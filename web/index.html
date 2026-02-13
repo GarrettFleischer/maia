@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maia — WebChat</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="chat-header">
+      <div class="header-left">
+        <span class="header-emoji">🌙</span>
+        <h1>Maia</h1>
+      </div>
+      <div class="header-right">
+        <span id="connection-status" class="status-indicator disconnected">
+          Disconnected
+        </span>
+      </div>
+    </header>
+
+    <main id="chat-messages" class="chat-messages">
+      <div class="welcome-message">
+        <p class="welcome-emoji">🌙</p>
+        <h2>Welcome to Maia</h2>
+        <p>Type a message below to start chatting.</p>
+      </div>
+    </main>
+
+    <footer class="chat-input-area">
+      <form id="chat-form">
+        <div class="input-wrapper">
+          <textarea
+            id="chat-input"
+            placeholder="Type a message..."
+            rows="1"
+            autocomplete="off"
+            autofocus
+          ></textarea>
+          <button type="submit" id="send-button" title="Send message">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+          </button>
+        </div>
+      </form>
+    </footer>
+  </div>
+
+  <script src="chat.ts" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+{
+  "identity": {
+    "name": "Maia",
+    "emoji": "🌙",
+    "personality": "helpful, security-conscious assistant"
+  },
+  "workspace": {
+    "path": "~/.maia/workspace"
+  },
+  "provider": {
+    "primary": "ollama",
+    "model": "llama3.2",
+    "fallback": {
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile"
+    },
+    "ollama": {
+      "baseUrl": "http://localhost:11434"
+    },
+    "groq": {
+      "credentialName": "groq-api-key"
+    }
+  },
+  "gateway": {
+    "port": 3000,
+    "auth": {
+      "token": "${MAIA_AUTH_TOKEN}"
+    }
+  },
+  "channels": {
+    "cli": { "enabled": true },
+    "webchat": { "enabled": true },
+    "discord": { "enabled": false },
+    "telegram": { "enabled": false }
+  },
+  "memory": {
+    "enabled": true,
+    "embeddingProvider": "ollama",
+    "embeddingModel": "nomic-embed-text",
+    "search": {
+      "hybrid": { "enabled": true, "vectorWeight": 0.7, "textWeight": 0.3 }
+    },
+    "autoCapture": true,
+    "autoRecall": true
+  },
+  "security": {
+    "rateLimiting": { "maxRequests": 60, "windowMs": 60000 },
+    "promptInjection": { "detection": true, "wrapping": true },
+    "ssrf": { "blockPrivateIPs": true },
+    "encryption": {
+      "enabled": true,
+      "scope": ["USER.md", "MEMORY.md", "memory/", "knowledge/"]
+    },
+    "secretScanner": { "enabled": true },
+    "auditLog": { "enabled": true },
+    "toolPermissions": {
+      "main": { "allow": ["*"] },
+      "group": { "allow": ["memory_search"], "deny": ["web_fetch", "memory_store"] }
+    },
+    "sandbox": { "enabled": true, "root": "~/.maia" }
+  },
+  "scheduler": { "enabled": true, "checkIntervalMs": 60000 }
+}
