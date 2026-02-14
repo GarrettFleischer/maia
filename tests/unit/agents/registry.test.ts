@@ -71,6 +71,18 @@ describe("AgentRegistry", () => {
       expect(agents).toBe("Custom instructions here");
     });
 
+    it("should include Security and integrity section in default AGENTS.md", async () => {
+      const { registry, fs } = makeRegistry();
+      await registry.register(sampleConfig());
+
+      const agents = fs.files.get("/workspace/agents/research-bot/AGENTS.md")!;
+      expect(agents).toContain("Security and integrity");
+      expect(agents).toContain("prompt injection");
+      expect(agents).toContain("jailbreaks");
+      expect(agents).toContain("Violate privacy");
+      expect(agents).toContain("Circumvent security");
+    });
+
     it("should insert into database", async () => {
       const { registry, db } = makeRegistry();
       await registry.register(sampleConfig());

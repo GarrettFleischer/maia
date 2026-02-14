@@ -111,6 +111,8 @@ export interface MaiaApp {
   getActiveAgents(): Map<string, SubAgent>;
   /** @brief Returns the raw (unsandboxed) filesystem */
   getRawFs(): FileSystem;
+  /** @brief Returns the data directory path (e.g. for queue.json) */
+  getDataDir(): string;
   /** @brief Gracefully shuts down all subsystems */
   stop(): Promise<void>;
 }
@@ -395,7 +397,7 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
       },
     });
 
-    return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs);
+    return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs, dataDir);
   }
 
   // Build runtime without memory
@@ -420,7 +422,7 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
     },
   });
 
-  return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs);
+  return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs, dataDir);
 }
 
 /**
@@ -523,6 +525,7 @@ function buildApp(
   agentRegistry: AgentRegistry,
   activeAgents: Map<string, SubAgent>,
   rawFs: FileSystem,
+  dataDir: string,
 ): MaiaApp {
   return {
     getContext: () => ctx,
@@ -531,6 +534,7 @@ function buildApp(
     getAgentRegistry: () => agentRegistry,
     getActiveAgents: () => activeAgents,
     getRawFs: () => rawFs,
+    getDataDir: () => dataDir,
     async stop(): Promise<void> {
       logger.info("Shutting down Maia...");
       await shutdown.shutdown("app.stop() called");

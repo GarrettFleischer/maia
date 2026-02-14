@@ -10,9 +10,27 @@
 import type { Logger, EventBus } from "../core/types.js";
 
 /**
- * @brief WebSocket message types.
+ * @brief WebSocket message types (client-to-server).
  */
-export type WSMessageType = "chat" | "ping" | "subscribe" | "unsubscribe";
+export type WSMessageType =
+  | "chat"
+  | "ping"
+  | "subscribe"
+  | "unsubscribe"
+  | "thread_message"
+  | "subscribe_thread"
+  | "unsubscribe_thread"
+  | "approval_response";
+
+/**
+ * @brief Server-to-client push message types.
+ */
+export type WSPushType =
+  | "agent_dm"
+  | "agent_status_update"
+  | "thread_update"
+  | "approval_request"
+  | "status_report";
 
 /**
  * @brief Parsed WebSocket message.
@@ -22,6 +40,7 @@ export interface WSMessage {
   id?: string;
   content?: string;
   channel?: string;
+  threadId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -47,12 +66,45 @@ export type WSSendFn = (connectionId: string, data: string) => void;
 export interface WSHandlerDeps {
   logger: Logger;
   events: EventBus;
-  /** Handles a chat message; returns content and optional remembered content (for "Maia will remember that" tooltip). */
+  /** Handles a chat message; returns content and optional remembered/security/progress for UI. */
   onChatMessage?: (
     connectionId: string,
     senderId: string,
     content: string
-  ) => Promise<{ content: string; remembered?: { memoryMd?: string; userMd?: string; soulMd?: string } }>;
+  ) => Promise<{
+    content: string;
+    remembered?: { memoryMd?: string; userMd?: string; soulMd?: string };
+    securityFlagged?: { reason: string; snippet: string };
+    progressReport?: { status: string; summary: string };
+    responderId?: string;
+  }>;
+  /** Handles a thread message from the client. */
+  onThreadMessage?: (
+    connectionId: string,
+    senderId: string,
+    threadId: string,
+    content: string
+  ) => Promise<{ content: string }>;
+  /** Called when any user activity occurs (for quiet-time tracking). */
+  onUserActivity?: () => void;
+  /**
+   * @brief Handles user response to an approval request (tool proposal or flagged agent).
+   * @param connectionId - WebSocket connection ID
+   * @param senderId - Authenticated user ID
+   * @param payload - { kind, decision, feedback?, proposalId?, agentId?, ... }
+   */
+  onApprovalResponse?: (
+    connectionId: string,
+    senderId: string,
+    payload: {
+      kind: string;
+      decision: string;
+      feedback?: string;
+      proposalId?: string;
+      agentId?: string;
+      approvalRequestId?: string;
+    }
+  ) => Promise<void>;
   /** Idle timeout in ms before closing connection (default: 300000 = 5 min) */
   idleTimeoutMs?: number;
 }
@@ -95,6 +147,23 @@ export interface WSHandler {
    * @returns WSConnection or undefined
    */
   getConnection(connectionId: string): WSConnection | undefined;
+
+  /**
+   * @brief Broadcasts a push message to all connected clients.
+   * @param type - Push message type (agent_dm, agent_status_update, thread_update)
+   * @param payload - Message payload
+   * @param sendFn - Function to send data to a specific connection
+   */
+  broadcast(type: WSPushType, payload: Record<string, unknown>, sendFn: (connectionId: string, data: string) => void): void;
+
+  /**
+   * @brief Sends a push message to clients subscribed to a specific thread.
+   * @param threadId - Thread ID to target
+   * @param type - Push message type
+   * @param payload - Message payload
+   * @param sendFn - Function to send data to a specific connection
+   */
+  pushToThreadSubscribers(threadId: string, type: WSPushType, payload: Record<string, unknown>, sendFn: (connectionId: string, data: string) => void): void;
 }
 
 /**
@@ -119,7 +188,7 @@ export interface WSHandler {
  * if (reply) ws.send(reply);
  */
 export function createWSHandler(deps: WSHandlerDeps): WSHandler {
-  const { logger, events, onChatMessage } = deps;
+  const { logger, events, onChatMessage, onThreadMessage, onUserActivity, onApprovalResponse } = deps;
   const connections = new Map<string, WSConnection>();
 
   return {
@@ -152,6 +221,9 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
         return JSON.stringify({ error: "Invalid JSON" });
       }
 
+      // Track user activity for quiet-time inference
+      if (onUserActivity) onUserActivity();
+
       switch (msg.type) {
         case "ping":
           return JSON.stringify({ type: "pong", timestamp: Date.now() });
@@ -180,6 +252,9 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
                 ...(result.remembered && Object.keys(result.remembered).length > 0
                   ? { remembered: result.remembered }
                   : {}),
+                ...(result.responderId ? { responderId: result.responderId } : {}),
+                ...(result.securityFlagged ? { securityFlagged: result.securityFlagged } : {}),
+                ...(result.progressReport ? { progressReport: result.progressReport } : {}),
               });
             } catch (err) {
               const errorMsg = err instanceof Error ? err.message : String(err);
@@ -200,6 +275,76 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
             id: msg.id,
             error: "Chat handler not configured",
           });
+        }
+
+        case "thread_message": {
+          if (!msg.threadId || !msg.content) {
+            return JSON.stringify({ error: "threadId and content are required for thread_message" });
+          }
+
+          if (onThreadMessage) {
+            try {
+              const result = await onThreadMessage(
+                connectionId,
+                conn.senderId,
+                msg.threadId,
+                msg.content
+              );
+              return JSON.stringify({
+                type: "thread_message_response",
+                id: msg.id,
+                threadId: msg.threadId,
+                content: result.content,
+              });
+            } catch (err) {
+              const errorMsg = err instanceof Error ? err.message : String(err);
+              logger.error("Thread message handling failed", {
+                connectionId,
+                error: errorMsg,
+              });
+              return JSON.stringify({
+                type: "error",
+                id: msg.id,
+                error: errorMsg,
+              });
+            }
+          }
+
+          return JSON.stringify({
+            type: "error",
+            id: msg.id,
+            error: "Thread message handler not configured",
+          });
+        }
+
+        case "subscribe_thread": {
+          if (msg.threadId) {
+            conn.subscriptions.add(`thread:${msg.threadId}`);
+            logger.debug("WebSocket subscribed to thread", {
+              connectionId,
+              threadId: msg.threadId,
+            });
+            return JSON.stringify({
+              type: "subscribed",
+              channel: `thread:${msg.threadId}`,
+            });
+          }
+          return JSON.stringify({ error: "threadId is required for subscribe_thread" });
+        }
+
+        case "unsubscribe_thread": {
+          if (msg.threadId) {
+            conn.subscriptions.delete(`thread:${msg.threadId}`);
+            logger.debug("WebSocket unsubscribed from thread", {
+              connectionId,
+              threadId: msg.threadId,
+            });
+            return JSON.stringify({
+              type: "unsubscribed",
+              channel: `thread:${msg.threadId}`,
+            });
+          }
+          return JSON.stringify({ error: "threadId is required for unsubscribe_thread" });
         }
 
         case "subscribe": {
@@ -234,6 +379,36 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
           });
         }
 
+        case "approval_response": {
+          const payload = (msg.metadata ?? msg) as Record<string, unknown>;
+          const kind = payload.kind as string | undefined;
+          const decision = payload.decision as string | undefined;
+          if (!kind || !decision) {
+            return JSON.stringify({ error: "approval_response requires kind and decision" });
+          }
+          if (onApprovalResponse) {
+            try {
+              await onApprovalResponse(connectionId, conn.senderId, {
+                kind,
+                decision,
+                feedback: payload.feedback as string | undefined,
+                proposalId: payload.proposalId as string | undefined,
+                agentId: payload.agentId as string | undefined,
+                approvalRequestId: payload.approvalRequestId as string | undefined,
+              });
+              return JSON.stringify({ type: "approval_response_ack", success: true });
+            } catch (err) {
+              const errorMsg = err instanceof Error ? err.message : String(err);
+              logger.error("Approval response handling failed", {
+                connectionId,
+                error: errorMsg,
+              });
+              return JSON.stringify({ type: "approval_response_ack", success: false, error: errorMsg });
+            }
+          }
+          return JSON.stringify({ error: "Approval response handler not configured" });
+        }
+
         default:
           return JSON.stringify({ error: `Unknown message type: ${msg.type}` });
       }
@@ -250,6 +425,47 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
 
     getConnection(connectionId: string): WSConnection | undefined {
       return connections.get(connectionId);
+    },
+
+    broadcast(
+      type: WSPushType,
+      payload: Record<string, unknown>,
+      sendFn: (connectionId: string, data: string) => void
+    ): void {
+      const data = JSON.stringify({ type, ...payload });
+      for (const [connId] of connections) {
+        try {
+          sendFn(connId, data);
+        } catch (err) {
+          logger.warn("Broadcast send failed", {
+            connectionId: connId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    },
+
+    pushToThreadSubscribers(
+      threadId: string,
+      type: WSPushType,
+      payload: Record<string, unknown>,
+      sendFn: (connectionId: string, data: string) => void
+    ): void {
+      const subscriptionKey = `thread:${threadId}`;
+      const data = JSON.stringify({ type, ...payload });
+      for (const [connId, conn] of connections) {
+        if (conn.subscriptions.has(subscriptionKey)) {
+          try {
+            sendFn(connId, data);
+          } catch (err) {
+            logger.warn("Thread push send failed", {
+              connectionId: connId,
+              threadId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
     },
   };
 }

@@ -101,6 +101,36 @@ async function appendToFile(
 }
 
 /**
+ * @brief Applies previously parsed remembered content to a workspace (e.g. the other agent in agent-agent "both remember").
+ * @param fs - File system
+ * @param workspacePath - Workspace root (MEMORY.md, USER.md, SOUL.md live here)
+ * @param rememberedContent - Content to append (memoryMd, userMd, soulMd)
+ * @param logger - Logger
+ *
+ * @example
+ * await applyRememberedContent(fs, otherAgentWorkspacePath, response.rememberedContent!, logger);
+ */
+export async function applyRememberedContent(
+  fs: RememberBlockDeps["fs"],
+  workspacePath: string,
+  rememberedContent: RememberedContent,
+  logger: RememberBlockDeps["logger"]
+): Promise<void> {
+  const memoryPath = `${workspacePath}/MEMORY.md`;
+  const userPath = `${workspacePath}/USER.md`;
+  const soulPath = `${workspacePath}/SOUL.md`;
+  if (rememberedContent.memoryMd?.trim()) {
+    await appendToFile(fs, memoryPath, rememberedContent.memoryMd.trim(), logger);
+  }
+  if (rememberedContent.userMd?.trim()) {
+    await appendToFile(fs, userPath, rememberedContent.userMd.trim(), logger);
+  }
+  if (rememberedContent.soulMd?.trim()) {
+    await appendToFile(fs, soulPath, rememberedContent.soulMd.trim(), logger);
+  }
+}
+
+/**
  * @brief Creates a remember-block handler that parses LLM output and appends to workspace files.
  * @param deps - fs, logger, workspacePath
  * @returns RememberBlockHandler

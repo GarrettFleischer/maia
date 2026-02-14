@@ -222,7 +222,10 @@ export type AuditEventType =
   | "THREAT_DETECTED"
   | "HEALTH_CHECK"
   | "FILE_TAMPER"
-  | "FILE_ACCESS_DENIED";
+  | "FILE_ACCESS_DENIED"
+  | "CHECKIN_SECURITY_FLAG"
+  | "INLINE_SECURITY_FLAG"
+  | "AGENT_STOPPED_SECURITY";
 
 /**
  * @brief Append-only security audit log interface.

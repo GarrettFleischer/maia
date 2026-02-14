@@ -25,6 +25,7 @@ import type { AgentConfig } from "./registry.js";
 import { createSandboxedFileSystem } from "../security/sandbox-fs.js";
 import { createAgentRuntime } from "../agent/runtime.js";
 import type { AgentRuntime } from "../agent/runtime.js";
+import type { AgentTool } from "../agent/tools/base.js";
 import { createContextBuilder } from "../agent/context.js";
 import { createSessionManager } from "../agent/session.js";
 import { createToolRegistry } from "../agent/tools/registry.js";
@@ -35,6 +36,7 @@ import {
   createMemoryForgetTool,
 } from "../agent/tools/memory-tools.js";
 import { createMemoryStore } from "../memory/store.js";
+import { createRememberBlockHandler } from "../memory/remember-block.js";
 import { createAutoRecall } from "../memory/auto-recall.js";
 import { createDailyLog } from "../memory/daily-log.js";
 import { createPeriodicMerge } from "../memory/periodic-merge.js";
@@ -56,6 +58,8 @@ export interface SharedAgentDeps {
   providerRegistry: ProviderRegistry;
   /** Raw (unsandboxed) filesystem for creating per-agent sandboxes */
   rawFs: FileSystem;
+  /** Optional dynamic tools (from tools folder) to register for every agent */
+  dynamicTools?: AgentTool[];
 }
 
 /**
@@ -150,6 +154,12 @@ export function createSubAgentRuntime(
     toolRegistry.register(createMemoryForgetTool({ store: memoryStore, logger }));
   }
 
+  if (shared.dynamicTools) {
+    for (const tool of shared.dynamicTools) {
+      toolRegistry.register(tool);
+    }
+  }
+
   // Auto-recall for this agent's memories
   const autoRecall = createAutoRecall({
     store: memoryStore,
@@ -177,6 +187,13 @@ export function createSubAgentRuntime(
     return providerRegistry.getPrimary();
   })();
 
+  // Remember block: append to this agent's workspace (MEMORY.md, USER.md, SOUL.md)
+  const rememberBlockHandler = createRememberBlockHandler({
+    fs: agentFs,
+    logger,
+    workspacePath: agentWorkspacePath,
+  });
+
   // Periodic merge for this agent (batch memory with chat every 10 min)
   const mergeStrategy = createPeriodicMerge({
     fs: agentFs,
@@ -200,6 +217,7 @@ export function createSubAgentRuntime(
     sessionManager,
     contextBuilder,
     toolRegistry,
+    parseRemember: (raw) => rememberBlockHandler.parseAndApply(raw),
     recallMemory: async (query: string) => {
       return await autoRecall.formatContextBlock(query);
     },

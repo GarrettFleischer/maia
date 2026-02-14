@@ -32,8 +32,11 @@ const WEB_UI_MIME: Record<string, string> = {
 
 /**
  * @brief Serves a file from webRoot if pathName is a safe web UI asset path.
- * @param pathName - Request path (e.g. "/", "/index.html", "/styles.css")
- * @param webRoot - Absolute path to the web/ directory
+ * Supports both flat (web/) and nested (dashboard/dist/assets/) structures.
+ * For SPA routing, returns index.html for non-API, non-file paths that don't
+ * match a static asset.
+ * @param pathName - Request path (e.g. "/", "/index.html", "/assets/main.js")
+ * @param webRoot - Absolute path to the web root directory
  * @param method - GET or HEAD
  * @returns Promise resolving to Response with file body, or null if not a static asset or file missing
  */
@@ -43,18 +46,44 @@ async function serveWebAsset(
   method: string
 ): Promise<Response | null> {
   if (method !== "GET" && method !== "HEAD") return null;
+
+  // Prevent path traversal
+  const normalized = path.normalize(pathName);
+  if (normalized.includes("..")) return null;
+
   let filePath: string;
+
   if (pathName === "/" || pathName === "/index.html") {
     filePath = path.join(webRoot, "index.html");
-  } else if (/^\/[^/]+$/.test(pathName)) {
-    const segment = pathName.slice(1);
-    if (segment.includes("..") || segment.startsWith(".")) return null;
-    filePath = path.join(webRoot, segment);
   } else {
+    // Support nested paths (e.g. /assets/main-abc123.js) for Vite builds
+    const relativePath = pathName.slice(1);
+    if (relativePath.startsWith(".")) return null;
+    filePath = path.join(webRoot, relativePath);
+  }
+
+  const ext = path.extname(filePath);
+  if (!Object.prototype.hasOwnProperty.call(WEB_UI_MIME, ext)) {
+    // SPA fallback: for non-API paths with no file extension, serve index.html
+    if (!pathName.startsWith("/api") && !pathName.startsWith("/ws") && !ext) {
+      const indexPath = path.join(webRoot, "index.html");
+      const indexFile = Bun.file(indexPath);
+      if (await indexFile.exists()) {
+        if (method === "HEAD") {
+          return new Response(undefined, {
+            status: 200,
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          });
+        }
+        return new Response(indexFile, {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+    }
     return null;
   }
-  const ext = path.extname(filePath);
-  if (!Object.prototype.hasOwnProperty.call(WEB_UI_MIME, ext)) return null;
+
   const file = Bun.file(filePath);
   if (!(await file.exists())) return null;
 
@@ -129,6 +158,17 @@ export interface BunServer {
   url: string;
   /** Stop the server */
   stop(): void;
+  /**
+   * @brief Send a message to a specific WebSocket connection by ID.
+   * @param connectionId - Connection ID
+   * @param data - Message data (JSON string)
+   */
+  wsSend(connectionId: string, data: string): void;
+  /**
+   * @brief Broadcast a message to all connected WebSocket clients.
+   * @param data - Message data (JSON string)
+   */
+  wsBroadcast(data: string): void;
 }
 
 /**
@@ -149,11 +189,18 @@ export interface BunServer {
  */
 /**
  * @brief Resolves the web UI root directory (must contain index.html).
- * Tries process.cwd()/web, entry-point dir (Bun.main)/web and ../web, then path relative to this module.
+ * Prefers dashboard/dist if it exists (Vite build output), otherwise falls back
+ * to the original web/ directory.
+ * Tries process.cwd()/dashboard/dist, then process.cwd()/web, entry-point dir paths, etc.
  */
 function resolveWebRoot(): string {
   const entryDir = path.dirname(Bun.main);
   const candidates = [
+    // Prefer Vite dashboard build output
+    path.resolve(process.cwd(), "dashboard", "dist"),
+    path.resolve(entryDir, "dashboard", "dist"),
+    path.resolve(entryDir, "..", "dashboard", "dist"),
+    // Fallback to original web/ directory
     path.resolve(process.cwd(), "web"),
     path.resolve(entryDir, "web"),
     path.resolve(entryDir, "..", "web"),
@@ -291,6 +338,31 @@ export function startBunServer(options: BunServerOptions): BunServer {
     stop() {
       server.stop(true);
       logger.info("Bun server stopped");
+    },
+    wsSend(connectionId: string, data: string): void {
+      const entry = wsConnections.get(connectionId);
+      if (entry) {
+        try {
+          (entry.ws as ServerWebSocket<WSData>).send(data);
+        } catch (err) {
+          logger.warn("wsSend failed", {
+            connectionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    },
+    wsBroadcast(data: string): void {
+      for (const [, entry] of wsConnections) {
+        try {
+          (entry.ws as ServerWebSocket<WSData>).send(data);
+        } catch (err) {
+          logger.warn("wsBroadcast send failed", {
+            connectionId: entry.connectionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     },
   };
 }

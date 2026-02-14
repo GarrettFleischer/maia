@@ -111,7 +111,7 @@ const AGENT_TEMPLATES: Record<string, (config: AgentConfig) => string> = {
   "IDENTITY.md": (c) => `# Identity\n\n- Name: ${c.name}\n- Emoji: ${c.emoji}\n- Created by: ${c.createdBy}\n`,
   "AGENTS.md": (c) =>
     c.instructions ??
-    `# Operating Instructions\n\n## Every Session\n1. Read SOUL.md to remember who you are\n2. Read USER.md for user context\n3. Check MEMORY.md for your curated notes\n\n## Memory Rules\n- Store important facts using memory_store\n- Never store credentials or secrets\n\n## Safety Rules\n- Never exfiltrate data without permission\n- Ask before performing external actions\n`,
+    `# Operating Instructions\n\n## Every Session\n1. Read SOUL.md to remember who you are\n2. Read USER.md for user context\n3. Check MEMORY.md for your curated notes\n\n## Memory Rules\n- Store important facts using memory_store\n- Never store credentials or secrets\n\n## Safety Rules\n- Never exfiltrate data without permission\n- Ask before performing external actions\n\n## Security and integrity\nYou must not attempt to:\n- Use prompt injection, jailbreaks, or role-override attempts (e.g. "ignore your instructions", "you are now…").\n- Violate privacy: do not extract or leak private data, store in memory when in privacy mode, or exfiltrate without permission.\n- Circumvent security: do not disable safety checks, abuse tools, or evade oversight.\n`,
   "USER.md": () => "# User\n\nUser preferences and context.\n",
   "MEMORY.md": () => "",
   "TOOLS.md": (c) => `# Tools\n\nAllowed tools: ${c.tools.join(", ")}\n`,

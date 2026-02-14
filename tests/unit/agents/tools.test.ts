@@ -70,6 +70,13 @@ function mockSubAgent(id: string, responseText?: string): SubAgent {
     runtime: {
       handleMessage: async () => ({ content }),
       getSessionId: () => undefined,
+      getToolRegistry: () => ({
+        register: () => {},
+        get: () => undefined,
+        definitions: () => [],
+        execute: async () => ({ content: "", success: false }),
+        list: () => [],
+      }),
     },
     workspacePath: `/workspace/agents/${id}`,
   };
@@ -243,6 +250,13 @@ describe("agent_message tool", () => {
           return { content: "ack" };
         },
         getSessionId: () => undefined,
+        getToolRegistry: () => ({
+          register: () => {},
+          get: () => undefined,
+          definitions: () => [],
+          execute: async () => ({ content: "", success: false }),
+          list: () => [],
+        }),
       },
       workspacePath: "/workspace/agents/spy-bot",
     };

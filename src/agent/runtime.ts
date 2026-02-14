@@ -25,15 +25,21 @@ import type { ToolRegistry } from "./tools/registry.js";
 import type { MergeStrategy } from "../memory/periodic-merge.js";
 
 import type { RememberedContent } from "../memory/remember-block.js";
+import { REMEMBER_DELIMITER } from "../memory/remember-block.js";
+import { parseResponseBlocks } from "./response-blocks.js";
 
 /**
- * @brief Result of handling a message: display content and optional remembered content for UI.
+ * @brief Result of handling a message: display content and optional remembered/security/progress for UI and backend.
  */
 export interface HandleMessageResult {
   /** Assistant reply text to show to the user. */
   content: string;
   /** When the LLM included a remember block and it was applied; content per file for hover tooltip. */
   remembered?: RememberedContent;
+  /** When the LLM reported a security concern (inline); backend should check approved snippets then stop/notify if needed. */
+  securityFlagged?: { reason: string; snippet: string };
+  /** When the LLM self-reported progress (accomplished/stuck/failed); backend may send DM. */
+  progressReport?: { status: string; summary: string };
 }
 
 /**
@@ -81,6 +87,11 @@ export interface AgentRuntimeDeps {
    */
   parseRemember?: ParseRememberFn;
   /**
+   * @brief When the LLM reports ---SECURITY--- with flagged true, called with reason and snippet.
+   * Only called when security block is present and flagged; backend may check approved snippets before acting.
+   */
+  onSecurityFlagged?: (reason: string, snippet: string) => void;
+  /**
    * @brief Called after each reply is sent. Used for post-reply persistence
    * (daily log append). Not called when the merge path was used.
    * Runs fire-and-forget so it never blocks the user's reply.
@@ -123,6 +134,11 @@ export interface AgentRuntime {
    * @returns Session ID or undefined
    */
   getSessionId(channelId: string, senderId: string): string | undefined;
+
+  /**
+   * @brief Returns the tool registry for this runtime (e.g. to register propose_tool from index).
+   */
+  getToolRegistry(): ToolRegistry;
 }
 
 /**
@@ -151,6 +167,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     sendReply,
     mergeStrategy,
     parseRemember,
+    onSecurityFlagged,
     onAfterReply,
   } = deps;
 
@@ -352,14 +369,40 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         };
       }
 
-      // Step 7: Parse optional ---REMEMBER--- block and get display content
-      let displayContent = response.content;
+      // Step 7: Parse structured blocks (REMEMBER, SECURITY, PROGRESS) and get display content
+      const parsedBlocks = parseResponseBlocks(response.content);
+      let displayContent = parsedBlocks.displayContent;
       let remembered: RememberedContent | undefined;
-      if (parseRemember && !privacyMode) {
-        const parsed = await parseRemember(response.content);
-        displayContent = parsed.displayContent;
-        remembered = parsed.remembered && parsed.rememberedContent ? parsed.rememberedContent : undefined;
+      if (parseRemember && !privacyMode && parsedBlocks.rememberBlockRaw) {
+        const fullRaw =
+          displayContent +
+          "\n" +
+          REMEMBER_DELIMITER +
+          "\n" +
+          parsedBlocks.rememberBlockRaw;
+        const parsedRemember = await parseRemember(fullRaw);
+        displayContent = parsedRemember.displayContent;
+        remembered =
+          parsedRemember.remembered && parsedRemember.rememberedContent
+            ? parsedRemember.rememberedContent
+            : undefined;
       }
+
+      let securityFlagged: HandleMessageResult["securityFlagged"];
+      if (parsedBlocks.security?.flagged) {
+        const reason = parsedBlocks.security.reason ?? "";
+        const snippet = parsedBlocks.security.snippet ?? "";
+        onSecurityFlagged?.(reason, snippet);
+        securityFlagged = { reason, snippet };
+      }
+
+      const progressReport: HandleMessageResult["progressReport"] =
+        parsedBlocks.progress?.status != null && parsedBlocks.progress.summary != null
+          ? {
+              status: parsedBlocks.progress.status,
+              summary: parsedBlocks.progress.summary,
+            }
+          : undefined;
 
       // Step 8: Add final assistant response and send reply
       const assistantMessage: ChatMessage = {
@@ -402,13 +445,24 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         toolRounds,
         responseLength: displayContent.length,
         remembered: !!remembered,
+        securityFlagged: !!securityFlagged,
+        progressReport: !!progressReport,
       });
 
-      return { content: displayContent, remembered };
+      return {
+        content: displayContent,
+        remembered,
+        securityFlagged,
+        progressReport,
+      };
     },
 
     getSessionId(channelId: string, senderId: string): string | undefined {
       return sessionMap.get(`${channelId}:${senderId}`);
+    },
+
+    getToolRegistry(): ToolRegistry {
+      return toolRegistry;
     },
   };
 }

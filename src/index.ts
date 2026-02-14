@@ -23,6 +23,19 @@ import { startBunServer, registerApiRoutes } from "./gateway/bun-server.js";
 // import { createCLIChannel } from "./channels/cli.js";
 // import { createMessageFormatter } from "./channels/formatter.js";
 
+// Dashboard / Agent orchestration
+import { registerDashboardRoutes } from "./gateway/dashboard-routes.js";
+import { createThreadService } from "./threads/service.js";
+import { createTaskMonitor } from "./agents/task-monitor.js";
+import { createOrchestrator } from "./agents/orchestrator.js";
+import { createProposeToolTool } from "./agents/tools/propose-tool.js";
+import { createRequestQueue } from "./providers/queue.js";
+import { createToolProposalsRepository } from "./tools/proposals.js";
+import { loadDynamicTools } from "./tools/loader.js";
+import { writeApprovedTool } from "./tools/write-approved-tool.js";
+import { createToolAudit } from "./security/tool-audit.js";
+import { createApprovedSnippetsRepository } from "./security/approved-snippets.js";
+
 // Watchdog
 import { createWatchdogDaemon } from "./watchdog/daemon.js";
 import { createThreatDetector } from "./watchdog/threat-detector.js";
@@ -454,10 +467,87 @@ async function runStart(): Promise<void> {
   });
   const errorHandler = createErrorHandler({ logger: ctx.logger });
 
+  // Forward reference for orchestrator (used by WS handler for activity and progress DM)
+  type OrchestratorRef = { recordUserActivity(): void; sendDmToUser(senderId: string, senderName: string, content: string, threadId?: string): Promise<void> };
+  let orchestratorRef: OrchestratorRef | null = null;
+
+  // ── Thread service ──────────────────────────────────────────────
+  const threadService = createThreadService({
+    db: ctx.db,
+    crypto: ctx.crypto,
+    clock: ctx.clock,
+    logger: ctx.logger,
+  });
+
+  // ── Tool proposals and audit (for propose_tool and tool_review job) ─────
+  const toolProposalsRepo = createToolProposalsRepository({
+    db: ctx.db,
+    logger: ctx.logger,
+  });
+  const toolAudit = createToolAudit({
+    logger: ctx.logger,
+    llm: providerRegistry.getPrimary(),
+  });
+  const approvedSnippetsRepo = createApprovedSnippetsRepository({
+    db: ctx.db,
+    crypto: ctx.crypto,
+    logger: ctx.logger,
+  });
+  /** Pending flagged-agent approval requests keyed by approval request id; only user (approval_response) can approve. */
+  const pendingFlaggedAgentApprovals = new Map<
+    string,
+    { agentId: string; agentName: string; snippet: string; reason: string }
+  >();
+  let onSecurityApproved: (proposalId: string) => void = () => {};
+  let onSecurityDenied: (proposalId: string, reason: string) => void = () => {};
+
+  // ── Priority LLM Queue ────────────────────────────────────────
+  const queuePersistPath = path.join(app.getDataDir(), "queue.json");
+  const priorityQueue = createRequestQueue({
+    maxConcurrent: 2,
+    maxQueueDepth: 100,
+    clock: ctx.clock,
+    persistPath: queuePersistPath,
+    fs: app.getRawFs(),
+    jobHandlers: {
+      tool_review: async (payload: Record<string, unknown>) => {
+        const proposalId = payload.proposalId as string;
+        if (!proposalId) return;
+        const proposal = await toolProposalsRepo.getById(proposalId);
+        if (!proposal || proposal.status !== "pending_security") return;
+        const result = await toolAudit.review(proposal);
+        if (!result.approved) {
+          await toolProposalsRepo.updateStatus(proposalId, "security_denied", {
+            securityReason: result.reason,
+          });
+          onSecurityDenied(proposalId, result.reason);
+          return;
+        }
+        await toolProposalsRepo.updateStatus(proposalId, "pending_user");
+        onSecurityApproved(proposalId);
+      },
+    },
+  });
+  await priorityQueue.loadFromFile();
+
+  let approvalResponseHandler: (
+    connectionId: string,
+    senderId: string,
+    payload: {
+      kind: string;
+      decision: string;
+      feedback?: string;
+      proposalId?: string;
+      agentId?: string;
+      approvalRequestId?: string;
+    }
+  ) => Promise<void> = async () => {};
+
   // Set up WebSocket handler
   const wsHandler = createWSHandler({
     logger: ctx.logger,
     events: ctx.events,
+    onApprovalResponse: (connId, senderId, payload) => approvalResponseHandler(connId, senderId, payload),
     onChatMessage: async (_connectionId, senderId, content) => {
       const message = {
         id: ctx.crypto.randomUUID(),
@@ -468,8 +558,53 @@ async function runStart(): Promise<void> {
         isGroup: false,
       };
 
-      const result = await runtime.handleMessage(message);
-      return { content: result.content, remembered: result.remembered };
+      // User chat goes through priority queue at highest priority
+      const result = await priorityQueue.enqueue(
+        () => runtime.handleMessage(message),
+        "user"
+      );
+
+      if (result.securityFlagged) {
+        // Flag applies to the conversation partner (sender). Here the sender is the user; we audit and push approval for maia (responder) to allowlist the snippet.
+        const { reason, snippet } = result.securityFlagged;
+        const approved = await approvedSnippetsRepo.isApproved("maia", snippet);
+        if (!approved) {
+          await ctx.auditLog.log("INLINE_SECURITY_FLAG", {
+            flaggedPartyId: senderId,
+            reportedBy: "maia",
+            reason,
+            snippet: snippet.slice(0, 200),
+            timestamp: ctx.clock.timestamp(),
+          });
+          pushFlaggedAgentApproval("maia", "Maia", reason, snippet);
+        }
+      }
+
+      if (result.progressReport && orchestratorRef) {
+        const { status, summary } = result.progressReport;
+        await orchestratorRef.sendDmToUser(
+          "maia",
+          "Maia",
+          `Progress: [${status}] ${summary}`
+        );
+      }
+
+      return {
+        content: result.content,
+        remembered: result.remembered,
+        securityFlagged: result.securityFlagged,
+        progressReport: result.progressReport,
+        responderId: "maia",
+      };
+    },
+    onThreadMessage: async (_connectionId, senderId, threadId, content) => {
+      // Add the user's message to the thread
+      await threadService.addMessage(threadId, senderId, "user", content);
+      return { content: "Message added to thread." };
+    },
+    onUserActivity: () => {
+      // Will be wired to orchestrator.recordUserActivity() after orchestrator is created
+      orchestratorRef?.recordUserActivity();
     },
   });
 
@@ -483,7 +618,7 @@ async function runStart(): Promise<void> {
     wsHandler,
   });
 
-  // Register API routes
+  // Register API routes (onChat runs after server start so pushFlaggedAgentApproval and orchestratorRef exist when used)
   registerApiRoutes(gateway, {
     startTime: Date.now(),
     onChat: async (message, senderId) => {
@@ -496,7 +631,36 @@ async function runStart(): Promise<void> {
         isGroup: false,
       };
       const result = await runtime.handleMessage(inbound);
-      return { content: result.content, remembered: result.remembered };
+      if (result.securityFlagged) {
+        // Flag applies to the conversation partner (sender). Here the sender is the API caller; we audit and push approval for maia to allowlist the snippet.
+        const { reason, snippet } = result.securityFlagged;
+        const approved = await approvedSnippetsRepo.isApproved("maia", snippet);
+        if (!approved) {
+          await ctx.auditLog.log("INLINE_SECURITY_FLAG", {
+            flaggedPartyId: senderId,
+            reportedBy: "maia",
+            reason,
+            snippet: snippet.slice(0, 200),
+            timestamp: ctx.clock.timestamp(),
+          });
+          pushFlaggedAgentApproval("maia", "Maia", reason, snippet);
+        }
+      }
+      if (result.progressReport && orchestratorRef) {
+        const { status, summary } = result.progressReport;
+        await orchestratorRef.sendDmToUser(
+          "maia",
+          "Maia",
+          `Progress: [${status}] ${summary}`
+        );
+      }
+      return {
+        content: result.content,
+        remembered: result.remembered,
+        securityFlagged: result.securityFlagged,
+        progressReport: result.progressReport,
+        responderId: "maia",
+      };
     },
     providerHealthCheck: async () => {
       const status = await providerRegistry.healthStatus();
@@ -514,6 +678,28 @@ async function runStart(): Promise<void> {
     gateway,
     logger: ctx.logger,
   });
+
+  /** Push a flagged-agent approval request to the dashboard; only user (approval_response) can approve. */
+  function pushFlaggedAgentApproval(
+    agentId: string,
+    agentName: string,
+    reason: string,
+    snippet: string
+  ): void {
+    const id = ctx.crypto.randomUUID();
+    pendingFlaggedAgentApprovals.set(id, { agentId, agentName, snippet, reason });
+    bunServer.wsBroadcast(
+      JSON.stringify({
+        type: "approval_request",
+        id,
+        kind: "flagged_agent",
+        agentId,
+        agentName,
+        reason,
+        snippet,
+      })
+    );
+  }
 
   // Register shutdown hook for the server
   ctx.shutdown.register(
@@ -579,6 +765,31 @@ async function runStart(): Promise<void> {
   const agentRegistry = app.getAgentRegistry();
   const activeAgents = app.getActiveAgents();
 
+  const workspacePathExpanded = ctx.config.workspace.path.startsWith("~")
+    ? path.join(os.homedir(), ctx.config.workspace.path.slice(1))
+    : path.resolve(ctx.config.workspace.path);
+  const toolsDir = path.join(workspacePathExpanded, "tools");
+  const dynamicTools = await loadDynamicTools(app.getRawFs(), toolsDir, {
+    logger: ctx.logger,
+  });
+  for (const tool of dynamicTools) {
+    runtime.getToolRegistry().register(tool);
+  }
+
+  const sharedAgentDeps = {
+    db: ctx.db,
+    crypto: ctx.crypto,
+    http: ctx.http,
+    clock: ctx.clock,
+    auditLog: ctx.auditLog,
+    events: ctx.events,
+    logger: ctx.logger,
+    config: ctx.config,
+    providerRegistry,
+    rawFs: app.getRawFs(),
+    dynamicTools,
+  };
+
   // Load all existing agents and create their runtimes
   try {
     const existingAgents = await agentRegistry.list();
@@ -588,18 +799,7 @@ async function runStart(): Promise<void> {
         const { createSubAgentRuntime: createSub } =
           await import("./agents/factory.js");
         const agentWorkspace = agentRegistry.agentWorkspacePath(agentConfig.id);
-        const subAgent = createSub(agentConfig, agentWorkspace, {
-          db: ctx.db,
-          crypto: ctx.crypto,
-          http: ctx.http,
-          clock: ctx.clock,
-          auditLog: ctx.auditLog,
-          events: ctx.events,
-          logger: ctx.logger,
-          config: ctx.config,
-          providerRegistry,
-          rawFs: app.getRawFs(),
-        });
+        const subAgent = createSub(agentConfig, agentWorkspace, sharedAgentDeps);
         activeAgents.set(agentConfig.id, subAgent);
         ctx.logger.info("Agent loaded", {
           id: agentConfig.id,
@@ -623,6 +823,86 @@ async function runStart(): Promise<void> {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+
+  approvalResponseHandler = async (
+    _connectionId: string,
+    _senderId: string,
+    payload: {
+      kind: string;
+      decision: string;
+      feedback?: string;
+      proposalId?: string;
+      agentId?: string;
+      approvalRequestId?: string;
+    }
+  ) => {
+    if (payload.kind === "tool_proposal" && payload.proposalId) {
+      const proposal = await toolProposalsRepo.getById(payload.proposalId);
+      if (!proposal) return;
+      if (payload.decision === "approve") {
+        await toolProposalsRepo.updateStatus(payload.proposalId, "user_approved");
+        try {
+          await writeApprovedTool(
+            app.getRawFs(),
+            toolsDir,
+            proposal,
+            ctx.logger
+          );
+        } catch (err) {
+          ctx.logger.warn("Failed to write approved tool to tools folder", {
+            proposalId: payload.proposalId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        ctx.logger.info("Tool proposal approved by user", { proposalId: payload.proposalId });
+      } else {
+        const status = payload.decision === "modify" ? "pending_user" : "user_denied";
+        await toolProposalsRepo.updateStatus(payload.proposalId, status, {
+          userFeedback: payload.feedback ?? null,
+        });
+        ctx.logger.info("Tool proposal user response", {
+          proposalId: payload.proposalId,
+          decision: payload.decision,
+        });
+        if (proposal.proposingAgentId !== "maia") {
+          const msg =
+            payload.decision === "modify"
+              ? `The user requested changes to your tool proposal "${proposal.name}". Feedback: ${payload.feedback ?? "none"}`
+              : `Your tool proposal "${proposal.name}" was rejected by the user. Feedback: ${payload.feedback ?? "none"}`;
+          await orchestrator.agentToAgentChat("maia", proposal.proposingAgentId, msg);
+        }
+      }
+    } else if (payload.kind === "flagged_agent" && payload.agentId) {
+      const agentId = payload.agentId;
+      const pending = payload.approvalRequestId
+        ? pendingFlaggedAgentApprovals.get(payload.approvalRequestId)
+        : undefined;
+      if (pending && (payload.decision === "restart_with_warning" || payload.decision === "restart")) {
+        await approvedSnippetsRepo.add(pending.agentId, pending.snippet);
+        pendingFlaggedAgentApprovals.delete(payload.approvalRequestId!);
+        ctx.logger.info("User approved security snippet for agent", {
+          agentId: pending.agentId,
+        });
+      }
+      if (payload.decision === "restart_with_warning" || payload.decision === "restart") {
+        const config = await agentRegistry.get(agentId);
+        if (config) {
+          await agentRegistry.update(agentId, { active: true });
+          const { createSubAgentRuntime } = await import("./agents/factory.js");
+          const agentWorkspace = agentRegistry.agentWorkspacePath(agentId);
+          const subAgent = createSubAgentRuntime(config, agentWorkspace, sharedAgentDeps);
+          activeAgents.set(agentId, subAgent);
+          ctx.logger.info("Agent restarted after flagged", { agentId });
+        }
+      } else if (payload.decision === "remove") {
+        await agentRegistry.remove(agentId);
+        ctx.logger.info("Agent removed by user after flagged", { agentId });
+      }
+      if (payload.approvalRequestId) {
+        pendingFlaggedAgentApprovals.delete(payload.approvalRequestId);
+      }
+    }
+  };
 
   // Start the scheduler with agent task dispatch
   const { createScheduler } = await import("./agent/scheduler.js");
@@ -673,7 +953,35 @@ async function runStart(): Promise<void> {
         timestamp: ctx.clock.timestamp(),
         isGroup: false,
       };
-      await subAgent.runtime.handleMessage(message);
+      const result = await subAgent.runtime.handleMessage(message);
+      if (result.securityFlagged) {
+        // Flag applies to the conversation partner (sender), not the responder. Sender here is "scheduler".
+        const { reason, snippet } = result.securityFlagged;
+        const flaggedPartyId = message.senderId;
+        await ctx.auditLog.log("INLINE_SECURITY_FLAG", {
+          flaggedPartyId,
+          reportedBy: agentId,
+          reason,
+          snippet: snippet.slice(0, 200),
+          timestamp: ctx.clock.timestamp(),
+        });
+        if (orchestratorRef) {
+          await orchestratorRef.sendDmToUser(
+            "maia",
+            "Maia",
+            `Agent **${subAgent.config.name}** (${agentId}) reported a concern about the scheduled task prompt: ${reason}.`
+          );
+        }
+        // Do not stop the agent; the flag applies to the sender (scheduler), not the responder.
+      }
+      if (result.progressReport && orchestratorRef) {
+        const { status, summary } = result.progressReport;
+        await orchestratorRef.sendDmToUser(
+          agentId,
+          subAgent.config.name,
+          `Progress: [${status}] ${summary}`
+        );
+      }
       await ctx.events.emit("agentTaskCompleted", { agentId, taskId: task.id });
     } catch (err) {
       ctx.logger.warn("Scheduled task execution failed", {
@@ -696,6 +1004,157 @@ async function runStart(): Promise<void> {
     },
     4,
   );
+
+  // ── Task Monitor (tasks.json scanner) ────────────────────────
+  const taskMonitor = createTaskMonitor({
+    fs: ctx.fs,
+    clock: ctx.clock,
+    crypto: ctx.crypto,
+    logger: ctx.logger,
+    getAgentWorkspaces: () => {
+      const map = new Map<string, string>();
+      for (const [agentId] of activeAgents) {
+        map.set(agentId, agentRegistry.agentWorkspacePath(agentId));
+      }
+      return map;
+    },
+  });
+
+  taskMonitor.start(async (agentId, task) => {
+    const subAgent = activeAgents.get(agentId);
+    if (!subAgent) return;
+
+    ctx.logger.info("Task monitor firing task", { agentId, taskId: task.id });
+    await priorityQueue.enqueue(async () => {
+      const message = {
+        id: ctx.crypto.randomUUID(),
+        channelId: `task:${agentId}`,
+        senderId: "task-monitor",
+        content: task.prompt,
+        timestamp: ctx.clock.timestamp(),
+        isGroup: false,
+      };
+      const result = await subAgent.runtime.handleMessage(message);
+      if (result.securityFlagged) {
+        // Flag applies to the conversation partner (sender), not the responder. Sender here is "task-monitor".
+        const { reason, snippet } = result.securityFlagged;
+        const flaggedPartyId = message.senderId;
+        await ctx.auditLog.log("INLINE_SECURITY_FLAG", {
+          flaggedPartyId,
+          reportedBy: agentId,
+          reason,
+          snippet: snippet.slice(0, 200),
+          timestamp: ctx.clock.timestamp(),
+        });
+        if (orchestratorRef) {
+          await orchestratorRef.sendDmToUser(
+            "maia",
+            "Maia",
+            `Agent **${subAgent.config.name}** (${agentId}) reported a concern about the task prompt: ${reason}.`
+          );
+        }
+        // Do not stop the agent; the flag applies to the sender (task-monitor), not the responder.
+      }
+      if (result.progressReport && orchestratorRef) {
+        const { status, summary } = result.progressReport;
+        await orchestratorRef.sendDmToUser(
+          agentId,
+          subAgent.config.name,
+          `Progress: [${status}] ${summary}`
+        );
+      }
+    }, "agent");
+  });
+
+  ctx.shutdown.register(
+    "task-monitor",
+    async () => {
+      taskMonitor.stop();
+    },
+    4,
+  );
+
+  // ── Agent Orchestrator ──────────────────────────────────────────
+  const orchestrator = createOrchestrator({
+    clock: ctx.clock,
+    crypto: ctx.crypto,
+    logger: ctx.logger,
+    threadService,
+    priorityQueue,
+    activeAgents,
+    maiaRuntime: runtime,
+    wsPush: (type: string, payload: Record<string, unknown>) => {
+      bunServer.wsBroadcast(JSON.stringify({ type, ...payload }));
+    },
+    agentRegistry,
+    checkInSkipIfDmWithinMs: 15 * 60 * 1000,
+    approvedSnippetsRepo,
+    onFlaggedAgentApprovalRequest: pushFlaggedAgentApproval,
+    agentWorkspaceFs: app.getRawFs(),
+    auditLog: ctx.auditLog,
+  });
+
+  orchestratorRef = orchestrator;
+  orchestrator.start();
+
+  ctx.shutdown.register(
+    "orchestrator",
+    async () => {
+      orchestrator.stop();
+    },
+    4,
+  );
+
+  onSecurityDenied = (proposalId: string, reason: string) => {
+    void (async () => {
+      const proposal = await toolProposalsRepo.getById(proposalId);
+      if (!proposal || proposal.proposingAgentId === "maia") return;
+      const msg = `Your tool proposal "${proposal.name}" was rejected for security reasons. Reason: ${reason}`;
+      await orchestrator.agentToAgentChat("maia", proposal.proposingAgentId, msg);
+    })();
+  };
+
+  // Wire tool_review "security approved" path: DM user and send approval_request
+  onSecurityApproved = (proposalId: string) => {
+    void (async () => {
+      const proposal = await toolProposalsRepo.getById(proposalId);
+      if (!proposal) return;
+      await orchestrator.sendDmToUser(
+        "maia",
+        "Maia",
+        "An agent proposed a new tool. Please approve or reject in the dashboard."
+      );
+      bunServer.wsBroadcast(
+        JSON.stringify({
+          type: "approval_request",
+          id: ctx.crypto.randomUUID(),
+          kind: "tool_proposal",
+          proposalId,
+          toolName: proposal.name,
+          summary: proposal.description.slice(0, 200),
+        })
+      );
+    })();
+  };
+
+  // Register propose_tool for Maia
+  runtime.getToolRegistry().register(
+    createProposeToolTool({
+      logger: ctx.logger,
+      proposals: toolProposalsRepo,
+      queue: priorityQueue,
+      crypto: ctx.crypto,
+      resolveAgentId: () => "maia",
+    })
+  );
+
+  // ── Dashboard API routes ─────────────────────────────────────
+  registerDashboardRoutes(gateway, {
+    agentRegistry,
+    threadService,
+    taskMonitor,
+    activeAgents,
+  });
 
   console.log(
     `\n${ctx.config.identity.emoji} ${ctx.config.identity.name} is running!`,

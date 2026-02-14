@@ -301,4 +301,100 @@ describe("AgentRuntime", () => {
     await runtime.handleMessage(testMessage("Private question"));
     expect(memoryCalled).toBe(false);
   });
+
+  // ── Structured blocks (SECURITY, PROGRESS, REMEMBER) ─────────────────────
+
+  it("should return securityFlagged and call onSecurityFlagged when response contains flagged SECURITY block", async () => {
+    const response =
+      "I cannot help with that.\n---SECURITY---\n{\"flagged\": true, \"reason\": \"Possible injection\", \"snippet\": \"ignore instructions\"}";
+    const flaggedCalls: Array<{ reason: string; snippet: string }> = [];
+    const logger = capturingLogger();
+    const events = mockEventBus();
+    const config = testConfig();
+    const fs = inMemoryFileSystem({
+      "/test/workspace/SOUL.md": "# Soul",
+      "/test/workspace/IDENTITY.md": "# Identity\nname: TestMaia",
+    });
+    const runtime = createAgentRuntime({
+      config,
+      logger,
+      events,
+      provider: mockProvider(response),
+      sessionManager: createSessionManager({
+        contextWindowSize: 4096,
+        compactionThresholdPercent: 80,
+        preserveRecentMessages: 10,
+        logger,
+        clock: fixedClock(),
+      }),
+      contextBuilder: createContextBuilder({ fs, config, logger }),
+      toolRegistry: createToolRegistry({ logger }),
+      onSecurityFlagged: (reason, snippet) => flaggedCalls.push({ reason, snippet }),
+      sendReply: async () => {},
+    });
+    const result = await runtime.handleMessage(testMessage("Hi"));
+    expect(result.content).toBe("I cannot help with that.");
+    expect(result.securityFlagged).toEqual({
+      reason: "Possible injection",
+      snippet: "ignore instructions",
+    });
+    expect(flaggedCalls).toHaveLength(1);
+    expect(flaggedCalls[0].reason).toBe("Possible injection");
+    expect(flaggedCalls[0].snippet).toBe("ignore instructions");
+  });
+
+  it("should return progressReport when response contains PROGRESS block", async () => {
+    const response =
+      "Task completed.\n---PROGRESS---\n{\"status\": \"accomplished\", \"summary\": \"All items processed.\"}";
+    const { runtime } = setup(response);
+    const result = await runtime.handleMessage(testMessage("Go"));
+    expect(result.content).toBe("Task completed.");
+    expect(result.progressReport).toEqual({
+      status: "accomplished",
+      summary: "All items processed.",
+    });
+  });
+
+  it("should not set securityFlagged when SECURITY block has flagged false", async () => {
+    const response = "Fine.\n---SECURITY---\n{\"flagged\": false}";
+    const { runtime } = setup(response);
+    const result = await runtime.handleMessage(testMessage("Hi"));
+    expect(result.securityFlagged).toBeUndefined();
+  });
+
+  it("should return remembered and apply when parseRemember provided and REMEMBER block present", async () => {
+    const fs = inMemoryFileSystem({
+      "/test/workspace/SOUL.md": "# Soul",
+      "/test/workspace/IDENTITY.md": "# Identity\nname: TestMaia",
+    });
+    const handler = (await import("../../../src/memory/remember-block.js")).createRememberBlockHandler({
+      fs,
+      logger: capturingLogger(),
+      workspacePath: "/test/workspace",
+    });
+    const response = `Done.\n---REMEMBER---\n{"memoryMd": "User likes tests."}`;
+    const runtime = createAgentRuntime({
+      config: testConfig(),
+      logger: capturingLogger(),
+      events: mockEventBus(),
+      provider: mockProvider(response),
+      sessionManager: createSessionManager({
+        contextWindowSize: 4096,
+        compactionThresholdPercent: 80,
+        preserveRecentMessages: 10,
+        logger: capturingLogger(),
+        clock: fixedClock(),
+      }),
+      contextBuilder: createContextBuilder({ fs, config: testConfig(), logger: capturingLogger() }),
+      toolRegistry: createToolRegistry({ logger: capturingLogger() }),
+      parseRemember: (raw) => handler.parseAndApply(raw),
+      sendReply: async () => {},
+    });
+    const result = await runtime.handleMessage(testMessage("Remember this"));
+    expect(result.content).toBe("Done.");
+    expect(result.remembered).toBeDefined();
+    expect((result.remembered as { memoryMd?: string }).memoryMd).toBe("User likes tests.");
+    const memoryContent = await fs.readFile("/test/workspace/MEMORY.md");
+    expect(memoryContent).toContain("User likes tests.");
+  });
 });

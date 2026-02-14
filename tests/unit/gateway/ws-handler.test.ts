@@ -152,4 +152,64 @@ describe("WSHandler", () => {
     expect(handler.getConnection("ws-2")).toBeUndefined();
     expect(handler.getConnection("ws-1")).toBeTruthy();
   });
+
+  // ── approval_response ───────────────────────────────────────────
+
+  it("should handle approval_response and call onApprovalResponse", async () => {
+    let captured: { connectionId: string; senderId: string; payload: Record<string, unknown> } | null = null;
+    const handler = createWSHandler({
+      logger: capturingLogger(),
+      events: mockEventBus(),
+      onApprovalResponse: async (connectionId, senderId, payload) => {
+        captured = { connectionId, senderId, payload };
+      },
+    });
+    handler.connect("ws-1", "user-1");
+    const response = await handler.handleMessage(
+      "ws-1",
+      JSON.stringify({
+        type: "approval_response",
+        kind: "tool_proposal",
+        decision: "approve",
+        proposalId: "prop-123",
+        approvalRequestId: "req-456",
+      })
+    );
+    expect(response).not.toBeNull();
+    const parsed = JSON.parse(response!);
+    expect(parsed.type).toBe("approval_response_ack");
+    expect(parsed.success).toBe(true);
+    expect(captured).not.toBeNull();
+    expect(captured!.connectionId).toBe("ws-1");
+    expect(captured!.senderId).toBe("user-1");
+    expect(captured!.payload.kind).toBe("tool_proposal");
+    expect(captured!.payload.decision).toBe("approve");
+    expect(captured!.payload.proposalId).toBe("prop-123");
+    expect(captured!.payload.approvalRequestId).toBe("req-456");
+  });
+
+  it("should return error when approval_response missing kind or decision", async () => {
+    const handler = createWSHandler({ logger: capturingLogger(), events: mockEventBus() });
+    handler.connect("ws-1", "user-1");
+    const r1 = await handler.handleMessage(
+      "ws-1",
+      JSON.stringify({ type: "approval_response", decision: "approve" })
+    );
+    expect(JSON.parse(r1!).error).toContain("kind and decision");
+    const r2 = await handler.handleMessage(
+      "ws-1",
+      JSON.stringify({ type: "approval_response", kind: "tool_proposal" })
+    );
+    expect(JSON.parse(r2!).error).toContain("kind and decision");
+  });
+
+  it("should return error when approval_response handler not configured", async () => {
+    const handler = createWSHandler({ logger: capturingLogger(), events: mockEventBus() });
+    handler.connect("ws-1", "user-1");
+    const response = await handler.handleMessage(
+      "ws-1",
+      JSON.stringify({ type: "approval_response", kind: "tool_proposal", decision: "approve" })
+    );
+    expect(JSON.parse(response!).error).toContain("not configured");
+  });
 });
