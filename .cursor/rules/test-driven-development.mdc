@@ -1,0 +1,13 @@
+---
+description: Test Driven Development - create or update tests before changing code
+alwaysApply: true
+---
+
+# Test Driven Development (TDD)
+
+When drafting a plan for any feature, refactor, or bugfix:
+
+1. **Always state** that we are following **Test Driven Development (TDD)**.
+2. **Order of work**: Create or update the relevant tests **first**, then implement or change the code to satisfy those tests.
+
+In plans and task breakdowns, explicitly include a step to write or update tests before writing or modifying implementation code. Do not skip to implementation without addressing tests first.
