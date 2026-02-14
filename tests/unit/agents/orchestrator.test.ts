@@ -8,7 +8,7 @@ import { createOrchestrator } from "../../../src/agents/orchestrator.js";
 import type { SubAgent } from "../../../src/agents/factory.js";
 import type { HandleMessageResult } from "../../../src/agent/runtime.js";
 import { capturingLogger, mockCryptoProvider, fixedClock } from "../../helpers/index.js";
-import type { ThreadService } from "../../../src/threads/service.js";
+import type { ThreadService, SenderType } from "../../../src/threads/service.js";
 import type { RequestQueue } from "../../../src/providers/queue.js";
 import type { AgentRegistry } from "../../../src/agents/registry.js";
 import type { ApprovedSnippetsRepository } from "../../../src/security/approved-snippets.js";
@@ -74,8 +74,12 @@ function mockQueue(): RequestQueue {
   const run = async <T>(fn: () => Promise<T>): Promise<T> => fn();
   return {
     enqueue: run,
-    getStats: () => ({ pending: 0, running: 0 }),
-  } as RequestQueue;
+    enqueueJob: async () => {},
+    loadFromFile: async () => {},
+    depth: () => 0,
+    running: () => 0,
+    isPaused: () => false,
+  };
 }
 
 describe("Orchestrator", () => {
@@ -113,9 +117,14 @@ describe("Orchestrator", () => {
     let addMessageCalls = 0;
     const ts = {
       ...threadService,
-      addMessage: async (...args: unknown[]) => {
+      addMessage: async (
+        threadId: string,
+        senderId: string,
+        senderType: SenderType,
+        content: string
+      ) => {
         addMessageCalls++;
-        return threadService.addMessage("", "", "agent", "");
+        return threadService.addMessage(threadId, senderId, senderType, content);
       },
       findOrCreateThread: async () => ({
         id: "t1",
@@ -156,10 +165,11 @@ describe("Orchestrator", () => {
 
     const mockRegistry: AgentRegistry = {
       get: async (id) => (id === "alice" ? alice.config : bot.config),
-      update: async () => {},
-      remove: async () => {},
+      update: async () => undefined,
+      remove: async () => false,
       list: async () => [],
       agentWorkspacePath: (id) => `/workspace/${id}`,
+      register: async (config) => config,
     };
 
     const approvedRepo: ApprovedSnippetsRepository = {
@@ -232,10 +242,11 @@ describe("Orchestrator", () => {
       activeHours: { startHour: 0, endHour: 24 },
       agentRegistry: {
         get: async () => toAgent.config,
-        update: async () => {},
-        remove: async () => {},
+        update: async () => undefined,
+        remove: async () => false,
         list: async () => [],
         agentWorkspacePath: () => "/w",
+        register: async (config) => config,
       },
     });
 
@@ -269,10 +280,11 @@ describe("Orchestrator", () => {
       wsPush: () => {},
       agentRegistry: {
         get: async () => toAgent.config,
-        update: async () => {},
-        remove: async () => {},
+        update: async () => undefined,
+        remove: async () => false,
         list: async () => [],
         agentWorkspacePath: (id) => (id === "maia" ? "/workspace/maia" : "/workspace/bot"),
+        register: async (config) => config,
       },
       agentWorkspaceFs: fs,
     });

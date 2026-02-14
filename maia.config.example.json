@@ -125,5 +125,14 @@
   },
   "backup": {
     "includeAuditLog": false
+  },
+  "mcp": {
+    "servers": [
+      {
+        "name": "docker",
+        "command": "docker",
+        "args": ["mcp", "--config", "/path/to/gordon-mcp.yml"]
+      }
+    ]
   }
 }

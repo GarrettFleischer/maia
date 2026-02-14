@@ -16,6 +16,7 @@ import type { AgentToolsDeps } from "../../../src/agents/tools.js";
 import type { AgentRegistry, AgentConfig } from "../../../src/agents/registry.js";
 import type { SubAgent } from "../../../src/agents/factory.js";
 import type { ToolContext } from "../../../src/agent/tools/base.js";
+import type { CryptoProvider } from "../../../src/core/types.js";
 import { capturingLogger } from "../../helpers/index.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -97,6 +98,9 @@ function makeDeps(overrides?: Partial<AgentToolsDeps>): AgentToolsDeps {
     logger: overrides?.logger ?? capturingLogger(),
     createRuntime: overrides?.createRuntime ?? ((config: AgentConfig) => mockSubAgent(config.id)),
     activeAgents: overrides?.activeAgents ?? new Map<string, SubAgent>(),
+    crypto:
+      overrides?.crypto ??
+      ({ randomUUID: () => "test-uuid-" + Math.random().toString(36).slice(2) } as CryptoProvider),
   };
 }
 
@@ -107,15 +111,18 @@ describe("agent_create tool", () => {
     const deps = makeDeps();
     const tool = createAgentCreateTool(deps);
 
-    const result = await tool.execute({
-      id: "research-bot",
-      name: "ResearchBot",
-      personality: "thorough researcher",
-      tools: ["web_fetch"],
-    }, defaultContext());
+    const result = await tool.execute(
+      {
+        id: "research-bot",
+        schedule: "",
+        tools: ["web_fetch"],
+      },
+      defaultContext()
+    );
 
     expect(result.success).toBe(true);
-    expect(result.content).toContain("ResearchBot");
+    expect(result.content).toContain("created successfully");
+    expect(result.content).toContain("set_identity");
     expect(deps.activeAgents.has("research-bot")).toBe(true);
   });
 
@@ -123,11 +130,7 @@ describe("agent_create tool", () => {
     const registry = mockRegistry([sampleConfig({ id: "existing" })]);
     const tool = createAgentCreateTool(makeDeps({ registry }));
 
-    const result = await tool.execute({
-      id: "existing",
-      name: "X",
-      personality: "x",
-    }, defaultContext());
+    const result = await tool.execute({ id: "existing" }, defaultContext());
 
     expect(result.success).toBe(false);
     expect(result.content).toContain("already exists");
@@ -138,11 +141,7 @@ describe("agent_create tool", () => {
     const deps = makeDeps({ activeAgents });
     const tool = createAgentCreateTool(deps);
 
-    await tool.execute({
-      id: "minimal",
-      name: "MinimalBot",
-      personality: "minimal",
-    }, defaultContext());
+    await tool.execute({ id: "minimal" }, defaultContext());
 
     const agent = activeAgents.get("minimal");
     expect(agent).toBeDefined();
@@ -175,13 +174,13 @@ describe("agent_list tool", () => {
     expect(result.data!.count).toBe(2);
   });
 
-  it("should return 'No sub-agents registered' when empty", async () => {
+  it("should return 'No agents registered' when empty", async () => {
     const tool = createAgentListTool(makeDeps());
 
     const result = await tool.execute({}, defaultContext());
 
     expect(result.success).toBe(true);
-    expect(result.content).toContain("No sub-agents registered");
+    expect(result.content).toContain("No agents registered");
   });
 
   it("should return valid ToolDefinition", () => {

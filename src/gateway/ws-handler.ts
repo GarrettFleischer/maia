@@ -88,10 +88,10 @@ export interface WSHandlerDeps {
   /** Called when any user activity occurs (for quiet-time tracking). */
   onUserActivity?: () => void;
   /**
-   * @brief Handles user response to an approval request (tool proposal or flagged agent).
+   * @brief Handles user response to an approval request (tool proposal, agent creation, or flagged agent).
    * @param connectionId - WebSocket connection ID
    * @param senderId - Authenticated user ID
-   * @param payload - { kind, decision, feedback?, proposalId?, agentId?, ... }
+   * @param payload - { kind, decision, feedback?, proposalId?, agentId?, approvalRequestId?, requestId? }
    */
   onApprovalResponse?: (
     connectionId: string,
@@ -103,6 +103,7 @@ export interface WSHandlerDeps {
       proposalId?: string;
       agentId?: string;
       approvalRequestId?: string;
+      requestId?: string;
     }
   ) => Promise<void>;
   /** Idle timeout in ms before closing connection (default: 300000 = 5 min) */
@@ -395,6 +396,7 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
                 proposalId: payload.proposalId as string | undefined,
                 agentId: payload.agentId as string | undefined,
                 approvalRequestId: payload.approvalRequestId as string | undefined,
+                requestId: payload.requestId as string | undefined,
               });
               return JSON.stringify({ type: "approval_response_ack", success: true });
             } catch (err) {

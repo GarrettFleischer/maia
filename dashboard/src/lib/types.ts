@@ -89,13 +89,14 @@ export interface ThreadUpdate {
   };
 }
 
-/** Approval request push (tool proposal or flagged agent). */
+/** Approval request push (tool proposal, agent creation, MCP server proposal, or flagged agent). */
 export interface ApprovalRequest {
   type: "approval_request";
   id: string;
-  kind: "tool_proposal" | "flagged_agent";
+  kind: "tool_proposal" | "agent_creation_request" | "mcp_server_proposal" | "flagged_agent";
   summary: string;
   proposalId?: string;
+  requestId?: string;
   toolName?: string;
   agentId?: string;
   agentName?: string;

@@ -25,6 +25,7 @@
     "compile": "bun build src/index.ts --compile --outfile=maia"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

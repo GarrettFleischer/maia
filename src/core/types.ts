@@ -354,6 +354,9 @@ export interface MaiaConfig {
   backup: {
     includeAuditLog: boolean;
   };
+  mcp?: {
+    servers?: Array<{ name: string; command: string; args?: string[] }>;
+  };
 }
 
 /**

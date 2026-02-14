@@ -20,12 +20,11 @@ import type {
   MaiaConfig,
 } from "../core/types.js";
 import type { ProviderRegistry } from "../providers/base.js";
-import type { AgentConfig } from "./registry.js";
+import type { AgentConfig, AgentRegistry } from "./registry.js";
 
 import { createSandboxedFileSystem } from "../security/sandbox-fs.js";
 import { createAgentRuntime } from "../agent/runtime.js";
 import type { AgentRuntime } from "../agent/runtime.js";
-import type { AgentTool } from "../agent/tools/base.js";
 import { createContextBuilder } from "../agent/context.js";
 import { createSessionManager } from "../agent/session.js";
 import { createToolRegistry } from "../agent/tools/registry.js";
@@ -58,8 +57,16 @@ export interface SharedAgentDeps {
   providerRegistry: ProviderRegistry;
   /** Raw (unsandboxed) filesystem for creating per-agent sandboxes */
   rawFs: FileSystem;
-  /** Optional dynamic tools (from tools folder) to register for every agent */
-  dynamicTools?: AgentTool[];
+  /** Optional: for flat agent architecture — agent registry for create_agent / agent_list */
+  agentRegistry?: AgentRegistry;
+  /** Optional: creates and activates a new agent (for create_agent when Maia approves). */
+  createRuntime?: (config: AgentConfig) => SubAgent;
+  /** Optional: map of active agents (for create_agent tool). */
+  activeAgents?: Map<string, SubAgent>;
+  /** Optional: agent creation requests repo (for create_agent when non-Maia requests). */
+  creationRequestsRepo?: import("./agent-creation-requests.js").AgentCreationRequestsRepository;
+  /** Optional: called when a non-Maia agent submits a creation request. */
+  onAgentCreationRequest?: (request: import("./agent-creation-requests.js").AgentCreationRequest) => void;
 }
 
 /**
@@ -154,11 +161,8 @@ export function createSubAgentRuntime(
     toolRegistry.register(createMemoryForgetTool({ store: memoryStore, logger }));
   }
 
-  if (shared.dynamicTools) {
-    for (const tool of shared.dynamicTools) {
-      toolRegistry.register(tool);
-    }
-  }
+  // create_agent, chat_with_agent, dm_user, agent_list, set_identity are registered in index after sub-agent creation
+  // when sharedAgentDeps includes agentRegistry, createRuntime, activeAgents, creationRequestsRepo, onAgentCreationRequest
 
   // Auto-recall for this agent's memories
   const autoRecall = createAutoRecall({

@@ -206,6 +206,21 @@ export const configSchema = z.object({
   backup: z.object({
     includeAuditLog: z.boolean().default(false),
   }).default({ includeAuditLog: false }),
+
+  mcp: z
+    .object({
+      servers: z
+        .array(
+          z.object({
+            name: z.string().min(1),
+            command: z.string().min(1),
+            args: z.array(z.string()).optional().default([]),
+          })
+        )
+        .optional()
+        .default([]),
+    })
+    .default({ servers: [] }),
 });
 
 /**

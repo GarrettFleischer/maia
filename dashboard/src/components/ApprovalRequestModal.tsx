@@ -7,7 +7,7 @@ import type { ApprovalRequest } from "../lib/types.js";
 
 interface ApprovalRequestModalProps {
   request: ApprovalRequest | null;
-  onRespond: (payload: { kind: string; decision: string; feedback?: string; proposalId?: string; agentId?: string; approvalRequestId?: string }) => void;
+  onRespond: (payload: { kind: string; decision: string; feedback?: string; proposalId?: string; requestId?: string; agentId?: string; approvalRequestId?: string }) => void;
   onDismiss: () => void;
 }
 
@@ -26,6 +26,7 @@ export function ApprovalRequestModal({ request, onRespond, onDismiss }: Approval
       decision,
       feedback,
       proposalId: request.proposalId,
+      requestId: request.requestId,
       agentId: request.agentId,
       approvalRequestId: id,
     });
@@ -43,7 +44,7 @@ export function ApprovalRequestModal({ request, onRespond, onDismiss }: Approval
       >
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold text-maia-text">
-            {kind === "tool_proposal" ? "Tool proposal" : "Flagged agent"}
+            {kind === "tool_proposal" ? "Tool proposal" : kind === "agent_creation_request" ? "Agent creation request" : kind === "mcp_server_proposal" ? "MCP server proposal" : "Flagged agent"}
           </h2>
           <button
             type="button"
@@ -58,7 +59,7 @@ export function ApprovalRequestModal({ request, onRespond, onDismiss }: Approval
         {kind === "tool_proposal" && request.toolName && (
           <p class="text-xs text-maia-text-dim mb-3">Tool: {request.toolName}</p>
         )}
-        {kind === "flagged_agent" && (request.agentName ?? request.agentId) && (
+        {(kind === "agent_creation_request" || kind === "flagged_agent") && (request.agentName ?? request.agentId) && (
           <p class="text-xs text-maia-text-dim mb-2">
             Agent: {request.agentName ?? request.agentId}
           </p>
@@ -72,7 +73,7 @@ export function ApprovalRequestModal({ request, onRespond, onDismiss }: Approval
           </pre>
         )}
 
-        {kind === "tool_proposal" && (
+        {(kind === "tool_proposal" || kind === "agent_creation_request" || kind === "mcp_server_proposal") && (
           <div class="space-y-2">
             <div class="flex flex-wrap gap-2">
               <button
@@ -85,23 +86,25 @@ export function ApprovalRequestModal({ request, onRespond, onDismiss }: Approval
               <button
                 type="button"
                 onClick={() => {
-                  const feedback = window.prompt("Optional feedback for the agent:");
-                  handleDecision("reject", feedback ?? undefined);
+                  const feedback = window.prompt(kind === "agent_creation_request" || kind === "mcp_server_proposal" ? "Optional feedback for the requesting agent:" : "Optional feedback for the agent:");
+                  handleDecision(kind === "agent_creation_request" || kind === "mcp_server_proposal" ? "deny" : "reject", feedback ?? undefined);
                 }}
                 class="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg"
               >
-                Reject
+                {kind === "agent_creation_request" || kind === "mcp_server_proposal" ? "Deny" : "Reject"}
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const feedback = window.prompt("Requested changes (required):");
-                  handleDecision("modify", feedback ?? "");
-                }}
-                class="px-3 py-1.5 bg-maia-accent hover:bg-maia-accent-hover text-white text-sm rounded-lg"
-              >
-                Request modification
-              </button>
+              {kind === "tool_proposal" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const feedback = window.prompt("Requested changes (required):");
+                    handleDecision("modify", feedback ?? "");
+                  }}
+                  class="px-3 py-1.5 bg-maia-accent hover:bg-maia-accent-hover text-white text-sm rounded-lg"
+                >
+                  Request modification
+                </button>
+              )}
             </div>
           </div>
         )}

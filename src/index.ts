@@ -28,13 +28,11 @@ import { registerDashboardRoutes } from "./gateway/dashboard-routes.js";
 import { createThreadService } from "./threads/service.js";
 import { createTaskMonitor } from "./agents/task-monitor.js";
 import { createOrchestrator } from "./agents/orchestrator.js";
-import { createProposeToolTool } from "./agents/tools/propose-tool.js";
 import { createRequestQueue } from "./providers/queue.js";
-import { createToolProposalsRepository } from "./tools/proposals.js";
-import { loadDynamicTools } from "./tools/loader.js";
-import { writeApprovedTool } from "./tools/write-approved-tool.js";
-import { createToolAudit } from "./security/tool-audit.js";
 import { createApprovedSnippetsRepository } from "./security/approved-snippets.js";
+import { createAgentCreationRequestsRepository } from "./agents/agent-creation-requests.js";
+import { createMcpServerProposalsRepository } from "./agents/mcp-server-proposals.js";
+import { createMemoryStore } from "./memory/store.js";
 
 // Watchdog
 import { createWatchdogDaemon } from "./watchdog/daemon.js";
@@ -431,9 +429,17 @@ Commands:
 async function runStart(): Promise<void> {
   console.log("Starting Maia gateway server...\n");
 
+  type SubAgentType = import("./agents/factory.js").SubAgent;
+  const getOnAgentCreatedRef = {
+    current: null as (() => (subAgent: SubAgentType) => void) | null,
+  };
+  const taskMonitorRef = {
+    current: null as import("./agents/task-monitor.js").TaskMonitor | null,
+  };
+
   let app;
   try {
-    app = await createApp();
+    app = await createApp({ getOnAgentCreatedRef, taskMonitorRef });
   } catch (err) {
     console.error(
       "Failed to start Maia:",
@@ -455,6 +461,17 @@ async function runStart(): Promise<void> {
     await bootstrap.initializeWorkspace();
     await bootstrap.complete();
     ctx.logger.info("Workspace bootstrapped");
+  }
+
+  // MCP bridge: connect to configured MCP servers and register their tools on Maia's registry
+  if (ctx.config.mcp?.servers?.length) {
+    const { createMCPBridgeTools } = await import("./mcp/bridge.js");
+    for (const server of ctx.config.mcp.servers) {
+      const mcpTools = await createMCPBridgeTools({ logger: ctx.logger, server });
+      for (const t of mcpTools) {
+        runtime.getToolRegistry().register(t);
+      }
+    }
   }
 
   // Set up gateway
@@ -479,27 +496,25 @@ async function runStart(): Promise<void> {
     logger: ctx.logger,
   });
 
-  // ── Tool proposals and audit (for propose_tool and tool_review job) ─────
-  const toolProposalsRepo = createToolProposalsRepository({
-    db: ctx.db,
-    logger: ctx.logger,
-  });
-  const toolAudit = createToolAudit({
-    logger: ctx.logger,
-    llm: providerRegistry.getPrimary(),
-  });
   const approvedSnippetsRepo = createApprovedSnippetsRepository({
     db: ctx.db,
     crypto: ctx.crypto,
     logger: ctx.logger,
   });
+  const agentCreationRequestsRepo = createAgentCreationRequestsRepository({
+    db: ctx.db,
+    logger: ctx.logger,
+  });
+  const mcpServerProposalsRepo = createMcpServerProposalsRepository({
+    db: ctx.db,
+    logger: ctx.logger,
+  });
+
   /** Pending flagged-agent approval requests keyed by approval request id; only user (approval_response) can approve. */
   const pendingFlaggedAgentApprovals = new Map<
     string,
     { agentId: string; agentName: string; snippet: string; reason: string }
   >();
-  let onSecurityApproved: (proposalId: string) => void = () => {};
-  let onSecurityDenied: (proposalId: string, reason: string) => void = () => {};
 
   // ── Priority LLM Queue ────────────────────────────────────────
   const queuePersistPath = path.join(app.getDataDir(), "queue.json");
@@ -509,38 +524,29 @@ async function runStart(): Promise<void> {
     clock: ctx.clock,
     persistPath: queuePersistPath,
     fs: app.getRawFs(),
-    jobHandlers: {
-      tool_review: async (payload: Record<string, unknown>) => {
-        const proposalId = payload.proposalId as string;
-        if (!proposalId) return;
-        const proposal = await toolProposalsRepo.getById(proposalId);
-        if (!proposal || proposal.status !== "pending_security") return;
-        const result = await toolAudit.review(proposal);
-        if (!result.approved) {
-          await toolProposalsRepo.updateStatus(proposalId, "security_denied", {
-            securityReason: result.reason,
-          });
-          onSecurityDenied(proposalId, result.reason);
-          return;
-        }
-        await toolProposalsRepo.updateStatus(proposalId, "pending_user");
-        onSecurityApproved(proposalId);
-      },
-    },
+    jobHandlers: {},
   });
   await priorityQueue.loadFromFile();
+
+  let onAgentCreationRequest: (request: import("./agents/agent-creation-requests.js").AgentCreationRequest) => void =
+    () => {};
+  let onMcpProposalForUserApproval: (proposal: import("./agents/mcp-server-proposals.js").McpServerProposal) => void =
+    () => {};
+
+  type ApprovalPayload = {
+    kind: string;
+    decision: string;
+    feedback?: string;
+    proposalId?: string;
+    agentId?: string;
+    approvalRequestId?: string;
+    requestId?: string;
+  };
 
   let approvalResponseHandler: (
     connectionId: string,
     senderId: string,
-    payload: {
-      kind: string;
-      decision: string;
-      feedback?: string;
-      proposalId?: string;
-      agentId?: string;
-      approvalRequestId?: string;
-    }
+    payload: ApprovalPayload
   ) => Promise<void> = async () => {};
 
   // Set up WebSocket handler
@@ -701,6 +707,31 @@ async function runStart(): Promise<void> {
     );
   }
 
+  onAgentCreationRequest = (request) => {
+    bunServer.wsBroadcast(
+      JSON.stringify({
+        type: "approval_request",
+        id: ctx.crypto.randomUUID(),
+        kind: "agent_creation_request",
+        requestId: request.id,
+        agentId: request.proposedConfig.id,
+        summary: `Agent creation requested by ${request.requestingAgentId}: ${request.proposedConfig.id}`,
+      })
+    );
+  };
+
+  onMcpProposalForUserApproval = (proposal: import("./agents/mcp-server-proposals.js").McpServerProposal) => {
+    bunServer.wsBroadcast(
+      JSON.stringify({
+        type: "approval_request",
+        id: ctx.crypto.randomUUID(),
+        kind: "mcp_server_proposal",
+        requestId: proposal.id,
+        summary: `MCP server "${proposal.name}" proposed by ${proposal.proposingAgentId}: ${proposal.description ?? proposal.sandboxPath}`,
+      })
+    );
+  };
+
   // Register shutdown hook for the server
   ctx.shutdown.register(
     "bun-server",
@@ -765,18 +796,19 @@ async function runStart(): Promise<void> {
   const agentRegistry = app.getAgentRegistry();
   const activeAgents = app.getActiveAgents();
 
-  const workspacePathExpanded = ctx.config.workspace.path.startsWith("~")
-    ? path.join(os.homedir(), ctx.config.workspace.path.slice(1))
-    : path.resolve(ctx.config.workspace.path);
-  const toolsDir = path.join(workspacePathExpanded, "tools");
-  const dynamicTools = await loadDynamicTools(app.getRawFs(), toolsDir, {
-    logger: ctx.logger,
-  });
-  for (const tool of dynamicTools) {
-    runtime.getToolRegistry().register(tool);
-  }
+  const { createSubAgentRuntime } = await import("./agents/factory.js");
+  type SubAgent = import("./agents/factory.js").SubAgent;
+  type AgentConfig = import("./agents/registry.js").AgentConfig;
 
-  const sharedAgentDeps = {
+  let createAndActivateAgent: (config: AgentConfig) => SubAgent;
+
+  const sharedAgentDeps: import("./agents/factory.js").SharedAgentDeps & {
+    agentRegistry?: typeof agentRegistry;
+    createRuntime?: (config: AgentConfig) => SubAgent;
+    activeAgents?: Map<string, SubAgent>;
+    creationRequestsRepo?: import("./agents/agent-creation-requests.js").AgentCreationRequestsRepository;
+    onAgentCreationRequest?: (request: import("./agents/agent-creation-requests.js").AgentCreationRequest) => void;
+  } = {
     db: ctx.db,
     crypto: ctx.crypto,
     http: ctx.http,
@@ -787,10 +819,22 @@ async function runStart(): Promise<void> {
     config: ctx.config,
     providerRegistry,
     rawFs: app.getRawFs(),
-    dynamicTools,
+    agentRegistry,
+    creationRequestsRepo: agentCreationRequestsRepo,
+    onAgentCreationRequest: (req) => onAgentCreationRequest(req),
   };
 
+  createAndActivateAgent = (config: AgentConfig) => {
+    const agentWorkspace = agentRegistry.agentWorkspacePath(config.id);
+    const subAgent = createSubAgentRuntime(config, agentWorkspace, sharedAgentDeps);
+    activeAgents.set(config.id, subAgent);
+    return subAgent;
+  };
+  sharedAgentDeps.createRuntime = createAndActivateAgent;
+  sharedAgentDeps.activeAgents = activeAgents;
+
   // Load all existing agents and create their runtimes
+  const { createAgentCreateTool } = await import("./agents/tools.js");
   try {
     const existingAgents = await agentRegistry.list();
     for (const agentConfig of existingAgents) {
@@ -801,6 +845,23 @@ async function runStart(): Promise<void> {
         const agentWorkspace = agentRegistry.agentWorkspacePath(agentConfig.id);
         const subAgent = createSub(agentConfig, agentWorkspace, sharedAgentDeps);
         activeAgents.set(agentConfig.id, subAgent);
+        if (
+          sharedAgentDeps.creationRequestsRepo &&
+          sharedAgentDeps.onAgentCreationRequest
+        ) {
+          subAgent.runtime.getToolRegistry().register(
+            createAgentCreateTool({
+              registry: agentRegistry,
+              logger: ctx.logger,
+              createRuntime: createAndActivateAgent,
+              activeAgents,
+              crypto: ctx.crypto,
+              resolveAgentId: () => agentConfig.id,
+              creationRequestsRepo: agentCreationRequestsRepo,
+              onAgentCreationRequest,
+            })
+          );
+        }
         ctx.logger.info("Agent loaded", {
           id: agentConfig.id,
           name: agentConfig.name,
@@ -836,41 +897,104 @@ async function runStart(): Promise<void> {
       approvalRequestId?: string;
     }
   ) => {
-    if (payload.kind === "tool_proposal" && payload.proposalId) {
-      const proposal = await toolProposalsRepo.getById(payload.proposalId);
-      if (!proposal) return;
+    if (payload.kind === "agent_creation_request" && (payload as ApprovalPayload).requestId) {
+      const requestId = (payload as ApprovalPayload).requestId!;
+      const request = await agentCreationRequestsRepo.getById(requestId);
+      if (!request || request.status !== "pending") return;
       if (payload.decision === "approve") {
-        await toolProposalsRepo.updateStatus(payload.proposalId, "user_approved");
-        try {
-          await writeApprovedTool(
-            app.getRawFs(),
-            toolsDir,
-            proposal,
-            ctx.logger
-          );
-        } catch (err) {
-          ctx.logger.warn("Failed to write approved tool to tools folder", {
-            proposalId: payload.proposalId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-        ctx.logger.info("Tool proposal approved by user", { proposalId: payload.proposalId });
+        const { PLACEHOLDER_NAME, PLACEHOLDER_SOUL } = await import("./agents/tools.js");
+        const p = request.proposedConfig;
+        const config: AgentConfig = {
+          id: p.id,
+          name: PLACEHOLDER_NAME,
+          emoji: p.emoji ?? "🤖",
+          personality: PLACEHOLDER_SOUL,
+          createdBy: request.requestingAgentId,
+          schedule: p.schedule ?? "",
+          tools: p.tools ?? ["memory_search", "memory_store"],
+          model: p.model ?? { provider: "gemini", model: "gemini-2.0-flash" },
+          instructions: p.instructions,
+        };
+        const registered = await agentRegistry.register(config);
+        const subAgent = createAndActivateAgent(registered);
+        activeAgents.set(config.id, subAgent);
+        getOnAgentCreatedRef.current?.()(subAgent);
+        await agentCreationRequestsRepo.updateStatus(requestId, "approved");
+        const creatorMemoryStore = createMemoryStore({
+          db: ctx.db,
+          crypto: ctx.crypto,
+          logger: ctx.logger,
+          agentId: request.requestingAgentId,
+        });
+        await creatorMemoryStore.store({
+          text: `I requested creation of agent ${config.id}. I can chat with them using chat_with_agent.`,
+          category: "fact",
+          importance: 0.5,
+        });
+        await orchestrator.agentToAgentChat(
+          "maia",
+          request.requestingAgentId,
+          `Your agent creation request for **${config.id}** was approved. They are now active. You can chat with them using chat_with_agent.`
+        );
+        ctx.logger.info("Agent creation request approved", {
+          requestId,
+          agentId: config.id,
+          requestingAgentId: request.requestingAgentId,
+        });
       } else {
-        const status = payload.decision === "modify" ? "pending_user" : "user_denied";
-        await toolProposalsRepo.updateStatus(payload.proposalId, status, {
-          userFeedback: payload.feedback ?? null,
+        await agentCreationRequestsRepo.updateStatus(requestId, "denied");
+        await orchestrator.agentToAgentChat(
+          "maia",
+          request.requestingAgentId,
+          `Your agent creation request for **${request.proposedConfig.id}** was denied.`
+        );
+        ctx.logger.info("Agent creation request denied", {
+          requestId,
+          requestingAgentId: request.requestingAgentId,
         });
-        ctx.logger.info("Tool proposal user response", {
-          proposalId: payload.proposalId,
-          decision: payload.decision,
-        });
-        if (proposal.proposingAgentId !== "maia") {
-          const msg =
-            payload.decision === "modify"
-              ? `The user requested changes to your tool proposal "${proposal.name}". Feedback: ${payload.feedback ?? "none"}`
-              : `Your tool proposal "${proposal.name}" was rejected by the user. Feedback: ${payload.feedback ?? "none"}`;
-          await orchestrator.agentToAgentChat("maia", proposal.proposingAgentId, msg);
+      }
+    } else if (payload.kind === "mcp_server_proposal" && (payload as ApprovalPayload).requestId) {
+      const proposalId = (payload as ApprovalPayload).requestId!;
+      const proposal = await mcpServerProposalsRepo.getById(proposalId);
+      if (!proposal || proposal.status !== "pending_user") return;
+      if (payload.decision === "approve") {
+        await mcpServerProposalsRepo.updateStatus(proposalId, "user_approved");
+        const mcpApprovedDir = path.join(app.getDataDir(), "mcp-approved");
+        const snippetPath = path.join(mcpApprovedDir, `${proposal.name.replace(/[^a-z0-9-_]/gi, "_")}.yml`);
+        const snippet = `# Add this to your Docker MCP config (e.g. gordon-mcp.yml or --additional-config)
+# MCP server: ${proposal.name}
+# Proposed by agent: ${proposal.proposingAgentId}
+# Path: ${proposal.sandboxPath}
+services:
+  ${proposal.name.replace(/[^a-z0-9-_]/gi, "_")}:
+    build: ${proposal.sandboxPath}
+    # Or use image: ${proposal.imageRef ?? "<image-ref>"}
+`;
+        try {
+          const rawFs = app.getRawFs();
+          if (!(await rawFs.exists(mcpApprovedDir))) {
+            await rawFs.mkdir(mcpApprovedDir);
+          }
+          await rawFs.writeFile(snippetPath, snippet);
+        } catch (err) {
+          ctx.logger.warn("Failed to write MCP snippet", { path: snippetPath, error: err instanceof Error ? err.message : String(err) });
         }
+        await orchestrator.agentToAgentChat(
+          "maia",
+          proposal.proposingAgentId,
+          `Your MCP server **${proposal.name}** was approved. A config snippet was written to \`${snippetPath}\`. Add it to your Docker MCP setup (e.g. --additional-config) to use it.`
+        );
+        ctx.logger.info("MCP server proposal approved", { proposalId, name: proposal.name, proposingAgentId: proposal.proposingAgentId });
+      } else {
+        await mcpServerProposalsRepo.updateStatus(proposalId, "user_denied", {
+          userFeedback: payload.feedback ?? undefined,
+        });
+        await orchestrator.agentToAgentChat(
+          "maia",
+          proposal.proposingAgentId,
+          `Your MCP server proposal **${proposal.name}** was denied.${payload.feedback ? ` Feedback: ${payload.feedback}` : ""}`
+        );
+        ctx.logger.info("MCP server proposal denied", { proposalId, proposingAgentId: proposal.proposingAgentId });
       }
     } else if (payload.kind === "flagged_agent" && payload.agentId) {
       const agentId = payload.agentId;
@@ -1020,6 +1144,7 @@ async function runStart(): Promise<void> {
     },
   });
 
+  taskMonitorRef.current = taskMonitor;
   taskMonitor.start(async (agentId, task) => {
     const subAgent = activeAgents.get(agentId);
     if (!subAgent) return;
@@ -1097,55 +1222,89 @@ async function runStart(): Promise<void> {
   orchestratorRef = orchestrator;
   orchestrator.start();
 
+  const { createChatWithAgentTool } = await import("./agents/tools/chat-with-agent.js");
+  const { createDmUserTool } = await import("./agents/tools/dm-user.js");
+  const { createAgentListTool } = await import("./agents/tools.js");
+  const { createSetIdentityTool } = await import("./agents/tools/set-identity.js");
+  const { createProposeMcpServerTool } = await import("./agents/tools/propose-mcp-server.js");
+  const rawFs = app.getRawFs();
+
+  const writeAgentWorkspaceFile = async (agentId: string, filename: string, content: string) => {
+    const p = agentRegistry.agentWorkspacePath(agentId) + "/" + filename;
+    await rawFs.writeFile(p, content);
+  };
+
+  const registerAgentTools = (agentId: string, subAgent: SubAgentType) => {
+    subAgent.runtime.getToolRegistry().register(
+      createChatWithAgentTool({
+        logger: ctx.logger,
+        orchestrator,
+        resolveAgentId: () => agentId,
+      })
+    );
+    subAgent.runtime.getToolRegistry().register(
+      createDmUserTool({
+        logger: ctx.logger,
+        orchestrator,
+        activeAgents,
+        resolveAgentId: () => agentId,
+      })
+    );
+    subAgent.runtime.getToolRegistry().register(
+      createAgentListTool({
+        registry: agentRegistry,
+        logger: ctx.logger,
+        createRuntime: createAndActivateAgent,
+        activeAgents,
+        crypto: ctx.crypto,
+        taskMonitor,
+        resolveAgentId: () => agentId,
+      })
+    );
+    subAgent.runtime.getToolRegistry().register(
+      createSetIdentityTool({
+        logger: ctx.logger,
+        registry: agentRegistry,
+        resolveAgentId: () => agentId,
+        writeAgentWorkspaceFile,
+      })
+    );
+    subAgent.runtime.getToolRegistry().register(
+      createProposeMcpServerTool({
+        logger: ctx.logger,
+        crypto: ctx.crypto,
+        repo: mcpServerProposalsRepo,
+        registry: agentRegistry,
+        resolveAgentId: () => agentId,
+        onMcpProposalForUserApproval: (proposal) => onMcpProposalForUserApproval(proposal),
+      })
+    );
+  };
+  for (const [agentId, subAgent] of activeAgents) {
+    registerAgentTools(agentId, subAgent);
+  }
+  getOnAgentCreatedRef.current = () => (subAgent: SubAgentType) => {
+    registerAgentTools(subAgent.config.id, subAgent);
+    const welcomeContent =
+      "You were just created. Use the set_identity tool to choose your name and soul (personality). They must be unique among all agents. Call set_identity with your chosen name and soul.";
+    void priorityQueue.enqueue(() =>
+      subAgent.runtime.handleMessage({
+        id: ctx.crypto.randomUUID(),
+        channelId: "welcome",
+        senderId: "maia",
+        content: welcomeContent,
+        timestamp: ctx.clock.timestamp(),
+        isGroup: false,
+      })
+    );
+  };
+
   ctx.shutdown.register(
     "orchestrator",
     async () => {
       orchestrator.stop();
     },
     4,
-  );
-
-  onSecurityDenied = (proposalId: string, reason: string) => {
-    void (async () => {
-      const proposal = await toolProposalsRepo.getById(proposalId);
-      if (!proposal || proposal.proposingAgentId === "maia") return;
-      const msg = `Your tool proposal "${proposal.name}" was rejected for security reasons. Reason: ${reason}`;
-      await orchestrator.agentToAgentChat("maia", proposal.proposingAgentId, msg);
-    })();
-  };
-
-  // Wire tool_review "security approved" path: DM user and send approval_request
-  onSecurityApproved = (proposalId: string) => {
-    void (async () => {
-      const proposal = await toolProposalsRepo.getById(proposalId);
-      if (!proposal) return;
-      await orchestrator.sendDmToUser(
-        "maia",
-        "Maia",
-        "An agent proposed a new tool. Please approve or reject in the dashboard."
-      );
-      bunServer.wsBroadcast(
-        JSON.stringify({
-          type: "approval_request",
-          id: ctx.crypto.randomUUID(),
-          kind: "tool_proposal",
-          proposalId,
-          toolName: proposal.name,
-          summary: proposal.description.slice(0, 200),
-        })
-      );
-    })();
-  };
-
-  // Register propose_tool for Maia
-  runtime.getToolRegistry().register(
-    createProposeToolTool({
-      logger: ctx.logger,
-      proposals: toolProposalsRepo,
-      queue: priorityQueue,
-      crypto: ctx.crypto,
-      resolveAgentId: () => "maia",
-    })
   );
 
   // ── Dashboard API routes ─────────────────────────────────────

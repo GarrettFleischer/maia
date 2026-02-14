@@ -54,6 +54,47 @@ describe("Config Schema", () => {
     const result = configSchema.safeParse(config);
     expect(result.success).toBe(false);
   });
+
+  it("should accept optional mcp.servers and default to empty array", () => {
+    const config = {
+      provider: { primary: "ollama", model: "test" },
+    };
+    const result = configSchema.parse(config);
+    expect(result.mcp).toBeDefined();
+    expect(result.mcp.servers).toEqual([]);
+  });
+
+  it("should validate mcp.servers with name, command, and optional args", () => {
+    const config = {
+      provider: { primary: "ollama", model: "test" },
+      mcp: {
+        servers: [
+          { name: "docker", command: "docker", args: ["mcp", "--config", "/path/to/mcp.yml"] },
+          { name: "custom", command: "node", args: [] },
+        ],
+      },
+    };
+    const result = configSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mcp.servers).toHaveLength(2);
+      expect(result.data.mcp.servers[0].name).toBe("docker");
+      expect(result.data.mcp.servers[0].command).toBe("docker");
+      expect(result.data.mcp.servers[0].args).toEqual(["mcp", "--config", "/path/to/mcp.yml"]);
+      expect(result.data.mcp.servers[1].args).toEqual([]);
+    }
+  });
+
+  it("should reject mcp.servers with empty name or command", () => {
+    const invalid = [
+      { provider: { primary: "ollama", model: "test" }, mcp: { servers: [{ name: "", command: "docker" }] } },
+      { provider: { primary: "ollama", model: "test" }, mcp: { servers: [{ name: "x", command: "" }] } },
+    ];
+    for (const config of invalid) {
+      const result = configSchema.safeParse(config);
+      expect(result.success).toBe(false);
+    }
+  });
 });
 
 describe("Config Loader", () => {

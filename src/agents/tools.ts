@@ -1,17 +1,19 @@
 /**
- * @fileoverview Agent management tools for Maia (the manager brain).
+ * @fileoverview Agent management tools for Maia and sub-agents (flat architecture).
  * @module agents/tools
  *
- * @brief These tools are registered ONLY in Maia's tool registry, not in
- * sub-agents. They let Maia (and by extension the user) create, list,
- * remove, message, and inspect sub-agents.
+ * @brief These tools are registered for Maia and optionally for sub-agents. They let
+ * agents create (with Maia approval when caller is not Maia), list, remove, message,
+ * and inspect other agents. New agents choose their own name and soul via set_identity.
  */
 
-import type { Logger, InboundMessage } from "../core/types.js";
+import type { CryptoProvider, Logger, InboundMessage } from "../core/types.js";
 import type { AgentTool, ToolContext, ToolResult } from "../agent/tools/base.js";
 import type { ToolDefinition } from "../core/types.js";
 import type { AgentRegistry, AgentConfig, AgentModelConfig } from "./registry.js";
 import type { SubAgent } from "./factory.js";
+import type { AgentCreationRequestsRepository, AgentCreationRequest } from "./agent-creation-requests.js";
+import type { TaskMonitor } from "./task-monitor.js";
 
 /**
  * @brief Dependencies shared by all agent management tools.
@@ -23,36 +25,68 @@ export interface AgentToolsDeps {
   createRuntime: (config: AgentConfig) => SubAgent;
   /** Map of active sub-agent runtimes, keyed by agent ID */
   activeAgents: Map<string, SubAgent>;
+  /** Crypto for generating request IDs */
+  crypto: CryptoProvider;
+  /** Resolves the calling agent's ID (e.g. "maia" or sub-agent id). When absent, caller is treated as Maia. */
+  resolveAgentId?: (context: ToolContext) => string | undefined;
+  /** Repository for agent creation requests (required when non-Maia agents can request creation). */
+  creationRequestsRepo?: AgentCreationRequestsRepository;
+  /** Called when a non-Maia agent submits an agent creation request (e.g. to push approval to dashboard). */
+  onAgentCreationRequest?: (request: AgentCreationRequest) => void;
+  /** Called when an agent is created (direct path) so the host can register chat_with_agent/dm_user on it. */
+  onAgentCreated?: (subAgent: SubAgent) => void;
+  /** Optional: for agent_list to include each agent's assigned tasks. */
+  taskMonitor?: TaskMonitor;
+  /** Optional ref to TaskMonitor (for Maia's agent_list when monitor is created later). */
+  taskMonitorRef?: { current: TaskMonitor | null };
 }
 
 // ─── agent_create ─────────────────────────────────────────────────
 
 /**
+ * @brief Placeholder name and soul for newly created agents; they set their own via set_identity.
+ */
+export const PLACEHOLDER_NAME = "New Agent";
+export const PLACEHOLDER_SOUL = "Identity to be set";
+
+/**
  * @brief Creates the agent_create tool.
  * @param deps - Shared agent tool dependencies
- * @returns AgentTool that creates a new sub-agent
+ * @returns AgentTool that creates a new sub-agent (direct if Maia, request if non-Maia)
+ *
+ * @note When the caller is not Maia, a creation request is stored and onAgentCreationRequest
+ * is called; Maia/user must approve before the agent is created. New agents get placeholder
+ * name/soul and choose their own via set_identity.
  *
  * @example
- * // LLM calls: agent_create({ id: "research-bot", name: "ResearchBot", ... })
+ * // Maia: agent_create({ id: "research-bot", schedule: "0 9 * * *", tools: ["memory_search"] })
+ * // Other agent: same args -> request created for Maia approval
  */
 export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
-  const { registry, logger, createRuntime, activeAgents } = deps;
+  const {
+    registry,
+    logger,
+    createRuntime,
+    activeAgents,
+    crypto,
+    resolveAgentId,
+    creationRequestsRepo,
+    onAgentCreationRequest,
+    onAgentCreated,
+  } = deps;
 
   return {
     name: "agent_create",
-    description: "Create a new sub-agent with its own persona, schedule, and tools.",
+    description: "Create a new agent. If you are not Maia, a request is submitted for her approval; the new agent will choose their own name and soul.",
     definition(): ToolDefinition {
       return {
         name: "agent_create",
         description:
-          "Create a new sub-agent. The agent gets its own workspace, personality, memory, and optional schedule.",
+          "Create a new agent with its own workspace, schedule, and tools. Provide at least id. The new agent will choose their own name and soul after creation. If you are not Maia, your request must be approved by Maia first.",
         parameters: {
           type: "object",
           properties: {
             id: { type: "string", description: "Unique kebab-case identifier (e.g. 'research-bot')" },
-            name: { type: "string", description: "Display name for the agent" },
-            emoji: { type: "string", description: "Emoji identifier" },
-            personality: { type: "string", description: "Personality description for the agent's soul" },
             schedule: { type: "string", description: "Cron schedule (e.g. '0 9 * * *') or empty for no schedule" },
             tools: {
               type: "array",
@@ -62,26 +96,61 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
             provider: { type: "string", description: "LLM provider name (e.g. 'gemini', 'groq')" },
             model: { type: "string", description: "LLM model name" },
             instructions: { type: "string", description: "Custom operating instructions (optional)" },
+            emoji: { type: "string", description: "Emoji identifier (optional; agent can change later)" },
           },
-          required: ["id", "name", "personality"],
+          required: ["id"],
         },
       };
     },
 
-    async execute(args: Record<string, unknown>): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
       try {
         const id = args.id as string;
+        if (!id || typeof id !== "string") {
+          return { content: "id is required.", success: false };
+        }
         const existing = await registry.get(id);
         if (existing) {
           return { content: `Agent '${id}' already exists.`, success: false };
         }
 
+        const callerId = resolveAgentId?.(context) ?? "maia";
+        const isMaia = callerId === "maia";
+
+        if (!isMaia && creationRequestsRepo && onAgentCreationRequest) {
+          const proposedConfig = {
+            id,
+            schedule: (args.schedule as string) ?? "",
+            tools: (args.tools as string[]) ?? ["memory_search", "memory_store"],
+            model: {
+              provider: (args.provider as string) ?? "gemini",
+              model: (args.model as string) ?? "gemini-2.0-flash",
+            } as AgentModelConfig,
+            instructions: args.instructions as string | undefined,
+            emoji: (args.emoji as string) ?? "🤖",
+          };
+          const requestId = crypto.randomUUID();
+          await creationRequestsRepo.create({
+            id: requestId,
+            requestingAgentId: callerId,
+            proposedConfigJson: JSON.stringify(proposedConfig),
+          });
+          const request = await creationRequestsRepo.getById(requestId);
+          if (request) onAgentCreationRequest(request);
+          logger.info("Agent creation request submitted", { requestId, id, requestingAgentId: callerId });
+          return {
+            content: `Agent creation request for '${id}' submitted. Maia must approve before the agent is created. You will be able to chat with them using chat_with_agent once they exist.`,
+            success: true,
+            data: { requestId, agentId: id },
+          };
+        }
+
         const config: AgentConfig = {
           id,
-          name: args.name as string,
+          name: PLACEHOLDER_NAME,
           emoji: (args.emoji as string) ?? "🤖",
-          personality: args.personality as string,
-          createdBy: "maia",
+          personality: PLACEHOLDER_SOUL,
+          createdBy: callerId,
           schedule: (args.schedule as string) ?? "",
           tools: (args.tools as string[]) ?? ["memory_search", "memory_store"],
           model: {
@@ -92,14 +161,13 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
         };
 
         const registered = await registry.register(config);
-
-        // Create and activate the runtime
         const subAgent = createRuntime(registered);
         activeAgents.set(id, subAgent);
+        onAgentCreated?.(subAgent);
 
-        logger.info("Agent created via tool", { id, name: config.name });
+        logger.info("Agent created via tool", { id, createdBy: callerId });
         return {
-          content: `Agent '${config.name}' (${id}) created successfully with tools: ${config.tools.join(", ")}. ${config.schedule ? `Scheduled: ${config.schedule}` : "No schedule."}`,
+          content: `Agent (${id}) created successfully with tools: ${config.tools.join(", ")}. They will choose their own name and soul using set_identity. ${config.schedule ? `Scheduled: ${config.schedule}` : "No schedule."}`,
           success: true,
           data: { agentId: id },
         };
@@ -117,33 +185,57 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
 
 /**
  * @brief Creates the agent_list tool.
- * @param deps - Shared agent tool dependencies
- * @returns AgentTool that lists all sub-agents
+ * @param deps - Shared agent tool dependencies (optional taskMonitor for assigned tasks)
+ * @returns AgentTool that lists all agents with status and optionally assigned tasks
  */
 export function createAgentListTool(deps: AgentToolsDeps): AgentTool {
-  const { registry } = deps;
+  const { registry, taskMonitor, taskMonitorRef, resolveAgentId } = deps;
+  const getTaskMonitor = () => taskMonitor ?? taskMonitorRef?.current ?? undefined;
 
   return {
     name: "agent_list",
-    description: "List all registered sub-agents and their status.",
+    description: "List all registered agents, their status, and assigned tasks.",
     definition(): ToolDefinition {
       return {
         name: "agent_list",
-        description: "List all registered sub-agents with their status, schedule, and tools.",
+        description:
+          "List all registered agents with status, schedule, tools, and assigned tasks (next due or count of pending).",
         parameters: { type: "object", properties: {} },
       };
     },
 
-    async execute(): Promise<ToolResult> {
+    async execute(_args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
       try {
         const agents = await registry.list();
         if (agents.length === 0) {
-          return { content: "No sub-agents registered.", success: true };
+          return { content: "No agents registered.", success: true };
         }
+        const callerId = resolveAgentId?.(context);
 
-        const lines = agents.map((a) =>
-          `- **${a.name}** (${a.id}) ${a.emoji} | Active: ${a.active !== false ? "yes" : "no"} | Tools: ${a.tools.join(", ")} | Schedule: ${a.schedule || "none"}`
-        );
+        const lines: string[] = [];
+        for (const a of agents) {
+          let line = `- **${a.name}** (${a.id}) ${a.emoji} | Active: ${a.active !== false ? "yes" : "no"} | Tools: ${a.tools.join(", ")} | Schedule: ${a.schedule || "none"}`;
+          if (callerId === a.id) line += " | *(you)*";
+          const monitor = getTaskMonitor();
+          if (monitor) {
+            try {
+              const tasks = await monitor.getTasks(a.id);
+              const pending = tasks.filter((t) => t.status === "pending");
+              if (pending.length > 0) {
+                const next = pending.sort(
+                  (x, y) => new Date(x.scheduledAt).getTime() - new Date(y.scheduledAt).getTime()
+                )[0];
+                line += ` | Assigned: ${next.description} (due ${next.scheduledAt})`;
+                if (pending.length > 1) line += `; +${pending.length - 1} more`;
+              } else {
+                line += " | Assigned: none";
+              }
+            } catch {
+              line += " | Assigned: —";
+            }
+          }
+          lines.push(line);
+        }
         return {
           content: `Registered agents:\n${lines.join("\n")}`,
           success: true,
@@ -214,7 +306,7 @@ export function createAgentRemoveTool(deps: AgentToolsDeps): AgentTool {
  * @returns AgentTool that sends a message to a sub-agent and returns the response
  */
 export function createAgentMessageTool(deps: AgentToolsDeps): AgentTool {
-  const { activeAgents, logger } = deps;
+  const { activeAgents, logger, crypto } = deps;
 
   return {
     name: "agent_message",

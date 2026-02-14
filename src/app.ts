@@ -93,6 +93,10 @@ export interface CreateAppOptions {
   configPath?: string;
   /** Path to the data directory. Defaults to ~/.maia/data */
   dataDir?: string;
+  /** Ref to a function that returns the onAgentCreated callback (set by host after orchestrator exists). */
+  getOnAgentCreatedRef?: { current: (() => (subAgent: SubAgent) => void) | null };
+  /** Ref to TaskMonitor (set by host after task monitor exists) for agent_list assigned tasks. */
+  taskMonitorRef?: { current: import("./agents/task-monitor.js").TaskMonitor | null };
 }
 
 /**
@@ -295,12 +299,17 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
     return subAgent;
   };
 
-  // Register Maia's agent management tools
+  // Register Maia's agent management tools (crypto for request IDs; onAgentCreated from options for post-create tool registration)
   const agentToolDeps = {
     registry: agentRegistry,
     logger,
     createRuntime: createAndActivateAgent,
     activeAgents,
+    crypto,
+    onAgentCreated: options?.getOnAgentCreatedRef
+      ? (sub: SubAgent) => options.getOnAgentCreatedRef!.current?.()?.(sub)
+      : undefined,
+    taskMonitorRef: options?.taskMonitorRef,
   };
   toolRegistry.register(createAgentCreateTool(agentToolDeps));
   toolRegistry.register(createAgentListTool(agentToolDeps));
