@@ -152,6 +152,7 @@ export function createMemoryStore(deps: MemoryStoreDeps): MemoryStore {
 
     async remove(id: string): Promise<void> {
       await db.execute("DELETE FROM memories WHERE id = ?", [id]);
+      localCache.delete(id);
       logger.debug("Memory removed", { id });
     },
 

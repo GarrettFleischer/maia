@@ -10,6 +10,14 @@
   "scripts": {
     "start": "bun run src/index.ts start",
     "chat": "bun run src/index.ts chat",
+    "onboard": "bun run src/index.ts onboard",
+    "credentials": "bun run src/index.ts credentials",
+    "backup": "bun run src/index.ts backup",
+    "restore": "bun run src/index.ts restore",
+    "schedule": "bun run src/index.ts schedule",
+    "watchdog": "bun run src/index.ts watchdog",
+    "doctor": "bun run src/index.ts doctor",
+    "help": "bun run src/index.ts -- --help",
     "test": "bun test",
     "test:watch": "bun test --watch",
     "typecheck": "bunx tsc --noEmit"
