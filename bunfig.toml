@@ -1,0 +1,6 @@
+# Bun configuration (https://bun.sh/docs/runtime/bunfig)
+# Coverage reports go to coverage/ (gitignored). Use "bun run test:coverage".
+
+[test]
+coverageReporter = ["text", "lcov"]
+coverageDir = "coverage"

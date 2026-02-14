@@ -143,4 +143,37 @@ describe("Alerter", () => {
 
     expect(shutdown.shutdownCalled).toBe(false);
   });
+
+  it("should log CRITICAL alerts as error to console", async () => {
+    const logger = capturingLogger();
+    const alerter = createAlerter({ channels: ["console"], logger });
+    await alerter.dispatch({
+      level: "CRITICAL" as AlertLevel,
+      pattern: "injection_storm",
+      message: "Injection storm detected",
+      timestamp: "2026-02-13T14:00:00Z",
+      metadata: {},
+    });
+    const errorLogs = logger.calls.filter((c) => c.level === "error");
+    expect(errorLogs.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("should log discord/telegram/webhook channel as info", async () => {
+    const logger = capturingLogger();
+    const alerter = createAlerter({
+      channels: ["discord", "telegram"],
+      logger,
+    });
+    await alerter.dispatch({
+      level: "WARN" as AlertLevel,
+      pattern: "brute_force",
+      message: "Auth failures",
+      timestamp: "2026-02-13T14:00:00Z",
+      metadata: {},
+    });
+    const infoLogs = logger.calls.filter((c) => c.level === "info");
+    expect(infoLogs.length).toBeGreaterThanOrEqual(2);
+    expect(infoLogs.some((c) => c.message?.includes("discord"))).toBe(true);
+    expect(infoLogs.some((c) => c.message?.includes("telegram"))).toBe(true);
+  });
 });

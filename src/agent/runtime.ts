@@ -50,7 +50,7 @@ export interface AgentRuntime {
   /**
    * @brief Processes an inbound message through the agent pipeline.
    * @param message - The inbound message from any channel
-   * @returns Promise resolving when the response has been sent
+   * @returns Promise resolving to the assistant's response content
    *
    * @note Pipeline:
    * 1. Get or create session
@@ -59,9 +59,10 @@ export interface AgentRuntime {
    * 4. Add user message to session
    * 5. Call LLM with conversation + tools
    * 6. Handle tool calls (loop until no more tool calls)
-   * 7. Send assistant response back to channel
+   * 7. Send assistant response back to channel via sendReply callback
+   * 8. Return the response content to the caller
    */
-  handleMessage(message: InboundMessage): Promise<void>;
+  handleMessage(message: InboundMessage): Promise<string>;
 
   /**
    * @brief Gets the current session ID for a channel+sender pair.
@@ -146,7 +147,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   }
 
   return {
-    async handleMessage(message: InboundMessage): Promise<void> {
+    async handleMessage(message: InboundMessage): Promise<string> {
       await events.emit("messageReceived", {
         channelId: message.channelId,
         senderId: message.senderId,
@@ -289,6 +290,8 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         toolRounds,
         responseLength: response.content.length,
       });
+
+      return response.content;
     },
 
     getSessionId(channelId: string, senderId: string): string | undefined {

@@ -10,21 +10,35 @@
   "provider": {
     "primary": "ollama",
     "model": "llama3.2",
-    "fallback": {
-      "provider": "groq",
-      "model": "llama-3.3-70b-versatile"
+    "healthCheck": {
+      "enabled": true,
+      "intervalMs": 60000,
+      "consecutiveFailures": 3
     },
     "ollama": {
       "baseUrl": "http://localhost:11434"
     },
     "groq": {
       "credentialName": "groq-api-key"
+    },
+    "gemini": {
+      "credentialName": "gemini-api-key"
+    },
+    "huggingface": {
+      "credentialName": "huggingface-api-key"
+    },
+    "openrouter": {
+      "credentialName": "openrouter-api-key"
     }
   },
   "gateway": {
     "port": 3000,
+    "host": "0.0.0.0",
     "auth": {
       "token": "${MAIA_AUTH_TOKEN}"
+    },
+    "cors": {
+      "origins": ["http://localhost:3000"]
     }
   },
   "channels": {
@@ -38,26 +52,78 @@
     "embeddingProvider": "ollama",
     "embeddingModel": "nomic-embed-text",
     "search": {
-      "hybrid": { "enabled": true, "vectorWeight": 0.7, "textWeight": 0.3 }
+      "hybrid": {
+        "enabled": true,
+        "vectorWeight": 0.7,
+        "textWeight": 0.3
+      },
+      "defaultLimit": 5
     },
     "autoCapture": true,
-    "autoRecall": true
+    "autoRecall": true,
+    "consolidation": {
+      "schedule": "0 23 * * *",
+      "onDemand": true,
+      "sizeThreshold": 5000
+    }
   },
   "security": {
-    "rateLimiting": { "maxRequests": 60, "windowMs": 60000 },
-    "promptInjection": { "detection": true, "wrapping": true },
-    "ssrf": { "blockPrivateIPs": true },
+    "rateLimiting": {
+      "maxRequests": 60,
+      "windowMs": 60000
+    },
+    "promptInjection": {
+      "detection": true,
+      "wrapping": true
+    },
+    "ssrf": {
+      "blockPrivateIPs": true
+    },
     "encryption": {
       "enabled": true,
       "scope": ["USER.md", "MEMORY.md", "memory/", "knowledge/"]
     },
-    "secretScanner": { "enabled": true },
-    "auditLog": { "enabled": true },
+    "secretScanner": {
+      "enabled": true,
+      "patterns": []
+    },
+    "auditLog": {
+      "enabled": true
+    },
     "toolPermissions": {
       "main": { "allow": ["*"] },
-      "group": { "allow": ["memory_search"], "deny": ["web_fetch", "memory_store"] }
+      "group": {
+        "allow": ["memory_search"],
+        "deny": ["web_fetch", "memory_store"]
+      }
     },
-    "sandbox": { "enabled": true, "root": "~/.maia" }
+    "sandbox": {
+      "enabled": true,
+      "root": "~/.maia"
+    }
   },
-  "scheduler": { "enabled": true, "checkIntervalMs": 60000 }
+  "session": {
+    "compaction": {
+      "thresholdPercent": 80,
+      "preserveRecentMessages": 10
+    }
+  },
+  "scheduler": {
+    "enabled": true,
+    "checkIntervalMs": 60000
+  },
+  "watchdog": {
+    "enabled": true,
+    "healthCheckIntervalMs": 60000,
+    "threatWindow": {
+      "durationMs": 300000,
+      "bruteForceThreshold": 10,
+      "injectionThreshold": 5
+    },
+    "alertChannels": ["console"],
+    "autoShutdown": true
+  },
+  "backup": {
+    "includeAuditLog": false
+  }
 }

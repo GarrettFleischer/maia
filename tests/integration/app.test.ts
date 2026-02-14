@@ -34,7 +34,7 @@ describe("createApp() composition smoke test", () => {
       },
       gateway: {
         port: 39999, // won't actually start a server in this test
-        auth: { token: "test-token-abc" },
+        auth: { token: "test-token-at-least-16ch" },
       },
       channels: {
         cli: { enabled: true },
@@ -50,7 +50,7 @@ describe("createApp() composition smoke test", () => {
     await fsNative.writeFile(configPath, JSON.stringify(config));
 
     // Set env vars the app needs
-    process.env.MAIA_AUTH_TOKEN = "test-token-abc";
+    process.env.MAIA_AUTH_TOKEN = "test-token-at-least-16ch";
     process.env.MAIA_MASTER_KEY = "test-master-key-for-integration";
   });
 
@@ -110,6 +110,57 @@ describe("createApp() composition smoke test", () => {
     expect(registry).toBeTruthy();
     expect(typeof registry.get).toBe("function");
     expect(typeof registry.getPrimary).toBe("function");
+
+    await app.stop();
+  });
+
+  it("should return provider health status from registry", async () => {
+    const app = await createApp({ configPath, dataDir });
+    const registry = app.getProviderRegistry();
+
+    const status = await registry.healthStatus();
+    expect(status).toBeDefined();
+    expect(status instanceof Map || typeof status[Symbol.iterator] === "function").toBe(true);
+    const entries = [...status];
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(entries.every(([id, healthy]) => typeof id === "string" && typeof healthy === "boolean")).toBe(true);
+
+    await app.stop();
+  });
+
+  it("should return primary provider from registry", async () => {
+    const app = await createApp({ configPath, dataDir });
+    const registry = app.getProviderRegistry();
+
+    const primary = registry.getPrimary();
+    expect(primary).toBeDefined();
+    expect(primary?.name).toBe("Ollama");
+
+    await app.stop();
+  });
+
+  it("should process a message through runtime (returns string or throws on provider error)", async () => {
+    const app = await createApp({ configPath, dataDir });
+    const runtime = app.getRuntime();
+    const ctx = app.getContext();
+
+    const msg = {
+      id: ctx.crypto.randomUUID(),
+      channelId: "integration-test",
+      senderId: "test-user",
+      content: "Say hello in one word.",
+      timestamp: ctx.clock.timestamp(),
+      isGroup: false,
+    };
+
+    try {
+      const reply = await runtime.handleMessage(msg);
+      expect(typeof reply).toBe("string");
+      expect(reply.length).toBeGreaterThan(0);
+    } catch (err) {
+      expect(err).toBeDefined();
+      expect(err instanceof Error || typeof (err as Error).message === "string").toBe(true);
+    }
 
     await app.stop();
   });

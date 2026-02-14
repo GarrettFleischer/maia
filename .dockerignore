@@ -1,0 +1,19 @@
+# Dependencies and build artifacts
+node_modules
+.git
+*.log
+.env
+.env.*
+!.env.example
+
+# Test and dev
+tests
+docs
+*.md
+!README.md
+
+# IDE and OS
+.vscode
+.cursor
+*.swp
+.DS_Store

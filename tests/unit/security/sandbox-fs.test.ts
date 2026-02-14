@@ -139,6 +139,38 @@ describe("SandboxedFileSystem", () => {
     expect(auditLog.entries[0]!.metadata.operation).toBe("remove");
   });
 
+  it("should deny appendFile outside root and log", async () => {
+    const { fs, auditLog } = makeSandbox();
+    const outsidePath = path.resolve("/tmp", "outside.log");
+    await expect(fs.appendFile(outsidePath, "data")).rejects.toThrow(SecurityError);
+    expect(auditLog.entries.filter((e) => e.type === "FILE_ACCESS_DENIED")).toHaveLength(1);
+    expect(auditLog.entries[0]!.metadata.operation).toBe("appendFile");
+  });
+
+  it("should deny chmod outside root and log", async () => {
+    const { fs, auditLog } = makeSandbox();
+    const outsidePath = path.resolve("/etc", "passwd");
+    await expect(fs.chmod(outsidePath, 0o644)).rejects.toThrow(SecurityError);
+    expect(auditLog.entries.filter((e) => e.type === "FILE_ACCESS_DENIED")).toHaveLength(1);
+    expect(auditLog.entries[0]!.metadata.operation).toBe("chmod");
+  });
+
+  it("should deny stat outside root and log", async () => {
+    const { fs, auditLog } = makeSandbox();
+    const outsidePath = path.resolve("/etc", "hosts");
+    await expect(fs.stat(outsidePath)).rejects.toThrow(SecurityError);
+    expect(auditLog.entries.filter((e) => e.type === "FILE_ACCESS_DENIED")).toHaveLength(1);
+    expect(auditLog.entries[0]!.metadata.operation).toBe("stat");
+  });
+
+  it("should deny checksum outside root and log", async () => {
+    const { fs, auditLog } = makeSandbox();
+    const outsidePath = path.resolve("/etc", "shadow");
+    await expect(fs.checksum(outsidePath)).rejects.toThrow(SecurityError);
+    expect(auditLog.entries.filter((e) => e.type === "FILE_ACCESS_DENIED")).toHaveLength(1);
+    expect(auditLog.entries[0]!.metadata.operation).toBe("checksum");
+  });
+
   it("should allow normalized path under root", async () => {
     const { fs, auditLog, inner } = makeSandbox();
     const withDots = path.join(SANDBOX_ROOT, ".", "a", "..", "b");

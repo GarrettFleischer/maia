@@ -113,6 +113,30 @@ describe("AuditLog with real filesystem (integration)", () => {
     expect(limited[1].metadata.tool).toBe("third");
   });
 
+  // ── read() when log file does not exist yet ──────────────────────
+
+  it("should return empty array when log file does not exist yet", async () => {
+    const { log } = createTestLog("no-file-yet");
+    const entries = await log.read();
+    expect(entries).toEqual([]);
+  });
+
+  // ── Filter by since date ─────────────────────────────────────────
+
+  it("should filter by since date", async () => {
+    const { log } = createTestLog("since");
+
+    await log.log("EVENT_A", { n: 1 });
+    const afterFirst = new Date();
+    await log.log("EVENT_B", { n: 2 });
+    await log.log("EVENT_C", { n: 3 });
+
+    const entriesSince = await log.read({ since: afterFirst });
+    expect(entriesSince.length).toBeGreaterThanOrEqual(2);
+    expect(entriesSince.some((e) => e.metadata.n === 2)).toBe(true);
+    expect(entriesSince.some((e) => e.metadata.n === 3)).toBe(true);
+  });
+
   // ── Create parent directories if needed ──────────────────────────
 
   it("should create parent directories for the log path", async () => {

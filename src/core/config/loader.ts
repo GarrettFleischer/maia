@@ -72,5 +72,16 @@ export async function loadConfig(
     throw new ConfigError(`Config validation failed:\n${issues}`);
   }
 
-  return result.data as MaiaConfig;
+  const config = result.data as MaiaConfig;
+
+  // Production safety: reject weak or missing gateway auth token at startup
+  const token = config.gateway?.auth?.token ?? "";
+  if (token.length < 16) {
+    throw new ConfigError(
+      "Gateway auth token must be at least 16 characters. " +
+        "Set MAIA_AUTH_TOKEN in your environment (e.g. in .env) to a strong secret."
+    );
+  }
+
+  return config;
 }

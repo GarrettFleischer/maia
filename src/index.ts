@@ -19,9 +19,9 @@ import { createCorsMiddleware } from "./gateway/middleware/cors.js";
 import { createErrorHandler } from "./gateway/middleware/error-handler.js";
 import { startBunServer, registerApiRoutes } from "./gateway/bun-server.js";
 
-// Channels
-import { createCLIChannel } from "./channels/cli.js";
-import { createMessageFormatter } from "./channels/formatter.js";
+// Channels (kept for future use in full channel mode)
+// import { createCLIChannel } from "./channels/cli.js";
+// import { createMessageFormatter } from "./channels/formatter.js";
 
 // Watchdog
 import { createWatchdogDaemon } from "./watchdog/daemon.js";
@@ -167,35 +167,24 @@ async function promptUser(prompt: string): Promise<string> {
 async function runChat(): Promise<void> {
   console.log("Starting Maia interactive chat...\n");
 
-  const app = await createApp();
+  let app;
+  try {
+    app = await createApp();
+  } catch (err) {
+    console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
+    console.error("\nHave you run 'bun run onboard' yet? Check your config and .env file.");
+    process.exit(1);
+  }
+
   const ctx = app.getContext();
   const runtime = app.getRuntime();
 
-  // Set up CLI channel
-  const formatter = createMessageFormatter("cli");
   const { rl, readLine } = createReadlineInterface();
-
-  const cliChannel = createCLIChannel({
-    logger: ctx.logger,
-    crypto: ctx.crypto,
-    formatter,
-    readLine,
-    writeLine: (line: string) => console.log(line),
-  });
-
-  // Wire channel to agent runtime
-  cliChannel.onMessage(async (message) => {
-    await runtime.handleMessage(message);
-  });
-
-  await cliChannel.initialize({ enabled: true });
-  await (cliChannel as ReturnType<typeof createCLIChannel> & { injectInput: (input: string) => Promise<void> })
-    .injectInput?.(""); // Check if injectInput exists
 
   console.log(`\n${ctx.config.identity.emoji} ${ctx.config.identity.name} is ready!`);
   console.log("Type your message, or /quit to exit, /private to toggle privacy mode.\n");
 
-  // REPL loop
+  // REPL loop -- reads input, sends through runtime, prints response
   while (true) {
     process.stdout.write("You: ");
     const input = await readLine();
@@ -222,13 +211,22 @@ Commands:
       continue;
     }
 
-    // Send through the CLI channel
-    const cliTyped = cliChannel as ReturnType<typeof createCLIChannel> & {
-      injectInput: (input: string) => Promise<void>;
+    // Build an inbound message and send through the runtime
+    const message = {
+      id: ctx.crypto.randomUUID(),
+      channelId: "cli",
+      senderId: "user",
+      content: input,
+      timestamp: ctx.clock.timestamp(),
+      isGroup: false,
     };
 
-    if (cliTyped.injectInput) {
-      await cliTyped.injectInput(input);
+    try {
+      const response = await runtime.handleMessage(message);
+      console.log(`\n${ctx.config.identity.name}: ${response}\n`);
+    } catch (err) {
+      console.error(`\nError processing message: ${err instanceof Error ? err.message : String(err)}`);
+      console.error("The LLM provider may be unreachable. Check your provider configuration.\n");
     }
   }
 
@@ -244,7 +242,15 @@ Commands:
 async function runStart(): Promise<void> {
   console.log("Starting Maia gateway server...\n");
 
-  const app = await createApp();
+  let app;
+  try {
+    app = await createApp();
+  } catch (err) {
+    console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
+    console.error("\nHave you run 'bun run onboard' yet? Check your config and .env file.");
+    process.exit(1);
+  }
+
   const ctx = app.getContext();
   const runtime = app.getRuntime();
   const providerRegistry = app.getProviderRegistry();
@@ -272,7 +278,6 @@ async function runStart(): Promise<void> {
     logger: ctx.logger,
     events: ctx.events,
     onChatMessage: async (_connectionId, senderId, content) => {
-      let reply = "";
       const message = {
         id: ctx.crypto.randomUUID(),
         channelId: "webchat",
@@ -282,9 +287,8 @@ async function runStart(): Promise<void> {
         isGroup: false,
       };
 
-      // Process through runtime
-      await runtime.handleMessage(message);
-      return reply || "I received your message.";
+      const reply = await runtime.handleMessage(message);
+      return reply;
     },
   });
 
@@ -302,7 +306,6 @@ async function runStart(): Promise<void> {
   registerApiRoutes(gateway, {
     startTime: Date.now(),
     onChat: async (message, senderId) => {
-      let reply = "";
       const inbound = {
         id: ctx.crypto.randomUUID(),
         channelId: "api",
@@ -311,8 +314,8 @@ async function runStart(): Promise<void> {
         timestamp: ctx.clock.timestamp(),
         isGroup: false,
       };
-      await runtime.handleMessage(inbound);
-      return reply || "Message processed.";
+      const reply = await runtime.handleMessage(inbound);
+      return reply;
     },
     providerHealthCheck: async () => {
       const status = await providerRegistry.healthStatus();
@@ -403,6 +406,7 @@ async function runStart(): Promise<void> {
  * @brief Runs the first-run setup wizard.
  */
 async function runOnboard(): Promise<void> {
+  try {
   console.log("\n🌙 Welcome to Maia - First Run Setup\n");
 
   const homeDir = os.homedir();
@@ -526,6 +530,11 @@ MAIA_CONFIG=${configPath}
   }
   console.log("  3. Start chatting: bun run src/index.ts chat");
   console.log("  4. Or start the server: bun run src/index.ts start\n");
+
+  } catch (err) {
+    console.error("Onboarding failed:", err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 }
 
 // ─── Command: credentials ──────────────────────────────────────────
@@ -534,6 +543,7 @@ MAIA_CONFIG=${configPath}
  * @brief Manages the encrypted credential vault.
  */
 async function runCredentials(): Promise<void> {
+  try {
   const subcommand = args[1] ?? "list";
   const env = createRealEnvProvider();
   const fs = createRealFileSystem();
@@ -603,6 +613,10 @@ async function runCredentials(): Promise<void> {
       console.error("Usage: maia credentials [add|list|remove]");
       process.exit(1);
   }
+  } catch (err) {
+    console.error("Credential operation failed:", err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 }
 
 // ─── Command: backup ───────────────────────────────────────────────
@@ -611,6 +625,7 @@ async function runCredentials(): Promise<void> {
  * @brief Creates an encrypted backup of the Maia data.
  */
 async function runBackup(): Promise<void> {
+  try {
   const outputPath = args[1] ?? expandHome(`~/.maia/backups/maia-backup-${Date.now()}.enc`);
   console.log("Creating encrypted backup...");
 
@@ -619,7 +634,12 @@ async function runBackup(): Promise<void> {
   const env = createRealEnvProvider();
 
   const maiaDir = expandHome("~/.maia");
-  const masterKeyPassphrase = env.get("MAIA_MASTER_KEY") ?? "maia-default-key";
+  const masterKeyPassphrase = env.get("MAIA_MASTER_KEY");
+  if (!masterKeyPassphrase) {
+    console.error("Error: MAIA_MASTER_KEY environment variable is not set.");
+    console.error("Run 'maia onboard' first, or set it in your .env file.");
+    process.exit(1);
+  }
   const salt = new TextEncoder().encode(`maia-salt-${path.join(maiaDir, "workspace")}`);
   const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
 
@@ -641,6 +661,10 @@ async function runBackup(): Promise<void> {
 
   await exporter.export(outputPath);
   console.log(`Backup saved to: ${outputPath}`);
+  } catch (err) {
+    console.error("Backup failed:", err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 }
 
 // ─── Command: restore ──────────────────────────────────────────────
@@ -649,6 +673,7 @@ async function runBackup(): Promise<void> {
  * @brief Restores from an encrypted backup.
  */
 async function runRestore(): Promise<void> {
+  try {
   const inputPath = args[1];
   if (!inputPath) {
     console.error("Usage: maia restore <backup-path>");
@@ -662,7 +687,12 @@ async function runRestore(): Promise<void> {
   const env = createRealEnvProvider();
 
   const maiaDir = expandHome("~/.maia");
-  const masterKeyPassphrase = env.get("MAIA_MASTER_KEY") ?? "maia-default-key";
+  const masterKeyPassphrase = env.get("MAIA_MASTER_KEY");
+  if (!masterKeyPassphrase) {
+    console.error("Error: MAIA_MASTER_KEY environment variable is not set.");
+    console.error("Run 'maia onboard' first, or set it in your .env file.");
+    process.exit(1);
+  }
   const salt = new TextEncoder().encode(`maia-salt-${path.join(maiaDir, "workspace")}`);
   const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
 
@@ -681,6 +711,10 @@ async function runRestore(): Promise<void> {
 
   await restorer.restore(inputPath);
   console.log("Restore complete.");
+  } catch (err) {
+    console.error("Restore failed:", err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 }
 
 // ─── Command: schedule ─────────────────────────────────────────────
@@ -689,8 +723,16 @@ async function runRestore(): Promise<void> {
  * @brief Manages scheduled tasks.
  */
 async function runSchedule(): Promise<void> {
+  let app;
+  try {
+    app = await createApp();
+  } catch (err) {
+    console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+
+  try {
   const subcommand = args[1] ?? "list";
-  const app = await createApp();
   const ctx = app.getContext();
 
   const { createScheduler } = await import("./agent/scheduler.js");
@@ -746,6 +788,11 @@ async function runSchedule(): Promise<void> {
   }
 
   await app.stop();
+  } catch (err) {
+    console.error("Schedule operation failed:", err instanceof Error ? err.message : String(err));
+    await app.stop();
+    process.exit(1);
+  }
 }
 
 // ─── Command: watchdog ─────────────────────────────────────────────
@@ -756,7 +803,13 @@ async function runSchedule(): Promise<void> {
 async function runWatchdog(): Promise<void> {
   console.log("Starting Maia watchdog daemon...\n");
 
-  const app = await createApp();
+  let app;
+  try {
+    app = await createApp();
+  } catch (err) {
+    console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
   const ctx = app.getContext();
 
   const threatDetector = createThreatDetector({
@@ -846,8 +899,8 @@ async function runDoctor(): Promise<void> {
   const hasMasterKey = !!env.get("MAIA_MASTER_KEY");
   checks.push({
     name: "Master key",
-    status: hasMasterKey ? "ok" : "warn",
-    message: hasMasterKey ? "Set in environment" : "MAIA_MASTER_KEY not set. Using default.",
+    status: hasMasterKey ? "ok" : "error",
+    message: hasMasterKey ? "Set in environment" : "MAIA_MASTER_KEY not set. Run 'maia onboard' or set in .env.",
   });
 
   // Check database

@@ -27,6 +27,7 @@ import { createRealEnvProvider } from "./adapters/env.js";
 
 // Core
 import { loadConfig } from "./core/config/loader.js";
+import { ConfigError } from "./core/errors.js";
 import { createLogger } from "./core/logger.js";
 import { createEventBus } from "./core/events.js";
 import { createShutdownCoordinator } from "./core/shutdown.js";
@@ -132,7 +133,7 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
   const logLevel = (env.get("MAIA_LOG_LEVEL") ?? "info") as "debug" | "info" | "warn" | "error";
   const logger = createLogger({ level: logLevel, write: (line) => process.stdout.write(line + "\n") });
   const events = createEventBus();
-  const shutdown = createShutdownCoordinator();
+  const shutdown = createShutdownCoordinator({ logger });
 
   // ── Step 2: Raw filesystem + config ──────────────────────────────
 
@@ -178,7 +179,12 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
 
   // ── Step 8: Derive master key + credential store ─────────────────
 
-  const masterKeyPassphrase = env.get("MAIA_MASTER_KEY") ?? "maia-default-key";
+  const masterKeyPassphrase = env.get("MAIA_MASTER_KEY");
+  if (!masterKeyPassphrase || masterKeyPassphrase.length === 0) {
+    throw new ConfigError(
+      "MAIA_MASTER_KEY is not set. Run 'maia onboard' or set MAIA_MASTER_KEY in your .env file."
+    );
+  }
   const salt = new TextEncoder().encode(`maia-salt-${workspacePath}`);
   const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
 

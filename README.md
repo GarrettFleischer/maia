@@ -129,6 +129,7 @@ See [docs/providers.md](docs/providers.md) for step-by-step setup.
 - [Providers](docs/providers.md) -- Free LLM provider setup guides
 - [Channels](docs/channels.md) -- CLI, WebChat, Discord, Telegram setup
 - [Configuration](docs/configuration.md) -- All config options with examples
+- [Deployment](docs/deployment.md) -- Production deployment (reverse proxy, TLS, systemd, Docker)
 - [API Reference](docs/api.md) -- Gateway REST + WebSocket API
 - [Credentials](docs/credentials.md) -- Credential store and LLM-opaque keys
 - [Watchdog](docs/watchdog.md) -- Persistent security monitor

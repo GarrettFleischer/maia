@@ -7,21 +7,31 @@
  * logs the error and continues with remaining hooks.
  */
 
-import type { ShutdownCoordinator, ShutdownHook } from "./types.js";
+import type { Logger, ShutdownCoordinator, ShutdownHook } from "./types.js";
+
+/**
+ * @brief Options for createShutdownCoordinator.
+ */
+export interface ShutdownCoordinatorOptions {
+  /** Optional logger for structured error reporting during shutdown */
+  logger?: Logger;
+}
 
 /**
  * @brief Creates a shutdown coordinator that manages graceful shutdown.
+ * @param options - Optional configuration including a logger
  * @returns ShutdownCoordinator instance
  *
  * @example
- * const coordinator = createShutdownCoordinator();
+ * const coordinator = createShutdownCoordinator({ logger });
  * coordinator.register("database", async (reason) => { await db.close(); }, 5);
  * coordinator.register("gateway", async (reason) => { server.close(); }, 10);
  * await coordinator.shutdown("SIGINT"); // gateway first (priority 10), then db (priority 5)
  */
-export function createShutdownCoordinator(): ShutdownCoordinator {
+export function createShutdownCoordinator(options?: ShutdownCoordinatorOptions): ShutdownCoordinator {
   const hooks: Array<{ name: string; hook: ShutdownHook; priority: number }> = [];
   let shuttingDown = false;
+  const logger = options?.logger;
 
   return {
     register(name: string, hook: ShutdownHook, priority?: number): void {
@@ -38,9 +48,14 @@ export function createShutdownCoordinator(): ShutdownCoordinator {
       for (const { name, hook } of sorted) {
         try {
           await hook(reason);
-        } catch {
-          // Log error but continue shutdown
-          console.error(`Shutdown hook "${name}" failed`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (logger) {
+            logger.error(`Shutdown hook "${name}" failed`, { error: msg, reason });
+          } else {
+            // Fallback when no logger is available
+            console.error(`Shutdown hook "${name}" failed: ${msg}`);
+          }
         }
       }
     },

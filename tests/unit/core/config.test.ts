@@ -61,6 +61,7 @@ describe("Config Loader", () => {
     const fs = inMemoryFileSystem({
       "/config.json": JSON.stringify({
         provider: { primary: "ollama", model: "llama3.2" },
+        gateway: { auth: { token: "a-16-char-token!!" } },
       }),
     });
     const ctx = createTestContext({ fs });
@@ -76,10 +77,10 @@ describe("Config Loader", () => {
         gateway: { auth: { token: "${MAIA_AUTH_TOKEN}" } },
       }),
     });
-    const env = staticEnv({ MAIA_AUTH_TOKEN: "my-secret-token" });
+    const env = staticEnv({ MAIA_AUTH_TOKEN: "my-secret-token-16ch" });
     const ctx = createTestContext({ fs, env });
     const config = await loadConfig("/config.json", ctx);
-    expect(config.gateway.auth.token).toBe("my-secret-token");
+    expect(config.gateway.auth.token).toBe("my-secret-token-16ch");
   });
 
   it("should throw on missing required env vars", async () => {
@@ -104,5 +105,27 @@ describe("Config Loader", () => {
   it("should throw when config file does not exist", async () => {
     const ctx = createTestContext();
     await expect(loadConfig("/nonexistent.json", ctx)).rejects.toThrow();
+  });
+
+  it("should throw when gateway auth token is shorter than 16 characters", async () => {
+    const fs = inMemoryFileSystem({
+      "/config.json": JSON.stringify({
+        provider: { primary: "ollama", model: "llama3.2" },
+        gateway: { auth: { token: "short" } },
+      }),
+    });
+    const ctx = createTestContext({ fs });
+    await expect(loadConfig("/config.json", ctx)).rejects.toThrow("at least 16 characters");
+  });
+
+  it("should throw when gateway auth token is empty", async () => {
+    const fs = inMemoryFileSystem({
+      "/config.json": JSON.stringify({
+        provider: { primary: "ollama", model: "llama3.2" },
+        gateway: { auth: { token: "" } },
+      }),
+    });
+    const ctx = createTestContext({ fs });
+    await expect(loadConfig("/config.json", ctx)).rejects.toThrow("at least 16 characters");
   });
 });
