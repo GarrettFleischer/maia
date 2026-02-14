@@ -126,10 +126,10 @@ describe("AuditLog with real filesystem (integration)", () => {
   it("should filter by since date", async () => {
     const { log } = createTestLog("since");
 
-    await log.log("EVENT_A", { n: 1 });
+    await log.log("HEALTH_CHECK", { n: 1 });
     const afterFirst = new Date();
-    await log.log("EVENT_B", { n: 2 });
-    await log.log("EVENT_C", { n: 3 });
+    await log.log("AUTH_SUCCESS", { n: 2 });
+    await log.log("MEMORY_WRITE", { n: 3 });
 
     const entriesSince = await log.read({ since: afterFirst });
     expect(entriesSince.length).toBeGreaterThanOrEqual(2);

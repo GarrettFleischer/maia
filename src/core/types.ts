@@ -156,7 +156,14 @@ export type MaiaEvent =
   | "memoryRecalled"
   | "providerSwitch"
   | "shutdownRequested"
-  | "threatDetected";
+  | "threatDetected"
+  | "agentCreated"
+  | "agentRemoved"
+  | "agentScheduleTriggered"
+  | "agentTaskCompleted"
+  | "agentError"
+  | "agentRequest"
+  | "agentResponse";
 
 /**
  * @brief Event handler function type.

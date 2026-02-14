@@ -16,11 +16,11 @@ export const configSchema = z.object({
     name: z.string().default("Maia"),
     emoji: z.string().default("🌙"),
     personality: z.string().default("helpful, security-conscious assistant"),
-  }).default({}),
+  }).default({ name: "Maia", emoji: "🌙", personality: "helpful, security-conscious assistant" }),
 
   workspace: z.object({
     path: z.string().default("~/.maia/workspace"),
-  }).default({}),
+  }).default({ path: "~/.maia/workspace" }),
 
   provider: z.object({
     primary: z.enum(["ollama", "groq", "gemini", "huggingface", "openrouter"]),
@@ -33,7 +33,7 @@ export const configSchema = z.object({
       enabled: z.boolean().default(true),
       intervalMs: z.number().positive().default(60000),
       consecutiveFailures: z.number().positive().default(3),
-    }).default({}),
+    }).default({ enabled: true, intervalMs: 60000, consecutiveFailures: 3 }),
     ollama: z.object({ baseUrl: z.string().default("http://localhost:11434") }).optional(),
     groq: z.object({ credentialName: z.string() }).optional(),
     gemini: z.object({ credentialName: z.string() }).optional(),
@@ -47,10 +47,10 @@ export const configSchema = z.object({
       host: z.string().default("0.0.0.0"),
       auth: z.object({
         token: z.string().default(""),
-      }).default({}),
+      }).default({ token: "" }),
       cors: z.object({
         origins: z.array(z.string()).default(["http://localhost:3000"]),
-      }).default({}),
+      }).default({ origins: ["http://localhost:3000"] }),
     })
     .default({
       port: 3000,
@@ -61,16 +61,16 @@ export const configSchema = z.object({
 
   channels: z
     .object({
-      cli: z.object({ enabled: z.boolean().default(true) }).default({}),
-      webchat: z.object({ enabled: z.boolean().default(false) }).default({}),
+      cli: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
+      webchat: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
       discord: z.object({
         enabled: z.boolean().default(false),
         credentialName: z.string().optional(),
-      }).default({}),
+      }).default({ enabled: false }),
       telegram: z.object({
         enabled: z.boolean().default(false),
         credentialName: z.string().optional(),
-      }).default({}),
+      }).default({ enabled: false }),
     })
     .default({
       cli: { enabled: true },
@@ -89,16 +89,16 @@ export const configSchema = z.object({
           enabled: z.boolean().default(true),
           vectorWeight: z.number().min(0).max(1).default(0.7),
           textWeight: z.number().min(0).max(1).default(0.3),
-        }).default({}),
+        }).default({ enabled: true, vectorWeight: 0.7, textWeight: 0.3 }),
         defaultLimit: z.number().int().positive().default(5),
-      }).default({}),
+      }).default({ hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 }, defaultLimit: 5 }),
       autoCapture: z.boolean().default(true),
       autoRecall: z.boolean().default(true),
       consolidation: z.object({
         schedule: z.string().default("0 23 * * *"),
         onDemand: z.boolean().default(true),
         sizeThreshold: z.number().positive().default(5000),
-      }).default({}),
+      }).default({ schedule: "0 23 * * *", onDemand: true, sizeThreshold: 5000 }),
     })
     .default({
       enabled: true,
@@ -122,26 +122,26 @@ export const configSchema = z.object({
       rateLimiting: z.object({
         maxRequests: z.number().int().positive().default(60),
         windowMs: z.number().positive().default(60000),
-      }).default({}),
+      }).default({ maxRequests: 60, windowMs: 60000 }),
       promptInjection: z.object({
         detection: z.boolean().default(true),
         wrapping: z.boolean().default(true),
-      }).default({}),
+      }).default({ detection: true, wrapping: true }),
       ssrf: z.object({
         blockPrivateIPs: z.boolean().default(true),
-      }).default({}),
+      }).default({ blockPrivateIPs: true }),
       encryption: z.object({
         enabled: z.boolean().default(false),
         scope: z.array(z.string()).default([]),
-      }).default({}),
+      }).default({ enabled: false, scope: [] }),
       secretScanner: z.object({
         enabled: z.boolean().default(true),
         patterns: z.array(z.string()).default([]),
-      }).default({}),
+      }).default({ enabled: true, patterns: [] }),
       auditLog: z.object({
         enabled: z.boolean().default(true),
-      }).default({}),
-      toolPermissions: z.record(z.object({
+      }).default({ enabled: true }),
+      toolPermissions: z.record(z.string(), z.object({
         allow: z.array(z.string()).optional(),
         deny: z.array(z.string()).optional(),
       })).default({
@@ -151,7 +151,7 @@ export const configSchema = z.object({
       sandbox: z.object({
         enabled: z.boolean().default(true),
         root: z.string().optional(),
-      }).default({}),
+      }).default({ enabled: true }),
     })
     .default({
       rateLimiting: { maxRequests: 60, windowMs: 60000 },
@@ -170,7 +170,7 @@ export const configSchema = z.object({
   scheduler: z.object({
     enabled: z.boolean().default(true),
     checkIntervalMs: z.number().positive().default(60000),
-  }).default({}),
+  }).default({ enabled: true, checkIntervalMs: 60000 }),
 
   watchdog: z.object({
     enabled: z.boolean().default(true),
@@ -179,10 +179,16 @@ export const configSchema = z.object({
       durationMs: z.number().positive().default(300000),
       bruteForceThreshold: z.number().int().positive().default(10),
       injectionThreshold: z.number().int().positive().default(5),
-    }).default({}),
+    }).default({ durationMs: 300000, bruteForceThreshold: 10, injectionThreshold: 5 }),
     alertChannels: z.array(z.string()).default(["console"]),
     autoShutdown: z.boolean().default(true),
-  }).default({}),
+  }).default({
+    enabled: true,
+    healthCheckIntervalMs: 60000,
+    threatWindow: { durationMs: 300000, bruteForceThreshold: 10, injectionThreshold: 5 },
+    alertChannels: ["console"],
+    autoShutdown: true,
+  }),
 
   session: z
     .object({
@@ -199,7 +205,7 @@ export const configSchema = z.object({
 
   backup: z.object({
     includeAuditLog: z.boolean().default(false),
-  }).default({}),
+  }).default({ includeAuditLog: false }),
 });
 
 /**

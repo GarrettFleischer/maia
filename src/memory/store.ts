@@ -19,6 +19,8 @@ export interface MemoryStoreDeps {
   db: Database;
   crypto: CryptoProvider;
   logger: Logger;
+  /** @brief Agent ID to scope memories to. Defaults to "maia" for the main agent. */
+  agentId?: string;
 }
 
 /**
@@ -27,7 +29,7 @@ export interface MemoryStoreDeps {
  * @returns Object implementing the MemoryStore interface
  */
 export function createMemoryStore(deps: MemoryStoreDeps): MemoryStore {
-  const { db, crypto, logger } = deps;
+  const { db, crypto, logger, agentId = "maia" } = deps;
 
   /**
    * @brief In-memory index for fast lookups (supplements DB queries).
@@ -45,8 +47,8 @@ export function createMemoryStore(deps: MemoryStoreDeps): MemoryStore {
       const embeddingJson = entry.embedding ? JSON.stringify(entry.embedding) : null;
 
       await db.execute(
-        `INSERT INTO memories (id, text, category, importance, embedding, source_date, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO memories (id, text, category, importance, embedding, source_date, created_at, updated_at, agent_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           entry.text,
@@ -56,6 +58,7 @@ export function createMemoryStore(deps: MemoryStoreDeps): MemoryStore {
           entry.sourceDate ?? null,
           now,
           now,
+          agentId,
         ]
       );
 
@@ -83,8 +86,8 @@ export function createMemoryStore(deps: MemoryStoreDeps): MemoryStore {
       const pattern = `%${query.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
 
       let sql = `SELECT id, text, category, importance, embedding, source_date, created_at, updated_at
-                 FROM memories WHERE text LIKE ? ESCAPE '\\'`;
-      const params: unknown[] = [pattern];
+                 FROM memories WHERE agent_id = ? AND text LIKE ? ESCAPE '\\'`;
+      const params: unknown[] = [agentId, pattern];
 
       if (options?.category) {
         sql += ` AND category = ?`;
@@ -151,13 +154,13 @@ export function createMemoryStore(deps: MemoryStoreDeps): MemoryStore {
     },
 
     async remove(id: string): Promise<void> {
-      await db.execute("DELETE FROM memories WHERE id = ?", [id]);
+      await db.execute("DELETE FROM memories WHERE id = ? AND agent_id = ?", [id, agentId]);
       localCache.delete(id);
       logger.debug("Memory removed", { id });
     },
 
     async count(): Promise<number> {
-      const rows = await db.query<{ count: number }>("SELECT COUNT(*) as count FROM memories");
+      const rows = await db.query<{ count: number }>("SELECT COUNT(*) as count FROM memories WHERE agent_id = ?", [agentId]);
       return rows[0]?.count ?? 0;
     },
   };

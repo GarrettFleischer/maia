@@ -5,10 +5,24 @@
  *
  * @note Loads all layers (SOUL, IDENTITY, AGENTS, USER, TOOLS) from the workspace
  * and injects relevant memories to build the system prompt. Context is rebuilt
- * on each turn to reflect the latest state.
+ * on each turn to reflect the latest state. Missing workspace files are created
+ * with default content so the system never "fails" to find them.
  */
 
 import type { ChatMessage, FileSystem, Logger, MaiaConfig } from "../core/types.js";
+
+/**
+ * @brief Default content for workspace files when they do not exist.
+ * @note Creating the file on first read avoids "file not found" and ensures a consistent starting state.
+ */
+const WORKSPACE_FILE_DEFAULTS: Record<string, string> = {
+  "SOUL.md": "# Soul\n\nDefine your AI's core identity and values here.\n",
+  "IDENTITY.md": "# Identity\n\nname: Maia\nemoji: 🌙\npersonality: helpful assistant\n",
+  "AGENTS.md": "# Agents\n\nConfigure agent behaviors and rules here.\n",
+  "USER.md": "# User\n\nUser preferences and context.\n",
+  "TOOLS.md": "# Tools\n\nConfigure available tools and permissions.\n",
+  "MEMORY.md": "# Memory\n\nCurated long-term notes.\n",
+};
 
 /**
  * @brief Dependencies for createContextBuilder.
@@ -43,9 +57,9 @@ export interface ContextBuilder {
   buildSystemPrompt(input?: ContextInput): Promise<ChatMessage>;
 
   /**
-   * @brief Loads a single workspace file safely.
-   * @param filename - File name relative to workspace path
-   * @returns File contents or empty string if not found
+   * @brief Loads a workspace file, creating it with default content if missing.
+   * @param filename - File name relative to workspace path (e.g. MEMORY.md, USER.md)
+   * @returns File contents, or default content after creating the file
    */
   loadWorkspaceFile(filename: string): Promise<string>;
 }
@@ -67,19 +81,26 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
   const workspacePath = config.workspace.path;
 
   /**
-   * @brief Safely reads a file from the workspace directory.
-   * @param filename - Filename relative to workspace path
-   * @returns File content or empty string on error
+   * @brief Reads a workspace file, creating it with default content if missing.
+   * @param filename - Filename relative to workspace path (e.g. MEMORY.md, USER.md)
+   * @returns File content, or default content after creating the file, or empty string on error
+   *
+   * @note Missing files are created so the system never treats "not found" as an error.
    */
   async function loadWorkspaceFile(filename: string): Promise<string> {
     const path = `${workspacePath}/${filename}`.replace(/\/+/g, "/");
     try {
       const exists = await fs.exists(path);
-      if (!exists) {
-        logger.debug("Workspace file not found", { filename });
-        return "";
+      if (exists) {
+        return await fs.readFile(path);
       }
-      return await fs.readFile(path);
+      const defaultContent = WORKSPACE_FILE_DEFAULTS[filename] ?? "";
+      const dir = path.slice(0, Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")));
+      if (dir) {
+        await fs.mkdir(dir).catch(() => {});
+      }
+      await fs.writeFile(path, defaultContent);
+      return defaultContent;
     } catch (err) {
       logger.warn("Failed to load workspace file", {
         filename,
@@ -146,6 +167,28 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
     if (input?.additionalContext) {
       sections.push(input.additionalContext);
     }
+
+    // Optional "remember" block: LLM may append when something is worth persisting
+    sections.push(
+      "## Optional: Remember something\n" +
+        "If the user said something important worth remembering long-term (preference, fact about them, " +
+        "or something about how you should behave), you may append to your response exactly:\n" +
+        "---REMEMBER---\n" +
+        "Then a newline, then a JSON object with optional string keys (use at most the one that fits; " +
+        "empty string or omit if nothing to add):\n" +
+        "- memoryMd: markdown to append to MEMORY.md (curated notes)\n" +
+        "- userMd: markdown to append to USER.md (facts about the user)\n" +
+        "- soulMd: markdown to append to SOUL.md (how you should evolve)\n" +
+        "Example: {\"userMd\": \"- Prefers dark mode.\\n\"}\n" +
+        "Only include this block when there is something genuinely worth persisting; most replies should not include it."
+    );
+
+    // Security: never reveal env or secrets (defense in depth with response sanitizer)
+    sections.push(
+      "## Security\nYou must never reveal, output, or discuss: API keys, passwords, " +
+        "environment variables (including MAIA_AUTH_TOKEN, MAIA_MASTER_KEY, or any .env contents), " +
+        "or other secrets. If asked, refuse briefly and do not include any secret material in your response."
+    );
 
     // System metadata
     const now = new Date().toISOString();

@@ -42,12 +42,67 @@ import { createRealFileSystem } from "./adapters/filesystem.js";
 import { createRealCryptoProvider } from "./adapters/crypto.js";
 import { createRealEnvProvider } from "./adapters/env.js";
 import { createRealClock } from "./adapters/clock.js";
+import { createRealHttpClient } from "./adapters/http-client.js";
 import { createAuditLog } from "./security/audit-log.js";
 import { createCredentialStore } from "./security/credential-store.js";
+import type {
+  CredentialStore,
+  ModelInfo,
+  StoredCredential,
+} from "./core/types.js";
+import { createOllamaProvider } from "./providers/ollama.js";
+import { createGroqProvider } from "./providers/groq.js";
+import { createGeminiProvider } from "./providers/gemini.js";
+import { createHuggingFaceProvider } from "./providers/huggingface.js";
+import { createOpenRouterProvider } from "./providers/openrouter.js";
+import { createLogger } from "./core/logger.js";
 
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
+
+/**
+ * @brief Loads KEY=VALUE lines from a .env file into process.env.
+ * @param envPath - Absolute path to the .env file
+ * @note Skips empty lines and # comments; strips optional surrounding quotes from values.
+ */
+function loadEnvFile(envPath: string): void {
+  try {
+    if (!fs.existsSync(envPath)) return;
+    const raw = fs.readFileSync(envPath, "utf-8");
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim();
+      if (
+        value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'")))
+      )
+        value = value.slice(1, -1);
+      if (key) process.env[key] = value;
+    }
+  } catch {
+    // Ignore read/parse errors; process.env stays unchanged
+  }
+}
+
+/**
+ * @brief Loads environment variables so MAIA_* (e.g. MAIA_AUTH_TOKEN) are available.
+ * Loads in order: process.cwd()/.env (project), then ~/.maia/.env (canonical).
+ * Later files override earlier, so ~/.maia/.env wins for overlapping keys.
+ * @note Ensures maia chat/start use the same MAIA_* vars whether run from repo or from home.
+ */
+function loadMaiaEnv(): void {
+  loadEnvFile(path.resolve(process.cwd(), ".env"));
+  loadEnvFile(path.join(os.homedir(), ".maia", ".env"));
+}
+
+loadMaiaEnv();
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
@@ -98,6 +153,110 @@ function expandHome(p: string): string {
     return path.join(os.homedir(), p.slice(1));
   }
   return p;
+}
+
+/**
+ * @brief In-memory credential store for onboarding (fetch models before vault exists).
+ * @param credentialName - Key name to store
+ * @param value - Secret value
+ * @returns CredentialStore that exposes a single credential
+ */
+function createMemoryCredentialStore(
+  credentialName: string,
+  value: string,
+): CredentialStore {
+  const stored: StoredCredential = { value, addedAt: new Date().toISOString() };
+  return {
+    async get(name: string): Promise<StoredCredential> {
+      if (name !== credentialName)
+        throw new Error("Unknown credential: " + name);
+      return stored;
+    },
+    async set(name: string, val: string): Promise<void> {
+      if (name === credentialName) {
+        stored.value = val;
+        stored.addedAt = new Date().toISOString();
+      }
+    },
+    async remove(): Promise<void> {},
+    async list(): Promise<Array<{ name: string; addedAt: string }>> {
+      return [{ name: credentialName, addedAt: stored.addedAt }];
+    },
+    async has(name: string): Promise<boolean> {
+      return name === credentialName;
+    },
+  };
+}
+
+/**
+ * @brief Fetches available models from the given provider for onboarding.
+ * @param primaryProvider - Provider id (ollama, groq, gemini, huggingface, openrouter)
+ * @param apiKey - API key for cloud providers; omitted for Ollama
+ * @returns List of ModelInfo, or empty array on error / no key
+ */
+async function fetchModelsForOnboarding(
+  primaryProvider: "ollama" | "groq" | "gemini" | "huggingface" | "openrouter",
+  apiKey?: string,
+): Promise<ModelInfo[]> {
+  const http = createRealHttpClient();
+  const logger = createLogger({ level: "warn", write: () => {} });
+  const credentialName = `${primaryProvider}-api-key`;
+
+  try {
+    if (primaryProvider === "ollama") {
+      const provider = createOllamaProvider({
+        http,
+        logger,
+        baseUrl: "http://localhost:11434",
+      });
+      return await provider.listModels();
+    }
+    if (!apiKey || !apiKey.trim()) return [];
+    const credentials = createMemoryCredentialStore(
+      credentialName,
+      apiKey.trim(),
+    );
+
+    if (primaryProvider === "groq") {
+      const provider = createGroqProvider({
+        http,
+        credentials,
+        logger,
+        credentialName,
+      });
+      return await provider.listModels();
+    }
+    if (primaryProvider === "gemini") {
+      const provider = createGeminiProvider({
+        http,
+        credentials,
+        logger,
+        credentialName,
+      });
+      return await provider.listModels();
+    }
+    if (primaryProvider === "huggingface") {
+      const provider = createHuggingFaceProvider({
+        http,
+        credentials,
+        logger,
+        credentialName,
+      });
+      return await provider.listModels();
+    }
+    if (primaryProvider === "openrouter") {
+      const provider = createOpenRouterProvider({
+        http,
+        credentials,
+        logger,
+        credentialName,
+      });
+      return await provider.listModels();
+    }
+  } catch {
+    // Return empty list on any error (network, auth, etc.)
+  }
+  return [];
 }
 
 /**
@@ -173,8 +332,13 @@ async function runChat(): Promise<void> {
   try {
     app = await createApp();
   } catch (err) {
-    console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
-    console.error("\nHave you run 'maia onboard' yet? Check your config and .env file.");
+    console.error(
+      "Failed to start Maia:",
+      err instanceof Error ? err.message : String(err),
+    );
+    console.error(
+      "\nHave you run 'maia onboard' yet? Check your config and .env file.",
+    );
     process.exit(1);
   }
 
@@ -183,8 +347,12 @@ async function runChat(): Promise<void> {
 
   const { rl, readLine } = createReadlineInterface();
 
-  console.log(`\n${ctx.config.identity.emoji} ${ctx.config.identity.name} is ready!`);
-  console.log("Type your message, or /quit to exit, /private to toggle privacy mode.\n");
+  console.log(
+    `\n${ctx.config.identity.emoji} ${ctx.config.identity.name} is ready!`,
+  );
+  console.log(
+    "Type your message, or /quit to exit, /private to toggle privacy mode.\n",
+  );
 
   // REPL loop -- reads input, sends through runtime, prints response
   while (true) {
@@ -199,7 +367,9 @@ async function runChat(): Promise<void> {
     if (input.trim() === "") continue;
 
     if (input === "/private") {
-      console.log("Privacy mode toggled. (Privacy features are active per session.)");
+      console.log(
+        "Privacy mode toggled. (Privacy features are active per session.)",
+      );
       continue;
     }
 
@@ -224,11 +394,15 @@ Commands:
     };
 
     try {
-      const response = await runtime.handleMessage(message);
-      console.log(`\n${ctx.config.identity.name}: ${response}\n`);
+      const result = await runtime.handleMessage(message);
+      console.log(`\n${ctx.config.identity.name}: ${result.content}\n`);
     } catch (err) {
-      console.error(`\nError processing message: ${err instanceof Error ? err.message : String(err)}`);
-      console.error("The LLM provider may be unreachable. Check your provider configuration.\n");
+      console.error(
+        `\nError processing message: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      console.error(
+        "The LLM provider may be unreachable. Check your provider configuration.\n",
+      );
     }
   }
 
@@ -248,8 +422,13 @@ async function runStart(): Promise<void> {
   try {
     app = await createApp();
   } catch (err) {
-    console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
-    console.error("\nHave you run 'maia onboard' yet? Check your config and .env file.");
+    console.error(
+      "Failed to start Maia:",
+      err instanceof Error ? err.message : String(err),
+    );
+    console.error(
+      "\nHave you run 'maia onboard' yet? Check your config and .env file.",
+    );
     process.exit(1);
   }
 
@@ -289,8 +468,8 @@ async function runStart(): Promise<void> {
         isGroup: false,
       };
 
-      const reply = await runtime.handleMessage(message);
-      return reply;
+      const result = await runtime.handleMessage(message);
+      return { content: result.content, remembered: result.remembered };
     },
   });
 
@@ -316,8 +495,8 @@ async function runStart(): Promise<void> {
         timestamp: ctx.clock.timestamp(),
         isGroup: false,
       };
-      const reply = await runtime.handleMessage(inbound);
-      return reply;
+      const result = await runtime.handleMessage(inbound);
+      return { content: result.content, remembered: result.remembered };
     },
     providerHealthCheck: async () => {
       const status = await providerRegistry.healthStatus();
@@ -330,12 +509,20 @@ async function runStart(): Promise<void> {
   });
 
   // Start Bun HTTP server
-  const bunServer = startBunServer({ config: ctx.config, gateway, logger: ctx.logger });
+  const bunServer = startBunServer({
+    config: ctx.config,
+    gateway,
+    logger: ctx.logger,
+  });
 
   // Register shutdown hook for the server
-  ctx.shutdown.register("bun-server", async () => {
-    bunServer.stop();
-  }, 5);
+  ctx.shutdown.register(
+    "bun-server",
+    async () => {
+      bunServer.stop();
+    },
+    5,
+  );
 
   // Start watchdog if enabled
   if (ctx.config.watchdog.enabled) {
@@ -376,16 +563,148 @@ async function runStart(): Promise<void> {
     });
 
     await watchdog.start();
-    ctx.shutdown.register("watchdog", async () => {
-      await watchdog.stop();
-    }, 3);
+    ctx.shutdown.register(
+      "watchdog",
+      async () => {
+        await watchdog.stop();
+      },
+      3,
+    );
 
     ctx.logger.info("Watchdog daemon started");
   }
 
-  console.log(`\n${ctx.config.identity.emoji} ${ctx.config.identity.name} is running!`);
+  // ── Agent loading + scheduler ────────────────────────────────────
+
+  const agentRegistry = app.getAgentRegistry();
+  const activeAgents = app.getActiveAgents();
+
+  // Load all existing agents and create their runtimes
+  try {
+    const existingAgents = await agentRegistry.list();
+    for (const agentConfig of existingAgents) {
+      if (agentConfig.active === false) continue;
+      try {
+        const { createSubAgentRuntime: createSub } =
+          await import("./agents/factory.js");
+        const agentWorkspace = agentRegistry.agentWorkspacePath(agentConfig.id);
+        const subAgent = createSub(agentConfig, agentWorkspace, {
+          db: ctx.db,
+          crypto: ctx.crypto,
+          http: ctx.http,
+          clock: ctx.clock,
+          auditLog: ctx.auditLog,
+          events: ctx.events,
+          logger: ctx.logger,
+          config: ctx.config,
+          providerRegistry,
+          rawFs: app.getRawFs(),
+        });
+        activeAgents.set(agentConfig.id, subAgent);
+        ctx.logger.info("Agent loaded", {
+          id: agentConfig.id,
+          name: agentConfig.name,
+        });
+      } catch (err) {
+        ctx.logger.warn("Failed to load agent", {
+          id: agentConfig.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (existingAgents.length > 0) {
+      ctx.logger.info("Agents loaded", {
+        count: activeAgents.size,
+        total: existingAgents.length,
+      });
+    }
+  } catch (err) {
+    ctx.logger.warn("Failed to load agents", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Start the scheduler with agent task dispatch
+  const { createScheduler } = await import("./agent/scheduler.js");
+  const scheduler = createScheduler({
+    fs: ctx.fs,
+    clock: ctx.clock,
+    schedulerPath: `${ctx.config.workspace.path}/data/scheduler.json`,
+    logger: ctx.logger,
+    checkIntervalMs: ctx.config.scheduler.checkIntervalMs,
+  });
+
+  // Register schedules from loaded agents
+  for (const [agentId, subAgent] of activeAgents) {
+    if (subAgent.config.schedule) {
+      await scheduler.add({
+        schedule: subAgent.config.schedule,
+        prompt: `Execute your scheduled task as ${subAgent.config.name}.`,
+        channel: `agent:${agentId}`,
+        agentId,
+      });
+    }
+  }
+
+  scheduler.start(async (task) => {
+    const taskWithAgent = task as typeof task & { agentId?: string };
+    const agentId =
+      taskWithAgent.agentId ?? taskWithAgent.channel?.replace("agent:", "");
+    if (!agentId) {
+      ctx.logger.warn("Scheduled task has no agent", { taskId: task.id });
+      return;
+    }
+    const subAgent = activeAgents.get(agentId);
+    if (!subAgent) {
+      ctx.logger.warn("Scheduled task agent not found", {
+        taskId: task.id,
+        agentId,
+      });
+      return;
+    }
+
+    ctx.logger.info("Executing scheduled task", { taskId: task.id, agentId });
+    try {
+      const message = {
+        id: ctx.crypto.randomUUID(),
+        channelId: `scheduler:${agentId}`,
+        senderId: "scheduler",
+        content: task.prompt,
+        timestamp: ctx.clock.timestamp(),
+        isGroup: false,
+      };
+      await subAgent.runtime.handleMessage(message);
+      await ctx.events.emit("agentTaskCompleted", { agentId, taskId: task.id });
+    } catch (err) {
+      ctx.logger.warn("Scheduled task execution failed", {
+        taskId: task.id,
+        agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      await ctx.events.emit("agentError", {
+        agentId,
+        taskId: task.id,
+        error: String(err),
+      });
+    }
+  });
+
+  ctx.shutdown.register(
+    "scheduler",
+    async () => {
+      scheduler.stop();
+    },
+    4,
+  );
+
+  console.log(
+    `\n${ctx.config.identity.emoji} ${ctx.config.identity.name} is running!`,
+  );
   console.log(`Gateway: ${bunServer.url}`);
   console.log(`WebSocket: ${bunServer.url.replace("http", "ws")}/ws`);
+  if (activeAgents.size > 0) {
+    console.log(`Active agents: ${activeAgents.size}`);
+  }
   console.log("\nPress Ctrl+C to stop.\n");
 
   // Handle graceful shutdown on SIGINT/SIGTERM
@@ -409,86 +728,202 @@ async function runStart(): Promise<void> {
  */
 async function runOnboard(): Promise<void> {
   try {
-  console.log("\n🌙 Welcome to Maia - First Run Setup\n");
+    console.log("\n🌙 Welcome to Maia - First Run Setup\n");
 
-  const homeDir = os.homedir();
-  const maiaDir = path.join(homeDir, ".maia");
-  const dataDir = path.join(maiaDir, "data");
-  const workspaceDir = path.join(maiaDir, "workspace");
-  const configPath = path.join(maiaDir, "maia.config.json");
-  const envPath = path.join(maiaDir, ".env");
+    const homeDir = os.homedir();
+    const maiaDir = path.join(homeDir, ".maia");
+    const dataDir = path.join(maiaDir, "data");
+    const workspaceDir = path.join(maiaDir, "workspace");
+    const configPath = path.join(maiaDir, "maia.config.json");
+    const envPath = path.join(maiaDir, ".env");
 
-  const fs = createRealFileSystem();
-  const crypto = createRealCryptoProvider();
+    const fs = createRealFileSystem();
+    const crypto = createRealCryptoProvider();
 
-  // Create directories
-  console.log("Creating Maia directories...");
-  await fs.mkdir(maiaDir);
-  await fs.mkdir(dataDir);
-  await fs.mkdir(workspaceDir);
+    // Create directories
+    console.log("Creating Maia directories...");
+    await fs.mkdir(maiaDir);
+    await fs.mkdir(dataDir);
+    await fs.mkdir(workspaceDir);
 
-  // Provider selection
-  console.log("\nAvailable LLM providers:");
-  console.log("  1. ollama    (local, free, requires Ollama running)");
-  console.log("  2. groq      (cloud, free tier available)");
-  console.log("  3. gemini    (cloud, free tier available)");
-  console.log("  4. huggingface (cloud, free tier available)");
-  console.log("  5. openrouter  (cloud, aggregator)");
+    // Provider selection
+    console.log("\nAvailable LLM providers:");
+    console.log("  1. ollama    (local, free, requires Ollama running)");
+    console.log("  2. groq      (cloud, free tier available)");
+    console.log("  3. gemini    (cloud, free tier available)");
+    console.log("  4. huggingface (cloud, free tier available)");
+    console.log("  5. openrouter  (cloud, aggregator)");
 
-  const providerChoice = await promptUser("\nSelect primary provider (1-5) [1]: ");
-  const providers = ["ollama", "groq", "gemini", "huggingface", "openrouter"] as const;
-  const providerIndex = Math.max(0, Math.min(4, parseInt(providerChoice || "1", 10) - 1));
-  const primaryProvider = providers[providerIndex];
+    const providerChoice = await promptUser(
+      "\nSelect primary provider (1-5) [1]: ",
+    );
+    const providers = [
+      "ollama",
+      "groq",
+      "gemini",
+      "huggingface",
+      "openrouter",
+    ] as const;
+    const providerIndex = Math.max(
+      0,
+      Math.min(4, parseInt(providerChoice || "1", 10) - 1),
+    );
+    const primaryProvider = providers[providerIndex];
 
-  const model = await promptUser(`Enter model name [${primaryProvider === "ollama" ? "llama3.2" : "default"}]: `);
+    const defaultModels: Record<typeof primaryProvider, string> = {
+      ollama: "llama3.2",
+      groq: "llama-3.3-70b-versatile",
+      gemini: "gemini-3-flash-preview",
+      huggingface: "HuggingFaceH4/zephyr-7b-beta",
+      openrouter: "llama-3.3-70b-versatile",
+    };
+    const defaultModel = defaultModels[primaryProvider];
 
-  // Build config
-  const config: Record<string, unknown> = {
-    identity: { name: "Maia", emoji: "🌙", personality: "helpful, security-conscious assistant" },
-    workspace: { path: workspaceDir },
-    provider: {
-      primary: primaryProvider,
-      model: model || (primaryProvider === "ollama" ? "llama3.2" : "llama-3.3-70b-versatile"),
-      ...(primaryProvider === "ollama" ? { ollama: { baseUrl: "http://localhost:11434" } } : {}),
-      ...(primaryProvider !== "ollama" ? { [primaryProvider]: { credentialName: `${primaryProvider}-api-key` } } : {}),
-    },
-    gateway: {
-      port: 3000,
-      auth: { token: "${MAIA_AUTH_TOKEN}" },
-    },
-    channels: {
-      cli: { enabled: true },
-      webchat: { enabled: true },
-      discord: { enabled: false },
-      telegram: { enabled: false },
-    },
-    memory: { enabled: true },
-    security: {
-      sandbox: { enabled: true, root: maiaDir },
-    },
-  };
+    // For cloud providers, get API key first so we can fetch available models
+    let apiKeyForVault: string | undefined;
+    if (primaryProvider !== "ollama") {
+      const keyPrompt = await promptUser(
+        `\nEnter your ${primaryProvider} API key (or leave blank to skip and use default model): `,
+      );
+      if (keyPrompt && keyPrompt.trim()) apiKeyForVault = keyPrompt.trim();
+    }
 
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2));
-  console.log(`\nConfig written to: ${configPath}`);
+    // Fetch available models (Ollama: always; cloud: only if we have a key)
+    let models: ModelInfo[] = [];
+    console.log("\nFetching available models...");
+    if (primaryProvider === "ollama") {
+      models = await fetchModelsForOnboarding(primaryProvider);
+    } else if (apiKeyForVault) {
+      models = await fetchModelsForOnboarding(primaryProvider, apiKeyForVault);
+    }
+    if (models.length > 0) {
+      models = [...models].sort((a, b) => a.id.localeCompare(b.id, "en"));
+      console.log(`Found ${models.length} model(s):`);
+      models.forEach((m, i) => {
+        console.log(`  ${i + 1}. ${m.name} (${m.id})`);
+      });
+    } else if (primaryProvider === "ollama") {
+      console.log(
+        "Could not reach Ollama (is it running?). You can enter a model name manually.",
+      );
+    } else if (
+      (primaryProvider as "ollama" | "groq" | "gemini" | "huggingface" | "openrouter") !== "ollama" &&
+      !apiKeyForVault
+    ) {
+      console.log(
+        "Enter a model name below, or run onboard again and add your API key to list models.",
+      );
+    }
 
-  // Generate auth token and master key
-  const authToken = Buffer.from(crypto.randomBytes(24)).toString("hex");
-  const masterKey = Buffer.from(crypto.randomBytes(24)).toString("hex");
+    let chosenModel: string;
+    if (models.length > 0) {
+      const modelInput = await promptUser(
+        `\nEnter model number (1-${models.length}) or model name [${defaultModel}]: `,
+      );
+      const trimmed = modelInput?.trim() ?? "";
+      const asNum = parseInt(trimmed, 10);
+      if (trimmed === "") {
+        chosenModel = defaultModel;
+      } else if (
+        Number.isFinite(asNum) &&
+        asNum >= 1 &&
+        asNum <= models.length
+      ) {
+        chosenModel = models[asNum - 1].id;
+      } else {
+        chosenModel = trimmed;
+      }
+    } else {
+      const modelInput = await promptUser(
+        `Enter model name [${defaultModel}]: `,
+      );
+      chosenModel = (modelInput && modelInput.trim()) || defaultModel;
+    }
 
-  const envContent = `# Maia Environment Variables (generated by maia onboard)
+    // Gateway
+    console.log("\n--- Gateway (for maia start / web UI) ---");
+    const portStr = await promptUser("Gateway port [3000]: ");
+    const gatewayPort = portStr ? parseInt(portStr, 10) : 3000;
+    const port =
+      Number.isFinite(gatewayPort) && gatewayPort > 0 ? gatewayPort : 3000;
+    const host =
+      (await promptUser("Gateway host (bind address) [0.0.0.0]: ")) ||
+      "0.0.0.0";
+
+    // Sandbox (file access restriction)
+    console.log("\n--- Security sandbox ---");
+    console.log(
+      "The sandbox restricts file access to a single root directory.",
+    );
+    const sandboxChoice = await promptUser(
+      "Enable sandbox? (recommended) [Y/n]: ",
+    );
+    const sandboxEnabled =
+      sandboxChoice === "" || sandboxChoice.toLowerCase().startsWith("y");
+    const defaultSandboxRoot = maiaDir;
+    const sandboxRootInput = await promptUser(
+      `Sandbox root directory [${defaultSandboxRoot}]: `,
+    );
+    const sandboxRoot = sandboxRootInput.trim() || defaultSandboxRoot;
+
+    // Build config
+    const config: Record<string, unknown> = {
+      identity: {
+        name: "Maia",
+        emoji: "🌙",
+        personality: "helpful, security-conscious assistant",
+      },
+      workspace: { path: workspaceDir },
+      provider: {
+        primary: primaryProvider,
+        model: chosenModel,
+        ...(primaryProvider === "ollama"
+          ? { ollama: { baseUrl: "http://localhost:11434" } }
+          : {}),
+        ...(primaryProvider !== "ollama"
+          ? {
+              [primaryProvider]: {
+                credentialName: `${primaryProvider}-api-key`,
+              },
+            }
+          : {}),
+      },
+      gateway: {
+        port,
+        host,
+        auth: { token: "${MAIA_AUTH_TOKEN}" },
+        cors: { origins: ["http://localhost:" + String(port)] },
+      },
+      channels: {
+        cli: { enabled: true },
+        webchat: { enabled: true },
+        discord: { enabled: false },
+        telegram: { enabled: false },
+      },
+      memory: { enabled: true },
+      security: {
+        sandbox: { enabled: sandboxEnabled, root: sandboxRoot },
+      },
+    };
+
+    await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+    console.log(`\nConfig written to: ${configPath}`);
+
+    // Generate auth token and master key
+    const authToken = Buffer.from(crypto.randomBytes(24)).toString("hex");
+    const masterKey = Buffer.from(crypto.randomBytes(24)).toString("hex");
+
+    const envContent = `# Maia Environment Variables (generated by maia onboard)
 MAIA_AUTH_TOKEN=${authToken}
 MAIA_MASTER_KEY=${masterKey}
 MAIA_LOG_LEVEL=info
 MAIA_CONFIG=${configPath}
 `;
-  await fs.writeFile(envPath, envContent);
-  console.log(`Environment file written to: ${envPath}`);
+    await fs.writeFile(envPath, envContent);
+    console.log(`Environment file written to: ${envPath}`);
 
-  // If provider needs an API key, prompt for it
-  if (primaryProvider !== "ollama") {
-    const apiKey = await promptUser(`\nEnter your ${primaryProvider} API key: `);
-    if (apiKey) {
-      // We need to boot a minimal credential store to save the key
+    // Save API key to vault if we collected it during model selection
+    if (primaryProvider !== "ollama" && apiKeyForVault) {
       const clock = createRealClock();
       process.env.MAIA_MASTER_KEY = masterKey;
       const salt = new TextEncoder().encode(`maia-salt-${workspaceDir}`);
@@ -498,7 +933,6 @@ MAIA_CONFIG=${configPath}
         clock,
         logPath: path.join(dataDir, "audit.jsonl"),
       });
-      const { createLogger } = await import("./core/logger.js");
       const logger = createLogger({ level: "info", write: () => {} });
       const store = createCredentialStore({
         fs,
@@ -508,33 +942,45 @@ MAIA_CONFIG=${configPath}
         vaultPath: path.join(dataDir, "credentials.enc"),
         masterKey: derivedKey,
       });
-      await store.set(`${primaryProvider}-api-key`, apiKey);
+      await store.set(`${primaryProvider}-api-key`, apiKeyForVault);
       console.log(`API key stored securely in encrypted vault.`);
     }
-  }
 
-  // Create workspace template files
-  console.log("\nInitializing workspace...");
-  const templates: Record<string, string> = {
-    "SOUL.md": "# Soul\n\nDefine your AI's core identity and values here.\n",
-    "IDENTITY.md": "# Identity\n\nname: Maia\nemoji: 🌙\npersonality: helpful assistant\n",
-    "USER.md": "# User\n\nYour preferences and context go here.\n",
-  };
-  for (const [name, content] of Object.entries(templates)) {
-    await fs.writeFile(path.join(workspaceDir, name), content);
-  }
+    // Create workspace template files
+    console.log("\nInitializing workspace...");
+    const templates: Record<string, string> = {
+      "SOUL.md": "# Soul\n\nDefine your AI's core identity and values here.\n",
+      "IDENTITY.md":
+        "# Identity\n\nname: Maia\nemoji: 🌙\npersonality: helpful assistant\n",
+      "USER.md": "# User\n\nYour preferences and context go here.\n",
+    };
+    for (const [name, content] of Object.entries(templates)) {
+      await fs.writeFile(path.join(workspaceDir, name), content);
+    }
 
-  console.log("\n✅ Setup complete!");
-  console.log("\nNext steps:");
-  if (primaryProvider === "ollama") {
-    console.log("  1. Make sure Ollama is running: ollama serve");
-    console.log(`  2. Pull your model: ollama pull ${model || "llama3.2"}`);
-  }
-  console.log("  3. Start chatting: maia chat");
-  console.log("  4. Or start the server: maia start\n");
-
+    console.log("\n✅ Setup complete!");
+    console.log("\nYour config and credentials are in " + maiaDir + ".");
+    console.log(
+      "Maia will load " +
+        envPath +
+        " automatically when you run maia chat or maia start.",
+    );
+    console.log("\nNext steps:");
+    if (primaryProvider === "ollama") {
+      console.log("  1. Make sure Ollama is running: ollama serve");
+      console.log(`  2. Pull your model: ollama pull ${chosenModel}`);
+    }
+    console.log("  3. Start chatting: maia chat");
+    console.log(
+      "  4. Or start the server: maia start" +
+        (port !== 3000 ? " (gateway will listen on port " + port + ")" : "") +
+        "\n",
+    );
   } catch (err) {
-    console.error("Onboarding failed:", err instanceof Error ? err.message : String(err));
+    console.error(
+      "Onboarding failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     process.exit(1);
   }
 }
@@ -546,77 +992,89 @@ MAIA_CONFIG=${configPath}
  */
 async function runCredentials(): Promise<void> {
   try {
-  const subcommand = args[1] ?? "list";
-  const env = createRealEnvProvider();
-  const fs = createRealFileSystem();
-  const crypto = createRealCryptoProvider();
-  const clock = createRealClock();
+    const subcommand = args[1] ?? "list";
+    const env = createRealEnvProvider();
+    const fs = createRealFileSystem();
+    const crypto = createRealCryptoProvider();
+    const clock = createRealClock();
 
-  const maiaDir = expandHome("~/.maia");
-  const dataDir = path.join(maiaDir, "data");
-  const vaultPath = path.join(dataDir, "credentials.enc");
-  const auditLogPath = path.join(dataDir, "audit.jsonl");
+    const maiaDir = expandHome("~/.maia");
+    const dataDir = path.join(maiaDir, "data");
+    const vaultPath = path.join(dataDir, "credentials.enc");
+    const auditLogPath = path.join(dataDir, "audit.jsonl");
 
-  const masterKeyPassphrase = env.get("MAIA_MASTER_KEY");
-  if (!masterKeyPassphrase) {
-    console.error("Error: MAIA_MASTER_KEY environment variable is not set.");
-    console.error("Run 'maia onboard' first, or set it in your .env file.");
-    process.exit(1);
-  }
-
-  const salt = new TextEncoder().encode(`maia-salt-${expandHome("~/.maia/workspace")}`);
-  const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
-  const { createLogger } = await import("./core/logger.js");
-  const logger = createLogger({ level: "warn", write: () => {} });
-  const auditLog = createAuditLog({ fs, clock, logPath: auditLogPath });
-  const store = createCredentialStore({ fs, crypto, auditLog, logger, vaultPath, masterKey });
-
-  switch (subcommand) {
-    case "add": {
-      const name = args[2];
-      if (!name) {
-        console.error("Usage: maia credentials add <name>");
-        process.exit(1);
-      }
-      const value = await promptUser(`Enter value for '${name}': `);
-      if (!value) {
-        console.error("No value provided.");
-        process.exit(1);
-      }
-      await store.set(name, value);
-      console.log(`Credential '${name}' stored securely.`);
-      break;
-    }
-    case "list": {
-      const creds = await store.list();
-      if (creds.length === 0) {
-        console.log("No credentials stored.");
-      } else {
-        console.log("\nStored credentials:");
-        for (const cred of creds) {
-          console.log(`  ${cred.name}  (added: ${cred.addedAt})`);
-        }
-        console.log();
-      }
-      break;
-    }
-    case "remove": {
-      const name = args[2];
-      if (!name) {
-        console.error("Usage: maia credentials remove <name>");
-        process.exit(1);
-      }
-      await store.remove(name);
-      console.log(`Credential '${name}' removed.`);
-      break;
-    }
-    default:
-      console.error(`Unknown credentials subcommand: ${subcommand}`);
-      console.error("Usage: maia credentials [add|list|remove]");
+    const masterKeyPassphrase = env.get("MAIA_MASTER_KEY");
+    if (!masterKeyPassphrase) {
+      console.error("Error: MAIA_MASTER_KEY environment variable is not set.");
+      console.error("Run 'maia onboard' first, or set it in your .env file.");
       process.exit(1);
-  }
+    }
+
+    const salt = new TextEncoder().encode(
+      `maia-salt-${expandHome("~/.maia/workspace")}`,
+    );
+    const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
+    const { createLogger } = await import("./core/logger.js");
+    const logger = createLogger({ level: "warn", write: () => {} });
+    const auditLog = createAuditLog({ fs, clock, logPath: auditLogPath });
+    const store = createCredentialStore({
+      fs,
+      crypto,
+      auditLog,
+      logger,
+      vaultPath,
+      masterKey,
+    });
+
+    switch (subcommand) {
+      case "add": {
+        const name = args[2];
+        if (!name) {
+          console.error("Usage: maia credentials add <name>");
+          process.exit(1);
+        }
+        const value = await promptUser(`Enter value for '${name}': `);
+        if (!value) {
+          console.error("No value provided.");
+          process.exit(1);
+        }
+        await store.set(name, value);
+        console.log(`Credential '${name}' stored securely.`);
+        break;
+      }
+      case "list": {
+        const creds = await store.list();
+        if (creds.length === 0) {
+          console.log("No credentials stored.");
+        } else {
+          console.log("\nStored credentials:");
+          for (const cred of creds) {
+            console.log(`  ${cred.name}  (added: ${cred.addedAt})`);
+          }
+          console.log();
+        }
+        break;
+      }
+      case "remove": {
+        const name = args[2];
+        if (!name) {
+          console.error("Usage: maia credentials remove <name>");
+          process.exit(1);
+        }
+        await store.remove(name);
+        console.log(`Credential '${name}' removed.`);
+        break;
+      }
+      default:
+        console.error(`Unknown credentials subcommand: ${subcommand}`);
+        console.error("Usage: maia credentials [add|list|remove]");
+        process.exit(1);
+    }
   } catch (err) {
-    console.error("Credential operation failed:", err instanceof Error ? err.message : String(err));
+    console.error(
+      "Credential operation failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     process.exit(1);
   }
 }
@@ -628,43 +1086,52 @@ async function runCredentials(): Promise<void> {
  */
 async function runBackup(): Promise<void> {
   try {
-  const outputPath = args[1] ?? expandHome(`~/.maia/backups/maia-backup-${Date.now()}.enc`);
-  console.log("Creating encrypted backup...");
+    const outputPath =
+      args[1] ?? expandHome(`~/.maia/backups/maia-backup-${Date.now()}.enc`);
+    console.log("Creating encrypted backup...");
 
-  const fs = createRealFileSystem();
-  const crypto = createRealCryptoProvider();
-  const env = createRealEnvProvider();
+    const fs = createRealFileSystem();
+    const crypto = createRealCryptoProvider();
+    const env = createRealEnvProvider();
 
-  const maiaDir = expandHome("~/.maia");
-  const masterKeyPassphrase = env.get("MAIA_MASTER_KEY");
-  if (!masterKeyPassphrase) {
-    console.error("Error: MAIA_MASTER_KEY environment variable is not set.");
-    console.error("Run 'maia onboard' first, or set it in your .env file.");
-    process.exit(1);
-  }
-  const salt = new TextEncoder().encode(`maia-salt-${path.join(maiaDir, "workspace")}`);
-  const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
+    const maiaDir = expandHome("~/.maia");
+    const masterKeyPassphrase = env.get("MAIA_MASTER_KEY");
+    if (!masterKeyPassphrase) {
+      console.error("Error: MAIA_MASTER_KEY environment variable is not set.");
+      console.error("Run 'maia onboard' first, or set it in your .env file.");
+      process.exit(1);
+    }
+    const salt = new TextEncoder().encode(
+      `maia-salt-${path.join(maiaDir, "workspace")}`,
+    );
+    const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
 
-  const { createLogger } = await import("./core/logger.js");
-  const logger = createLogger({ level: "info", write: (line) => console.log(line) });
+    const { createLogger } = await import("./core/logger.js");
+    const logger = createLogger({
+      level: "info",
+      write: (line) => console.log(line),
+    });
 
-  // Ensure backup directory exists
-  await fs.mkdir(path.dirname(outputPath));
+    // Ensure backup directory exists
+    await fs.mkdir(path.dirname(outputPath));
 
-  const exporter = createBackupExporter({
-    fs,
-    crypto,
-    logger,
-    workspacePath: path.join(maiaDir, "workspace"),
-    dataPath: path.join(maiaDir, "data"),
-    credentialsPath: path.join(maiaDir, "data", "credentials.enc"),
-    masterKey,
-  });
+    const exporter = createBackupExporter({
+      fs,
+      crypto,
+      logger,
+      workspacePath: path.join(maiaDir, "workspace"),
+      dataPath: path.join(maiaDir, "data"),
+      credentialsPath: path.join(maiaDir, "data", "credentials.enc"),
+      masterKey,
+    });
 
-  await exporter.export(outputPath);
-  console.log(`Backup saved to: ${outputPath}`);
+    await exporter.export(outputPath);
+    console.log(`Backup saved to: ${outputPath}`);
   } catch (err) {
-    console.error("Backup failed:", err instanceof Error ? err.message : String(err));
+    console.error(
+      "Backup failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     process.exit(1);
   }
 }
@@ -676,45 +1143,53 @@ async function runBackup(): Promise<void> {
  */
 async function runRestore(): Promise<void> {
   try {
-  const inputPath = args[1];
-  if (!inputPath) {
-    console.error("Usage: maia restore <backup-path>");
-    process.exit(1);
-  }
+    const inputPath = args[1];
+    if (!inputPath) {
+      console.error("Usage: maia restore <backup-path>");
+      process.exit(1);
+    }
 
-  console.log(`Restoring from: ${inputPath}`);
+    console.log(`Restoring from: ${inputPath}`);
 
-  const fs = createRealFileSystem();
-  const crypto = createRealCryptoProvider();
-  const env = createRealEnvProvider();
+    const fs = createRealFileSystem();
+    const crypto = createRealCryptoProvider();
+    const env = createRealEnvProvider();
 
-  const maiaDir = expandHome("~/.maia");
-  const masterKeyPassphrase = env.get("MAIA_MASTER_KEY");
-  if (!masterKeyPassphrase) {
-    console.error("Error: MAIA_MASTER_KEY environment variable is not set.");
-    console.error("Run 'maia onboard' first, or set it in your .env file.");
-    process.exit(1);
-  }
-  const salt = new TextEncoder().encode(`maia-salt-${path.join(maiaDir, "workspace")}`);
-  const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
+    const maiaDir = expandHome("~/.maia");
+    const masterKeyPassphrase = env.get("MAIA_MASTER_KEY");
+    if (!masterKeyPassphrase) {
+      console.error("Error: MAIA_MASTER_KEY environment variable is not set.");
+      console.error("Run 'maia onboard' first, or set it in your .env file.");
+      process.exit(1);
+    }
+    const salt = new TextEncoder().encode(
+      `maia-salt-${path.join(maiaDir, "workspace")}`,
+    );
+    const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
 
-  const { createLogger } = await import("./core/logger.js");
-  const logger = createLogger({ level: "info", write: (line) => console.log(line) });
+    const { createLogger } = await import("./core/logger.js");
+    const logger = createLogger({
+      level: "info",
+      write: (line) => console.log(line),
+    });
 
-  const restorer = createBackupRestorer({
-    fs,
-    crypto,
-    logger,
-    workspacePath: path.join(maiaDir, "workspace"),
-    dataPath: path.join(maiaDir, "data"),
-    credentialsPath: path.join(maiaDir, "data", "credentials.enc"),
-    masterKey,
-  });
+    const restorer = createBackupRestorer({
+      fs,
+      crypto,
+      logger,
+      workspacePath: path.join(maiaDir, "workspace"),
+      dataPath: path.join(maiaDir, "data"),
+      credentialsPath: path.join(maiaDir, "data", "credentials.enc"),
+      masterKey,
+    });
 
-  await restorer.restore(inputPath);
-  console.log("Restore complete.");
+    await restorer.restore(inputPath);
+    console.log("Restore complete.");
   } catch (err) {
-    console.error("Restore failed:", err instanceof Error ? err.message : String(err));
+    console.error(
+      "Restore failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     process.exit(1);
   }
 }
@@ -729,69 +1204,79 @@ async function runSchedule(): Promise<void> {
   try {
     app = await createApp();
   } catch (err) {
-    console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
+    console.error(
+      "Failed to start Maia:",
+      err instanceof Error ? err.message : String(err),
+    );
     process.exit(1);
   }
 
   try {
-  const subcommand = args[1] ?? "list";
-  const ctx = app.getContext();
+    const subcommand = args[1] ?? "list";
+    const ctx = app.getContext();
 
-  const { createScheduler } = await import("./agent/scheduler.js");
-  const scheduler = createScheduler({
-    fs: ctx.fs,
-    clock: ctx.clock,
-    schedulerPath: expandHome("~/.maia/data/scheduler.json"),
-  });
+    const { createScheduler } = await import("./agent/scheduler.js");
+    const scheduler = createScheduler({
+      fs: ctx.fs,
+      clock: ctx.clock,
+      schedulerPath: expandHome("~/.maia/data/scheduler.json"),
+    });
 
-  switch (subcommand) {
-    case "list": {
-      const tasks = await scheduler.list();
-      if (tasks.length === 0) {
-        console.log("No scheduled tasks.");
-      } else {
-        console.log("\nScheduled tasks:");
-        for (const task of tasks) {
-          console.log(`  [${task.id}] ${task.prompt} (${task.schedule}) - ${task.status}`);
+    switch (subcommand) {
+      case "list": {
+        const tasks = await scheduler.list();
+        if (tasks.length === 0) {
+          console.log("No scheduled tasks.");
+        } else {
+          console.log("\nScheduled tasks:");
+          for (const task of tasks) {
+            console.log(
+              `  [${task.id}] ${task.prompt} (${task.schedule}) - ${task.status}`,
+            );
+          }
+          console.log();
         }
-        console.log();
+        break;
       }
-      break;
-    }
-    case "add": {
-      const schedule = args[2];
-      const prompt = args.slice(3).join(" ");
-      if (!schedule || !prompt) {
-        console.error("Usage: maia schedule add <schedule> <prompt>");
-        console.error('Example: maia schedule add "0 9 * * *" "Check the news"');
+      case "add": {
+        const schedule = args[2];
+        const prompt = args.slice(3).join(" ");
+        if (!schedule || !prompt) {
+          console.error("Usage: maia schedule add <schedule> <prompt>");
+          console.error(
+            'Example: maia schedule add "0 9 * * *" "Check the news"',
+          );
+          process.exit(1);
+        }
+        const task = await scheduler.add({
+          schedule,
+          prompt,
+          channel: "cli",
+        });
+        console.log(`Task added: ${task.id}`);
+        break;
+      }
+      case "remove": {
+        const taskId = args[2];
+        if (!taskId) {
+          console.error("Usage: maia schedule remove <task-id>");
+          process.exit(1);
+        }
+        await scheduler.remove(taskId);
+        console.log(`Task removed: ${taskId}`);
+        break;
+      }
+      default:
+        console.error(`Unknown schedule subcommand: ${subcommand}`);
         process.exit(1);
-      }
-      const task = await scheduler.add({
-        schedule,
-        prompt,
-        channel: "cli",
-      });
-      console.log(`Task added: ${task.id}`);
-      break;
     }
-    case "remove": {
-      const taskId = args[2];
-      if (!taskId) {
-        console.error("Usage: maia schedule remove <task-id>");
-        process.exit(1);
-      }
-      await scheduler.remove(taskId);
-      console.log(`Task removed: ${taskId}`);
-      break;
-    }
-    default:
-      console.error(`Unknown schedule subcommand: ${subcommand}`);
-      process.exit(1);
-  }
 
-  await app.stop();
+    await app.stop();
   } catch (err) {
-    console.error("Schedule operation failed:", err instanceof Error ? err.message : String(err));
+    console.error(
+      "Schedule operation failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     await app.stop();
     process.exit(1);
   }
@@ -809,7 +1294,10 @@ async function runWatchdog(): Promise<void> {
   try {
     app = await createApp();
   } catch (err) {
-    console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
+    console.error(
+      "Failed to start Maia:",
+      err instanceof Error ? err.message : String(err),
+    );
     process.exit(1);
   }
   const ctx = app.getContext();
@@ -874,10 +1362,16 @@ async function runWatchdog(): Promise<void> {
 async function runDoctor(): Promise<void> {
   console.log("\n🩺 Maia Health Check\n");
 
-  const checks: Array<{ name: string; status: "ok" | "warn" | "error"; message: string }> = [];
+  const checks: Array<{
+    name: string;
+    status: "ok" | "warn" | "error";
+    message: string;
+  }> = [];
 
   // Check config file exists
-  const configPath = expandHome(process.env.MAIA_CONFIG ?? "~/.maia/maia.config.json");
+  const configPath = expandHome(
+    process.env.MAIA_CONFIG ?? "~/.maia/maia.config.json",
+  );
   const fs = createRealFileSystem();
 
   const configExists = await fs.exists(configPath);
@@ -893,7 +1387,9 @@ async function runDoctor(): Promise<void> {
   checks.push({
     name: "Data directory",
     status: dataExists ? "ok" : "warn",
-    message: dataExists ? dataDir : `Not found: ${dataDir}. Run 'maia onboard' to set up.`,
+    message: dataExists
+      ? dataDir
+      : `Not found: ${dataDir}. Run 'maia onboard' to set up.`,
   });
 
   // Check master key
@@ -902,7 +1398,9 @@ async function runDoctor(): Promise<void> {
   checks.push({
     name: "Master key",
     status: hasMasterKey ? "ok" : "error",
-    message: hasMasterKey ? "Set in environment" : "MAIA_MASTER_KEY not set. Run 'maia onboard' or set in .env.",
+    message: hasMasterKey
+      ? "Set in environment"
+      : "MAIA_MASTER_KEY not set. Run 'maia onboard' or set in .env.",
   });
 
   // Check database
@@ -920,7 +1418,9 @@ async function runDoctor(): Promise<void> {
   checks.push({
     name: "Workspace",
     status: wsExists ? "ok" : "warn",
-    message: wsExists ? workspaceDir : "Not found. Run 'maia onboard' to set up.",
+    message: wsExists
+      ? workspaceDir
+      : "Not found. Run 'maia onboard' to set up.",
   });
 
   // Try to boot the app if config exists
@@ -959,13 +1459,16 @@ async function runDoctor(): Promise<void> {
 
   // Print results
   for (const check of checks) {
-    const icon = check.status === "ok" ? "✅" : check.status === "warn" ? "⚠️ " : "❌";
+    const icon =
+      check.status === "ok" ? "✅" : check.status === "warn" ? "⚠️ " : "❌";
     console.log(`  ${icon} ${check.name}: ${check.message}`);
   }
 
   const errors = checks.filter((c) => c.status === "error").length;
   const warnings = checks.filter((c) => c.status === "warn").length;
-  console.log(`\n  ${checks.length} checks: ${checks.length - errors - warnings} passed, ${warnings} warnings, ${errors} errors\n`);
+  console.log(
+    `\n  ${checks.length} checks: ${checks.length - errors - warnings} passed, ${warnings} warnings, ${errors} errors\n`,
+  );
 
   if (errors > 0) process.exit(1);
 }

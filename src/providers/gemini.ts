@@ -29,7 +29,7 @@ export interface GeminiProviderDeps {
   model?: string;
 }
 
-const DEFAULT_MODEL = "gemini-1.5-flash";
+const DEFAULT_MODEL = "gemini-3-flash-preview";
 
 function getGeminiContextSize(modelId: string): number {
   const lower = modelId.toLowerCase();

@@ -5,11 +5,103 @@
  * @note This module creates a real HTTP/WebSocket server using Bun's
  * native server API and delegates all request handling to the
  * existing GatewayServer which processes middleware chains.
+ * Serves static web UI files from web/ (GET /, /index.html, /styles.css, /chat.ts).
+ * All HTTP routes and WebSocket upgrades require a valid Bearer token.
  */
 
+import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
+import * as path from "node:path";
 import type { Server, ServerWebSocket } from "bun";
 import type { Logger, MaiaConfig } from "../core/types.js";
 import type { GatewayServer } from "./server.js";
+
+/** MIME types for web UI static file extensions. */
+const WEB_UI_MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".ts": "application/javascript; charset=utf-8",
+  ".ico": "image/x-icon",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+};
+
+/**
+ * @brief Serves a file from webRoot if pathName is a safe web UI asset path.
+ * @param pathName - Request path (e.g. "/", "/index.html", "/styles.css")
+ * @param webRoot - Absolute path to the web/ directory
+ * @param method - GET or HEAD
+ * @returns Promise resolving to Response with file body, or null if not a static asset or file missing
+ */
+async function serveWebAsset(
+  pathName: string,
+  webRoot: string,
+  method: string
+): Promise<Response | null> {
+  if (method !== "GET" && method !== "HEAD") return null;
+  let filePath: string;
+  if (pathName === "/" || pathName === "/index.html") {
+    filePath = path.join(webRoot, "index.html");
+  } else if (/^\/[^/]+$/.test(pathName)) {
+    const segment = pathName.slice(1);
+    if (segment.includes("..") || segment.startsWith(".")) return null;
+    filePath = path.join(webRoot, segment);
+  } else {
+    return null;
+  }
+  const ext = path.extname(filePath);
+  if (!Object.prototype.hasOwnProperty.call(WEB_UI_MIME, ext)) return null;
+  const file = Bun.file(filePath);
+  if (!(await file.exists())) return null;
+
+  if (method === "HEAD") {
+    return new Response(undefined, {
+      status: 200,
+      headers: { "Content-Type": WEB_UI_MIME[ext] ?? "application/octet-stream" },
+    });
+  }
+
+  if (ext === ".ts") {
+    const text = await file.text();
+    const transpiler = new Bun.Transpiler({ loader: "ts" });
+    const js = transpiler.transformSync(text);
+    return new Response(js, {
+      status: 200,
+      headers: { "Content-Type": "application/javascript; charset=utf-8" },
+    });
+  }
+
+  return new Response(file, {
+    status: 200,
+    headers: {
+      "Content-Type": WEB_UI_MIME[ext] ?? "application/octet-stream",
+    },
+  });
+}
+
+/**
+ * @brief Validates WebSocket auth token from request (query or header).
+ * @param req - Incoming request (for /ws upgrade)
+ * @param url - Parsed URL (for query param)
+ * @param expectedToken - Configured gateway auth token
+ * @returns true if token is valid
+ */
+function validateWSToken(req: Request, url: URL, expectedToken: string): boolean {
+  const fromQuery = (url.searchParams.get("token") ?? "").trim();
+  const fromHeader =
+    req.headers.get("authorization")?.replace(/^\s*Bearer\s+/i, "").trim() ?? "";
+  const token = (fromQuery || fromHeader).trim();
+  const expected = (expectedToken ?? "").trim();
+  if (!token || !expected) return false;
+  const a = Buffer.from(token, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
 
 /**
  * @brief Options for starting the Bun HTTP server.
@@ -47,7 +139,7 @@ export interface BunServer {
  * @note The server:
  * - Delegates all HTTP requests to gatewayServer.handleRequest()
  * - Upgrades /ws connections to WebSocket and delegates to WSHandler
- * - Serves static web files from web/ for the webchat UI
+ * - Serves static web files from web/ for the webchat UI (GET /, /index.html, etc.)
  *
  * @example
  * const bunServer = startBunServer({ config, gateway, logger });
@@ -55,9 +147,30 @@ export interface BunServer {
  * // ... later ...
  * bunServer.stop();
  */
+/**
+ * @brief Resolves the web UI root directory (must contain index.html).
+ * Tries process.cwd()/web, entry-point dir (Bun.main)/web and ../web, then path relative to this module.
+ */
+function resolveWebRoot(): string {
+  const entryDir = path.dirname(Bun.main);
+  const candidates = [
+    path.resolve(process.cwd(), "web"),
+    path.resolve(entryDir, "web"),
+    path.resolve(entryDir, "..", "web"),
+    path.resolve(import.meta.dir, "..", "..", "web"),
+  ];
+  const indexName = "index.html";
+  for (const dir of candidates) {
+    if (existsSync(path.join(dir, indexName))) return dir;
+  }
+  return candidates[candidates.length - 1]!;
+}
+
 export function startBunServer(options: BunServerOptions): BunServer {
   const { config, gateway, logger } = options;
   const wsHandler = gateway.getWSHandler();
+  const webRoot = resolveWebRoot();
+  logger.debug("Web UI root", { webRoot });
 
   // Track WebSocket connections by server-assigned ID
   const wsConnections = new Map<string, { ws: unknown; connectionId: string }>();
@@ -77,8 +190,19 @@ export function startBunServer(options: BunServerOptions): BunServer {
       const url = new URL(req.url);
       const pathName = url.pathname;
 
-      // WebSocket upgrade
+      // Serve web UI static files (GET /, /index.html, /styles.css, /chat.ts, etc.)
+      const staticResponse = await serveWebAsset(pathName, webRoot, req.method);
+      if (staticResponse) return staticResponse;
+
+      // WebSocket upgrade (requires valid Bearer token via ?token= or Authorization header)
       if (pathName === "/ws" && wsHandler) {
+        const expectedToken = config.gateway.auth?.token ?? "";
+        if (!validateWSToken(req, url, expectedToken)) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
         const connectionId = `ws-${++wsIdCounter}`;
         const upgraded = server.upgrade(req, {
           data: { connectionId },
@@ -100,10 +224,15 @@ export function startBunServer(options: BunServerOptions): BunServer {
         ? await req.text()
         : "";
 
-      // Extract client IP
-      const ip = headers["x-forwarded-for"]?.split(",")[0]?.trim()
-        ?? headers["x-real-ip"]
-        ?? "unknown";
+      // Extract client IP: prefer proxy headers, then Bun's connection address.
+      // When opening the page in a browser (no proxy), headers are absent and we
+      // previously used "unknown", so all clients shared one rate-limit bucket
+      // and could get 429 on first load.
+      const ip =
+        headers["x-forwarded-for"]?.split(",")[0]?.trim() ??
+        headers["x-real-ip"] ??
+        server.requestIP?.(req)?.address ??
+        "unknown";
 
       const response = await gateway.handleRequest(method, reqPath, headers, body, ip);
 
@@ -148,6 +277,13 @@ export function startBunServer(options: BunServerOptions): BunServer {
 
   const serverUrl = `http://${config.gateway.host === "0.0.0.0" ? "localhost" : config.gateway.host}:${server.port}`;
   logger.info("Bun server started", { url: serverUrl, port: server.port });
+  // Bypass logger redaction so user can verify token matches .env (remove or gate on debug in production)
+  const authToken = config.gateway.auth?.token ?? "";
+  if (authToken) {
+    process.stdout.write(
+      `[Maia] Gateway auth token (verification only): ${authToken}\n`
+    );
+  }
 
   return {
     server,
@@ -173,13 +309,16 @@ export function registerApiRoutes(
   gateway: GatewayServer,
   deps: {
     startTime: number;
-    onChat?: (message: string, senderId: string) => Promise<string>;
+    onChat?: (
+      message: string,
+      senderId: string
+    ) => Promise<{ content: string; remembered?: { memoryMd?: string; userMd?: string; soulMd?: string } }>;
     providerHealthCheck?: () => Promise<Record<string, boolean>>;
   }
 ): void {
   const router = gateway.getRouter();
 
-  // Health check (public endpoint, no auth required)
+  // Health check (requires Bearer token like all other routes)
   router.get("/api/health", async () => ({
     status: 200,
     headers: { "Content-Type": "application/json" },
@@ -226,11 +365,16 @@ export function registerApiRoutes(
     }
 
     const senderId = parsed.senderId ?? "api-user";
-    const reply = await deps.onChat(parsed.message, senderId);
+    const result = await deps.onChat(parsed.message, senderId);
     return {
       status: 200,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reply }),
+      body: JSON.stringify({
+        reply: result.content,
+        ...(result.remembered && Object.keys(result.remembered).length > 0
+          ? { remembered: result.remembered }
+          : {}),
+      }),
     };
   });
 

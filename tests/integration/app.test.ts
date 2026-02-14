@@ -154,9 +154,9 @@ describe("createApp() composition smoke test", () => {
     };
 
     try {
-      const reply = await runtime.handleMessage(msg);
-      expect(typeof reply).toBe("string");
-      expect(reply.length).toBeGreaterThan(0);
+      const result = await runtime.handleMessage(msg);
+      expect(typeof result.content).toBe("string");
+      expect(result.content.length).toBeGreaterThan(0);
     } catch (err) {
       expect(err).toBeDefined();
       expect(err instanceof Error || typeof (err as Error).message === "string").toBe(true);

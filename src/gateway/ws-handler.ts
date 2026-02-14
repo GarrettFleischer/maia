@@ -47,8 +47,12 @@ export type WSSendFn = (connectionId: string, data: string) => void;
 export interface WSHandlerDeps {
   logger: Logger;
   events: EventBus;
-  /** Handles a chat message from a WebSocket client */
-  onChatMessage?: (connectionId: string, senderId: string, content: string) => Promise<string>;
+  /** Handles a chat message; returns content and optional remembered content (for "Maia will remember that" tooltip). */
+  onChatMessage?: (
+    connectionId: string,
+    senderId: string,
+    content: string
+  ) => Promise<{ content: string; remembered?: { memoryMd?: string; userMd?: string; soulMd?: string } }>;
   /** Idle timeout in ms before closing connection (default: 300000 = 5 min) */
   idleTimeoutMs?: number;
 }
@@ -159,7 +163,7 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
 
           if (onChatMessage) {
             try {
-              const reply = await onChatMessage(
+              const result = await onChatMessage(
                 connectionId,
                 conn.senderId,
                 msg.content
@@ -172,7 +176,10 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
               return JSON.stringify({
                 type: "chat_response",
                 id: msg.id,
-                content: reply,
+                content: result.content,
+                ...(result.remembered && Object.keys(result.remembered).length > 0
+                  ? { remembered: result.remembered }
+                  : {}),
               });
             } catch (err) {
               const errorMsg = err instanceof Error ? err.message : String(err);

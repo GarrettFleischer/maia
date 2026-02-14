@@ -18,9 +18,31 @@ import type {
   MaiaConfig,
   OutboundMessage,
 } from "../core/types.js";
+import { redactSecretsFromResponse } from "../security/content-sanitizer.js";
 import type { ContextBuilder, ContextInput } from "./context.js";
 import type { SessionManager } from "./session.js";
 import type { ToolRegistry } from "./tools/registry.js";
+import type { MergeStrategy } from "../memory/periodic-merge.js";
+
+import type { RememberedContent } from "../memory/remember-block.js";
+
+/**
+ * @brief Result of handling a message: display content and optional remembered content for UI.
+ */
+export interface HandleMessageResult {
+  /** Assistant reply text to show to the user. */
+  content: string;
+  /** When the LLM included a remember block and it was applied; content per file for hover tooltip. */
+  remembered?: RememberedContent;
+}
+
+/**
+ * @brief Parses optional ---REMEMBER--- block from LLM response and appends to workspace files.
+ * When present, runtime uses returned displayContent for reply and passes rememberedContent to result.
+ */
+export type ParseRememberFn = (
+  rawContent: string
+) => Promise<{ displayContent: string; remembered: boolean; rememberedContent?: RememberedContent }>;
 
 /**
  * @brief Dependencies for createAgentRuntime.
@@ -41,6 +63,35 @@ export interface AgentRuntimeDeps {
   isPrivacyActive?: (sessionId: string) => boolean;
   /** Sends a message back to the originating channel */
   sendReply: (message: OutboundMessage) => Promise<void>;
+  /**
+   * @brief When set, the runtime may run a combined reply+memory merge instead of
+   * normal chat when shouldRunMerge() is true (e.g. every 10 min). Merge path does
+   * not call onAfterReply (merge appends to daily log itself).
+   */
+  mergeStrategy?: MergeStrategy;
+  /**
+   * @brief Called after each reply is sent. Used for post-reply persistence
+   * (daily log append). Not called when the merge path was used.
+   * Runs fire-and-forget so it never blocks the user's reply.
+   * @param params - User content, response content, session ID, and privacy flag
+   */
+  /**
+   * @brief When set, parses ---REMEMBER--- from the LLM response and appends to MEMORY/USER/SOUL.
+   * Returned displayContent is used for the reply; remembered is passed through to callers for UI.
+   */
+  parseRemember?: ParseRememberFn;
+  /**
+   * @brief Called after each reply is sent. Used for post-reply persistence
+   * (daily log append). Not called when the merge path was used.
+   * Runs fire-and-forget so it never blocks the user's reply.
+   * @param params - User content, response content, session ID, and privacy flag
+   */
+  onAfterReply?: (params: {
+    userContent: string;
+    responseContent: string;
+    sessionId: string;
+    privacyMode: boolean;
+  }) => Promise<void>;
 }
 
 /**
@@ -50,7 +101,7 @@ export interface AgentRuntime {
   /**
    * @brief Processes an inbound message through the agent pipeline.
    * @param message - The inbound message from any channel
-   * @returns Promise resolving to the assistant's response content
+   * @returns Promise resolving to { content, remembered? } for the assistant reply
    *
    * @note Pipeline:
    * 1. Get or create session
@@ -59,10 +110,11 @@ export interface AgentRuntime {
    * 4. Add user message to session
    * 5. Call LLM with conversation + tools
    * 6. Handle tool calls (loop until no more tool calls)
-   * 7. Send assistant response back to channel via sendReply callback
-   * 8. Return the response content to the caller
+   * 7. Parse optional ---REMEMBER--- block and apply to workspace files
+   * 8. Send assistant response back to channel via sendReply callback
+   * 9. Return { content, remembered? } to the caller
    */
-  handleMessage(message: InboundMessage): Promise<string>;
+  handleMessage(message: InboundMessage): Promise<HandleMessageResult>;
 
   /**
    * @brief Gets the current session ID for a channel+sender pair.
@@ -97,6 +149,9 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     getThreadSummary,
     isPrivacyActive,
     sendReply,
+    mergeStrategy,
+    parseRemember,
+    onAfterReply,
   } = deps;
 
   /** Maps "channelId:senderId" to session IDs */
@@ -147,7 +202,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   }
 
   return {
-    async handleMessage(message: InboundMessage): Promise<string> {
+    async handleMessage(message: InboundMessage): Promise<HandleMessageResult> {
       await events.emit("messageReceived", {
         channelId: message.channelId,
         senderId: message.senderId,
@@ -156,6 +211,32 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
 
       const sessionId = getOrCreateSession(message.channelId, message.senderId);
       const privacyMode = isPrivacyActive?.(sessionId) ?? false;
+
+      // Merge path: combined reply + memory extraction every N minutes (no tools this turn)
+      if (mergeStrategy && !privacyMode && (await mergeStrategy.shouldRunMerge())) {
+        const userMsg: ChatMessage = {
+          role: "user",
+          content: message.content,
+          name: message.senderId,
+        };
+        sessionManager.addMessage(sessionId, userMsg);
+        const reply = await mergeStrategy.runMerge(message.content, sessionId);
+        sessionManager.addMessage(sessionId, { role: "assistant", content: reply });
+        const outbound: OutboundMessage = {
+          channelId: message.channelId,
+          recipientId: message.senderId,
+          content: reply,
+          replyTo: message.id,
+        };
+        await sendReply(outbound);
+        await events.emit("messageSent", {
+          channelId: message.channelId,
+          recipientId: message.senderId,
+          messageId: message.id,
+        });
+        logger.debug("Message processed (merge path)", { sessionId, responseLength: reply.length });
+        return { content: reply };
+      }
 
       // Step 1: Recall relevant memories
       let memoryContext: string | undefined;
@@ -210,6 +291,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       }
 
       let response = await callProvider(conversation, chatOptions);
+      response = {
+        ...response,
+        content: redactSecretsFromResponse(response.content),
+      };
       let toolRounds = 0;
 
       // Tool call loop
@@ -261,19 +346,32 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           ...sessionManager.getMessages(sessionId),
         ];
         response = await callProvider(updatedConversation, chatOptions);
+        response = {
+          ...response,
+          content: redactSecretsFromResponse(response.content),
+        };
       }
 
-      // Step 7: Add final assistant response and send reply
+      // Step 7: Parse optional ---REMEMBER--- block and get display content
+      let displayContent = response.content;
+      let remembered: RememberedContent | undefined;
+      if (parseRemember && !privacyMode) {
+        const parsed = await parseRemember(response.content);
+        displayContent = parsed.displayContent;
+        remembered = parsed.remembered && parsed.rememberedContent ? parsed.rememberedContent : undefined;
+      }
+
+      // Step 8: Add final assistant response and send reply
       const assistantMessage: ChatMessage = {
         role: "assistant",
-        content: response.content,
+        content: displayContent,
       };
       sessionManager.addMessage(sessionId, assistantMessage);
 
       const outbound: OutboundMessage = {
         channelId: message.channelId,
         recipientId: message.senderId,
-        content: response.content,
+        content: displayContent,
         replyTo: message.id,
       };
 
@@ -285,13 +383,28 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         messageId: message.id,
       });
 
+      // Step 9: Fire-and-forget post-reply persistence (daily log)
+      if (onAfterReply) {
+        onAfterReply({
+          userContent: message.content,
+          responseContent: displayContent,
+          sessionId,
+          privacyMode,
+        }).catch((err) => {
+          logger.warn("onAfterReply failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+
       logger.debug("Message processed", {
         sessionId,
         toolRounds,
-        responseLength: response.content.length,
+        responseLength: displayContent.length,
+        remembered: !!remembered,
       });
 
-      return response.content;
+      return { content: displayContent, remembered };
     },
 
     getSessionId(channelId: string, senderId: string): string | undefined {

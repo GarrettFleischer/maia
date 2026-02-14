@@ -42,26 +42,35 @@ export function createAuthMiddleware(ctx: MaiaContext): AuthMiddleware {
         req.headers["authorization"] ??
         req.headers["Authorization"] ??
         Object.entries(req.headers).find(
-          ([k]) => k.toLowerCase() === "authorization"
+          ([k]) => k.toLowerCase() === "authorization",
         )?.[1];
 
       if (!raw) {
-        await ctx.auditLog.log("AUTH_FAILURE", { ip: req.ip, reason: "missing_header" });
+        await ctx.auditLog.log("AUTH_FAILURE", {
+          ip: req.ip,
+          reason: "missing_header",
+        });
         return { authenticated: false, statusCode: 401 };
       }
 
       if (!raw.startsWith("Bearer ") || raw.length <= 7) {
-        await ctx.auditLog.log("AUTH_FAILURE", { ip: req.ip, reason: "invalid_format" });
+        await ctx.auditLog.log("AUTH_FAILURE", {
+          ip: req.ip,
+          reason: "invalid_format",
+        });
         return { authenticated: false, statusCode: 401 };
       }
 
-      const token = raw.slice(7);
-      const expected = ctx.config.gateway.auth.token;
+      const token = raw.slice(7).trim();
+      const expected = (ctx.config.gateway.auth.token ?? "").trim();
       const a = encoder.encode(token);
       const b = encoder.encode(expected);
 
       if (a.length !== b.length || !ctx.crypto.timingSafeEqual(a, b)) {
-        await ctx.auditLog.log("AUTH_FAILURE", { ip: req.ip, reason: "invalid_token" });
+        await ctx.auditLog.log("AUTH_FAILURE", {
+          ip: req.ip,
+          reason: "invalid_token",
+        });
         return { authenticated: false, statusCode: 401 };
       }
 

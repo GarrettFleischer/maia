@@ -12,6 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import type {
+  FileSystem,
   MaiaConfig,
   MaiaContext,
   LLMProvider,
@@ -66,6 +67,23 @@ import { createThreadTracker } from "./agent/threading.js";
 // Memory
 import { createMemoryStore } from "./memory/store.js";
 import { createAutoRecall } from "./memory/auto-recall.js";
+import { createDailyLog } from "./memory/daily-log.js";
+import { createPeriodicMerge } from "./memory/periodic-merge.js";
+import { createRememberBlockHandler } from "./memory/remember-block.js";
+
+// Agents
+import { createAgentRegistry } from "./agents/registry.js";
+import type { AgentRegistry, AgentConfig } from "./agents/registry.js";
+import { createSubAgentRuntime } from "./agents/factory.js";
+import type { SubAgent, SharedAgentDeps } from "./agents/factory.js";
+import {
+  createAgentCreateTool,
+  createAgentListTool,
+  createAgentRemoveTool,
+  createAgentMessageTool,
+  createAgentInspectTool,
+  createAgentUpdateTool,
+} from "./agents/tools.js";
 
 /**
  * @brief Options for creating the application.
@@ -87,6 +105,12 @@ export interface MaiaApp {
   getRuntime(): AgentRuntime;
   /** @brief Returns the provider registry */
   getProviderRegistry(): ProviderRegistry;
+  /** @brief Returns the agent registry for sub-agent management */
+  getAgentRegistry(): AgentRegistry;
+  /** @brief Returns the map of active sub-agent runtimes */
+  getActiveAgents(): Map<string, SubAgent>;
+  /** @brief Returns the raw (unsandboxed) filesystem */
+  getRawFs(): FileSystem;
   /** @brief Gracefully shuts down all subsystems */
   stop(): Promise<void>;
 }
@@ -249,6 +273,40 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
   const ssrfGuard = createSsrfGuard({ blockPrivateIPs: config.security.ssrf.blockPrivateIPs });
   toolRegistry.register(createWebFetchTool({ http, ssrfGuard, logger }));
 
+  // ── Step 13: Agent registry + management tools ───────────────────
+
+  const agentRegistry = createAgentRegistry({ fs, db, logger, workspacePath });
+  const activeAgents = new Map<string, SubAgent>();
+
+  /** @brief Shared deps for creating sub-agent runtimes */
+  const sharedAgentDeps: SharedAgentDeps = {
+    db, crypto, http, clock, auditLog, events, logger, config,
+    providerRegistry,
+    rawFs,
+  };
+
+  /** @brief Creates a sub-agent runtime and adds it to the active agents map */
+  const createAndActivateAgent = (agentConfig: AgentConfig): SubAgent => {
+    const agentWorkspace = agentRegistry.agentWorkspacePath(agentConfig.id);
+    const subAgent = createSubAgentRuntime(agentConfig, agentWorkspace, sharedAgentDeps);
+    activeAgents.set(agentConfig.id, subAgent);
+    return subAgent;
+  };
+
+  // Register Maia's agent management tools
+  const agentToolDeps = {
+    registry: agentRegistry,
+    logger,
+    createRuntime: createAndActivateAgent,
+    activeAgents,
+  };
+  toolRegistry.register(createAgentCreateTool(agentToolDeps));
+  toolRegistry.register(createAgentListTool(agentToolDeps));
+  toolRegistry.register(createAgentRemoveTool(agentToolDeps));
+  toolRegistry.register(createAgentMessageTool(agentToolDeps));
+  toolRegistry.register(createAgentInspectTool(agentToolDeps));
+  toolRegistry.register(createAgentUpdateTool(agentToolDeps));
+
   // Register memory tools if memory is enabled
   if (config.memory.enabled) {
     const memoryStore = createMemoryStore({ db, crypto, logger });
@@ -263,7 +321,45 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
       limit: config.memory.search.defaultLimit,
     });
 
-    // Build runtime with memory recall
+    // Daily log for Tier 1 audit trail
+    const dailyLog = createDailyLog({
+      fs,
+      clock,
+      auditLog,
+      basePath: `${workspacePath}/memory`,
+    });
+
+    // Optional "remember" block in every reply: LLM can append ---REMEMBER--- + JSON to persist to MEMORY/USER/SOUL
+    const rememberBlockHandler = createRememberBlockHandler({
+      fs,
+      logger,
+      workspacePath,
+    });
+
+    // Periodic merge: every 10 min, combine user chat with memory extraction from daily log since last merge
+    const mergeStrategy = createPeriodicMerge({
+      fs,
+      db,
+      logger,
+      llm: getActiveProvider(providerRegistry),
+      workspacePath,
+      contextBuilder,
+      dailyLog,
+      clock,
+      recallMemory: async (query: string) => {
+        const block = await autoRecall.formatContextBlock(query);
+        return block;
+      },
+      getThreadSummary: (_sessionId: string) => {
+        const threads = threadTracker.listThreads();
+        return threads.length > 0
+          ? threads.map((t) => t.topic).join(", ")
+          : undefined;
+      },
+      mergeIntervalMs: 10 * 60 * 1000,
+    });
+
+    // Build runtime with memory recall and periodic merge
     const runtime = createAgentRuntime({
       config,
       logger,
@@ -277,7 +373,6 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
         return block;
       },
       getThreadSummary: (_sessionId: string) => {
-        // Thread summaries are built from thread tracker topics
         const threads = threadTracker.listThreads();
         return threads.length > 0
           ? threads.map((t) => t.topic).join(", ")
@@ -288,9 +383,19 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
       sendReply: async () => {
         // Will be wired by the channel/CLI layer later
       },
+      mergeStrategy,
+      parseRemember: (raw) => rememberBlockHandler.parseAndApply(raw),
+      onAfterReply: async ({ userContent, responseContent, privacyMode }) => {
+        if (privacyMode) {
+          await dailyLog.append("[private exchange]");
+          return;
+        }
+        // Append exchange to daily log (Tier 1). Memory extraction runs in merge path.
+        await dailyLog.append(`User: ${userContent}\nAssistant: ${responseContent}`);
+      },
     });
 
-    return buildApp(ctx, runtime, providerRegistry, shutdown, logger);
+    return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs);
   }
 
   // Build runtime without memory
@@ -315,7 +420,7 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
     },
   });
 
-  return buildApp(ctx, runtime, providerRegistry, shutdown, logger);
+  return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs);
 }
 
 /**
@@ -414,12 +519,18 @@ function buildApp(
   runtime: AgentRuntime,
   providerRegistry: ProviderRegistry,
   shutdown: ReturnType<typeof createShutdownCoordinator>,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  agentRegistry: AgentRegistry,
+  activeAgents: Map<string, SubAgent>,
+  rawFs: FileSystem,
 ): MaiaApp {
   return {
     getContext: () => ctx,
     getRuntime: () => runtime,
     getProviderRegistry: () => providerRegistry,
+    getAgentRegistry: () => agentRegistry,
+    getActiveAgents: () => activeAgents,
+    getRawFs: () => rawFs,
     async stop(): Promise<void> {
       logger.info("Shutting down Maia...");
       await shutdown.shutdown("app.stop() called");

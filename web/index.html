@@ -14,11 +14,34 @@
         <h1>Maia</h1>
       </div>
       <div class="header-right">
+        <button type="button" id="reenter-token-btn" class="reenter-token-btn" title="Use a different access token" style="display: none;">
+          Re-enter token
+        </button>
         <span id="connection-status" class="status-indicator disconnected">
           Disconnected
         </span>
       </div>
     </header>
+
+    <div id="token-gate" class="token-gate" role="dialog" aria-label="Access token required">
+      <div class="token-gate-card">
+        <p class="token-gate-emoji">🔐</p>
+        <h2 class="token-gate-title">Access token required</h2>
+        <p class="token-gate-desc">Maia requires an access token to connect. Use the token from your <code>MAIA_AUTH_TOKEN</code> environment variable (e.g. from <code>~/.maia/.env</code>).</p>
+        <form id="token-form" class="token-form">
+          <input
+            type="password"
+            id="token-input"
+            placeholder="Paste your access token"
+            autocomplete="off"
+            autofocus
+            aria-label="Access token"
+          />
+          <button type="submit" id="token-connect-btn">Connect</button>
+        </form>
+        <p id="token-gate-error" class="token-gate-error" role="alert" hidden></p>
+      </div>
+    </div>
 
     <main id="chat-messages" class="chat-messages">
       <div class="welcome-message">

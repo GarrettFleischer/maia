@@ -100,8 +100,8 @@ describe("AgentRuntime", () => {
 
   it("should return the LLM response content", async () => {
     const { runtime } = setup("Hello from the LLM!");
-    const response = await runtime.handleMessage(testMessage("Hi there"));
-    expect(response).toBe("Hello from the LLM!");
+    const result = await runtime.handleMessage(testMessage("Hi there"));
+    expect(result.content).toBe("Hello from the LLM!");
   });
 
   it("should call sendReply with the response", async () => {
@@ -262,9 +262,9 @@ describe("AgentRuntime", () => {
       },
     });
 
-    const response = await runtime.handleMessage(testMessage("Search memory for test"));
+    const result = await runtime.handleMessage(testMessage("Search memory for test"));
     expect(callCount).toBe(2);
-    expect(response).toContain("I searched memory");
+    expect(result.content).toContain("I searched memory");
     expect(sentReplies.length).toBeGreaterThanOrEqual(1);
   });
 

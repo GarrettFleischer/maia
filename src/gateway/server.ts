@@ -4,7 +4,7 @@
  *
  * @note Orchestrates the HTTP/WebSocket server lifecycle:
  * 1. CORS validation
- * 2. Rate limiting
+ * 2. Rate limiting (skipped for GET requests to web UI assets to avoid 429 on first load)
  * 3. Authentication
  * 4. Route matching
  * 5. Error handling
@@ -52,7 +52,7 @@ export interface GatewayServer {
     path: string,
     headers: Record<string, string>,
     body: string,
-    ip: string
+    ip: string,
   ): Promise<RouteResponse>;
 
   /**
@@ -76,7 +76,7 @@ export interface GatewayServer {
  * @note The middleware chain executes in order:
  * 1. CORS (preflight returns immediately)
  * 2. Rate limiting
- * 3. Authentication (skipped for health endpoint)
+ * 3. Authentication (Bearer token required for all requests)
  * 4. Route matching
  * 5. Error handling wraps everything
  *
@@ -92,6 +92,33 @@ export interface GatewayServer {
  *
  * const response = await server.handleRequest("GET", "/api/health", {}, "", "127.0.0.1");
  */
+
+/** Paths/extensions for web UI assets; GET to these are exempt from rate limiting. */
+const WEB_UI_ASSET_EXT = /\.(html?|css|js|ico|svg|png|woff2?)(\?|$)/i;
+const WEB_UI_ROOT_PATHS = ["/", "/index.html"];
+
+/**
+ * @brief True if this request is a GET for a web UI asset (not counted toward rate limit).
+ * @param method - HTTP method
+ * @param pathBase - Path without query string
+ */
+function isWebUIAssetRequest(method: string, pathBase: string): boolean {
+  if (method !== "GET") return false;
+  if (WEB_UI_ROOT_PATHS.includes(pathBase)) return true;
+  return WEB_UI_ASSET_EXT.test(pathBase);
+}
+
+/** GET /api/health and /health are exempt from rate limiting (token check and health probes). */
+const RATE_LIMIT_EXEMPT_PATHS = ["/api/health", "/health"];
+
+/**
+ * @brief True if this request should not be counted toward rate limit.
+ */
+function isRateLimitExempt(method: string, pathBase: string): boolean {
+  if (method !== "GET") return false;
+  return isWebUIAssetRequest(method, pathBase) || RATE_LIMIT_EXEMPT_PATHS.includes(pathBase);
+}
+
 export function createGatewayServer(deps: GatewayServerDeps): GatewayServer {
   const {
     ctx,
@@ -104,15 +131,12 @@ export function createGatewayServer(deps: GatewayServerDeps): GatewayServer {
   } = deps;
   const logger: Logger = ctx.logger;
 
-  /** Paths that skip authentication */
-  const PUBLIC_PATHS = ["/api/health", "/health"];
-
   async function handleRequest(
     method: string,
     path: string,
     headers: Record<string, string>,
     body: string,
-    ip: string
+    ip: string,
   ): Promise<RouteResponse> {
     try {
       // Step 1: CORS
@@ -132,8 +156,15 @@ export function createGatewayServer(deps: GatewayServerDeps): GatewayServer {
         };
       }
 
-      // Step 2: Rate limiting
-      const rateResult = await rateLimitMiddleware.handle({ ip });
+      const pathBase = path.split("?")[0] ?? path;
+
+      // Step 2: Rate limiting (skip for web UI assets and health so token check / probes don't hit 429)
+      let rateResult: { allowed: boolean; statusCode?: number; headers: Record<string, string> };
+      if (isRateLimitExempt(method, pathBase)) {
+        rateResult = { allowed: true, headers: {} };
+      } else {
+        rateResult = await rateLimitMiddleware.handle({ ip });
+      }
       if (!rateResult.allowed) {
         return {
           status: rateResult.statusCode ?? 429,
@@ -142,11 +173,17 @@ export function createGatewayServer(deps: GatewayServerDeps): GatewayServer {
         };
       }
 
-      // Step 3: Authentication (skip for public paths)
-      const pathBase = path.split("?")[0] ?? path;
-      const isPublic = PUBLIC_PATHS.some((p) => pathBase === p);
-
-      if (!isPublic) {
+      // Step 3: Authentication (required except for public health and web UI asset GETs)
+      // For public paths we still validate when Authorization is present so the UI can check the token.
+      const publicPaths = ["/api/health", "/health"];
+      const isPublicPath =
+        publicPaths.includes(pathBase) || isWebUIAssetRequest(method, pathBase);
+      const hasAuthHeader =
+        headers["authorization"] ??
+        headers["Authorization"] ??
+        Object.keys(headers).some((k) => k.toLowerCase() === "authorization");
+      const requireAuth = !isPublicPath || !!hasAuthHeader;
+      if (requireAuth) {
         const authResult = await authMiddleware.handle({ headers, ip });
         if (!authResult.authenticated) {
           return {
@@ -158,7 +195,13 @@ export function createGatewayServer(deps: GatewayServerDeps): GatewayServer {
       }
 
       // Step 4: Route matching
-      const routeResponse = await router.handle(method, pathBase, headers, body, ip);
+      const routeResponse = await router.handle(
+        method,
+        pathBase,
+        headers,
+        body,
+        ip,
+      );
       if (!routeResponse) {
         return {
           status: 404,

@@ -21,9 +21,16 @@ describe("HybridSearch with real SQLite (integration)", () => {
 
   beforeEach(async () => {
     db = createSQLiteDatabase(":memory:");
-    const sqlPath = path.resolve("src/core/migrations/migrations/001_initial_schema.sql");
-    const sql = await fsNative.readFile(sqlPath, "utf-8");
-    await db.execute(sql);
+    const sqlPath1 = path.resolve(
+      "src/core/migrations/migrations/001_initial_schema.sql",
+    );
+    const sql1 = await fsNative.readFile(sqlPath1, "utf-8");
+    await db.execute(sql1);
+    const sqlPath2 = path.resolve(
+      "src/core/migrations/migrations/002_add_agents.sql",
+    );
+    const sql2 = await fsNative.readFile(sqlPath2, "utf-8");
+    await db.execute(sql2);
   });
 
   it("should return matching results via hybrid search", async () => {
@@ -59,7 +66,11 @@ describe("HybridSearch with real SQLite (integration)", () => {
     const crypto = createRealCryptoProvider();
     const logger = capturingLogger();
     const store = createMemoryStore({ db, crypto, logger });
-    await store.store({ text: "Preference one", category: "preference", importance: 0.8 });
+    await store.store({
+      text: "Preference one",
+      category: "preference",
+      importance: 0.8,
+    });
     await store.store({ text: "Fact one", category: "fact", importance: 0.5 });
 
     const search = createHybridSearch({

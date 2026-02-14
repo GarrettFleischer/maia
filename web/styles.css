@@ -118,6 +118,135 @@ html, body {
   color: var(--warning);
 }
 
+.reenter-token-btn {
+  margin-right: 12px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 100px;
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition);
+}
+
+.reenter-token-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+/* ─── Token gate (auth) ───────────────────────────────────────── */
+
+.token-gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 20px;
+  background: var(--bg-primary);
+}
+
+.token-gate.hidden {
+  display: none;
+}
+
+.token-gate-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 28px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.token-gate-emoji {
+  font-size: 2.5rem;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.token-gate-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.token-gate-desc {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.token-gate-desc code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+
+.token-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.token-form input {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+.token-form input:focus {
+  border-color: var(--accent);
+}
+
+.token-form input::placeholder {
+  color: var(--text-muted);
+}
+
+.token-form button {
+  padding: 10px 16px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: white;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.token-form button:hover {
+  background: var(--accent-hover);
+}
+
+.token-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.token-gate-error {
+  margin-top: 12px;
+  font-size: 0.85rem;
+  color: var(--danger);
+}
+
+.token-gate-error:not([hidden]) {
+  display: block;
+}
+
 /* ─── Messages ───────────────────────────────────────────────── */
 
 .chat-messages {
@@ -159,7 +288,68 @@ html, body {
   line-height: 1.5;
   animation: fadeIn var(--transition) ease-out;
   word-wrap: break-word;
-  white-space: pre-wrap;
+}
+
+.message-body {
+  margin: 0;
+}
+
+.message-body:empty {
+  min-height: 1em;
+}
+
+.message-body p:first-child {
+  margin-top: 0;
+}
+
+.message-body p:last-child {
+  margin-bottom: 0;
+}
+
+.message-body p + p {
+  margin-top: 0.6em;
+}
+
+.message-body ul,
+.message-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.message-body li + li {
+  margin-top: 0.25em;
+}
+
+.message-body blockquote {
+  margin: 0.5em 0;
+  padding-left: 1em;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.message-body h1, .message-body h2, .message-body h3 {
+  margin: 0.75em 0 0.35em;
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.message-body h1:first-child, .message-body h2:first-child, .message-body h3:first-child {
+  margin-top: 0;
+}
+
+.message-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.message-body a:hover {
+  text-decoration: underline;
+}
+
+.message-body hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 0.75em 0;
 }
 
 .message.user {
@@ -186,6 +376,12 @@ html, body {
   font-size: 0.7rem;
   color: var(--text-muted);
   margin-top: 4px;
+}
+
+.message-remembered {
+  margin-left: 6px;
+  color: var(--accent);
+  font-size: 0.75rem;
 }
 
 .message code {

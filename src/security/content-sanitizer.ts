@@ -1,10 +1,36 @@
 /**
  * @fileoverview Content sanitizer for prompt injection detection, wrapping untrusted
- * content, and stripping control characters. Logs injection events to the audit log.
+ * content, stripping control characters, and redacting secrets from LLM output.
+ * Logs injection events to the audit log.
  * @module security/content-sanitizer
  */
 
 import type { AuditLog } from "../core/types.js";
+
+/** @brief Placeholder used when redacting sensitive values from LLM output. */
+const REDACTED_PLACEHOLDER = "[REDACTED]";
+
+/**
+ * @brief Redacts environment variables and API-key-like patterns from text.
+ * Used on every LLM response so Maia never returns .env or secret values.
+ * @param text - Raw text (e.g. assistant response)
+ * @returns Text with MAIA_* env patterns and key-like values redacted
+ *
+ * @note Patterns redacted: MAIA_AUTH_TOKEN=..., MAIA_MASTER_KEY=..., and any
+ * MAIA_* env-style line. Does not depend on actual secret values.
+ */
+export function redactSecretsFromResponse(text: string): string {
+  if (typeof text !== "string" || text.length === 0) return text;
+  let out = text;
+  // MAIA_* env var = value (until newline or end)
+  out = out.replace(
+    /\b(MAIA_[A-Z0-9_]+)\s*=\s*[^\s\n\r]*/gi,
+    `$1=${REDACTED_PLACEHOLDER}`
+  );
+  // Standalone long hex strings (48+ hex chars) that may be tokens/keys
+  out = out.replace(/\b([0-9a-f]{48,})\b/gi, REDACTED_PLACEHOLDER);
+  return out;
+}
 
 /**
  * @brief Options for creating a content sanitizer.

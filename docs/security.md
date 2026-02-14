@@ -61,6 +61,7 @@ Sliding window rate limiter per IP address.
 - Returns `429 Too Many Requests` with `Retry-After` header when exceeded
 - Rate limit events logged to audit log
 - Clock is injected (testable with `fixedClock`)
+- GET requests for web UI assets (e.g. `/`, `/index.html`, `/styles.css`, `/chat.js`) are exempt so loading the web UI does not trigger 429
 
 ## Prompt Injection Defense
 

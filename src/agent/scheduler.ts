@@ -1,12 +1,14 @@
 /**
  * @fileoverview Scheduler for managing scheduled tasks and reminders. Persists
  * tasks to disk and supports adding, removing, listing, and marking tasks complete.
+ * Includes cron parsing and a polling loop for daemon mode.
  * @module agent/scheduler
  */
 
 import type {
   FileSystem,
   Clock,
+  Logger,
   ScheduledTask,
   TaskStatus,
 } from "../core/types.js";
@@ -16,6 +18,9 @@ export interface SchedulerDeps {
   fs: FileSystem;
   clock: Clock;
   schedulerPath: string;
+  logger?: Logger;
+  /** Polling interval in milliseconds (default: 60000) */
+  checkIntervalMs?: number;
 }
 
 /** @brief Input for adding a new scheduled task */
@@ -23,7 +28,15 @@ export interface AddTaskInput {
   schedule: string;
   prompt: string;
   channel: string;
+  /** Optional agent ID this task belongs to */
+  agentId?: string;
 }
+
+/**
+ * @brief Handler called when a scheduled task becomes due.
+ * @param task - The due task
+ */
+export type TaskDueHandler = (task: ScheduledTask & { agentId?: string }) => Promise<void>;
 
 /** @brief Scheduler interface */
 export interface Scheduler {
@@ -32,6 +45,15 @@ export interface Scheduler {
   list(): Promise<ScheduledTask[]>;
   getDueTasks(): Promise<ScheduledTask[]>;
   markCompleted(id: string): Promise<void>;
+  /**
+   * @brief Starts the polling loop. Calls the handler for each due task.
+   * @param handler - Function to call when a task is due
+   */
+  start(handler: TaskDueHandler): void;
+  /**
+   * @brief Stops the polling loop.
+   */
+  stop(): void;
 }
 
 /**
@@ -64,10 +86,53 @@ function isIsoTimestamp(schedule: string): boolean {
  * @returns Scheduler instance with add, remove, list, getDueTasks,
  *   and markCompleted methods
  */
+/**
+ * @brief Parses a simple cron expression (minute hour dayOfMonth month dayOfWeek).
+ * @param cron - Cron string like "0 9 * * *"
+ * @param now - Current date
+ * @returns true if the cron matches the current minute
+ *
+ * @note Supports: exact numbers, * (any), and step values (e.g. *\/5).
+ * Does not support ranges or lists.
+ */
+function cronMatchesNow(cron: string, now: Date): boolean {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+
+  const fields = [
+    now.getMinutes(),   // minute
+    now.getHours(),     // hour
+    now.getDate(),      // day of month
+    now.getMonth() + 1, // month (1-based)
+    now.getDay(),       // day of week (0=Sunday)
+  ];
+
+  for (let i = 0; i < 5; i++) {
+    const part = parts[i];
+    if (part === "*") continue;
+
+    // Step values: */5 means every 5
+    if (part.startsWith("*/")) {
+      const step = parseInt(part.slice(2), 10);
+      if (isNaN(step) || step <= 0) return false;
+      if (fields[i] % step !== 0) return false;
+      continue;
+    }
+
+    // Exact value
+    const val = parseInt(part, 10);
+    if (isNaN(val)) return false;
+    if (fields[i] !== val) return false;
+  }
+
+  return true;
+}
+
 export function createScheduler(deps: SchedulerDeps): Scheduler {
-  const { fs, clock, schedulerPath } = deps;
-  const tasks = new Map<string, ScheduledTask>();
+  const { fs, clock, schedulerPath, logger, checkIntervalMs = 60000 } = deps;
+  const tasks = new Map<string, ScheduledTask & { agentId?: string }>();
   let loaded = false;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   async function ensureLoaded(): Promise<void> {
     if (loaded) return;
@@ -109,13 +174,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       await ensureLoaded();
       const id = randomHexId();
       const now = clock.now().toISOString();
-      const scheduled: ScheduledTask = {
+      const scheduled: ScheduledTask & { agentId?: string } = {
         id,
         schedule: task.schedule,
         prompt: task.prompt,
         channel: task.channel,
         status: "pending",
         createdAt: now,
+        agentId: task.agentId,
       };
       tasks.set(id, scheduled);
       await persist();
@@ -135,12 +201,35 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
     async getDueTasks(): Promise<ScheduledTask[]> {
       await ensureLoaded();
-      const now = clock.now().toISOString();
+      const now = clock.now();
+      const nowIso = now.toISOString();
       const due: ScheduledTask[] = [];
       for (const task of tasks.values()) {
         if (task.status !== "pending") continue;
-        if (!isIsoTimestamp(task.schedule)) continue;
-        if (task.schedule <= now) {
+
+        // ISO timestamp: one-shot task
+        if (isIsoTimestamp(task.schedule)) {
+          if (task.schedule <= nowIso) {
+            due.push(task);
+          }
+          continue;
+        }
+
+        // Cron expression: recurring task
+        if (cronMatchesNow(task.schedule, now)) {
+          // Prevent re-triggering within the same minute
+          if (task.lastRunAt) {
+            const lastRun = new Date(task.lastRunAt);
+            if (
+              lastRun.getFullYear() === now.getFullYear() &&
+              lastRun.getMonth() === now.getMonth() &&
+              lastRun.getDate() === now.getDate() &&
+              lastRun.getHours() === now.getHours() &&
+              lastRun.getMinutes() === now.getMinutes()
+            ) {
+              continue; // Already ran this minute
+            }
+          }
           due.push(task);
         }
       }
@@ -153,9 +242,56 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (!task) {
         throw new Error(`Unknown task: ${id}`);
       }
-      task.status = "completed" as TaskStatus;
-      task.lastRunAt = clock.now().toISOString();
+
+      const nowIso = clock.now().toISOString();
+      task.lastRunAt = nowIso;
+
+      // One-shot (ISO) tasks become completed; cron tasks stay pending for next run
+      if (isIsoTimestamp(task.schedule)) {
+        task.status = "completed" as TaskStatus;
+      }
+      // Cron tasks remain "pending" but lastRunAt is updated to prevent re-trigger
+
       await persist();
+    },
+
+    start(handler: TaskDueHandler): void {
+      if (pollInterval) return; // Already running
+
+      logger?.info("Scheduler polling started", { intervalMs: checkIntervalMs });
+
+      const tick = async () => {
+        try {
+          const dueTasks = await this.getDueTasks();
+          for (const task of dueTasks) {
+            try {
+              await handler(task as ScheduledTask & { agentId?: string });
+              await this.markCompleted(task.id);
+            } catch (err) {
+              logger?.warn("Scheduler task handler failed", {
+                taskId: task.id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+        } catch (err) {
+          logger?.warn("Scheduler tick failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+
+      // Run once immediately, then on interval
+      tick();
+      pollInterval = setInterval(tick, checkIntervalMs);
+    },
+
+    stop(): void {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+        logger?.info("Scheduler polling stopped");
+      }
     },
   };
 }

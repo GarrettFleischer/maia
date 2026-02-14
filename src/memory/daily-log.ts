@@ -20,6 +20,8 @@ export interface DailyLog {
   append(content: string): Promise<void>;
   /** Read today's file (empty string if not exists) */
   readToday(): Promise<string>;
+  /** Read today's file from byte offset to end (for merge boundary). */
+  readTodayFromOffset(byteOffset: number): Promise<string>;
   /** Read yesterday's file */
   readYesterday(): Promise<string>;
   /** Read specific date's file (YYYY-MM-DD) */
@@ -76,6 +78,19 @@ export function createDailyLog(deps: DailyLogDeps): DailyLog {
     async readToday(): Promise<string> {
       const today = clock.todayString();
       return readFileSafe(filePath(today));
+    },
+
+    async readTodayFromOffset(byteOffset: number): Promise<string> {
+      const today = clock.todayString();
+      const path = filePath(today);
+      const exists = await fs.exists(path);
+      if (!exists || byteOffset <= 0) return readFileSafe(path);
+      try {
+        const content = await fs.readFile(path);
+        return byteOffset >= content.length ? "" : content.slice(byteOffset);
+      } catch {
+        return "";
+      }
     },
 
     async readYesterday(): Promise<string> {

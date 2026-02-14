@@ -141,7 +141,7 @@ Google's Gemini models with generous free tier and large context windows.
    {
      "provider": {
        "primary": "gemini",
-       "model": "gemini-1.5-flash",
+       "model": "gemini-2.0-flash",
        "gemini": {
          "credentialName": "gemini-api-key"
        }
@@ -153,9 +153,9 @@ Google's Gemini models with generous free tier and large context windows.
 
 | Model | Context | RPM | Notes |
 |-------|---------|-----|-------|
-| `gemini-1.5-flash` | 1M tokens | 15 | Fast, huge context |
+| `gemini-2.0-flash` | 1M tokens | 15 | Default; latest Flash, recommended |
+| `gemini-1.5-flash` | 1M tokens | 15 | Legacy; may 404 on some keys |
 | `gemini-1.5-pro` | 2M tokens | 2 | More capable, slower |
-| `gemini-2.0-flash` | 1M tokens | 15 | Latest Flash model |
 
 ### Rate Limits
 

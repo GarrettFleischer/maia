@@ -38,7 +38,16 @@ function createThrowingStore(overrides: {
 }): MemoryStore {
   return {
     search: overrides.search ?? (async () => []),
-    store: overrides.store ?? (async () => ({ id: "x", text: "", category: "other", importance: 0.5, createdAt: "", updatedAt: "" })),
+    store:
+      overrides.store ??
+      (async () => ({
+        id: "x",
+        text: "",
+        category: "other",
+        importance: 0.5,
+        createdAt: "",
+        updatedAt: "",
+      })),
     get: overrides.get ?? (async () => null),
     remove: overrides.remove ?? (async () => {}),
     count: async () => 0,
@@ -57,9 +66,16 @@ describe("Agent tools with real MemoryStore (integration)", () => {
 
   beforeEach(async () => {
     db = createSQLiteDatabase(":memory:");
-    const sqlPath = path.resolve("src/core/migrations/migrations/001_initial_schema.sql");
-    const sql = await fsNative.readFile(sqlPath, "utf-8");
-    await db.execute(sql);
+    const sqlPath1 = path.resolve(
+      "src/core/migrations/migrations/001_initial_schema.sql",
+    );
+    const sql1 = await fsNative.readFile(sqlPath1, "utf-8");
+    await db.execute(sql1);
+    const sqlPath2 = path.resolve(
+      "src/core/migrations/migrations/002_add_agents.sql",
+    );
+    const sql2 = await fsNative.readFile(sqlPath2, "utf-8");
+    await db.execute(sql2);
   });
 
   function createStore() {
@@ -73,11 +89,14 @@ describe("Agent tools with real MemoryStore (integration)", () => {
       const { store, logger } = createStore();
       const tool = createMemorySearchTool({ store, logger });
       const def = tool.definition();
+      const props = def.parameters?.properties as Record<string, unknown> | undefined;
       expect(def.name).toBe("memory_search");
       expect(def.description).toContain("Search");
-      expect(def.parameters?.properties?.query).toBeDefined();
-      expect(def.parameters?.properties?.category?.enum).toContain("preference");
-      expect(def.parameters?.properties?.limit).toBeDefined();
+      expect(props?.query).toBeDefined();
+      expect((props?.category as { enum?: string[] })?.enum).toContain(
+        "preference",
+      );
+      expect(props?.limit).toBeDefined();
       expect(def.parameters?.required).toContain("query");
     });
 
@@ -92,7 +111,10 @@ describe("Agent tools with real MemoryStore (integration)", () => {
     it("should return no memories message when search is empty", async () => {
       const { store, logger } = createStore();
       const tool = createMemorySearchTool({ store, logger });
-      const result = await tool.execute({ query: "nonexistent" }, defaultContext);
+      const result = await tool.execute(
+        { query: "nonexistent" },
+        defaultContext,
+      );
       expect(result.success).toBe(true);
       expect(result.content).toContain("No memories found");
       expect(result.data).toEqual({ count: 0 });
@@ -120,7 +142,10 @@ describe("Agent tools with real MemoryStore (integration)", () => {
         importance: 0.9,
       });
       const tool = createMemorySearchTool({ store, logger });
-      const result = await tool.execute({ query: "TypeScript" }, defaultContext);
+      const result = await tool.execute(
+        { query: "TypeScript" },
+        defaultContext,
+      );
       expect(result.success).toBe(true);
       expect(result.content).toContain("Found 1 memories");
       expect(result.content).toContain("preference");
@@ -130,12 +155,20 @@ describe("Agent tools with real MemoryStore (integration)", () => {
 
     it("should respect limit and category", async () => {
       const { store, logger } = createStore();
-      await store.store({ text: "Fact one", category: "fact", importance: 0.5 });
-      await store.store({ text: "Preference one", category: "preference", importance: 0.8 });
+      await store.store({
+        text: "Fact one",
+        category: "fact",
+        importance: 0.5,
+      });
+      await store.store({
+        text: "Preference one",
+        category: "preference",
+        importance: 0.8,
+      });
       const tool = createMemorySearchTool({ store, logger });
       const result = await tool.execute(
         { query: "one", category: "preference", limit: 1 },
-        defaultContext
+        defaultContext,
       );
       expect(result.success).toBe(true);
       expect(result.data?.count).toBeLessThanOrEqual(1);
@@ -147,10 +180,11 @@ describe("Agent tools with real MemoryStore (integration)", () => {
       const { store, logger } = createStore();
       const tool = createMemoryStoreTool({ store, logger });
       const def = tool.definition();
+      const props = def.parameters?.properties as Record<string, unknown> | undefined;
       expect(def.name).toBe("memory_store");
-      expect(def.parameters?.properties?.text).toBeDefined();
-      expect(def.parameters?.properties?.category?.enum).toContain("fact");
-      expect(def.parameters?.properties?.importance).toBeDefined();
+      expect(props?.text).toBeDefined();
+      expect((props?.category as { enum?: string[] })?.enum).toContain("fact");
+      expect(props?.importance).toBeDefined();
       expect(def.parameters?.required).toContain("text");
       expect(def.parameters?.required).toContain("category");
     });
@@ -160,7 +194,7 @@ describe("Agent tools with real MemoryStore (integration)", () => {
       const tool = createMemoryStoreTool({ store, logger });
       const result = await tool.execute(
         { text: "Secret", category: "preference" },
-        { ...defaultContext, privacyMode: true }
+        { ...defaultContext, privacyMode: true },
       );
       expect(result.success).toBe(true);
       expect(result.content).toContain("Privacy mode");
@@ -180,7 +214,7 @@ describe("Agent tools with real MemoryStore (integration)", () => {
       const tool = createMemoryStoreTool({ store, logger });
       const result = await tool.execute(
         { text: "Hello", category: "invalid_category" },
-        defaultContext
+        defaultContext,
       );
       expect(result.success).toBe(false);
       expect(result.content).toContain("invalid category");
@@ -191,7 +225,7 @@ describe("Agent tools with real MemoryStore (integration)", () => {
       const tool = createMemoryStoreTool({ store, logger });
       const result = await tool.execute(
         { text: "User likes Bun", category: "preference", importance: 8 },
-        defaultContext
+        defaultContext,
       );
       expect(result.success).toBe(true);
       expect(result.content).toMatch(/Memory stored \(id: .+\)/);
@@ -205,7 +239,7 @@ describe("Agent tools with real MemoryStore (integration)", () => {
       const tool = createMemoryStoreTool({ store, logger });
       const result = await tool.execute(
         { text: "High importance", category: "fact", importance: 99 },
-        defaultContext
+        defaultContext,
       );
       expect(result.success).toBe(true);
       const got = await store.get(result.data!.id as string);
@@ -222,7 +256,7 @@ describe("Agent tools with real MemoryStore (integration)", () => {
       const tool = createMemoryStoreTool({ store, logger });
       const result = await tool.execute(
         { text: "Fail", category: "fact" },
-        defaultContext
+        defaultContext,
       );
       expect(result.success).toBe(false);
       expect(result.content).toContain("Memory store error");
@@ -235,8 +269,9 @@ describe("Agent tools with real MemoryStore (integration)", () => {
       const { store, logger } = createStore();
       const tool = createMemoryForgetTool({ store, logger });
       const def = tool.definition();
+      const props = def.parameters?.properties as Record<string, unknown> | undefined;
       expect(def.name).toBe("memory_forget");
-      expect(def.parameters?.properties?.id).toBeDefined();
+      expect(props?.id).toBeDefined();
       expect(def.parameters?.required).toContain("id");
     });
 
@@ -251,7 +286,10 @@ describe("Agent tools with real MemoryStore (integration)", () => {
     it("should return not found for non-existent id", async () => {
       const { store, logger } = createStore();
       const tool = createMemoryForgetTool({ store, logger });
-      const result = await tool.execute({ id: "non-existent-id" }, defaultContext);
+      const result = await tool.execute(
+        { id: "non-existent-id" },
+        defaultContext,
+      );
       expect(result.success).toBe(false);
       expect(result.content).toContain("not found");
     });
@@ -324,9 +362,19 @@ describe("web_fetch tool (integration)", () => {
   it("should block private URL via SSRF guard", async () => {
     const logger = capturingLogger();
     const guard = createSsrfGuard({ blockPrivateIPs: true });
-    const http = mockHttpClient(new Map([["http://127.0.0.1/", { status: 200, headers: {}, body: "ok", ok: true }]]));
+    const http = mockHttpClient(
+      new Map([
+        [
+          "http://127.0.0.1/",
+          { status: 200, headers: {}, body: "ok", ok: true },
+        ],
+      ]),
+    );
     const tool = createWebFetchTool({ http, ssrfGuard: guard, logger });
-    const result = await tool.execute({ url: "http://127.0.0.1/" }, defaultContext);
+    const result = await tool.execute(
+      { url: "http://127.0.0.1/" },
+      defaultContext,
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain("blocked");
     expect(http.calls).toHaveLength(0);
@@ -341,10 +389,13 @@ describe("web_fetch tool (integration)", () => {
           "https://example.com/",
           { status: 200, headers: {}, body: "Hello from example", ok: true },
         ],
-      ])
+      ]),
     );
     const tool = createWebFetchTool({ http, ssrfGuard: guard, logger });
-    const result = await tool.execute({ url: "https://example.com/" }, defaultContext);
+    const result = await tool.execute(
+      { url: "https://example.com/" },
+      defaultContext,
+    );
     expect(result.success).toBe(true);
     expect(result.content).toContain("Status: 200");
     expect(result.content).toContain("Hello from example");
@@ -357,10 +408,23 @@ describe("web_fetch tool (integration)", () => {
     const logger = capturingLogger();
     const guard = createSsrfGuard({ blockPrivateIPs: true });
     const http = mockHttpClient(
-      new Map([["https://example.com/", { status: 200, headers: {}, body: longBody, ok: true }]])
+      new Map([
+        [
+          "https://example.com/",
+          { status: 200, headers: {}, body: longBody, ok: true },
+        ],
+      ]),
     );
-    const tool = createWebFetchTool({ http, ssrfGuard: guard, logger, maxResponseLength: 100 });
-    const result = await tool.execute({ url: "https://example.com/" }, defaultContext);
+    const tool = createWebFetchTool({
+      http,
+      ssrfGuard: guard,
+      logger,
+      maxResponseLength: 100,
+    });
+    const result = await tool.execute(
+      { url: "https://example.com/" },
+      defaultContext,
+    );
     expect(result.success).toBe(true);
     expect(result.content).toContain("...[truncated]");
   });
@@ -371,10 +435,11 @@ describe("web_fetch tool (integration)", () => {
     const http = mockHttpClient(new Map());
     const tool = createWebFetchTool({ http, ssrfGuard: guard, logger });
     const def = tool.definition();
+    const props = def.parameters?.properties as Record<string, unknown> | undefined;
     expect(def.name).toBe("web_fetch");
     expect(def.description).toContain("public URL");
-    expect(def.parameters?.properties?.url).toBeDefined();
-    expect(def.parameters?.properties?.method?.enum).toEqual(["GET", "POST"]);
+    expect(props?.url).toBeDefined();
+    expect((props?.method as { enum?: string[] })?.enum).toEqual(["GET", "POST"]);
     expect(def.parameters?.required).toContain("url");
   });
 
@@ -387,7 +452,10 @@ describe("web_fetch tool (integration)", () => {
       },
     };
     const tool = createWebFetchTool({ http, ssrfGuard: guard, logger });
-    const result = await tool.execute({ url: "https://example.com/" }, defaultContext);
+    const result = await tool.execute(
+      { url: "https://example.com/" },
+      defaultContext,
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain("Error fetching");
     expect(result.content).toContain("network timeout");
@@ -402,13 +470,16 @@ describe("web_fetch tool (integration)", () => {
           "https://api.example.com/",
           { status: 201, headers: {}, body: "created", ok: true },
         ],
-      ])
+      ]),
     );
     const tool = createWebFetchTool({ http, ssrfGuard: guard, logger });
-    const result = await tool.execute({
-      url: "https://api.example.com/",
-      method: "POST",
-    }, defaultContext);
+    const result = await tool.execute(
+      {
+        url: "https://api.example.com/",
+        method: "POST",
+      },
+      defaultContext,
+    );
     expect(result.success).toBe(true);
     expect(result.content).toContain("Status: 201");
   });
@@ -419,9 +490,16 @@ describe("Tool registry (integration)", () => {
 
   beforeEach(async () => {
     db = createSQLiteDatabase(":memory:");
-    const sqlPath = path.resolve("src/core/migrations/migrations/001_initial_schema.sql");
-    const sql = await fsNative.readFile(sqlPath, "utf-8");
-    await db.execute(sql);
+    const sqlPath1 = path.resolve(
+      "src/core/migrations/migrations/001_initial_schema.sql",
+    );
+    const sql1 = await fsNative.readFile(sqlPath1, "utf-8");
+    await db.execute(sql1);
+    const sqlPath2 = path.resolve(
+      "src/core/migrations/migrations/002_add_agents.sql",
+    );
+    const sql2 = await fsNative.readFile(sqlPath2, "utf-8");
+    await db.execute(sql2);
   });
 
   it("should register tool and return via get", () => {
@@ -455,9 +533,9 @@ describe("Tool registry (integration)", () => {
     const store = createMemoryStore({ db, crypto, logger });
     const registry = createToolRegistry({ logger });
     registry.register(createMemorySearchTool({ store, logger }));
-    expect(() => registry.register(createMemorySearchTool({ store, logger }))).toThrow(
-      "Tool already registered"
-    );
+    expect(() =>
+      registry.register(createMemorySearchTool({ store, logger })),
+    ).toThrow("Tool already registered");
   });
 
   it("should execute tool when allowed", async () => {
@@ -469,7 +547,7 @@ describe("Tool registry (integration)", () => {
     const result = await registry.execute(
       "memory_search",
       { query: "test" },
-      defaultContext
+      defaultContext,
     );
     expect(result.success).toBe(true);
   });
@@ -477,7 +555,11 @@ describe("Tool registry (integration)", () => {
   it("should return not found when tool name is unknown", async () => {
     const logger = capturingLogger();
     const registry = createToolRegistry({ logger });
-    const result = await registry.execute("fake_tool", { x: 1 }, defaultContext);
+    const result = await registry.execute(
+      "fake_tool",
+      { x: 1 },
+      defaultContext,
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain("not found");
   });
@@ -494,7 +576,7 @@ describe("Tool registry (integration)", () => {
     const result = await registry.execute(
       "memory_search",
       { query: "test" },
-      defaultContext
+      defaultContext,
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain("Permission denied");
@@ -506,17 +588,17 @@ describe("Tool registry (integration)", () => {
     const throwingTool = {
       name: "throwing_tool",
       description: "Throws",
-      definition: () => ({ name: "throwing_tool", description: "Throws", parameters: { type: "object", properties: {} } }),
+      definition: () => ({
+        name: "throwing_tool",
+        description: "Throws",
+        parameters: { type: "object", properties: {} },
+      }),
       execute: async () => {
         throw new Error("tool crashed");
       },
     };
     registry.register(throwingTool);
-    const result = await registry.execute(
-      "throwing_tool",
-      {},
-      defaultContext
-    );
+    const result = await registry.execute("throwing_tool", {}, defaultContext);
     expect(result.success).toBe(false);
     expect(result.content).toContain("failed");
     expect(result.content).toContain("tool crashed");

@@ -8,7 +8,13 @@ import { createWSHandler } from "../../../src/gateway/ws-handler.js";
 import { capturingLogger, mockEventBus } from "../../helpers/index.js";
 
 describe("WSHandler", () => {
-  function setup(onChatMessage?: (connectionId: string, senderId: string, content: string) => Promise<string>) {
+  function setup(
+    onChatMessage?: (
+      connectionId: string,
+      senderId: string,
+      content: string
+    ) => Promise<{ content: string; remembered?: { memoryMd?: string; userMd?: string; soulMd?: string } }>
+  ) {
     const logger = capturingLogger();
     const events = mockEventBus();
     const handler = createWSHandler({
@@ -54,7 +60,7 @@ describe("WSHandler", () => {
 
   it("should handle a chat message and return the reply", async () => {
     const { handler } = setup(async (_connId, _senderId, content) => {
-      return `Echo: ${content}`;
+      return { content: `Echo: ${content}` };
     });
 
     handler.connect("ws-1", "user-1");
