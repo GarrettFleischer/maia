@@ -73,7 +73,7 @@ export function validateChatRequest(data: unknown): ValidationResult<ChatRequest
   if (result.success) {
     return { success: true, data: result.data as ChatRequest };
   }
-  const msg = result.error.errors.map((e) => e.message).join("; ");
+  const msg = result.error.issues.map((e) => e.message).join("; ");
   return { success: false, error: msg };
 }
 
@@ -87,7 +87,7 @@ export function validateMemoryStoreRequest(data: unknown): ValidationResult<Memo
   if (result.success) {
     return { success: true, data: result.data as MemoryStoreRequest };
   }
-  const msg = result.error.errors.map((e) => e.message).join("; ");
+  const msg = result.error.issues.map((e) => e.message).join("; ");
   return { success: false, error: msg };
 }
 
@@ -101,6 +101,6 @@ export function validateMemorySearchRequest(data: unknown): ValidationResult<Mem
   if (result.success) {
     return { success: true, data: result.data as MemorySearchRequest };
   }
-  const msg = result.error.errors.map((e) => e.message).join("; ");
+  const msg = result.error.issues.map((e) => e.message).join("; ");
   return { success: false, error: msg };
 }

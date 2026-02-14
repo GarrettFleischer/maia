@@ -27,14 +27,44 @@ cd maia
 bun install
 
 # Run the onboarding wizard (creates workspace, sets up identity)
-bun run maia onboard
+bun run onboard
 
 # Start the gateway (starts the agent, watchdog, and channels)
-bun run maia start
+bun run start
 
 # Or just chat via CLI
-bun run maia chat
+bun run chat
 ```
+
+**From source** you use `bun run <command>` (e.g. `bun run start`, `bun run chat`). Run `bun run help` or `bun run src/index.ts` with no command to see all commands.
+
+### Build (standalone binary)
+
+```bash
+bun run compile
+# Produces ./maia (native executable)
+```
+
+**With the compiled binary** use the executable instead of `bun run`:
+
+```bash
+./maia              # No command → shows help
+./maia onboard      # First-run setup
+./maia start        # Start gateway
+./maia chat         # CLI chat
+./maia doctor       # Health check
+```
+
+If `maia` is on your PATH, you can run `maia start`, `maia chat`, etc.
+
+### Environment
+
+For the gateway and credential store you need:
+
+- **MAIA_AUTH_TOKEN** – API/auth token (≥16 characters). Set in `.env` or environment.
+- **MAIA_MASTER_KEY** – Master passphrase for the encrypted credential vault. Set in `.env` or environment.
+
+Copy `.env.example` to `.env` and fill in values. The onboarding command (`maia onboard` or `bun run onboard`) can generate a master key if you don’t set one.
 
 ### Minimal Configuration
 

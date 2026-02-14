@@ -25,10 +25,10 @@
     "compile": "bun build src/index.ts --compile --outfile=maia"
   },
   "dependencies": {
-    "zod": "^3.24.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.7.0"
+    "@types/bun": "^1.3.9",
+    "typescript": "^5.9.3"
   }
 }

@@ -97,7 +97,10 @@ WorkingDirectory=/var/lib/maia
 EnvironmentFile=-/etc/maia/env
 Environment=MAIA_CONFIG=/var/lib/maia/maia.config.json
 
-ExecStart=/usr/bin/bun run /opt/maia/src/index.ts start
+# Use the compiled binary (recommended): run "bun run compile" and install ./maia to /opt/maia/
+ExecStart=/opt/maia/maia start
+# Or from source:
+# ExecStart=/usr/bin/bun run /opt/maia/src/index.ts start
 Restart=on-failure
 RestartSec=10
 

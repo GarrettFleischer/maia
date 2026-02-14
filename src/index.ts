@@ -4,7 +4,7 @@
  *
  * @note This file handles CLI command parsing and bootstraps the application.
  * Available commands: start, chat, onboard, credentials, backup, restore,
- * schedule, watchdog, doctor.
+ * schedule, watchdog, doctor. If no command is given, help is shown.
  */
 
 import { createApp } from "./app.js";
@@ -83,6 +83,8 @@ Commands:
 
   --help, -h         Show this help message
   --version, -v      Show version
+
+Run maia with no command to show this help.
 `);
 }
 
@@ -172,7 +174,7 @@ async function runChat(): Promise<void> {
     app = await createApp();
   } catch (err) {
     console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
-    console.error("\nHave you run 'bun run onboard' yet? Check your config and .env file.");
+    console.error("\nHave you run 'maia onboard' yet? Check your config and .env file.");
     process.exit(1);
   }
 
@@ -247,7 +249,7 @@ async function runStart(): Promise<void> {
     app = await createApp();
   } catch (err) {
     console.error("Failed to start Maia:", err instanceof Error ? err.message : String(err));
-    console.error("\nHave you run 'bun run onboard' yet? Check your config and .env file.");
+    console.error("\nHave you run 'maia onboard' yet? Check your config and .env file.");
     process.exit(1);
   }
 
@@ -528,8 +530,8 @@ MAIA_CONFIG=${configPath}
     console.log("  1. Make sure Ollama is running: ollama serve");
     console.log(`  2. Pull your model: ollama pull ${model || "llama3.2"}`);
   }
-  console.log("  3. Start chatting: bun run src/index.ts chat");
-  console.log("  4. Or start the server: bun run src/index.ts start\n");
+  console.log("  3. Start chatting: maia chat");
+  console.log("  4. Or start the server: maia start\n");
 
   } catch (err) {
     console.error("Onboarding failed:", err instanceof Error ? err.message : String(err));
