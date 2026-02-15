@@ -302,7 +302,12 @@ export interface MaiaConfig {
     cli: { enabled: boolean };
     webchat: { enabled: boolean };
     discord: { enabled: boolean; credentialName?: string };
-    telegram: { enabled: boolean; credentialName?: string };
+    telegram: {
+      enabled: boolean;
+      credentialName?: string;
+      userChatId?: string;
+      webhookSecret?: string;
+    };
   };
   memory: {
     enabled: boolean;

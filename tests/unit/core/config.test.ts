@@ -95,6 +95,30 @@ describe("Config Schema", () => {
       expect(result.success).toBe(false);
     }
   });
+
+  it("should accept telegram channel with optional userChatId and webhookSecret", () => {
+    const config = {
+      provider: { primary: "ollama", model: "test" },
+      channels: {
+        cli: { enabled: true },
+        webchat: { enabled: false },
+        discord: { enabled: false },
+        telegram: {
+          enabled: true,
+          credentialName: "telegram-bot-token",
+          userChatId: "123456789",
+          webhookSecret: "my-webhook-secret",
+        },
+      },
+    };
+    const result = configSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.channels.telegram.enabled).toBe(true);
+      expect(result.data.channels.telegram.userChatId).toBe("123456789");
+      expect(result.data.channels.telegram.webhookSecret).toBe("my-webhook-secret");
+    }
+  });
 });
 
 describe("Config Loader", () => {

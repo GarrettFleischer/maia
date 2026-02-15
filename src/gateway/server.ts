@@ -173,9 +173,9 @@ export function createGatewayServer(deps: GatewayServerDeps): GatewayServer {
         };
       }
 
-      // Step 3: Authentication (required except for public health and web UI asset GETs)
+      // Step 3: Authentication (required except for public health, Telegram webhook, and web UI asset GETs)
       // For public paths we still validate when Authorization is present so the UI can check the token.
-      const publicPaths = ["/api/health", "/health"];
+      const publicPaths = ["/api/health", "/health", "/telegram-webhook"];
       const isPublicPath =
         publicPaths.includes(pathBase) || isWebUIAssetRequest(method, pathBase);
       const hasAuthHeader =

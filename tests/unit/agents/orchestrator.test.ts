@@ -287,6 +287,27 @@ describe("Orchestrator", () => {
     expect(wsPushCalls.some((c) => c.type === "agent_dm")).toBe(true);
   });
 
+  it("sendDmToUser calls forwardDmToUser with content when provided", async () => {
+    const forwardedContent: string[] = [];
+    const orchestrator = createOrchestrator({
+      clock: fixedClock(),
+      crypto: mockCryptoProvider(),
+      logger: capturingLogger(),
+      threadService: mockThreadService(),
+      priorityQueue: mockQueue(activeAgents),
+      activeAgents,
+      maiaRuntime: { handleMessage: async () => ({ content: "" }) },
+      wsPush: () => {},
+      activeHours: { startHour: 0, endHour: 24 },
+      forwardDmToUser: async (content) => {
+        forwardedContent.push(content);
+      },
+    });
+
+    await orchestrator.sendDmToUser("maia", "Maia", "Hello from Maia!");
+    expect(forwardedContent).toEqual(["Hello from Maia!"]);
+  });
+
   it("agentToAgentChat when response has remembered and agentWorkspaceFs: applies to from-agent workspace", async () => {
     const toAgent = createSubAgent("bot", "Bot", {
       content: "Noted.",

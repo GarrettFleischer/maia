@@ -96,6 +96,8 @@ export interface OrchestratorDeps {
   /** Optional: fs for writing to agent workspace paths (e.g. "both remember" in agent-agent chat) */
   agentWorkspaceFs?: FileSystem;
   auditLog?: AuditLog;
+  /** Optional: forward DM content to external channels (e.g. Telegram). Called after thread + wsPush. */
+  forwardDmToUser?: (content: string) => Promise<void>;
 }
 
 /**
@@ -167,6 +169,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     onFlaggedAgentApprovalRequest,
     agentWorkspaceFs,
     auditLog,
+    forwardDmToUser,
   } = deps;
 
   let checkInTimer: ReturnType<typeof setInterval> | null = null;
@@ -455,6 +458,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         threadId: dmThreadId,
         content,
       });
+
+      // Forward to external channels (e.g. Telegram) if configured
+      if (forwardDmToUser) {
+        await forwardDmToUser(content);
+      }
 
       logger.debug("DM sent to user", { senderId, threadId: dmThreadId });
     },

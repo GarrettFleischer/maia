@@ -70,6 +70,10 @@ export const configSchema = z.object({
       telegram: z.object({
         enabled: z.boolean().default(false),
         credentialName: z.string().optional(),
+        /** Telegram chat_id for the linked user (DM forwarding and inbound allowlist). */
+        userChatId: z.string().optional(),
+        /** Secret token for X-Telegram-Bot-Api-Secret-Token webhook validation. */
+        webhookSecret: z.string().optional(),
       }).default({ enabled: false }),
     })
     .default({

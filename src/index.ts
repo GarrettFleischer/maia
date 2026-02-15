@@ -19,9 +19,9 @@ import { createCorsMiddleware } from "./gateway/middleware/cors.js";
 import { createErrorHandler } from "./gateway/middleware/error-handler.js";
 import { startBunServer, registerApiRoutes } from "./gateway/bun-server.js";
 
-// Channels (kept for future use in full channel mode)
-// import { createCLIChannel } from "./channels/cli.js";
-// import { createMessageFormatter } from "./channels/formatter.js";
+// Channels
+import { createTelegramChannel } from "./channels/telegram.js";
+import { createMessageFormatter } from "./channels/formatter.js";
 
 // Dashboard / Agent orchestration
 import { registerDashboardRoutes } from "./gateway/dashboard-routes.js";
@@ -1252,6 +1252,160 @@ services:
     4,
   );
 
+  // ── Telegram channel (optional) ───────────────────────────────────
+  type TelegramChannelInstance = ReturnType<typeof createTelegramChannel>;
+  let telegramChannel: TelegramChannelInstance | null = null;
+  let forwardDmToUser: ((content: string) => Promise<void>) | undefined;
+
+  if (ctx.config.channels.telegram.enabled) {
+    const telegramCredName =
+      ctx.config.channels.telegram.credentialName ?? "telegram-bot-token";
+    const telegramUserChatId = ctx.config.channels.telegram.userChatId;
+
+    telegramChannel = createTelegramChannel({
+      logger: ctx.logger,
+      http: ctx.http,
+      credentials: ctx.credentials,
+      formatter: createMessageFormatter("telegram"),
+      credentialName: telegramCredName,
+    });
+
+    try {
+      await telegramChannel.initialize({ enabled: true });
+    } catch (err) {
+      ctx.logger.error("Telegram channel failed to initialize", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      telegramChannel = null;
+    }
+
+    if (telegramChannel) {
+      telegramChannel.onMessage(async (message: InboundMessage) => {
+        if (telegramUserChatId) {
+          const senderId = message.senderId;
+          const chatIdFromMeta = message.metadata?.chatId as number | undefined;
+          const allowed =
+            String(chatIdFromMeta ?? senderId) === telegramUserChatId;
+          if (!allowed) {
+            ctx.logger.debug("Telegram message from non-linked user, ignoring", {
+              senderId,
+              userChatId: telegramUserChatId,
+            });
+            return;
+          }
+        }
+
+        const thread = await threadService.findOrCreateThread(
+          "agent-dm",
+          ["maia", "user"],
+          "DM from Maia",
+        );
+        await threadService.addMessage(
+          thread.id,
+          "user",
+          "user",
+          message.content,
+        );
+
+        const inbound: InboundMessage = {
+          id: message.id,
+          channelId: "telegram",
+          senderId: "user",
+          content: message.content,
+          timestamp: message.timestamp,
+          isGroup: false,
+          metadata: message.metadata,
+        };
+        const jobId = priorityQueue.enqueue(
+          "handleUserChat",
+          { message: inbound },
+          "user",
+          "user",
+        );
+        const result = (await priorityQueue.waitForJobResult(
+          jobId,
+        )) as HandleMessageResult;
+
+        const chatId = (message.metadata?.chatId as number | undefined) ?? message.senderId;
+        const ch = telegramChannel;
+        if (ch) {
+          await ch.send({
+            channelId: "telegram",
+            recipientId: String(chatId),
+            content: result.content,
+          });
+        }
+
+        await threadService.addMessage(
+          thread.id,
+          "maia",
+          "maia",
+          result.content,
+        );
+      });
+
+      router.post("/telegram-webhook", async (req) => {
+        const webhookSecret = ctx.config.channels.telegram.webhookSecret?.trim();
+        if (webhookSecret) {
+          const headerToken =
+            req.headers["x-telegram-bot-api-secret-token"] ??
+            req.headers["X-Telegram-Bot-Api-Secret-Token"] ??
+            "";
+          if (headerToken !== webhookSecret) {
+            return {
+              status: 403,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ error: "Forbidden" }),
+            };
+          }
+        }
+
+        let update: Record<string, unknown>;
+        try {
+          update = JSON.parse(req.body || "{}") as Record<string, unknown>;
+        } catch {
+          return {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ error: "Invalid JSON body" }),
+          };
+        }
+
+        const ch = telegramChannel;
+        if (ch && "injectTelegramUpdate" in ch) {
+          await (ch as { injectTelegramUpdate: (u: Record<string, unknown>) => Promise<void> }).injectTelegramUpdate(update);
+        }
+
+        return {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ok: true }),
+        };
+      });
+
+      if (telegramUserChatId) {
+        const ch = telegramChannel;
+        forwardDmToUser = async (content: string) => {
+          if (ch) {
+            await ch.send({
+              channelId: "telegram",
+              recipientId: telegramUserChatId,
+              content,
+            });
+          }
+        };
+      }
+
+      ctx.shutdown.register(
+        "telegram-channel",
+        async () => {
+          await telegramChannel?.shutdown();
+        },
+        4,
+      );
+    }
+  }
+
   // ── Agent Orchestrator ──────────────────────────────────────────
   const orchestrator = createOrchestrator({
     clock: ctx.clock,
@@ -1270,6 +1424,7 @@ services:
     onFlaggedAgentApprovalRequest: pushFlaggedAgentApproval,
     agentWorkspaceFs: app.getRawFs(),
     auditLog: ctx.auditLog,
+    forwardDmToUser,
   });
 
   orchestratorRef = orchestrator;
@@ -1537,6 +1692,73 @@ async function runOnboard(): Promise<void> {
     );
     const sandboxRoot = sandboxRootInput.trim() || defaultSandboxRoot;
 
+    // --- Telegram (optional) ---
+    let telegramEnabled = false;
+    let telegramToken: string | undefined;
+    let telegramUserChatId: string | undefined;
+    let telegramWebhookSecret: string | undefined;
+
+    const telegramChoice = await promptUser(
+      "\nSet up Telegram for chat and notifications? (y/n) [n]: ",
+    );
+    if (
+      telegramChoice.trim().toLowerCase() === "y" ||
+      telegramChoice.trim().toLowerCase() === "yes"
+    ) {
+      console.log(
+        "\nTelegram: Chat with @BotFather, run /newbot, then copy the bot token.",
+      );
+      const tokenInput = await promptUser(
+        "Enter Telegram bot token (or leave blank to skip): ",
+      );
+      const token = tokenInput?.trim();
+      if (token) {
+        telegramEnabled = true;
+        telegramToken = token;
+
+        const userInput = await promptUser(
+          "Your Telegram (numeric id or @username; leave blank to add later in config): ",
+        );
+        const userTrimmed = userInput?.trim() ?? "";
+        if (userTrimmed) {
+          const numericOnly = /^\d+$/.test(userTrimmed);
+          if (numericOnly) {
+            telegramUserChatId = userTrimmed;
+          } else {
+            const username = userTrimmed.startsWith("@")
+              ? userTrimmed
+              : `@${userTrimmed}`;
+            try {
+              const getChatUrl = `https://api.telegram.org/bot${encodeURIComponent(token)}/getChat?chat_id=${encodeURIComponent(username)}`;
+              const res = await fetch(getChatUrl);
+              const data = (await res.json()) as {
+                ok?: boolean;
+                result?: { id?: number };
+              };
+              if (data?.ok && typeof data.result?.id === "number") {
+                telegramUserChatId = String(data.result.id);
+                console.log(`Resolved ${username} to chat id ${telegramUserChatId}`);
+              } else {
+                console.log(
+                  "Could not resolve username; add channels.telegram.userChatId in config later.",
+                );
+              }
+            } catch {
+              console.log(
+                "Network error resolving username; add channels.telegram.userChatId in config later.",
+              );
+            }
+          }
+        }
+
+        const secretInput = await promptUser(
+          "Webhook secret for X-Telegram-Bot-Api-Secret-Token (or leave blank to add later): ",
+        );
+        const secret = secretInput?.trim();
+        if (secret) telegramWebhookSecret = secret;
+      }
+    }
+
     // Build config
     const config: Record<string, unknown> = {
       identity: {
@@ -1569,7 +1791,12 @@ async function runOnboard(): Promise<void> {
         cli: { enabled: true },
         webchat: { enabled: true },
         discord: { enabled: false },
-        telegram: { enabled: false },
+        telegram: {
+          enabled: telegramEnabled,
+          credentialName: telegramEnabled ? "telegram-bot-token" : undefined,
+          ...(telegramUserChatId && { userChatId: telegramUserChatId }),
+          ...(telegramWebhookSecret && { webhookSecret: telegramWebhookSecret }),
+        },
       },
       memory: { enabled: true },
       security: {
@@ -1593,8 +1820,10 @@ MAIA_CONFIG=${configPath}
     await fs.writeFile(envPath, envContent);
     console.log(`Environment file written to: ${envPath}`);
 
-    // Save API key to vault if we collected it during model selection
-    if (primaryProvider !== "ollama" && apiKeyForVault) {
+    // Save API key and/or Telegram token to vault when collected during onboarding
+    const needsVault =
+      (primaryProvider !== "ollama" && apiKeyForVault) || telegramToken;
+    if (needsVault) {
       const clock = createRealClock();
       process.env.MAIA_MASTER_KEY = masterKey;
       const salt = new TextEncoder().encode(`maia-salt-${workspaceDir}`);
@@ -1613,8 +1842,14 @@ MAIA_CONFIG=${configPath}
         vaultPath: path.join(dataDir, "credentials.enc"),
         masterKey: derivedKey,
       });
-      await store.set(`${primaryProvider}-api-key`, apiKeyForVault);
-      console.log(`API key stored securely in encrypted vault.`);
+      if (primaryProvider !== "ollama" && apiKeyForVault) {
+        await store.set(`${primaryProvider}-api-key`, apiKeyForVault);
+        console.log(`API key stored securely in encrypted vault.`);
+      }
+      if (telegramToken) {
+        await store.set("telegram-bot-token", telegramToken);
+        console.log(`Telegram bot token stored securely in encrypted vault.`);
+      }
     }
 
     // Create workspace template files
