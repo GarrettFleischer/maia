@@ -43,6 +43,8 @@ export interface ContextInput {
   threadSummary?: string;
   /** Additional instructions or context */
   additionalContext?: string;
+  /** Queue status summary (only when Maia is acting as the brain / high-level reasoning) */
+  queueStatusSummary?: string;
 }
 
 /**
@@ -166,6 +168,11 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
     // Additional context
     if (input?.additionalContext) {
       sections.push(input.additionalContext);
+    }
+
+    // Queue status (only when Maia is the brain – high-level "what to do next" context)
+    if (input?.queueStatusSummary) {
+      sections.push(`## Queue Status\n${input.queueStatusSummary}`);
     }
 
     // Optional "remember" block: LLM may append when something is worth persisting

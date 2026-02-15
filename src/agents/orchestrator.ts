@@ -19,7 +19,7 @@ import type {
 } from "../core/types.js";
 import type { SubAgent } from "./factory.js";
 import type { ThreadService } from "../threads/service.js";
-import type { RequestQueue } from "../providers/queue.js";
+import type { QueuePriority } from "../providers/queue.js";
 import type { AgentRegistry } from "./registry.js";
 import type { ApprovedSnippetsRepository } from "../security/approved-snippets.js";
 import { applyRememberedContent } from "../memory/remember-block.js";
@@ -45,6 +45,19 @@ export interface ActiveHoursConfig {
 }
 
 /**
+ * @brief Queue manager interface used by the orchestrator: enqueue returns jobId, waitForJobResult returns result.
+ */
+export interface OrchestratorQueue {
+  enqueue(
+    action: string,
+    args: Record<string, unknown>,
+    priority: QueuePriority,
+    submitterAgentId: string
+  ): string;
+  waitForJobResult(jobId: string): Promise<HandleMessageResult>;
+}
+
+/**
  * @brief Dependencies for createOrchestrator.
  */
 export interface OrchestratorDeps {
@@ -52,7 +65,7 @@ export interface OrchestratorDeps {
   crypto: CryptoProvider;
   logger: Logger;
   threadService: ThreadService;
-  priorityQueue: RequestQueue;
+  priorityQueue: OrchestratorQueue;
   /** Active sub-agent runtimes, keyed by agent ID */
   activeAgents: Map<string, SubAgent>;
   /** Maia's own runtime for generating summaries */
@@ -230,17 +243,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         await threadService.addMessage(thread.id, "maia", "maia", checkinPrompt);
 
-        const response = await priorityQueue.enqueue(async () => {
-          const msg: InboundMessage = {
-            id: crypto.randomUUID(),
-            channelId: `checkin:${agentId}`,
-            senderId: "maia",
-            content: checkinPrompt,
-            timestamp: clock.timestamp(),
-            isGroup: false,
-          };
-          return subAgent.runtime.handleMessage(msg) as Promise<HandleMessageResult>;
-        }, "background");
+        const msg: InboundMessage = {
+          id: crypto.randomUUID(),
+          channelId: `checkin:${agentId}`,
+          senderId: "maia",
+          content: checkinPrompt,
+          timestamp: clock.timestamp(),
+          isGroup: false,
+        };
+        const jobId = priorityQueue.enqueue("handleAgentCheckin", { message: msg, agentId }, "background", agentId);
+        const response = await priorityQueue.waitForJobResult(jobId);
 
         if (response.securityFlagged) {
           // Flag applies to the conversation partner (who sent the message), not the responder.
@@ -468,17 +480,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       await threadService.addMessage(thread.id, fromAgentId, "agent", content);
 
       // Send to the target agent
-      const response = await priorityQueue.enqueue(async () => {
-        const msg: InboundMessage = {
-          id: crypto.randomUUID(),
-          channelId: `agent-chat:${fromAgentId}`,
-          senderId: fromAgentId,
-          content,
-          timestamp: clock.timestamp(),
-          isGroup: false,
-        };
-        return toAgent.runtime.handleMessage(msg) as Promise<HandleMessageResult>;
-      }, "agent");
+      const msg: InboundMessage = {
+        id: crypto.randomUUID(),
+        channelId: `agent-chat:${fromAgentId}`,
+        senderId: fromAgentId,
+        content,
+        timestamp: clock.timestamp(),
+        isGroup: false,
+      };
+      const jobId = priorityQueue.enqueue("handleAgentToAgentChat", { message: msg, toAgentId }, "agent", fromAgentId);
+      const response = await priorityQueue.waitForJobResult(jobId);
 
       if (response.securityFlagged) {
         // Flag applies to the conversation partner (who sent the message), not the responder.

@@ -1,8 +1,8 @@
 # Test Coverage Gaps
 
-Based on `bun run test:coverage`. Focus on **src/**; test files and helpers are excluded from priorities below.
+Based on `bun run test:coverage`. We require **≥90% overall** line and function coverage; enforced by `scripts/check-coverage.ts` (Bun’s threshold is per-file, so we use a custom overall check). CLI/server entry points and network/LLM-only code are excluded via `coveragePathIgnorePatterns` in `bunfig.toml`. Test files and helpers are excluded from the report.
 
-**Last major update:** Added integration tests for agent tools, backup restore, memory search; unit tests for error-handler, CORS, auth branches, embeddings, chunker, note, watchdog health-checks, alerter; runtime tool-call test. Overall coverage is now **~97%** lines/funcs for `src/`.
+**Last major update:** Added integration tests for agent tools, backup restore, memory search; unit tests for error-handler, CORS, auth branches, embeddings, chunker, note, watchdog health-checks, alerter; runtime tool-call test. Overall coverage is now **~97%** lines/funcs for included `src/`.
 
 ---
 

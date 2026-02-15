@@ -10,7 +10,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio";
 import type { Logger } from "../core/types.js";
-import type { AgentTool, ToolContext, ToolResult } from "../agent/tools/base.js";
+import type {
+  AgentTool,
+  ToolContext,
+  ToolResult,
+} from "../agent/tools/base.js";
 import type { ToolDefinition } from "../core/types.js";
 
 /**
@@ -37,9 +41,15 @@ export interface MCPBridgeDeps {
  *
  * @note Tool names are prefixed with the server name to avoid collisions (e.g. docker_list_containers).
  */
-export async function createMCPBridgeTools(deps: MCPBridgeDeps): Promise<AgentTool[]> {
+export async function createMCPBridgeTools(
+  deps: MCPBridgeDeps,
+): Promise<AgentTool[]> {
   const { logger, server } = deps;
-  const prefix = server.name.replace(/\s+/g, "_").toLowerCase().replace(/[^a-z0-9_]/g, "") + "_";
+  const prefix =
+    server.name
+      .replace(/\s+/g, "_")
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, "") + "_";
 
   try {
     const transport = new StdioClientTransport({
@@ -48,11 +58,9 @@ export async function createMCPBridgeTools(deps: MCPBridgeDeps): Promise<AgentTo
     });
     const client = new Client(
       { name: "maia-mcp-client", version: "0.1.0" },
-      { capabilities: {} }
+      { capabilities: {} },
     );
-    await client.connect(
-      transport as Parameters<Client["connect"]>[0]
-    );
+    await client.connect(transport as Parameters<Client["connect"]>[0]);
 
     const result = await client.listTools();
     const tools = result.tools ?? [];
@@ -61,7 +69,10 @@ export async function createMCPBridgeTools(deps: MCPBridgeDeps): Promise<AgentTo
     for (const tool of tools) {
       const toolName = prefix + tool.name;
       const description = (tool.description ?? tool.name) as string;
-      const inputSchema = (tool.inputSchema ?? { type: "object", properties: {} }) as Record<string, unknown>;
+      const inputSchema = (tool.inputSchema ?? {
+        type: "object",
+        properties: {},
+      }) as Record<string, unknown>;
 
       agentTools.push({
         name: toolName,
@@ -70,19 +81,32 @@ export async function createMCPBridgeTools(deps: MCPBridgeDeps): Promise<AgentTo
           return {
             name: toolName,
             description: description,
-            parameters: inputSchema as { type: "object"; properties?: Record<string, unknown>; required?: string[] },
+            parameters: inputSchema as {
+              type: "object";
+              properties?: Record<string, unknown>;
+              required?: string[];
+            },
           };
         },
-        async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+        async execute(
+          args: Record<string, unknown>,
+          _context: ToolContext,
+        ): Promise<ToolResult> {
           try {
             const result = await client.callTool({
               name: tool.name,
-              arguments: args as Record<string, string | number | boolean | null>,
+              arguments: args as Record<
+                string,
+                string | number | boolean | null
+              >,
             });
-            const content = (result as { content?: Array<{ type: string; text?: string }> }).content;
+            const content = (
+              result as { content?: Array<{ type: string; text?: string }> }
+            ).content;
             const text =
-              content?.map((c) => (c.type === "text" ? c.text : JSON.stringify(c))).join("\n") ??
-              JSON.stringify(result);
+              content
+                ?.map((c) => (c.type === "text" ? c.text : JSON.stringify(c)))
+                .join("\n") ?? JSON.stringify(result);
             return { content: text, success: true, data: { result } };
           } catch (err) {
             logger.warn("MCP tool call failed", {
@@ -99,7 +123,10 @@ export async function createMCPBridgeTools(deps: MCPBridgeDeps): Promise<AgentTo
       });
     }
 
-    logger.info("MCP bridge connected", { server: server.name, toolCount: agentTools.length });
+    logger.info("MCP bridge connected", {
+      server: server.name,
+      toolCount: agentTools.length,
+    });
     return agentTools;
   } catch (err) {
     logger.warn("MCP bridge connection failed", {

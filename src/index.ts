@@ -27,8 +27,10 @@ import { startBunServer, registerApiRoutes } from "./gateway/bun-server.js";
 import { registerDashboardRoutes } from "./gateway/dashboard-routes.js";
 import { createThreadService } from "./threads/service.js";
 import { createTaskMonitor } from "./agents/task-monitor.js";
-import { createOrchestrator } from "./agents/orchestrator.js";
-import { createRequestQueue } from "./providers/queue.js";
+import { createOrchestrator, type OrchestratorQueue } from "./agents/orchestrator.js";
+import { createQueueManager } from "./providers/queue-manager.js";
+import type { HandleMessageResult } from "./agent/runtime.js";
+import type { InboundMessage } from "./core/types.js";
 import { createApprovedSnippetsRepository } from "./security/approved-snippets.js";
 import { createAgentCreationRequestsRepository } from "./agents/agent-creation-requests.js";
 import { createMcpServerProposalsRepository } from "./agents/mcp-server-proposals.js";
@@ -67,6 +69,28 @@ import { createGeminiProvider } from "./providers/gemini.js";
 import { createHuggingFaceProvider } from "./providers/huggingface.js";
 import { createOpenRouterProvider } from "./providers/openrouter.js";
 import { createLogger } from "./core/logger.js";
+import { createMCPBridgeTools } from "./mcp/bridge.js";
+import { createSubAgentRuntime } from "./agents/factory.js";
+import type { SubAgent, SharedAgentDeps } from "./agents/factory.js";
+import type { AgentConfig } from "./agents/registry.js";
+import type {
+  AgentCreationRequest,
+  AgentCreationRequestsRepository,
+} from "./agents/agent-creation-requests.js";
+import type { McpServerProposal } from "./agents/mcp-server-proposals.js";
+import {
+  createAgentCreateTool,
+  createAgentListTool,
+  PLACEHOLDER_NAME,
+  PLACEHOLDER_SOUL,
+} from "./agents/tools.js";
+import { createScheduler } from "./agent/scheduler.js";
+import { createChatWithAgentTool } from "./agents/tools/chat-with-agent.js";
+import { createDmUserTool } from "./agents/tools/dm-user.js";
+import { createSetIdentityTool } from "./agents/tools/set-identity.js";
+import { createProposeMcpServerTool } from "./agents/tools/propose-mcp-server.js";
+import { createCheckQueueJobTool } from "./agents/tools/check-queue-job.js";
+import type { TaskMonitor } from "./agents/task-monitor.js";
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -429,17 +453,19 @@ Commands:
 async function runStart(): Promise<void> {
   console.log("Starting Maia gateway server...\n");
 
-  type SubAgentType = import("./agents/factory.js").SubAgent;
   const getOnAgentCreatedRef = {
-    current: null as (() => (subAgent: SubAgentType) => void) | null,
+    current: null as (() => (subAgent: SubAgent) => void) | null,
   };
   const taskMonitorRef = {
-    current: null as import("./agents/task-monitor.js").TaskMonitor | null,
+    current: null as TaskMonitor | null,
+  };
+  const getQueueStatusSummaryRef = {
+    current: null as (() => string) | null,
   };
 
   let app;
   try {
-    app = await createApp({ getOnAgentCreatedRef, taskMonitorRef });
+    app = await createApp({ getOnAgentCreatedRef, taskMonitorRef, getQueueStatusSummaryRef });
   } catch (err) {
     console.error(
       "Failed to start Maia:",
@@ -465,7 +491,6 @@ async function runStart(): Promise<void> {
 
   // MCP bridge: connect to configured MCP servers and register their tools on Maia's registry
   if (ctx.config.mcp?.servers?.length) {
-    const { createMCPBridgeTools } = await import("./mcp/bridge.js");
     for (const server of ctx.config.mcp.servers) {
       const mcpTools = await createMCPBridgeTools({ logger: ctx.logger, server });
       for (const t of mcpTools) {
@@ -516,22 +541,33 @@ async function runStart(): Promise<void> {
     { agentId: string; agentName: string; snippet: string; reason: string }
   >();
 
-  // ── Priority LLM Queue ────────────────────────────────────────
+  // ── Priority LLM Queue (sync queue + manager with workers) ─────────
   const queuePersistPath = path.join(app.getDataDir(), "queue.json");
-  const priorityQueue = createRequestQueue({
-    maxConcurrent: 2,
+  const priorityQueue = createQueueManager({
     maxQueueDepth: 100,
     clock: ctx.clock,
+    logger: ctx.logger,
     persistPath: queuePersistPath,
     fs: app.getRawFs(),
-    jobHandlers: {},
   });
-  await priorityQueue.loadFromFile();
+  priorityQueue.registerHandler("handleUserChat", async (args) => {
+    return runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
+  });
+  // Inject queue status into Maia's LLM context only when she's the brain (user chat, high-level reasoning)
+  getQueueStatusSummaryRef.current = () => {
+    const s = priorityQueue.getQueueStatusSummary();
+    const lines: string[] = [];
+    for (const [name, data] of Object.entries(s)) {
+      lines.push(`${name}: ${data.pending} pending, ${data.running.length} running`);
+      if (data.running.length > 0) {
+        lines.push(`  Running: ${data.running.map((r: { jobId: string; action: string }) => `${r.action} (${r.jobId})`).join("; ")}`);
+      }
+    }
+    return lines.join("\n");
+  };
 
-  let onAgentCreationRequest: (request: import("./agents/agent-creation-requests.js").AgentCreationRequest) => void =
-    () => {};
-  let onMcpProposalForUserApproval: (proposal: import("./agents/mcp-server-proposals.js").McpServerProposal) => void =
-    () => {};
+  let onAgentCreationRequest: (request: AgentCreationRequest) => void = () => {};
+  let onMcpProposalForUserApproval: (proposal: McpServerProposal) => void = () => {};
 
   type ApprovalPayload = {
     kind: string;
@@ -565,10 +601,8 @@ async function runStart(): Promise<void> {
       };
 
       // User chat goes through priority queue at highest priority
-      const result = await priorityQueue.enqueue(
-        () => runtime.handleMessage(message),
-        "user"
-      );
+      const jobId = priorityQueue.enqueue("handleUserChat", { message }, "user", "user");
+      const result = (await priorityQueue.waitForJobResult(jobId)) as HandleMessageResult;
 
       if (result.securityFlagged) {
         // Flag applies to the conversation partner (sender). Here the sender is the user; we audit and push approval for maia (responder) to allowlist the snippet.
@@ -720,7 +754,7 @@ async function runStart(): Promise<void> {
     );
   };
 
-  onMcpProposalForUserApproval = (proposal: import("./agents/mcp-server-proposals.js").McpServerProposal) => {
+  onMcpProposalForUserApproval = (proposal: McpServerProposal) => {
     bunServer.wsBroadcast(
       JSON.stringify({
         type: "approval_request",
@@ -796,18 +830,14 @@ async function runStart(): Promise<void> {
   const agentRegistry = app.getAgentRegistry();
   const activeAgents = app.getActiveAgents();
 
-  const { createSubAgentRuntime } = await import("./agents/factory.js");
-  type SubAgent = import("./agents/factory.js").SubAgent;
-  type AgentConfig = import("./agents/registry.js").AgentConfig;
-
   let createAndActivateAgent: (config: AgentConfig) => SubAgent;
 
-  const sharedAgentDeps: import("./agents/factory.js").SharedAgentDeps & {
+  const sharedAgentDeps: SharedAgentDeps & {
     agentRegistry?: typeof agentRegistry;
     createRuntime?: (config: AgentConfig) => SubAgent;
     activeAgents?: Map<string, SubAgent>;
-    creationRequestsRepo?: import("./agents/agent-creation-requests.js").AgentCreationRequestsRepository;
-    onAgentCreationRequest?: (request: import("./agents/agent-creation-requests.js").AgentCreationRequest) => void;
+    creationRequestsRepo?: AgentCreationRequestsRepository;
+    onAgentCreationRequest?: (request: AgentCreationRequest) => void;
   } = {
     db: ctx.db,
     crypto: ctx.crypto,
@@ -834,16 +864,13 @@ async function runStart(): Promise<void> {
   sharedAgentDeps.activeAgents = activeAgents;
 
   // Load all existing agents and create their runtimes
-  const { createAgentCreateTool } = await import("./agents/tools.js");
   try {
     const existingAgents = await agentRegistry.list();
     for (const agentConfig of existingAgents) {
       if (agentConfig.active === false) continue;
       try {
-        const { createSubAgentRuntime: createSub } =
-          await import("./agents/factory.js");
         const agentWorkspace = agentRegistry.agentWorkspacePath(agentConfig.id);
-        const subAgent = createSub(agentConfig, agentWorkspace, sharedAgentDeps);
+        const subAgent = createSubAgentRuntime(agentConfig, agentWorkspace, sharedAgentDeps);
         activeAgents.set(agentConfig.id, subAgent);
         if (
           sharedAgentDeps.creationRequestsRepo &&
@@ -885,6 +912,34 @@ async function runStart(): Promise<void> {
     });
   }
 
+  // Register queue action handlers that need activeAgents; then start workers and load persisted items
+  priorityQueue.registerHandler("handleTaskMonitorMessage", async (args) => {
+    const agentId = args.agentId as string;
+    const subAgent = activeAgents.get(agentId);
+    if (!subAgent) throw new Error(`Agent not found: ${agentId}`);
+    return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
+  });
+  priorityQueue.registerHandler("handleAgentCheckin", async (args) => {
+    const agentId = args.agentId as string;
+    const subAgent = activeAgents.get(agentId);
+    if (!subAgent) throw new Error(`Agent not found: ${agentId}`);
+    return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
+  });
+  priorityQueue.registerHandler("handleAgentToAgentChat", async (args) => {
+    const toAgentId = args.toAgentId as string;
+    const subAgent = activeAgents.get(toAgentId);
+    if (!subAgent) throw new Error(`Agent not found: ${toAgentId}`);
+    return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
+  });
+  priorityQueue.registerHandler("handleWelcomeMessage", async (args) => {
+    const agentId = args.agentId as string;
+    const subAgent = activeAgents.get(agentId);
+    if (!subAgent) throw new Error(`Agent not found: ${agentId}`);
+    return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
+  });
+  priorityQueue.startWorkers();
+  await priorityQueue.loadFromFile();
+
   approvalResponseHandler = async (
     _connectionId: string,
     _senderId: string,
@@ -902,7 +957,6 @@ async function runStart(): Promise<void> {
       const request = await agentCreationRequestsRepo.getById(requestId);
       if (!request || request.status !== "pending") return;
       if (payload.decision === "approve") {
-        const { PLACEHOLDER_NAME, PLACEHOLDER_SOUL } = await import("./agents/tools.js");
         const p = request.proposedConfig;
         const config: AgentConfig = {
           id: p.id,
@@ -1012,7 +1066,6 @@ services:
         const config = await agentRegistry.get(agentId);
         if (config) {
           await agentRegistry.update(agentId, { active: true });
-          const { createSubAgentRuntime } = await import("./agents/factory.js");
           const agentWorkspace = agentRegistry.agentWorkspacePath(agentId);
           const subAgent = createSubAgentRuntime(config, agentWorkspace, sharedAgentDeps);
           activeAgents.set(agentId, subAgent);
@@ -1029,7 +1082,6 @@ services:
   };
 
   // Start the scheduler with agent task dispatch
-  const { createScheduler } = await import("./agent/scheduler.js");
   const scheduler = createScheduler({
     fs: ctx.fs,
     clock: ctx.clock,
@@ -1150,18 +1202,18 @@ services:
     if (!subAgent) return;
 
     ctx.logger.info("Task monitor firing task", { agentId, taskId: task.id });
-    await priorityQueue.enqueue(async () => {
-      const message = {
-        id: ctx.crypto.randomUUID(),
-        channelId: `task:${agentId}`,
-        senderId: "task-monitor",
-        content: task.prompt,
-        timestamp: ctx.clock.timestamp(),
-        isGroup: false,
-      };
-      const result = await subAgent.runtime.handleMessage(message);
+    const message: InboundMessage = {
+      id: ctx.crypto.randomUUID(),
+      channelId: `task:${agentId}`,
+      senderId: "task-monitor",
+      content: task.prompt,
+      timestamp: ctx.clock.timestamp(),
+      isGroup: false,
+    };
+    const jobId = priorityQueue.enqueue("handleTaskMonitorMessage", { message, agentId }, "agent", agentId);
+    try {
+      const result = (await priorityQueue.waitForJobResult(jobId)) as HandleMessageResult;
       if (result.securityFlagged) {
-        // Flag applies to the conversation partner (sender), not the responder. Sender here is "task-monitor".
         const { reason, snippet } = result.securityFlagged;
         const flaggedPartyId = message.senderId;
         await ctx.auditLog.log("INLINE_SECURITY_FLAG", {
@@ -1178,7 +1230,6 @@ services:
             `Agent **${subAgent.config.name}** (${agentId}) reported a concern about the task prompt: ${reason}.`
           );
         }
-        // Do not stop the agent; the flag applies to the sender (task-monitor), not the responder.
       }
       if (result.progressReport && orchestratorRef) {
         const { status, summary } = result.progressReport;
@@ -1188,7 +1239,9 @@ services:
           `Progress: [${status}] ${summary}`
         );
       }
-    }, "agent");
+    } catch (err) {
+      ctx.logger.warn("Task monitor job failed", { agentId, taskId: task.id, error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   ctx.shutdown.register(
@@ -1205,7 +1258,7 @@ services:
     crypto: ctx.crypto,
     logger: ctx.logger,
     threadService,
-    priorityQueue,
+    priorityQueue: priorityQueue as OrchestratorQueue,
     activeAgents,
     maiaRuntime: runtime,
     wsPush: (type: string, payload: Record<string, unknown>) => {
@@ -1222,11 +1275,6 @@ services:
   orchestratorRef = orchestrator;
   orchestrator.start();
 
-  const { createChatWithAgentTool } = await import("./agents/tools/chat-with-agent.js");
-  const { createDmUserTool } = await import("./agents/tools/dm-user.js");
-  const { createAgentListTool } = await import("./agents/tools.js");
-  const { createSetIdentityTool } = await import("./agents/tools/set-identity.js");
-  const { createProposeMcpServerTool } = await import("./agents/tools/propose-mcp-server.js");
   const rawFs = app.getRawFs();
 
   const writeAgentWorkspaceFile = async (agentId: string, filename: string, content: string) => {
@@ -1234,7 +1282,7 @@ services:
     await rawFs.writeFile(p, content);
   };
 
-  const registerAgentTools = (agentId: string, subAgent: SubAgentType) => {
+  const registerAgentTools = (agentId: string, subAgent: SubAgent) => {
     subAgent.runtime.getToolRegistry().register(
       createChatWithAgentTool({
         logger: ctx.logger,
@@ -1279,24 +1327,29 @@ services:
         onMcpProposalForUserApproval: (proposal) => onMcpProposalForUserApproval(proposal),
       })
     );
+    subAgent.runtime.getToolRegistry().register(
+      createCheckQueueJobTool({
+        logger: ctx.logger,
+        getJobStatus: (jobId) => priorityQueue.getJobStatus(jobId),
+      })
+    );
   };
   for (const [agentId, subAgent] of activeAgents) {
     registerAgentTools(agentId, subAgent);
   }
-  getOnAgentCreatedRef.current = () => (subAgent: SubAgentType) => {
+  getOnAgentCreatedRef.current = () => (subAgent: SubAgent) => {
     registerAgentTools(subAgent.config.id, subAgent);
     const welcomeContent =
       "You were just created. Use the set_identity tool to choose your name and soul (personality). They must be unique among all agents. Call set_identity with your chosen name and soul.";
-    void priorityQueue.enqueue(() =>
-      subAgent.runtime.handleMessage({
-        id: ctx.crypto.randomUUID(),
-        channelId: "welcome",
-        senderId: "maia",
-        content: welcomeContent,
-        timestamp: ctx.clock.timestamp(),
-        isGroup: false,
-      })
-    );
+    const message: InboundMessage = {
+      id: ctx.crypto.randomUUID(),
+      channelId: "welcome",
+      senderId: "maia",
+      content: welcomeContent,
+      timestamp: ctx.clock.timestamp(),
+      isGroup: false,
+    };
+    priorityQueue.enqueue("handleWelcomeMessage", { message, agentId: subAgent.config.id }, "agent", subAgent.config.id);
   };
 
   ctx.shutdown.register(
@@ -1632,7 +1685,6 @@ async function runCredentials(): Promise<void> {
       `maia-salt-${expandHome("~/.maia/workspace")}`,
     );
     const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
-    const { createLogger } = await import("./core/logger.js");
     const logger = createLogger({ level: "warn", write: () => {} });
     const auditLog = createAuditLog({ fs, clock, logPath: auditLogPath });
     const store = createCredentialStore({
@@ -1724,7 +1776,6 @@ async function runBackup(): Promise<void> {
     );
     const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
 
-    const { createLogger } = await import("./core/logger.js");
     const logger = createLogger({
       level: "info",
       write: (line) => console.log(line),
@@ -1785,7 +1836,6 @@ async function runRestore(): Promise<void> {
     );
     const masterKey = await crypto.deriveKey(masterKeyPassphrase, salt);
 
-    const { createLogger } = await import("./core/logger.js");
     const logger = createLogger({
       level: "info",
       write: (line) => console.log(line),
@@ -1833,7 +1883,6 @@ async function runSchedule(): Promise<void> {
     const subcommand = args[1] ?? "list";
     const ctx = app.getContext();
 
-    const { createScheduler } = await import("./agent/scheduler.js");
     const scheduler = createScheduler({
       fs: ctx.fs,
       clock: ctx.clock,

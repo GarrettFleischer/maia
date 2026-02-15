@@ -97,6 +97,8 @@ export interface CreateAppOptions {
   getOnAgentCreatedRef?: { current: (() => (subAgent: SubAgent) => void) | null };
   /** Ref to TaskMonitor (set by host after task monitor exists) for agent_list assigned tasks. */
   taskMonitorRef?: { current: import("./agents/task-monitor.js").TaskMonitor | null };
+  /** Ref to get queue status summary (set by host when Maia is the brain). Injected into LLM context only when set. */
+  getQueueStatusSummaryRef?: { current: (() => string) | null };
 }
 
 /**
@@ -404,6 +406,7 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
         // Append exchange to daily log (Tier 1). Memory extraction runs in merge path.
         await dailyLog.append(`User: ${userContent}\nAssistant: ${responseContent}`);
       },
+      getQueueStatusSummaryRef: options?.getQueueStatusSummaryRef,
     });
 
     return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs, dataDir);
@@ -429,6 +432,7 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
     sendReply: async () => {
       // Will be wired by the channel/CLI layer later
     },
+    getQueueStatusSummaryRef: options?.getQueueStatusSummaryRef,
   });
 
   return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs, dataDir);

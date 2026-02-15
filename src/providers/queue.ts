@@ -1,348 +1,245 @@
 /**
- * @fileoverview Priority request queue for LLM operations with rate-limit retry.
+ * @fileoverview Sync priority request queue for LLM operations. Holds serializable
+ * action+args+submitterAgentId; no async execution inside the queue. Manager runs
+ * workers that claimNext(), run handlers, then remove (success) or release (retry).
  * @module providers/queue
  *
- * @brief Manages a priority queue of async functions and serializable jobs. User
- * requests always dequeue first, then agent, then background. Supports persisting
- * job descriptors to JSON so shutdown does not lose pending work. Automatically
- * retries on rate-limit errors with exponential backoff.
+ * @brief Three queues (user, agent, background); one worker per queue. Job stays
+ * in queue until success; on failure release(jobId) moves it back to pending.
  */
 
-import type { Clock, FileSystem } from "../core/types.js";
+import type { Clock } from "../core/types.js";
 
 /**
  * @brief Priority levels for queue items.
- * @note "user" is highest priority (dequeued first), "background" is lowest.
+ * @note "user" is highest priority, "background" is lowest. One dedicated worker per queue.
  */
 export type QueuePriority = "user" | "agent" | "background";
 
 /**
- * @brief Serializable job descriptor for persisted queue items.
+ * @brief Serializable queue item: action + args + submitterAgentId (no function refs).
  */
-export interface JobDescriptor {
+export interface QueuedItem {
   id: string;
-  type: string;
+  action: string;
+  args: Record<string, unknown>;
   priority: QueuePriority;
-  payload: Record<string, unknown>;
   createdAt: string;
+  submitterAgentId: string;
 }
 
 /**
- * @brief Job handler signature. Registered per job type at app startup.
+ * @brief Job status as seen by the queue (completed is tracked by manager/result registry).
  */
-export type JobHandler = (payload: Record<string, unknown>) => Promise<void>;
+export type JobStatus = "queued" | "running" | "not_found";
 
 /**
  * @brief Dependencies for creating the request queue.
  */
 export interface RequestQueueDeps {
-  /** Maximum number of functions running simultaneously. */
-  maxConcurrent: number;
-  /** Maximum number of items waiting in the queue. */
+  /** Maximum number of items per priority queue (pending + running). */
   maxQueueDepth: number;
-  /** Clock abstraction (for time-based features). */
+  /** Clock for createdAt on items. */
   clock: Clock;
-  /** Maximum retry attempts on rate-limit errors (default: 3). */
-  maxRetries?: number;
-  /** Base delay in ms for exponential backoff on rate-limit (default: 1000). */
-  retryBaseDelayMs?: number;
-  /** Maximum backoff delay in ms (default: 30000). */
-  retryMaxDelayMs?: number;
-  /** Optional: path to JSON file for persisting pending jobs. */
-  persistPath?: string;
-  /** Optional: filesystem for reading/writing persist file. Required if persistPath is set. */
-  fs?: FileSystem;
-  /** Optional: map of job type -> handler. Required to run enqueued jobs. */
-  jobHandlers?: Record<string, JobHandler>;
 }
 
 /**
- * @brief Request queue interface.
+ * @brief Request queue interface: sync enqueue, claimNext per priority, remove/release, getJobStatus.
  */
 export interface RequestQueue {
   /**
-   * @brief Enqueue a function at the given priority. Returns its result when it runs.
-   * @param fn - Async function to execute
-   * @param priority - Priority level (default: "agent")
-   * @returns Promise resolving to the function's result
-   * @throws Error if queue is full
+   * @brief Enqueue a serializable action. Returns jobId synchronously.
+   * @param action - Action name (e.g. "handleUserChat")
+   * @param args - Serializable args for the action
+   * @param priority - Which queue (user / agent / background)
+   * @param submitterAgentId - Agent (or "user"/"maia") to receive the result when job completes
+   * @returns Job ID (sync)
+   * @throws Error if that priority queue is full
    */
-  enqueue<T>(fn: () => Promise<T>, priority?: QueuePriority): Promise<T>;
+  enqueue(
+    action: string,
+    args: Record<string, unknown>,
+    priority: QueuePriority,
+    submitterAgentId: string
+  ): string;
 
   /**
-   * @brief Enqueue a serializable job. Resolves when the job is queued (not when it completes).
-   * Jobs are persisted to persistPath if configured. Handlers are invoked by job type.
-   * @param descriptor - Job type and payload (id and createdAt are added automatically)
-   * @param priority - Priority level (default: "background")
+   * @brief Claim the next item from the given priority queue (moves pending -> running).
+   * @param priority - Which queue to claim from
+   * @returns The item, or undefined if that queue has no pending items
    */
-  enqueueJob(
-    descriptor: { type: string; payload: Record<string, unknown> },
-    priority?: QueuePriority
-  ): Promise<void>;
+  claimNext(priority: QueuePriority): QueuedItem | undefined;
 
   /**
-   * @brief Load pending jobs from the persist file and re-enqueue them. Call after startup.
-   * No-op if persistPath/fs not configured.
+   * @brief Remove the job from the queue (call on success). Job must be in running state.
+   * @param jobId - Job ID returned from enqueue
    */
-  loadFromFile(): Promise<void>;
+  remove(jobId: string): void;
 
-  /** Current number of items waiting (not yet running). */
+  /**
+   * @brief Move the job from running back to pending (call on retriable failure).
+   * @param jobId - Job ID
+   */
+  release(jobId: string): void;
+
+  /**
+   * @brief Total number of items (pending + running) across all three queues.
+   */
   depth(): number;
 
-  /** Current number of items running. */
-  running(): number;
+  /**
+   * @brief Status of a job: queued (pending), running (claimed), or not_found.
+   * @note "completed" is not returned by the queue; manager/result layer tracks that.
+   */
+  getJobStatus(jobId: string): JobStatus;
 
-  /** Whether the queue is currently paused due to rate limiting. */
-  isPaused(): boolean;
+  /**
+   * @brief All items (pending + running) for persistence. Manager writes these to file.
+   */
+  getItemsForPersistence(): QueuedItem[];
+
+  /**
+   * @brief Re-enqueue items after load (e.g. on startup). All items go back to pending.
+   * @param items - Items previously returned from getItemsForPersistence
+   */
+  restore(items: QueuedItem[]): void;
+}
+
+interface SingleQueueState {
+  pending: QueuedItem[];
+  running: Map<string, QueuedItem>;
 }
 
 /**
- * @brief Internal queued item: either a function or a job descriptor.
- */
-type QueuedItem =
-  | {
-      kind: "fn";
-      fn: () => Promise<unknown>;
-      priority: QueuePriority;
-      resolve: (value: unknown) => void;
-      reject: (err: unknown) => void;
-      retryCount: number;
-    }
-  | {
-      kind: "job";
-      id: string;
-      type: string;
-      priority: QueuePriority;
-      payload: Record<string, unknown>;
-      createdAt: string;
-    };
-
-/**
- * @brief Priority ordering: lower number = higher priority (dequeued first).
- */
-const PRIORITY_ORDER: Record<QueuePriority, number> = {
-  user: 0,
-  agent: 1,
-  background: 2,
-};
-
-/**
- * @brief Checks if an error is a rate-limit error (HTTP 429 or similar).
- * @param err - The error to check
- * @returns True if this looks like a rate-limit error
- */
-function isRateLimitError(err: unknown): boolean {
-  if (err instanceof Error) {
-    const msg = err.message.toLowerCase();
-    if (msg.includes("429") || msg.includes("rate limit") || msg.includes("too many requests")) {
-      return true;
-    }
-  }
-  if (typeof err === "object" && err !== null && "status" in err) {
-    const status = (err as { status: unknown }).status;
-    if (status === 429) return true;
-  }
-  return false;
-}
-
-/**
- * @brief Creates a priority request queue with rate-limit retry and optional job persistence.
- * @param deps - Dependencies: maxConcurrent, maxQueueDepth, clock, optional persistPath, fs, jobHandlers
+ * @brief Creates a sync request queue with three priority queues (user, agent, background).
+ * @param deps - maxQueueDepth, clock
  * @returns RequestQueue instance
  *
  * @example
- * const queue = createRequestQueue({ maxConcurrent: 2, maxQueueDepth: 50, clock });
- * await queue.enqueue(() => provider.chat(messages), "user");
- * await queue.enqueueJob({ type: "tool_review", payload: { proposalId: "..." } }, "background");
- * await queue.loadFromFile(); // after startup
+ * const queue = createRequestQueue({ maxQueueDepth: 50, clock });
+ * const jobId = queue.enqueue("handleUserChat", { message }, "user", "user");
+ * const item = queue.claimNext("user");
+ * if (item) { const result = await runHandler(item); queue.remove(item.id); }
  */
 export function createRequestQueue(deps: RequestQueueDeps): RequestQueue {
-  const {
-    maxConcurrent,
-    maxQueueDepth,
-    clock,
-    maxRetries = 3,
-    retryBaseDelayMs = 1000,
-    retryMaxDelayMs = 30000,
-    persistPath,
-    fs,
-    jobHandlers = {},
-  } = deps;
+  const { maxQueueDepth, clock } = deps;
+  const priorities: QueuePriority[] = ["user", "agent", "background"];
+  const queues = new Map<QueuePriority, SingleQueueState>();
+  for (const p of priorities) {
+    const state: SingleQueueState = { pending: [], running: new Map<string, QueuedItem>() };
+    queues.set(p, state);
+  }
+  const jobIdToPriority = new Map<string, QueuePriority>();
 
-  const queue: QueuedItem[] = [];
-  let runningCount = 0;
-  let paused = false;
-
-  function findNextIndex(): number {
-    if (queue.length === 0) return -1;
-    let bestIdx = 0;
-    let bestPriority = PRIORITY_ORDER[queue[0].priority];
-    for (let i = 1; i < queue.length; i++) {
-      const p = PRIORITY_ORDER[queue[i].priority];
-      if (p < bestPriority) {
-        bestPriority = p;
-        bestIdx = i;
-      }
+  function totalDepth(): number {
+    let n = 0;
+    for (const state of queues.values()) {
+      n += state.pending.length + state.running.size;
     }
-    return bestIdx;
+    return n;
   }
 
-  function backoffDelay(attempt: number): number {
-    const delay = retryBaseDelayMs * Math.pow(2, attempt);
-    const jitter = delay * 0.2 * (Math.random() * 2 - 1);
-    return Math.min(delay + jitter, retryMaxDelayMs);
+  function queueDepth(priority: QueuePriority): number {
+    const state = queues.get(priority)!;
+    return state.pending.length + state.running.size;
   }
 
-  function pauseQueue(delayMs: number): void {
-    if (paused) return;
-    paused = true;
-    setTimeout(() => {
-      paused = false;
-      process();
-    }, delayMs);
-  }
-
-  async function persist(): Promise<void> {
-    if (!persistPath || !fs) return;
-    const jobItems = queue.filter((item): item is QueuedItem & { kind: "job" } => item.kind === "job");
-    const toWrite = jobItems.map((item) => ({
-      id: item.id,
-      type: item.type,
-      priority: item.priority,
-      payload: item.payload,
-      createdAt: item.createdAt,
-    }));
-    try {
-      await fs.writeFile(persistPath, JSON.stringify(toWrite, null, 0));
-    } catch {
-      // Best-effort; do not throw
-    }
-  }
-
-  function process(): void {
-    if (paused) return;
-
-    while (runningCount < maxConcurrent && queue.length > 0) {
-      const idx = findNextIndex();
-      if (idx === -1) break;
-      const item = queue.splice(idx, 1)[0];
-      runningCount++;
-
-      if (item.kind === "fn") {
-        Promise.resolve()
-          .then(() => item.fn())
-          .then((result) => {
-            item.resolve(result);
-          })
-          .catch((err) => {
-            if (isRateLimitError(err) && item.retryCount < maxRetries) {
-              item.retryCount++;
-              const delay = backoffDelay(item.retryCount - 1);
-              queue.push(item);
-              pauseQueue(delay);
-            } else {
-              item.reject(err);
-            }
-          })
-          .finally(() => {
-            runningCount--;
-            process();
-          });
-      } else {
-        const handler = jobHandlers[item.type];
-        Promise.resolve()
-          .then(() => {
-            if (handler) return handler(item.payload);
-            return Promise.reject(new Error(`No handler for job type: ${item.type}`));
-          })
-          .catch(() => {
-            // Do not re-enqueue failed jobs; handler may have logged
-          })
-          .finally(() => {
-            runningCount--;
-            persist();
-            process();
-          });
-      }
-    }
+  function findNextPendingIndex(priority: QueuePriority): number {
+    const state = queues.get(priority)!;
+    if (state.pending.length === 0) return -1;
+    return 0;
   }
 
   return {
-    enqueue<T>(fn: () => Promise<T>, priority: QueuePriority = "agent"): Promise<T> {
-      if (queue.length >= maxQueueDepth) {
-        return Promise.reject(new Error("Queue full"));
-      }
-      return new Promise<T>((resolve, reject) => {
-        queue.push({
-          kind: "fn",
-          fn: fn as () => Promise<unknown>,
-          priority,
-          resolve: resolve as (value: unknown) => void,
-          reject,
-          retryCount: 0,
-        });
-        process();
-      });
-    },
-
-    async enqueueJob(
-      descriptor: { type: string; payload: Record<string, unknown> },
-      priority: QueuePriority = "background"
-    ): Promise<void> {
-      if (queue.length >= maxQueueDepth) {
+    enqueue(
+      action: string,
+      args: Record<string, unknown>,
+      priority: QueuePriority,
+      submitterAgentId: string
+    ): string {
+      const state = queues.get(priority)!;
+      if (queueDepth(priority) >= maxQueueDepth) {
         throw new Error("Queue full");
       }
       const id = `job_${clock.now().getTime()}_${Math.random().toString(36).slice(2, 10)}`;
-      const createdAt = clock.timestamp();
-      queue.push({
-        kind: "job",
+      const item: QueuedItem = {
         id,
-        type: descriptor.type,
+        action,
+        args,
         priority,
-        payload: descriptor.payload,
-        createdAt,
-      });
-      await persist();
-      process();
+        createdAt: clock.timestamp(),
+        submitterAgentId,
+      };
+      state.pending.push(item);
+      jobIdToPriority.set(id, priority);
+      return id;
     },
 
-    async loadFromFile(): Promise<void> {
-      if (!persistPath || !fs) return;
-      try {
-        const exists = await fs.exists(persistPath);
-        if (!exists) return;
-        const raw = await fs.readFile(persistPath);
-        const parsed = JSON.parse(raw) as JobDescriptor[];
-        if (!Array.isArray(parsed)) return;
-        for (const job of parsed) {
-          if (job.id && job.type && job.priority && job.payload && job.createdAt) {
-            queue.push({
-              kind: "job",
-              id: job.id,
-              type: job.type,
-              priority: job.priority as QueuePriority,
-              payload: job.payload,
-              createdAt: job.createdAt,
-            });
-          }
-        }
-        await fs.writeFile(persistPath, "[]");
-        process();
-      } catch {
-        // Best-effort; do not throw
+    claimNext(priority: QueuePriority): QueuedItem | undefined {
+      const state = queues.get(priority)!;
+      const idx = findNextPendingIndex(priority);
+      if (idx === -1) return undefined;
+      const item = state.pending.splice(idx, 1)[0];
+      state.running.set(item.id, item);
+      return item;
+    },
+
+    remove(jobId: string): void {
+      const priority = jobIdToPriority.get(jobId);
+      if (!priority) return;
+      const state = queues.get(priority)!;
+      if (state.running.has(jobId)) {
+        state.running.delete(jobId);
+        jobIdToPriority.delete(jobId);
+      }
+    },
+
+    release(jobId: string): void {
+      const priority = jobIdToPriority.get(jobId);
+      if (!priority) return;
+      const state = queues.get(priority)!;
+      const item = state.running.get(jobId);
+      if (item) {
+        state.running.delete(jobId);
+        state.pending.push(item);
       }
     },
 
     depth(): number {
-      return queue.length;
+      return totalDepth();
     },
 
-    running(): number {
-      return runningCount;
+    getJobStatus(jobId: string): JobStatus {
+      const priority = jobIdToPriority.get(jobId);
+      if (!priority) return "not_found";
+      const state = queues.get(priority)!;
+      if (state.running.has(jobId)) return "running";
+      if (state.pending.some((i) => i.id === jobId)) return "queued";
+      return "not_found";
     },
 
-    isPaused(): boolean {
-      return paused;
+    getItemsForPersistence(): QueuedItem[] {
+      const out: QueuedItem[] = [];
+      for (const state of queues.values()) {
+        for (const item of state.pending) out.push(item);
+        for (const item of state.running.values()) out.push(item);
+      }
+      return out;
+    },
+
+    restore(items: QueuedItem[]): void {
+      for (const state of queues.values()) {
+        state.pending.length = 0;
+        state.running.clear();
+      }
+      jobIdToPriority.clear();
+      for (const item of items) {
+        const state = queues.get(item.priority)!;
+        if (state.pending.length + state.running.size < maxQueueDepth) {
+          state.pending.push(item);
+          jobIdToPriority.set(item.id, item.priority);
+        }
+      }
     },
   };
 }

@@ -9,7 +9,9 @@ import type { SubAgent } from "../../../src/agents/factory.js";
 import type { HandleMessageResult } from "../../../src/agent/runtime.js";
 import { capturingLogger, mockCryptoProvider, fixedClock } from "../../helpers/index.js";
 import type { ThreadService, SenderType } from "../../../src/threads/service.js";
-import type { RequestQueue } from "../../../src/providers/queue.js";
+import type { OrchestratorQueue } from "../../../src/agents/orchestrator.js";
+import type { HandleMessageResult as HMR } from "../../../src/agent/runtime.js";
+import type { InboundMessage } from "../../../src/core/types.js";
 import type { AgentRegistry } from "../../../src/agents/registry.js";
 import type { ApprovedSnippetsRepository } from "../../../src/security/approved-snippets.js";
 
@@ -68,17 +70,44 @@ function mockThreadService(overrides?: Partial<ThreadService>): ThreadService {
 }
 
 /**
- * Mock queue: enqueue runs the fn with the given priority and returns its result.
+ * Mock queue: enqueue returns jobId; waitForJobResult runs the action and returns the result.
+ * Uses activeAgents to run handleAgentCheckin / handleAgentToAgentChat.
  */
-function mockQueue(): RequestQueue {
-  const run = async <T>(fn: () => Promise<T>): Promise<T> => fn();
+function mockQueue(activeAgents: Map<string, SubAgent>): OrchestratorQueue {
+  const pending = new Map<string, Promise<HMR>>();
+  let jobCounter = 0;
   return {
-    enqueue: run,
-    enqueueJob: async () => {},
-    loadFromFile: async () => {},
-    depth: () => 0,
-    running: () => 0,
-    isPaused: () => false,
+    enqueue(
+      action: string,
+      args: Record<string, unknown>,
+      _priority: string,
+      _submitterAgentId: string
+    ): string {
+      const jobId = `mock-job-${++jobCounter}`;
+      const run = (): Promise<HMR> => {
+        if (action === "handleAgentCheckin") {
+          const agentId = args.agentId as string;
+          const subAgent = activeAgents.get(agentId);
+          if (subAgent) return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HMR>;
+          return Promise.resolve({ content: "" });
+        }
+        if (action === "handleAgentToAgentChat") {
+          const toAgentId = args.toAgentId as string;
+          const subAgent = activeAgents.get(toAgentId);
+          if (subAgent) return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HMR>;
+          return Promise.resolve({ content: "" });
+        }
+        return Promise.resolve({ content: "" });
+      };
+      pending.set(jobId, run());
+      return jobId;
+    },
+    async waitForJobResult(jobId: string): Promise<HMR> {
+      const p = pending.get(jobId);
+      if (!p) return Promise.reject(new Error(`Unknown job: ${jobId}`));
+      pending.delete(jobId);
+      return p;
+    },
   };
 }
 
@@ -141,7 +170,7 @@ describe("Orchestrator", () => {
       crypto: mockCryptoProvider(),
       logger: capturingLogger(),
       threadService: ts,
-      priorityQueue: mockQueue(),
+      priorityQueue: mockQueue(activeAgents),
       activeAgents,
       maiaRuntime: { handleMessage: async () => ({ content: "" }) },
       wsPush: (type, payload) => wsPushCalls.push({ type, ...payload } as { type: string; payload: Record<string, unknown> }),
@@ -182,7 +211,7 @@ describe("Orchestrator", () => {
       crypto: mockCryptoProvider(),
       logger: capturingLogger(),
       threadService: mockThreadService(),
-      priorityQueue: mockQueue(),
+      priorityQueue: mockQueue(activeAgents),
       activeAgents,
       maiaRuntime: { handleMessage: async () => ({ content: "" }) },
       wsPush: () => {},
@@ -233,7 +262,7 @@ describe("Orchestrator", () => {
       crypto: mockCryptoProvider(),
       logger: capturingLogger(),
       threadService,
-      priorityQueue: mockQueue(),
+      priorityQueue: mockQueue(activeAgents),
       activeAgents,
       maiaRuntime: { handleMessage: async () => ({ content: "" }) },
       wsPush: (type, payload) => {
@@ -274,7 +303,7 @@ describe("Orchestrator", () => {
       crypto: mockCryptoProvider(),
       logger,
       threadService: mockThreadService(),
-      priorityQueue: mockQueue(),
+      priorityQueue: mockQueue(activeAgents),
       activeAgents,
       maiaRuntime: { handleMessage: async () => ({ content: "" }) },
       wsPush: () => {},

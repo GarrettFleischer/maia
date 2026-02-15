@@ -20,9 +20,9 @@
     "help": "bun run src/index.ts -- --help",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "test:coverage": "bun test --coverage",
+    "test:coverage": "bun run scripts/check-coverage.ts",
     "typecheck": "bunx tsc --noEmit",
-    "compile": "bun build src/index.ts --compile --outfile=maia"
+    "compile": "bun build src/index.ts --compile --outfile=maia --external @modelcontextprotocol/sdk"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

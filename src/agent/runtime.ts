@@ -103,6 +103,11 @@ export interface AgentRuntimeDeps {
     sessionId: string;
     privacyMode: boolean;
   }) => Promise<void>;
+  /**
+   * @brief When set (e.g. for Maia as the brain), inject queue status into LLM context.
+   * Only used when the runtime is Maia's main brain (high-level "what to do next").
+   */
+  getQueueStatusSummaryRef?: { current: (() => string) | null };
 }
 
 /**
@@ -136,7 +141,7 @@ export interface AgentRuntime {
   getSessionId(channelId: string, senderId: string): string | undefined;
 
   /**
-   * @brief Returns the tool registry for this runtime (e.g. to register propose_tool from index).
+   * @brief Returns the tool registry for this runtime (e.g. to register agent tools from index).
    */
   getToolRegistry(): ToolRegistry;
 }
@@ -169,6 +174,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     parseRemember,
     onSecurityFlagged,
     onAfterReply,
+    getQueueStatusSummaryRef,
   } = deps;
 
   /** Maps "channelId:senderId" to session IDs */
@@ -271,6 +277,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       const contextInput: ContextInput = {
         memoryContext,
         threadSummary: getThreadSummary?.(sessionId),
+        queueStatusSummary: getQueueStatusSummaryRef?.current?.() ?? undefined,
       };
       const systemMessage = await contextBuilder.buildSystemPrompt(contextInput);
 

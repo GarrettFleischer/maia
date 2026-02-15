@@ -5,8 +5,7 @@
 
 import { describe, it, expect } from "bun:test";
 import { createProviderRegistry } from "../../../src/providers/base.js";
-import { createRequestQueue } from "../../../src/providers/queue.js";
-import { createTestContext, fixedClock } from "../../helpers/index.js";
+import { createTestContext } from "../../helpers/index.js";
 import type { LLMProvider, ChatMessage, ChatChunk } from "../../../src/core/types.js";
 
 /**
@@ -94,49 +93,4 @@ describe("Provider Registry", () => {
   });
 });
 
-describe("Request Queue", () => {
-  it("should process requests in FIFO order", async () => {
-    const results: number[] = [];
-    const queue = createRequestQueue({
-      maxConcurrent: 1,
-      maxQueueDepth: 10,
-      clock: fixedClock(),
-    });
-
-    await Promise.all([
-      queue.enqueue(async () => { results.push(1); }),
-      queue.enqueue(async () => { results.push(2); }),
-      queue.enqueue(async () => { results.push(3); }),
-    ]);
-
-    expect(results).toEqual([1, 2, 3]);
-  });
-
-  it("should reject when queue is full", async () => {
-    const queue = createRequestQueue({
-      maxConcurrent: 1,
-      maxQueueDepth: 1,
-      clock: fixedClock(),
-    });
-
-    // Fill the queue
-    const slow = queue.enqueue(() => new Promise((r) => setTimeout(r, 100)));
-    const queued = queue.enqueue(() => Promise.resolve());
-
-    // This should be rejected
-    await expect(queue.enqueue(() => Promise.resolve())).rejects.toThrow();
-
-    await slow;
-    await queued;
-  });
-
-  it("should report queue depth", async () => {
-    const queue = createRequestQueue({
-      maxConcurrent: 1,
-      maxQueueDepth: 10,
-      clock: fixedClock(),
-    });
-
-    expect(queue.depth()).toBe(0);
-  });
-});
+// Request queue is tested in tests/unit/providers/queue.test.ts (sync queue with claimNext/remove/release).
