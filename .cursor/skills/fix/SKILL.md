@@ -1,6 +1,6 @@
 ---
 name: fix
-description: Verifies a fix by running typecheck, then build, then tests in order. Use when the user asks to verify a fix, run the fix workflow, or after making code changes to confirm nothing is broken. When fixing unused variables or parameters, remove them or migrate usages—do not hide warnings with underscores.
+description: Verifies a fix by running typecheck, then build, then tests in order. Use when the user asks to verify a fix, run the fix workflow, or after making code changes to confirm nothing is broken (TDD: run tests as part of completing any implementation). When fixing unused variables or parameters, remove them or migrate usages—do not hide warnings with underscores.
 ---
 
 # Fix verification workflow

@@ -51,6 +51,46 @@ describe("GroqProvider", () => {
     expect(chunks.join("")).toBe("Hello there!");
   });
 
+  it("should include tools in request when options.tools is provided", async () => {
+    const body = 'data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\ndata: [DONE]';
+    const { provider, http } = setup(new Map([
+      ["https://api.groq.com/openai/v1/chat/completions", { status: 200, headers: {}, body, ok: true }],
+    ]));
+
+    const tools = [
+      { name: "agent_create", description: "Create agent", parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } },
+    ];
+    const gen = provider.chat([{ role: "user", content: "Hi" }], { tools });
+    for await (const _chunk of gen) { /* consume */ }
+
+    const callBody = JSON.parse((http.calls[0].options as Record<string, string>).body);
+    expect(callBody.tools).toBeDefined();
+    expect(Array.isArray(callBody.tools)).toBe(true);
+    expect(callBody.tools[0].type).toBe("function");
+    expect(callBody.tools[0].function.name).toBe("agent_create");
+  });
+
+  it("should yield toolCalls when stream contains tool_calls", async () => {
+    const body = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"agent_create","arguments":"{\\"id\\":\\"x\\"}"}}]},"finish_reason":"tool_calls"}]}',
+      "data: [DONE]",
+    ].join("\n");
+    const { provider } = setup(new Map([
+      ["https://api.groq.com/openai/v1/chat/completions", { status: 200, headers: {}, body, ok: true }],
+    ]));
+
+    const tools = [
+      { name: "agent_create", description: "Create agent", parameters: { type: "object", properties: {} } },
+    ];
+    const toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
+    for await (const chunk of provider.chat([{ role: "user", content: "Create agent x" }], { tools })) {
+      if (chunk.toolCalls) toolCalls.push(...chunk.toolCalls);
+    }
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].name).toBe("agent_create");
+    expect(toolCalls[0].arguments).toEqual({ id: "x" });
+  });
+
   it("should include Authorization header with API key", async () => {
     const body = 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\ndata: [DONE]';
     const { provider, http } = setup(new Map([

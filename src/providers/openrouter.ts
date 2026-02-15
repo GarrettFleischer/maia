@@ -15,6 +15,8 @@ import type {
   HttpClient,
   Logger,
   ModelInfo,
+  ToolCall,
+  ToolDefinition,
 } from "../core/types.js";
 import { ProviderError } from "../core/errors.js";
 
@@ -31,6 +33,68 @@ export interface OpenRouterProviderDeps {
 
 const DEFAULT_MODEL = "openai/gpt-3.5-turbo";
 const OPENROUTER_CONTEXT_SIZE = 4096;
+
+/**
+ * @brief Maps ToolDefinition[] to OpenAI-compatible tools array.
+ * @param tools - Maia tool definitions
+ * @returns OpenAI API tools payload
+ */
+function toOpenAITools(tools: ToolDefinition[]): Array<{ type: "function"; function: { name: string; description: string; parameters: Record<string, unknown> } }> {
+  return tools.map((t) => ({
+    type: "function" as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters ?? { type: "object", properties: {} },
+    },
+  }));
+}
+
+/** @brief Accumulated tool call from streaming deltas (by index). */
+interface AccumulatedToolCall {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+/**
+ * @brief Merges streaming tool_calls delta into accumulated map.
+ * @param acc - Map index -> AccumulatedToolCall
+ * @param deltaToolCalls - choices[0].delta.tool_calls from SSE
+ */
+function mergeToolCallsDelta(
+  acc: Map<number, AccumulatedToolCall>,
+  deltaToolCalls: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> | undefined
+): void {
+  if (!deltaToolCalls) return;
+  for (const d of deltaToolCalls) {
+    const idx = d.index ?? 0;
+    let cur = acc.get(idx);
+    if (!cur) {
+      cur = { id: d.id ?? `call_${idx}`, name: "", arguments: "" };
+      acc.set(idx, cur);
+    }
+    if (d.id) cur.id = d.id;
+    if (d.function?.name) cur.name = d.function.name;
+    if (d.function?.arguments != null) cur.arguments += d.function.arguments;
+  }
+}
+
+/**
+ * @brief Converts accumulated tool calls to ToolCall[] with parsed arguments.
+ */
+function accumulatedToToolCalls(acc: Map<number, AccumulatedToolCall>): ToolCall[] {
+  const sorted = [...acc.entries()].sort((a, b) => a[0] - b[0]);
+  return sorted.map(([, v]) => {
+    let args: Record<string, unknown> = {};
+    try {
+      if (v.arguments.trim()) args = JSON.parse(v.arguments) as Record<string, unknown>;
+    } catch {
+      // leave args empty on parse error
+    }
+    return { id: v.id, name: v.name, arguments: args };
+  });
+}
 
 /**
  * @brief Creates an OpenRouter LLM provider.
@@ -59,13 +123,17 @@ export function createOpenRouterProvider(deps: OpenRouterProviderDeps) {
       const key = cred.value;
 
       const url = `${BASE_URL}/chat/completions`;
-      const body = JSON.stringify({
+      const payload: Record<string, unknown> = {
         model,
         messages,
         stream: true,
         temperature: options?.temperature,
         max_tokens: options?.maxTokens,
-      });
+      };
+      if (options?.tools && options.tools.length > 0) {
+        payload.tools = toOpenAITools(options.tools);
+      }
+      const body = JSON.stringify(payload);
 
       try {
         const res = await http.fetch(url, {
@@ -88,23 +156,29 @@ export function createOpenRouterProvider(deps: OpenRouterProviderDeps) {
         const lines = res.body
           .split("\n")
           .filter((line) => line.startsWith("data: "));
+        let contentAcc = "";
+        const toolCallsAcc = new Map<number, AccumulatedToolCall>();
         for (const line of lines) {
           const data = line.slice(6).trim();
           if (data === "[DONE]") {
-            yield { content: "", done: true };
+            const toolCalls = accumulatedToToolCalls(toolCallsAcc);
+            yield { content: "", done: true, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
             break;
           }
           try {
             const parsed = JSON.parse(data) as {
               choices?: Array<{
-                delta?: { content?: string };
+                delta?: { content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> };
                 finish_reason?: string;
               }>;
             };
-            const content = parsed.choices?.[0]?.delta?.content ?? "";
-            const done = parsed.choices?.[0]?.finish_reason != null;
-            if (content || done) {
-              yield { content, done };
+            const choice = parsed.choices?.[0];
+            const delta = choice?.delta;
+            const content = delta?.content ?? "";
+            contentAcc += content;
+            mergeToolCallsDelta(toolCallsAcc, delta?.tool_calls);
+            if (content) {
+              yield { content, done: false };
             }
           } catch {
             // Skip malformed SSE lines

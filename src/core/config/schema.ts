@@ -174,7 +174,9 @@ export const configSchema = z.object({
   scheduler: z.object({
     enabled: z.boolean().default(true),
     checkIntervalMs: z.number().positive().default(60000),
-  }).default({ enabled: true, checkIntervalMs: 60000 }),
+    /** Interval for Maia's periodic \"brain\" run (review goals, schedule self). 0 = disabled. Default 3600000 = 1 hour. */
+    maiaBrainIntervalMs: z.number().min(0).default(3600000),
+  }).default({ enabled: true, checkIntervalMs: 60000, maiaBrainIntervalMs: 3600000 }),
 
   watchdog: z.object({
     enabled: z.boolean().default(true),

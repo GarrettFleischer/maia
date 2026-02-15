@@ -212,4 +212,26 @@ describe("WSHandler", () => {
     );
     expect(JSON.parse(response!).error).toContain("not configured");
   });
+
+  // ── broadcast (widget_approved and other push types) ─────────────────
+
+  it("should broadcast widget_approved to all connections with correct payload", () => {
+    const { handler } = setup();
+    handler.connect("ws-1", "user-1");
+    handler.connect("ws-2", "user-2");
+    const sent: { connectionId: string; data: string }[] = [];
+    const sendFn = (connectionId: string, data: string) => {
+      sent.push({ connectionId, data });
+    };
+    handler.broadcast("widget_approved", { agentId: "agent-123" }, sendFn);
+    expect(sent).toHaveLength(2);
+    const byConn = sent.reduce((acc, { connectionId, data }) => {
+      acc[connectionId] = JSON.parse(data);
+      return acc;
+    }, {} as Record<string, { type: string; agentId: string }>);
+    expect(byConn["ws-1"].type).toBe("widget_approved");
+    expect(byConn["ws-1"].agentId).toBe("agent-123");
+    expect(byConn["ws-2"].type).toBe("widget_approved");
+    expect(byConn["ws-2"].agentId).toBe("agent-123");
+  });
 });

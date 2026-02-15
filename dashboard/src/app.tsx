@@ -3,8 +3,8 @@
  * @module App
  */
 
-import { useState, useEffect } from "preact/hooks";
-import Router, { route } from "preact-router";
+import { useState } from "preact/hooks";
+import Router from "preact-router";
 import { Sidebar } from "./components/Sidebar.js";
 import { DmNotification } from "./components/DmNotification.js";
 import { ApprovalRequestModal } from "./components/ApprovalRequestModal.js";
@@ -14,8 +14,11 @@ import { Agents } from "./routes/Agents.js";
 import { AgentDetail } from "./routes/AgentDetail.js";
 import { Threads } from "./routes/Threads.js";
 import { ThreadView } from "./routes/ThreadView.js";
+import { Audit } from "./routes/Audit.js";
+import { LlmLog } from "./routes/LlmLog.js";
 import { useWebSocket } from "./hooks/use-websocket.js";
 import { useAgents } from "./hooks/use-agents.js";
+import { wsClient } from "./lib/ws-client.js";
 
 /**
  * @brief Login screen for entering the auth token.
@@ -64,9 +67,14 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
 }
 
 /**
- * @brief Main dashboard layout with sidebar, routing, and notifications.
+ * @brief Setter for authenticated state (used by Dashboard to log out).
  */
-function Dashboard() {
+function Dashboard({
+  setAuthenticated,
+}: {
+  setAuthenticated: (value: boolean) => void;
+}) {
+  const { agents, loading: agentsLoading, error: agentsError, refresh: refreshAgents } = useAgents();
   const {
     connected,
     notifications,
@@ -75,17 +83,27 @@ function Dashboard() {
     dismissNotification,
     dismissApprovalRequest,
     sendApprovalResponse,
-  } = useWebSocket();
-  const { agents, loading: agentsLoading, error: agentsError } = useAgents();
+  } = useWebSocket({ onAgentCreated: refreshAgents });
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
 
   const handleRoute = (e: { url: string }) => {
     setCurrentPath(e.url);
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem("maia_token");
+    wsClient.disconnect();
+    setAuthenticated(false);
+  };
+
   return (
     <div class="flex h-screen overflow-hidden bg-maia-bg">
-      <Sidebar agents={agents} connected={connected} currentPath={currentPath} />
+      <Sidebar
+        agents={agents}
+        connected={connected}
+        currentPath={currentPath}
+        onLogout={handleLogout}
+      />
 
       <main class="flex-1 overflow-y-auto">
         <Router onChange={handleRoute}>
@@ -96,10 +114,12 @@ function Dashboard() {
             agentStatuses={agentStatuses}
           />
           <Chat path="/chat" />
-          <Agents path="/agents" agents={agents} loading={agentsLoading} error={agentsError} />
+          <Agents path="/agents" agents={agents} loading={agentsLoading} error={agentsError} refresh={refreshAgents} />
           <AgentDetail path="/agents/:id" />
           <Threads path="/threads" />
           <ThreadView path="/threads/:id" />
+          <Audit path="/audit" />
+          <LlmLog path="/llm-log" />
         </Router>
       </main>
 
@@ -123,5 +143,5 @@ export function App() {
     return <LoginScreen onLogin={() => setAuthenticated(true)} />;
   }
 
-  return <Dashboard />;
+  return <Dashboard setAuthenticated={setAuthenticated} />;
 }

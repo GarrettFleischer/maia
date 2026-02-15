@@ -1,14 +1,17 @@
 /**
- * @fileoverview Agent detail page with config, tasks, and threads.
+ * @fileoverview Agent detail page with config, tasks, threads, and approved dashboard widgets.
  * @module routes/AgentDetail
  */
 
 import { route } from "preact-router";
+import { useEffect, useState } from "preact/hooks";
 import { useAgentDetail } from "../hooks/use-agents.js";
 import { useThreads } from "../hooks/use-threads.js";
 import { TaskList } from "../components/TaskList.js";
 import { StatusBadge } from "../components/StatusBadge.js";
-import { removeAgentTask } from "../lib/api-client.js";
+import { removeAgentTask, fetchAgentDashboard } from "../lib/api-client.js";
+import { wsClient } from "../lib/ws-client.js";
+import type { AgentDashboardConfig, ApprovedDashboardWidget } from "../lib/types.js";
 
 interface AgentDetailProps {
   path?: string;
@@ -16,13 +19,70 @@ interface AgentDetailProps {
 }
 
 /**
- * @brief Agent detail page showing config, tasks, and related threads.
+ * @brief Builds srcdoc for a sandboxed iframe from approved widget HTML/CSS/JS.
+ * Escapes closing tags in css/js to avoid breaking out of style/script.
+ */
+function widgetSrcdoc(w: ApprovedDashboardWidget): string {
+  const escCss = (w.css ?? "").replace(/<\/style>/gi, "\\u003c/style>");
+  const escJs = (w.js ?? "").replace(/<\/script>/gi, "\\u003c/script>");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${escCss}</style></head><body>${w.html ?? ""}<script>${escJs}<\/script></body></html>`;
+}
+
+/**
+ * @brief Renders a single approved widget in a sandboxed iframe (no same-origin, scripts only).
+ */
+function SandboxedWidget({ widget }: { widget: ApprovedDashboardWidget }) {
+  const srcdoc = widgetSrcdoc(widget);
+  return (
+    <div class="border border-maia-border rounded-lg overflow-hidden bg-maia-surface-light">
+      {(widget.name || widget.widgetId) && (
+        <div class="px-3 py-2 text-xs font-medium text-maia-text-dim border-b border-maia-border">
+          {widget.name ?? widget.widgetId}
+        </div>
+      )}
+      <iframe
+        title={widget.name ?? widget.widgetId}
+        sandbox="allow-scripts"
+        srcdoc={srcdoc}
+        class="w-full min-h-[120px] border-0"
+      />
+    </div>
+  );
+}
+
+/**
+ * @brief Agent detail page showing config, tasks, threads, and approved dashboard widgets.
  */
 export function AgentDetail({ id }: AgentDetailProps) {
   if (!id) return <p class="p-6 text-maia-error">Agent ID required.</p>;
 
   const { agent, loading, error, refresh } = useAgentDetail(id);
   const { threads } = useThreads(id);
+  const [dashboard, setDashboard] = useState<AgentDashboardConfig | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAgentDashboard(id)
+      .then((data) => {
+        if (!cancelled) setDashboard(data);
+      })
+      .catch(() => {
+        if (!cancelled) setDashboard({ approvedWidgets: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  // Refetch dashboard when a widget is approved for this agent (live update without reload).
+  useEffect(() => {
+    const onWidgetApproved = (agentId: string) => {
+      if (agentId !== id) return;
+      fetchAgentDashboard(id).then(setDashboard).catch(() => {});
+    };
+    wsClient.addWidgetApprovedListener(onWidgetApproved);
+    return () => wsClient.removeWidgetApprovedListener(onWidgetApproved);
+  }, [id]);
 
   if (loading) {
     return (
@@ -95,6 +155,20 @@ export function AgentDetail({ id }: AgentDetailProps) {
           )}
         </div>
       </div>
+
+      {/* Dashboard widgets (approved custom HTML/CSS/JS) */}
+      {dashboard && dashboard.approvedWidgets.length > 0 && (
+        <div class="bg-maia-surface border border-maia-border rounded-xl p-4 mb-6">
+          <h2 class="text-sm font-medium text-maia-text-dim uppercase tracking-wider mb-3">
+            Dashboard widgets ({dashboard.approvedWidgets.length})
+          </h2>
+          <div class="grid gap-4 sm:grid-cols-2">
+            {dashboard.approvedWidgets.map((widget) => (
+              <SandboxedWidget key={widget.id} widget={widget} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Tasks section */}
       <div class="bg-maia-surface border border-maia-border rounded-xl p-4 mb-6">

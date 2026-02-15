@@ -151,4 +151,70 @@ describe("GeminiProvider", () => {
     const { provider } = setup();
     expect(provider.contextWindowSize("gemini-nano")).toBe(32000);
   });
+
+  // ── Tools (function calling) ─────────────────────────────────────
+
+  it("should include tools in request when options.tools is provided", async () => {
+    const body = JSON.stringify({
+      candidates: [{ content: { parts: [{ text: "OK" }] } }],
+    });
+    const { provider, http } = setup(new Map([
+      ["https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent", {
+        status: 200, headers: {}, body, ok: true,
+      }],
+    ]));
+
+    const tools = [
+      {
+        name: "agent_create",
+        description: "Create a new agent.",
+        parameters: {
+          type: "object",
+          properties: { id: { type: "string", description: "Unique id" } },
+          required: ["id"],
+        },
+      },
+    ];
+    const gen = provider.chat([{ role: "user", content: "Create an agent" }], { tools });
+    for await (const _chunk of gen) { /* consume */ }
+
+    const callBody = JSON.parse((http.calls[0].options as Record<string, string>).body);
+    expect(callBody.tools).toBeDefined();
+    expect(callBody.tools).toHaveLength(1);
+    expect(callBody.tools[0].functionDeclarations).toHaveLength(1);
+    expect(callBody.tools[0].functionDeclarations[0].name).toBe("agent_create");
+    expect(callBody.tools[0].functionDeclarations[0].parameters.properties.id).toBeDefined();
+  });
+
+  it("should yield toolCalls when response has functionCall part", async () => {
+    const body = JSON.stringify({
+      candidates: [{
+        content: {
+          parts: [
+            { functionCall: { name: "agent_create", args: { id: "test-bot" } } },
+          ],
+        },
+      }],
+    });
+    const { provider } = setup(new Map([
+      ["https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent", {
+        status: 200, headers: {}, body, ok: true,
+      }],
+    ]));
+
+    const tools = [
+      { name: "agent_create", description: "Create agent", parameters: { type: "object", properties: {} } },
+    ];
+    const collected: Array<{ content: string; toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }> }> = [];
+    for await (const chunk of provider.chat([{ role: "user", content: "Create test-bot" }], { tools })) {
+      collected.push({
+        content: chunk.content,
+        toolCalls: chunk.toolCalls,
+      });
+    }
+    expect(collected.some((c) => c.toolCalls?.length)).toBe(true);
+    const withCalls = collected.find((c) => c.toolCalls && c.toolCalls.length > 0);
+    expect(withCalls?.toolCalls?.[0].name).toBe("agent_create");
+    expect(withCalls?.toolCalls?.[0].arguments).toEqual({ id: "test-bot" });
+  });
 });

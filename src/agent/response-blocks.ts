@@ -4,6 +4,8 @@
  *
  * @brief Single pass over raw response to extract display content and optional blocks
  * so the runtime can strip blocks, apply remember, and act on security/progress.
+ * @note Prefer the remember, security_report, and progress_report tools; this parsing
+ * is kept as a fallback for legacy or cached prompts that still emit inline blocks.
  */
 
 import { REMEMBER_DELIMITER } from "../memory/remember-block.js";

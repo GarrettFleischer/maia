@@ -225,7 +225,8 @@ export type AuditEventType =
   | "FILE_ACCESS_DENIED"
   | "CHECKIN_SECURITY_FLAG"
   | "INLINE_SECURITY_FLAG"
-  | "AGENT_STOPPED_SECURITY";
+  | "AGENT_STOPPED_SECURITY"
+  | "TOOL_EXECUTION";
 
 /**
  * @brief Append-only security audit log interface.
@@ -338,6 +339,8 @@ export interface MaiaConfig {
   scheduler: {
     enabled: boolean;
     checkIntervalMs: number;
+    /** Interval for Maia's periodic brain run (ms). 0 = disabled. */
+    maiaBrainIntervalMs: number;
   };
   watchdog: {
     enabled: boolean;

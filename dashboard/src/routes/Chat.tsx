@@ -1,21 +1,16 @@
 /**
  * @fileoverview Maia chat page, migrated from the vanilla web UI.
  * @module routes/Chat
+ *
+ * @note Messages and loading come from the chat store (useChatStore) so
+ * history persists when navigating away. WebSocket listeners are set once
+ * in useWebSocket; do not call setListeners here.
  */
 
 import { useState, useRef, useEffect } from "preact/hooks";
 import { wsClient } from "../lib/ws-client.js";
 import { MessageBubble } from "../components/MessageBubble.js";
-
-interface ChatMessage {
-  id: string;
-  content: string;
-  senderType: "user" | "maia";
-  createdAt: string;
-  /** When set, show "[Name] will remember that" below the message */
-  remembered?: Record<string, string>;
-  responderId?: string;
-}
+import { useChatStore } from "../hooks/use-chat-store.js";
 
 interface ChatProps {
   path?: string;
@@ -25,40 +20,13 @@ interface ChatProps {
  * @brief Chat page for talking with Maia.
  */
 export function Chat(_props: ChatProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { messages, loading, addMessage, setLoading } = useChatStore();
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Listen for chat responses
-    const originalListeners = { ...wsClient };
-    wsClient.setListeners({
-      onChatResponse: (data) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: data.id ?? crypto.randomUUID(),
-            content: data.content,
-            senderType: "maia",
-            createdAt: new Date().toISOString(),
-            ...(data.remembered && Object.keys(data.remembered).length > 0
-              ? { remembered: data.remembered, responderId: data.responderId }
-              : {}),
-          },
-        ]);
-        setLoading(false);
-      },
-      onConnected: () => {},
-      onDisconnected: () => {},
-    });
-
     inputRef.current?.focus();
-
-    return () => {
-      // Restore listeners (the parent App will re-set them)
-    };
   }, []);
 
   useEffect(() => {
@@ -70,15 +38,12 @@ export function Chat(_props: ChatProps) {
     if (!content || loading) return;
 
     const msgId = crypto.randomUUID();
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: msgId,
-        content,
-        senderType: "user",
-        createdAt: new Date().toISOString(),
-      },
-    ]);
+    addMessage({
+      id: msgId,
+      content,
+      senderType: "user",
+      createdAt: new Date().toISOString(),
+    });
     setInput("");
     setLoading(true);
 
@@ -118,6 +83,7 @@ export function Chat(_props: ChatProps) {
             createdAt={msg.createdAt}
             isUser={msg.senderType === "user"}
             remembered={msg.remembered}
+            toolCallsSummary={msg.toolCallsSummary}
             responderId={msg.responderId}
           />
         ))}

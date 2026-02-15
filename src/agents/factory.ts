@@ -34,6 +34,11 @@ import {
   createMemoryStoreTool,
   createMemoryForgetTool,
 } from "../agent/tools/memory-tools.js";
+import {
+  createRememberTool,
+  createSecurityReportTool,
+  createProgressReportTool,
+} from "../agent/tools/response-tools.js";
 import { createMemoryStore } from "../memory/store.js";
 import { createRememberBlockHandler } from "../memory/remember-block.js";
 import { createAutoRecall } from "../memory/auto-recall.js";
@@ -67,6 +72,15 @@ export interface SharedAgentDeps {
   creationRequestsRepo?: import("./agent-creation-requests.js").AgentCreationRequestsRepository;
   /** Optional: called when a non-Maia agent submits a creation request. */
   onAgentCreationRequest?: (request: import("./agent-creation-requests.js").AgentCreationRequest) => void;
+  /** Optional: records each LLM request/response for audit and per-thread views. */
+  logLlmCall?: (params: {
+    agentId: string;
+    sessionId: string;
+    threadId?: string | null;
+    requestMessages: Array<{ role: string; content: string; name?: string }>;
+    responseContent: string;
+    responseToolCalls?: unknown[];
+  }) => Promise<void>;
 }
 
 /**
@@ -138,7 +152,7 @@ export function createSubAgentRuntime(
   });
 
   // Tool registry (agent-specific tools)
-  const toolRegistry = createToolRegistry({ logger });
+  const toolRegistry = createToolRegistry({ logger, auditLog });
 
   // Register tools based on agent config
   const allowedTools = new Set(agentConfig.tools);
@@ -160,6 +174,11 @@ export function createSubAgentRuntime(
   if (allowedTools.has("memory_forget")) {
     toolRegistry.register(createMemoryForgetTool({ store: memoryStore, logger }));
   }
+
+  // Response tools: remember, security_report, progress_report (LLM invokes these instead of inline blocks)
+  toolRegistry.register(createRememberTool({ fs: agentFs, logger, workspacePath: agentWorkspacePath }));
+  toolRegistry.register(createSecurityReportTool({}));
+  toolRegistry.register(createProgressReportTool());
 
   // create_agent, chat_with_agent, dm_user, agent_list, set_identity are registered in index after sub-agent creation
   // when sharedAgentDeps includes agentRegistry, createRuntime, activeAgents, creationRequestsRepo, onAgentCreationRequest
@@ -236,6 +255,8 @@ export function createSubAgentRuntime(
       }
       await dailyLog.append(`User: ${userContent}\nAssistant: ${responseContent}`);
     },
+    agentId: agentConfig.id,
+    logLlmCall: shared.logLlmCall,
   });
 
   return {

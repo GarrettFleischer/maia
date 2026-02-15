@@ -14,6 +14,9 @@ import type {
   Thread,
   ThreadWithMessages,
   ThreadMessage,
+  AuditEntry,
+  LlmCall,
+  AgentDashboardConfig,
 } from "./types.js";
 
 /**
@@ -58,6 +61,11 @@ export function fetchAgents(): Promise<Agent[]> {
 /** @brief Get agent detail by ID. */
 export function fetchAgent(id: string): Promise<AgentDetail> {
   return apiFetch<AgentDetail>(`/api/agents/${id}`);
+}
+
+/** @brief Get agent dashboard config and approved widgets. */
+export function fetchAgentDashboard(agentId: string): Promise<AgentDashboardConfig> {
+  return apiFetch<AgentDashboardConfig>(`/api/agents/${agentId}/dashboard`);
 }
 
 // ─── Agent Tasks ─────────────────────────────────────────────
@@ -122,6 +130,44 @@ export function sendChat(
     method: "POST",
     body: JSON.stringify({ message, senderId }),
   });
+}
+
+// ─── Audit ──────────────────────────────────────────────────────
+
+/** @brief List audit log entries with optional type, since (ISO), limit. */
+export function fetchAuditEntries(params?: {
+  type?: string;
+  since?: string;
+  limit?: number;
+}): Promise<AuditEntry[]> {
+  const search = new URLSearchParams();
+  if (params?.type) search.set("type", params.type);
+  if (params?.since) search.set("since", params.since);
+  if (params?.limit != null) search.set("limit", String(params.limit));
+  const qs = search.toString();
+  return apiFetch<AuditEntry[]>(`/api/audit/entries${qs ? `?${qs}` : ""}`);
+}
+
+/** @brief List LLM calls with optional threadId, agentId, since, limit. */
+export function fetchLlmCalls(params?: {
+  threadId?: string;
+  agentId?: string;
+  since?: string;
+  limit?: number;
+}): Promise<LlmCall[]> {
+  const search = new URLSearchParams();
+  if (params?.threadId) search.set("threadId", params.threadId);
+  if (params?.agentId) search.set("agentId", params.agentId);
+  if (params?.since) search.set("since", params.since);
+  if (params?.limit != null) search.set("limit", String(params.limit));
+  const qs = search.toString();
+  return apiFetch<LlmCall[]>(`/api/llm-calls${qs ? `?${qs}` : ""}`);
+}
+
+/** @brief List LLM calls for a specific thread. */
+export function fetchThreadLlmCalls(threadId: string, limit?: number): Promise<LlmCall[]> {
+  const qs = limit != null ? `?limit=${limit}` : "";
+  return apiFetch<LlmCall[]>(`/api/threads/${encodeURIComponent(threadId)}/llm-calls${qs}`);
 }
 
 // ─── Health ──────────────────────────────────────────────────

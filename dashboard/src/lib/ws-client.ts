@@ -7,17 +7,28 @@
  */
 
 import type {
+  Agent,
   AgentDm,
   AgentStatusUpdate,
+  Thread,
   ThreadUpdate,
   ApprovalRequest,
   StatusReport,
 } from "./types.js";
 
 /**
+ * @brief Payload sent by the server on connect so the client can avoid GET /api/agents and /api/threads.
+ */
+export interface InitialStatePayload {
+  agents: Agent[];
+  threads: Thread[];
+}
+
+/**
  * @brief Listener callback types for WebSocket events.
  */
 export interface WSListeners {
+  onInitialState?: (payload: InitialStatePayload) => void;
   onAgentDm?: (dm: AgentDm) => void;
   onAgentStatusUpdate?: (update: AgentStatusUpdate) => void;
   onThreadUpdate?: (update: ThreadUpdate) => void;
@@ -27,13 +38,20 @@ export interface WSListeners {
     id?: string;
     content: string;
     remembered?: Record<string, string>;
+    /** Human-readable one-liners for tool calls (e.g. "Created agent wally"); shown like "will remember that". */
+    toolCallsSummary?: string[];
     responderId?: string;
     securityFlagged?: { reason: string; snippet: string };
     progressReport?: { status: string; summary: string };
   }) => void;
   onConnected?: () => void;
   onDisconnected?: () => void;
+  /** Called when the backend broadcasts that an agent was created (so the dashboard can refetch the agent list). */
+  onAgentCreated?: () => void;
 }
+
+/** @brief Callback for widget_approved push (agentId of the agent whose widget was approved). */
+export type WidgetApprovedListener = (agentId: string) => void;
 
 /**
  * @brief WebSocket client interface.
@@ -52,9 +70,14 @@ export interface WSClient {
     proposalId?: string;
     agentId?: string;
     approvalRequestId?: string;
+    requestId?: string;
   }): void;
   isConnected(): boolean;
   setListeners(listeners: WSListeners): void;
+  /** Subscribe to widget_approved pushes (e.g. to refetch agent dashboard when a widget is approved). */
+  addWidgetApprovedListener(cb: WidgetApprovedListener): void;
+  /** Unsubscribe a previously added widget_approved listener. */
+  removeWidgetApprovedListener(cb: WidgetApprovedListener): void;
 }
 
 /**
@@ -72,6 +95,7 @@ export interface WSClient {
 export function createWSClient(): WSClient {
   let socket: WebSocket | null = null;
   let listeners: WSListeners = {};
+  const widgetApprovedListeners = new Set<WidgetApprovedListener>();
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectDelay = 1000;
   let connected = false;
@@ -90,6 +114,12 @@ export function createWSClient(): WSClient {
       const type = data.type as string;
 
       switch (type) {
+        case "initial_state": {
+          const agents = Array.isArray(data.agents) ? data.agents : [];
+          const threads = Array.isArray(data.threads) ? data.threads : [];
+          listeners.onInitialState?.({ agents, threads });
+          break;
+        }
         case "agent_dm":
           listeners.onAgentDm?.(data as unknown as AgentDm);
           break;
@@ -117,6 +147,22 @@ export function createWSClient(): WSClient {
           break;
         case "pong":
           break;
+        case "agent_created":
+          listeners.onAgentCreated?.();
+          break;
+        case "widget_approved": {
+          const agentId = data.agentId as string | undefined;
+          if (typeof agentId === "string") {
+            for (const cb of widgetApprovedListeners) {
+              try {
+                cb(agentId);
+              } catch {
+                // Ignore listener errors
+              }
+            }
+          }
+          break;
+        }
         default:
           break;
       }
@@ -232,6 +278,14 @@ export function createWSClient(): WSClient {
 
     setListeners(newListeners: WSListeners): void {
       listeners = newListeners;
+    },
+
+    addWidgetApprovedListener(cb: WidgetApprovedListener): void {
+      widgetApprovedListeners.add(cb);
+    },
+
+    removeWidgetApprovedListener(cb: WidgetApprovedListener): void {
+      widgetApprovedListeners.delete(cb);
     },
   };
 }

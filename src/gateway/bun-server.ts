@@ -133,12 +133,23 @@ function validateWSToken(req: Request, url: URL, expectedToken: string): boolean
 }
 
 /**
+ * @brief Callback invoked when a WebSocket client connects; receives connection ID
+ * and a send function to push initial state (e.g. agents, threads) to that client.
+ */
+export type OnWsConnect = (
+  connectionId: string,
+  send: (data: string) => void
+) => void | Promise<void>;
+
+/**
  * @brief Options for starting the Bun HTTP server.
  */
 export interface BunServerOptions {
   config: MaiaConfig;
   gateway: GatewayServer;
   logger: Logger;
+  /** Optional getter for on-connect callback; called when a client connects so initial state can be sent. */
+  getOnWsConnect?: () => OnWsConnect | undefined;
 }
 
 /**
@@ -214,7 +225,7 @@ function resolveWebRoot(): string {
 }
 
 export function startBunServer(options: BunServerOptions): BunServer {
-  const { config, gateway, logger } = options;
+  const { config, gateway, logger, getOnWsConnect } = options;
   const wsHandler = gateway.getWSHandler();
   const webRoot = resolveWebRoot();
   logger.debug("Web UI root", { webRoot });
@@ -299,6 +310,25 @@ export function startBunServer(options: BunServerOptions): BunServer {
         wsConnections.set(connectionId, { ws, connectionId });
         wsHandler.connect(connectionId, connectionId);
         logger.debug("WebSocket connected", { connectionId });
+        const onConnect = getOnWsConnect?.();
+        if (onConnect) {
+          const send = (data: string) => {
+            try {
+              ws.send(data);
+            } catch (err) {
+              logger.warn("Initial state send failed", {
+                connectionId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          };
+          Promise.resolve(onConnect(connectionId, send)).catch((err) => {
+            logger.warn("OnWsConnect failed", {
+              connectionId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
       },
 
       async message(ws: ServerWebSocket<WSData>, message: string | Buffer) {

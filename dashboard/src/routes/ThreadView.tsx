@@ -6,9 +6,51 @@
 import { useRef, useEffect, useState } from "preact/hooks";
 import { useThread } from "../hooks/use-threads.js";
 import { wsClient } from "../lib/ws-client.js";
-import { postThreadMessage } from "../lib/api-client.js";
+import { postThreadMessage, fetchThreadLlmCalls } from "../lib/api-client.js";
 import { MessageBubble } from "../components/MessageBubble.js";
-import type { ThreadMessage } from "../lib/types.js";
+import type { ThreadMessage, LlmCall } from "../lib/types.js";
+
+/** @brief Expandable row for one LLM call in the thread view. */
+function ThreadLlmCallRow({ call }: { call: LlmCall }) {
+  const [open, setOpen] = useState(false);
+  const lastUser = [...call.requestMessages].reverse().find((m) => m.role === "user");
+  const summary =
+    lastUser?.content.slice(0, 50) + (lastUser && lastUser.content.length > 50 ? "…" : "") ||
+    "(no user message)";
+
+  return (
+    <div class="border border-maia-border/50 rounded-lg overflow-hidden bg-maia-bg/50">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        class="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-maia-text hover:bg-maia-surface-light/50"
+      >
+        <span class="text-maia-text-dim shrink-0">{open ? "▼" : "▶"}</span>
+        <span class="shrink-0 text-maia-text-dim">
+          {new Date(call.createdAt).toLocaleString()}
+        </span>
+        <span class="font-mono text-maia-accent shrink-0">{call.agentId}</span>
+        <span class="truncate flex-1 text-maia-text-dim">{summary}</span>
+      </button>
+      {open && (
+        <div class="px-3 pb-3 pt-0 space-y-2 text-xs">
+          <div>
+            <span class="text-maia-text-dim font-medium">Request:</span>
+            <pre class="mt-1 p-2 bg-maia-surface rounded max-h-32 overflow-auto whitespace-pre-wrap wrap-break-word text-maia-text">
+              {JSON.stringify(call.requestMessages, null, 2)}
+            </pre>
+          </div>
+          <div>
+            <span class="text-maia-text-dim font-medium">Response:</span>
+            <pre class="mt-1 p-2 bg-maia-surface rounded max-h-32 overflow-auto whitespace-pre-wrap wrap-break-word text-maia-text">
+              {call.responseContent || "(empty)"}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface ThreadViewProps {
   path?: string;
@@ -24,14 +66,14 @@ export function ThreadView({ id }: ThreadViewProps) {
   const { thread, setThread, loading, error } = useThread(id);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [llmCalls, setLlmCalls] = useState<LlmCall[]>([]);
+  const [llmCallsLoading, setLlmCallsLoading] = useState(false);
+  const [llmCallsExpanded, setLlmCallsExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Subscribe to thread updates via WebSocket
   useEffect(() => {
     wsClient.subscribeThread(id);
-
-    const originalListeners = { ...wsClient };
-    const prevOnThreadUpdate = wsClient;
 
     wsClient.setListeners({
       onThreadUpdate: (update) => {
@@ -58,6 +100,23 @@ export function ThreadView({ id }: ThreadViewProps) {
       wsClient.unsubscribeThread(id);
     };
   }, [id]);
+
+  // Load LLM calls for this thread when section is expanded
+  useEffect(() => {
+    if (!llmCallsExpanded || !id) return;
+    let cancelled = false;
+    setLlmCallsLoading(true);
+    fetchThreadLlmCalls(id, 50)
+      .then((data) => {
+        if (!cancelled) setLlmCalls(data);
+      })
+      .finally(() => {
+        if (!cancelled) setLlmCallsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, llmCallsExpanded]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -138,6 +197,33 @@ export function ThreadView({ id }: ThreadViewProps) {
           ))
         )}
         <div ref={messagesEndRef} />
+      </div>
+
+      {/* LLM calls in this thread */}
+      <div class="border-t border-maia-border bg-maia-surface">
+        <button
+          type="button"
+          onClick={() => setLlmCallsExpanded((e) => !e)}
+          class="w-full flex items-center justify-between px-6 py-3 text-left text-sm text-maia-text hover:bg-maia-surface-light/50"
+        >
+          <span class="font-medium">LLM calls in this thread</span>
+          <span class="text-maia-text-dim">{llmCallsExpanded ? "▼" : "▶"}</span>
+        </button>
+        {llmCallsExpanded && (
+          <div class="px-6 pb-4 max-h-80 overflow-y-auto">
+            {llmCallsLoading ? (
+              <p class="text-maia-text-dim text-sm">Loading…</p>
+            ) : llmCalls.length === 0 ? (
+              <p class="text-maia-text-dim text-sm">No LLM calls recorded for this thread.</p>
+            ) : (
+              <div class="space-y-1">
+                {llmCalls.map((call) => (
+                  <ThreadLlmCallRow key={call.id} call={call} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Input (only for user-facing threads) */}

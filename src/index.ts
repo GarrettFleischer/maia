@@ -17,7 +17,11 @@ import { createAuthMiddleware } from "./gateway/middleware/auth.js";
 import { createRateLimitMiddleware } from "./gateway/middleware/rate-limit.js";
 import { createCorsMiddleware } from "./gateway/middleware/cors.js";
 import { createErrorHandler } from "./gateway/middleware/error-handler.js";
-import { startBunServer, registerApiRoutes } from "./gateway/bun-server.js";
+import {
+  startBunServer,
+  registerApiRoutes,
+  type OnWsConnect,
+} from "./gateway/bun-server.js";
 
 // Channels
 import { createTelegramChannel } from "./channels/telegram.js";
@@ -34,6 +38,9 @@ import type { InboundMessage } from "./core/types.js";
 import { createApprovedSnippetsRepository } from "./security/approved-snippets.js";
 import { createAgentCreationRequestsRepository } from "./agents/agent-creation-requests.js";
 import { createMcpServerProposalsRepository } from "./agents/mcp-server-proposals.js";
+import { createWidgetReviewRequestsRepository } from "./agents/widget-review-requests.js";
+import type { WidgetReviewRequest } from "./agents/widget-review-requests.js";
+import { createApprovedDashboardWidgetsRepository } from "./agents/approved-dashboard-widgets.js";
 import { createMemoryStore } from "./memory/store.js";
 
 // Watchdog
@@ -89,7 +96,9 @@ import { createChatWithAgentTool } from "./agents/tools/chat-with-agent.js";
 import { createDmUserTool } from "./agents/tools/dm-user.js";
 import { createSetIdentityTool } from "./agents/tools/set-identity.js";
 import { createProposeMcpServerTool } from "./agents/tools/propose-mcp-server.js";
+import { createSubmitWidgetForReviewTool } from "./agents/tools/submit-widget-for-review.js";
 import { createCheckQueueJobTool } from "./agents/tools/check-queue-job.js";
+import { createTaskManageTool } from "./agents/tools/task-manage.js";
 import type { TaskMonitor } from "./agents/task-monitor.js";
 
 import * as fs from "node:fs";
@@ -462,10 +471,18 @@ async function runStart(): Promise<void> {
   const getQueueStatusSummaryRef = {
     current: null as (() => string) | null,
   };
+  const getOnWidgetReviewRequestRef = {
+    current: null as ((request: WidgetReviewRequest) => void) | null,
+  };
 
   let app;
   try {
-    app = await createApp({ getOnAgentCreatedRef, taskMonitorRef, getQueueStatusSummaryRef });
+    app = await createApp({
+      getOnAgentCreatedRef,
+      taskMonitorRef,
+      getQueueStatusSummaryRef,
+      getOnWidgetReviewRequestRef,
+    });
   } catch (err) {
     console.error(
       "Failed to start Maia:",
@@ -531,6 +548,14 @@ async function runStart(): Promise<void> {
     logger: ctx.logger,
   });
   const mcpServerProposalsRepo = createMcpServerProposalsRepository({
+    db: ctx.db,
+    logger: ctx.logger,
+  });
+  const widgetReviewRequestsRepo = createWidgetReviewRequestsRepository({
+    db: ctx.db,
+    logger: ctx.logger,
+  });
+  const approvedDashboardWidgetsRepo = createApprovedDashboardWidgetsRepository({
     db: ctx.db,
     logger: ctx.logger,
   });
@@ -712,11 +737,22 @@ async function runStart(): Promise<void> {
     },
   });
 
+  // Ref set after we have agentRegistry/threadService; used to send initial state on WS connect
+  const onWsConnectRef: { current: OnWsConnect | undefined } = { current: undefined };
+
   // Start Bun HTTP server
   const bunServer = startBunServer({
     config: ctx.config,
     gateway,
     logger: ctx.logger,
+    getOnWsConnect: () => onWsConnectRef.current,
+  });
+
+  ctx.events.on("agentCreated", async (data: Record<string, unknown>) => {
+    const agentId = data.agentId as string | undefined;
+    if (agentId) {
+      bunServer.wsBroadcast(JSON.stringify({ type: "agent_created", agentId }));
+    }
   });
 
   /** Push a flagged-agent approval request to the dashboard; only user (approval_response) can approve. */
@@ -762,6 +798,24 @@ async function runStart(): Promise<void> {
         kind: "mcp_server_proposal",
         requestId: proposal.id,
         summary: `MCP server "${proposal.name}" proposed by ${proposal.proposingAgentId}: ${proposal.description ?? proposal.sandboxPath}`,
+      })
+    );
+  };
+
+  getOnWidgetReviewRequestRef.current = (request: WidgetReviewRequest) => {
+    bunServer.wsBroadcast(
+      JSON.stringify({
+        type: "approval_request",
+        id: ctx.crypto.randomUUID(),
+        kind: "widget_review_request",
+        requestId: request.id,
+        requestingAgentId: request.requestingAgentId,
+        widgetId: request.widgetId,
+        name: request.name,
+        html: request.html,
+        css: request.css,
+        js: request.js,
+        summary: `Widget "${request.widgetId}" submitted by ${request.requestingAgentId} for security review`,
       })
     );
   };
@@ -829,6 +883,12 @@ async function runStart(): Promise<void> {
 
   const agentRegistry = app.getAgentRegistry();
   const activeAgents = app.getActiveAgents();
+  const llmCallsRepo = app.getLlmCallsRepository();
+  const logLlmCall = async (
+    call: Omit<import("./llm-calls.js").CreateLlmCallInput, "id">
+  ): Promise<void> => {
+    await llmCallsRepo.create({ ...call, id: ctx.crypto.randomUUID() });
+  };
 
   let createAndActivateAgent: (config: AgentConfig) => SubAgent;
 
@@ -852,6 +912,7 @@ async function runStart(): Promise<void> {
     agentRegistry,
     creationRequestsRepo: agentCreationRequestsRepo,
     onAgentCreationRequest: (req) => onAgentCreationRequest(req),
+    logLlmCall,
   };
 
   createAndActivateAgent = (config: AgentConfig) => {
@@ -915,6 +976,9 @@ async function runStart(): Promise<void> {
   // Register queue action handlers that need activeAgents; then start workers and load persisted items
   priorityQueue.registerHandler("handleTaskMonitorMessage", async (args) => {
     const agentId = args.agentId as string;
+    if (agentId === "maia") {
+      return runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
+    }
     const subAgent = activeAgents.get(agentId);
     if (!subAgent) throw new Error(`Agent not found: ${agentId}`);
     return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
@@ -937,6 +1001,18 @@ async function runStart(): Promise<void> {
     if (!subAgent) throw new Error(`Agent not found: ${agentId}`);
     return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
   });
+  priorityQueue.registerHandler("handleMaiaBrainRun", async () => {
+    const message: InboundMessage = {
+      id: ctx.crypto.randomUUID(),
+      channelId: "maia:brain",
+      senderId: "system",
+      content:
+        "Review your goals (see GOALS.md) and your task list (task_manage list). What short-term goal should you work on? Use task_manage to schedule yourself if needed.",
+      timestamp: ctx.clock.timestamp(),
+      isGroup: false,
+    };
+    return runtime.handleMessage(message) as Promise<HandleMessageResult>;
+  });
   priorityQueue.startWorkers();
   await priorityQueue.loadFromFile();
 
@@ -958,6 +1034,7 @@ async function runStart(): Promise<void> {
       if (!request || request.status !== "pending") return;
       if (payload.decision === "approve") {
         const p = request.proposedConfig;
+        const defaultModel = { provider: ctx.config.provider.primary, model: ctx.config.provider.model };
         const config: AgentConfig = {
           id: p.id,
           name: PLACEHOLDER_NAME,
@@ -966,13 +1043,14 @@ async function runStart(): Promise<void> {
           createdBy: request.requestingAgentId,
           schedule: p.schedule ?? "",
           tools: p.tools ?? ["memory_search", "memory_store"],
-          model: p.model ?? { provider: "gemini", model: "gemini-2.0-flash" },
+          model: p.model ?? defaultModel,
           instructions: p.instructions,
         };
         const registered = await agentRegistry.register(config);
         const subAgent = createAndActivateAgent(registered);
         activeAgents.set(config.id, subAgent);
         getOnAgentCreatedRef.current?.()(subAgent);
+        await ctx.events.emit("agentCreated", { agentId: config.id });
         await agentCreationRequestsRepo.updateStatus(requestId, "approved");
         const creatorMemoryStore = createMemoryStore({
           db: ctx.db,
@@ -1049,6 +1127,52 @@ services:
           `Your MCP server proposal **${proposal.name}** was denied.${payload.feedback ? ` Feedback: ${payload.feedback}` : ""}`
         );
         ctx.logger.info("MCP server proposal denied", { proposalId, proposingAgentId: proposal.proposingAgentId });
+      }
+    } else if (payload.kind === "widget_review_request" && (payload as ApprovalPayload).requestId) {
+      const requestId = (payload as ApprovalPayload).requestId!;
+      const request = await widgetReviewRequestsRepo.getById(requestId);
+      if (!request || request.status !== "pending") return;
+      if (payload.decision === "approve") {
+        const approvedId = ctx.crypto.randomUUID();
+        await approvedDashboardWidgetsRepo.create({
+          id: approvedId,
+          agentId: request.requestingAgentId,
+          widgetId: request.widgetId,
+          name: request.name,
+          html: request.html,
+          css: request.css,
+          js: request.js,
+        });
+        await widgetReviewRequestsRepo.updateStatus(requestId, "approved");
+        if (orchestratorRef) {
+          await orchestrator.agentToAgentChat(
+            "maia",
+            request.requestingAgentId,
+            `Your dashboard widget **${request.widgetId}** was approved. It will appear on your dashboard.`
+          );
+        }
+        ctx.logger.info("Widget review request approved", {
+          requestId,
+          requestingAgentId: request.requestingAgentId,
+          widgetId: request.widgetId,
+        });
+        bunServer.wsBroadcast(
+          JSON.stringify({ type: "widget_approved", agentId: request.requestingAgentId })
+        );
+      } else {
+        await widgetReviewRequestsRepo.updateStatus(requestId, "denied");
+        if (orchestratorRef) {
+          await orchestrator.agentToAgentChat(
+            "maia",
+            request.requestingAgentId,
+            `Your dashboard widget **${request.widgetId}** was denied.${payload.feedback ? ` Feedback: ${payload.feedback}` : ""}`
+          );
+        }
+        ctx.logger.info("Widget review request denied", {
+          requestId,
+          requestingAgentId: request.requestingAgentId,
+          widgetId: request.widgetId,
+        });
       }
     } else if (payload.kind === "flagged_agent" && payload.agentId) {
       const agentId = payload.agentId;
@@ -1189,6 +1313,7 @@ services:
     logger: ctx.logger,
     getAgentWorkspaces: () => {
       const map = new Map<string, string>();
+      map.set("maia", ctx.config.workspace.path);
       for (const [agentId] of activeAgents) {
         map.set(agentId, agentRegistry.agentWorkspacePath(agentId));
       }
@@ -1198,8 +1323,8 @@ services:
 
   taskMonitorRef.current = taskMonitor;
   taskMonitor.start(async (agentId, task) => {
-    const subAgent = activeAgents.get(agentId);
-    if (!subAgent) return;
+    const subAgent = agentId === "maia" ? null : activeAgents.get(agentId);
+    if (agentId !== "maia" && !subAgent) return;
 
     ctx.logger.info("Task monitor firing task", { agentId, taskId: task.id });
     const message: InboundMessage = {
@@ -1224,18 +1349,20 @@ services:
           timestamp: ctx.clock.timestamp(),
         });
         if (orchestratorRef) {
+          const name = agentId === "maia" ? "Maia" : subAgent!.config.name;
           await orchestratorRef.sendDmToUser(
             "maia",
             "Maia",
-            `Agent **${subAgent.config.name}** (${agentId}) reported a concern about the task prompt: ${reason}.`
+            `Agent **${name}** (${agentId}) reported a concern about the task prompt: ${reason}.`
           );
         }
       }
       if (result.progressReport && orchestratorRef) {
         const { status, summary } = result.progressReport;
+        const name = agentId === "maia" ? "Maia" : subAgent!.config.name;
         await orchestratorRef.sendDmToUser(
           agentId,
-          subAgent.config.name,
+          name,
           `Progress: [${status}] ${summary}`
         );
       }
@@ -1243,6 +1370,15 @@ services:
       ctx.logger.warn("Task monitor job failed", { agentId, taskId: task.id, error: err instanceof Error ? err.message : String(err) });
     }
   });
+
+  // Register task_manage for Maia so she can schedule herself (goals, short-term tasks)
+  runtime.getToolRegistry().register(
+    createTaskManageTool({
+      logger: ctx.logger,
+      taskMonitor,
+      resolveAgentId: () => "maia",
+    })
+  );
 
   ctx.shutdown.register(
     "task-monitor",
@@ -1430,6 +1566,26 @@ services:
   orchestratorRef = orchestrator;
   orchestrator.start();
 
+  // Maia's periodic brain run: review goals and schedule self (when enabled)
+  let maiaBrainTimer: ReturnType<typeof setInterval> | null = null;
+  const maiaBrainIntervalMs = ctx.config.scheduler.maiaBrainIntervalMs ?? 0;
+  if (maiaBrainIntervalMs > 0) {
+    ctx.logger.info("Maia brain timer started", { intervalMs: maiaBrainIntervalMs });
+    maiaBrainTimer = setInterval(() => {
+      priorityQueue.enqueue("handleMaiaBrainRun", {}, "background", "maia");
+    }, maiaBrainIntervalMs);
+    ctx.shutdown.register(
+      "maia-brain",
+      async () => {
+        if (maiaBrainTimer) {
+          clearInterval(maiaBrainTimer);
+          maiaBrainTimer = null;
+        }
+      },
+      5
+    );
+  }
+
   const rawFs = app.getRawFs();
 
   const writeAgentWorkspaceFile = async (agentId: string, filename: string, content: string) => {
@@ -1483,9 +1639,25 @@ services:
       })
     );
     subAgent.runtime.getToolRegistry().register(
+      createSubmitWidgetForReviewTool({
+        logger: ctx.logger,
+        crypto: ctx.crypto,
+        widgetReviewRequestsRepo,
+        resolveAgentId: () => agentId,
+        onWidgetReviewRequest: (req) => getOnWidgetReviewRequestRef.current?.(req),
+      })
+    );
+    subAgent.runtime.getToolRegistry().register(
       createCheckQueueJobTool({
         logger: ctx.logger,
         getJobStatus: (jobId) => priorityQueue.getJobStatus(jobId),
+      })
+    );
+    subAgent.runtime.getToolRegistry().register(
+      createTaskManageTool({
+        logger: ctx.logger,
+        taskMonitor,
+        resolveAgentId: () => agentId,
       })
     );
   };
@@ -1521,7 +1693,34 @@ services:
     threadService,
     taskMonitor,
     activeAgents,
+    auditLog: ctx.auditLog,
+    llmCallsRepo,
+    approvedDashboardWidgetsRepo,
   });
+
+  // Send full agents + threads to each client on WebSocket connect so dashboard can avoid GET spam
+  onWsConnectRef.current = async (connectionId, send) => {
+    try {
+      const agents = await agentRegistry.list();
+      const agentsWithStatus = agents.map((a) => ({
+        ...a,
+        isRunning: activeAgents.has(a.id),
+      }));
+      const threads = await threadService.listThreads();
+      send(
+        JSON.stringify({
+          type: "initial_state",
+          agents: agentsWithStatus,
+          threads,
+        })
+      );
+    } catch (err) {
+      ctx.logger.warn("Initial state send failed", {
+        connectionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
 
   console.log(
     `\n${ctx.config.identity.emoji} ${ctx.config.identity.name} is running!`,
@@ -1716,39 +1915,58 @@ async function runOnboard(): Promise<void> {
         telegramEnabled = true;
         telegramToken = token;
 
-        const userInput = await promptUser(
-          "Your Telegram (numeric id or @username; leave blank to add later in config): ",
-        );
-        const userTrimmed = userInput?.trim() ?? "";
-        if (userTrimmed) {
+        const maxUsernameAttempts = 3;
+        let usernameAttempt = 0;
+        let userTrimmed = "";
+
+        do {
+          const prompt =
+            usernameAttempt === 0
+              ? "Your Telegram (numeric id or @username; leave blank to add later in config): "
+              : "Try again? Enter numeric id or @username, or leave blank to skip: ";
+          const userInput = await promptUser(prompt);
+          userTrimmed = userInput?.trim() ?? "";
+          if (!userTrimmed) break;
+
           const numericOnly = /^\d+$/.test(userTrimmed);
           if (numericOnly) {
             telegramUserChatId = userTrimmed;
-          } else {
-            const username = userTrimmed.startsWith("@")
-              ? userTrimmed
-              : `@${userTrimmed}`;
-            try {
-              const getChatUrl = `https://api.telegram.org/bot${encodeURIComponent(token)}/getChat?chat_id=${encodeURIComponent(username)}`;
-              const res = await fetch(getChatUrl);
-              const data = (await res.json()) as {
-                ok?: boolean;
-                result?: { id?: number };
-              };
-              if (data?.ok && typeof data.result?.id === "number") {
-                telegramUserChatId = String(data.result.id);
-                console.log(`Resolved ${username} to chat id ${telegramUserChatId}`);
-              } else {
-                console.log(
-                  "Could not resolve username; add channels.telegram.userChatId in config later.",
-                );
-              }
-            } catch {
-              console.log(
-                "Network error resolving username; add channels.telegram.userChatId in config later.",
-              );
-            }
+            break;
           }
+
+          const username = userTrimmed.startsWith("@")
+            ? userTrimmed
+            : `@${userTrimmed}`;
+          try {
+            const getChatUrl = `https://api.telegram.org/bot${encodeURIComponent(token)}/getChat?chat_id=${encodeURIComponent(username)}`;
+            const res = await fetch(getChatUrl);
+            const data = (await res.json()) as {
+              ok?: boolean;
+              result?: { id?: number };
+              description?: string;
+            };
+            if (data?.ok && typeof data.result?.id === "number") {
+              telegramUserChatId = String(data.result.id);
+              console.log(`Resolved ${username} to chat id ${telegramUserChatId}`);
+              break;
+            }
+            const errMsg =
+              typeof data?.description === "string"
+                ? data.description
+                : "Could not resolve username.";
+            console.log("Telegram resolve failed: " + errMsg);
+            usernameAttempt++;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.log("Network error resolving username: " + msg);
+            usernameAttempt++;
+          }
+        } while (usernameAttempt < maxUsernameAttempts);
+
+        if (userTrimmed && !telegramUserChatId) {
+          console.log(
+            "Add channels.telegram.userChatId in config later, or message your bot and use the chat id from getUpdates.",
+          );
         }
 
         const secretInput = await promptUser(

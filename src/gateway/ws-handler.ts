@@ -28,9 +28,11 @@ export type WSMessageType =
 export type WSPushType =
   | "agent_dm"
   | "agent_status_update"
+  | "agent_created"
   | "thread_update"
   | "approval_request"
-  | "status_report";
+  | "status_report"
+  | "widget_approved";
 
 /**
  * @brief Parsed WebSocket message.
@@ -74,6 +76,7 @@ export interface WSHandlerDeps {
   ) => Promise<{
     content: string;
     remembered?: { memoryMd?: string; userMd?: string; soulMd?: string };
+    toolCallsSummary?: string[];
     securityFlagged?: { reason: string; snippet: string };
     progressReport?: { status: string; summary: string };
     responderId?: string;
@@ -252,6 +255,9 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
                 content: result.content,
                 ...(result.remembered && Object.keys(result.remembered).length > 0
                   ? { remembered: result.remembered }
+                  : {}),
+                ...(result.toolCallsSummary && result.toolCallsSummary.length > 0
+                  ? { toolCallsSummary: result.toolCallsSummary }
                   : {}),
                 ...(result.responderId ? { responderId: result.responderId } : {}),
                 ...(result.securityFlagged ? { securityFlagged: result.securityFlagged } : {}),

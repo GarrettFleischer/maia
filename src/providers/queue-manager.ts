@@ -87,7 +87,8 @@ function createJobResultRegistry(): JobResultRegistry {
 }
 
 /**
- * @brief Treat as retriable: 429, rate limit, ECONNRESET, ETIMEDOUT, network-related message or code.
+ * @brief Treat as retriable: 429, 502, 503, 504, rate limit, ECONNRESET, ETIMEDOUT,
+ * network-related message or code, or "unavailable" (e.g. Gemini 503).
  * @param err - The error to check
  * @returns True if the error is a network/rate-limit error that should trigger release and retry
  */
@@ -97,8 +98,12 @@ export function isNetworkError(err: unknown): boolean {
     const code = (err as NodeJS.ErrnoException).code;
     if (
       msg.includes("429") ||
+      msg.includes("502") ||
+      msg.includes("503") ||
+      msg.includes("504") ||
       msg.includes("rate limit") ||
       msg.includes("too many requests") ||
+      msg.includes("unavailable") ||
       code === "ECONNRESET" ||
       code === "ETIMEDOUT" ||
       code === "ENOTFOUND" ||
@@ -111,7 +116,8 @@ export function isNetworkError(err: unknown): boolean {
     }
   }
   if (typeof err === "object" && err !== null && "status" in err) {
-    if ((err as { status: unknown }).status === 429) return true;
+    const status = (err as { status: unknown }).status;
+    if (status === 429 || status === 502 || status === 503 || status === 504) return true;
   }
   return false;
 }

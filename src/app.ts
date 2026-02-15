@@ -61,6 +61,11 @@ import {
   createMemoryStoreTool,
   createMemoryForgetTool,
 } from "./agent/tools/memory-tools.js";
+import {
+  createRememberTool,
+  createSecurityReportTool,
+  createProgressReportTool,
+} from "./agent/tools/response-tools.js";
 import { createPrivacyManager } from "./agent/privacy.js";
 import { createThreadTracker } from "./agent/threading.js";
 
@@ -74,6 +79,8 @@ import { createRememberBlockHandler } from "./memory/remember-block.js";
 // Agents
 import { createAgentRegistry } from "./agents/registry.js";
 import type { AgentRegistry, AgentConfig } from "./agents/registry.js";
+import { createLlmCallsRepository } from "./llm-calls.js";
+import type { LlmCallsRepository } from "./llm-calls.js";
 import { createSubAgentRuntime } from "./agents/factory.js";
 import type { SubAgent, SharedAgentDeps } from "./agents/factory.js";
 import {
@@ -84,6 +91,8 @@ import {
   createAgentInspectTool,
   createAgentUpdateTool,
 } from "./agents/tools.js";
+import { createWidgetReviewRequestsRepository } from "./agents/widget-review-requests.js";
+import { createSubmitWidgetForReviewTool } from "./agents/tools/submit-widget-for-review.js";
 
 /**
  * @brief Options for creating the application.
@@ -99,6 +108,10 @@ export interface CreateAppOptions {
   taskMonitorRef?: { current: import("./agents/task-monitor.js").TaskMonitor | null };
   /** Ref to get queue status summary (set by host when Maia is the brain). Injected into LLM context only when set. */
   getQueueStatusSummaryRef?: { current: (() => string) | null };
+  /** Ref for widget review request callback (set by host so dashboard receives approval_request). */
+  getOnWidgetReviewRequestRef?: {
+    current: ((request: import("./agents/widget-review-requests.js").WidgetReviewRequest) => void) | null;
+  };
 }
 
 /**
@@ -119,6 +132,8 @@ export interface MaiaApp {
   getRawFs(): FileSystem;
   /** @brief Returns the data directory path (e.g. for queue.json) */
   getDataDir(): string;
+  /** @brief Returns the LLM calls repository for audit and per-thread views */
+  getLlmCallsRepository(): LlmCallsRepository;
   /** @brief Gracefully shuts down all subsystems */
   stop(): Promise<void>;
 }
@@ -256,6 +271,14 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
   });
   await migrationRunner.run();
 
+  // ── Step 10b: LLM calls repository (for prompt/response audit) ────
+  const llmCallsRepo = createLlmCallsRepository({ db, logger });
+  const logLlmCall = async (
+    call: Omit<import("./llm-calls.js").CreateLlmCallInput, "id">
+  ): Promise<void> => {
+    await llmCallsRepo.create({ ...call, id: crypto.randomUUID() });
+  };
+
   // ── Step 11: Provider registry ───────────────────────────────────
 
   const providerRegistry = createProviderRegistry(ctx);
@@ -275,7 +298,7 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
   const threadTracker = createThreadTracker();
   const privacyManager = createPrivacyManager({ auditLog });
 
-  const toolRegistry = createToolRegistry({ logger });
+  const toolRegistry = createToolRegistry({ logger, auditLog });
 
   // Register built-in tools
   const ssrfGuard = createSsrfGuard({ blockPrivateIPs: config.security.ssrf.blockPrivateIPs });
@@ -312,6 +335,8 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
       ? (sub: SubAgent) => options.getOnAgentCreatedRef!.current?.()?.(sub)
       : undefined,
     taskMonitorRef: options?.taskMonitorRef,
+    events,
+    defaultModel: { provider: config.provider.primary, model: config.provider.model },
   };
   toolRegistry.register(createAgentCreateTool(agentToolDeps));
   toolRegistry.register(createAgentListTool(agentToolDeps));
@@ -319,6 +344,25 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
   toolRegistry.register(createAgentMessageTool(agentToolDeps));
   toolRegistry.register(createAgentInspectTool(agentToolDeps));
   toolRegistry.register(createAgentUpdateTool(agentToolDeps));
+
+  // Widget review: submit_widget_for_review (when host provides callback for approval_request push)
+  if (options?.getOnWidgetReviewRequestRef) {
+    const widgetReviewRequestsRepo = createWidgetReviewRequestsRepository({ db, logger });
+    toolRegistry.register(
+      createSubmitWidgetForReviewTool({
+        logger,
+        crypto,
+        widgetReviewRequestsRepo,
+        resolveAgentId: () => "maia",
+        onWidgetReviewRequest: (req) => options.getOnWidgetReviewRequestRef!.current?.(req),
+      })
+    );
+  }
+
+  // Response tools: remember, security_report, progress_report (LLM invokes these instead of inline blocks)
+  toolRegistry.register(createRememberTool({ fs, logger, workspacePath }));
+  toolRegistry.register(createSecurityReportTool({}));
+  toolRegistry.register(createProgressReportTool());
 
   // Register memory tools if memory is enabled
   if (config.memory.enabled) {
@@ -407,9 +451,11 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
         await dailyLog.append(`User: ${userContent}\nAssistant: ${responseContent}`);
       },
       getQueueStatusSummaryRef: options?.getQueueStatusSummaryRef,
+      agentId: "maia",
+      logLlmCall,
     });
 
-    return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs, dataDir);
+    return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs, dataDir, llmCallsRepo);
   }
 
   // Build runtime without memory
@@ -433,9 +479,11 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
       // Will be wired by the channel/CLI layer later
     },
     getQueueStatusSummaryRef: options?.getQueueStatusSummaryRef,
+    agentId: "maia",
+    logLlmCall,
   });
 
-  return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs, dataDir);
+  return buildApp(ctx, runtime, providerRegistry, shutdown, logger, agentRegistry, activeAgents, rawFs, dataDir, llmCallsRepo);
 }
 
 /**
@@ -539,6 +587,7 @@ function buildApp(
   activeAgents: Map<string, SubAgent>,
   rawFs: FileSystem,
   dataDir: string,
+  llmCallsRepo: LlmCallsRepository,
 ): MaiaApp {
   return {
     getContext: () => ctx,
@@ -548,6 +597,7 @@ function buildApp(
     getActiveAgents: () => activeAgents,
     getRawFs: () => rawFs,
     getDataDir: () => dataDir,
+    getLlmCallsRepository: () => llmCallsRepo,
     async stop(): Promise<void> {
       logger.info("Shutting down Maia...");
       await shutdown.shutdown("app.stop() called");

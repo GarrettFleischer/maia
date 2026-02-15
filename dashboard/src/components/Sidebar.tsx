@@ -11,6 +11,8 @@ interface SidebarProps {
   agents: Agent[];
   connected: boolean;
   currentPath: string;
+  /** Called when the user logs out; clears token and disconnects WebSocket. */
+  onLogout?: () => void;
 }
 
 /**
@@ -37,7 +39,7 @@ function NavLink({ href, label, icon, active }: { href: string; label: string; i
  * @param props - agents list, connection status, current route path
  * @returns Preact element
  */
-export function Sidebar({ agents, connected, currentPath }: SidebarProps) {
+export function Sidebar({ agents, connected, currentPath, onLogout }: SidebarProps) {
   return (
     <aside class="w-64 h-screen bg-maia-surface border-r border-maia-border flex flex-col overflow-hidden">
       {/* Header */}
@@ -60,6 +62,8 @@ export function Sidebar({ agents, connected, currentPath }: SidebarProps) {
         <NavLink href="/chat" label="Chat with Maia" icon="💬" active={currentPath === "/chat"} />
         <NavLink href="/agents" label="Agents" icon="🤖" active={currentPath.startsWith("/agents")} />
         <NavLink href="/threads" label="Threads" icon="🧵" active={currentPath.startsWith("/threads")} />
+        <NavLink href="/audit" label="Audit trail" icon="📋" active={currentPath === "/audit"} />
+        <NavLink href="/llm-log" label="LLM log" icon="📜" active={currentPath === "/llm-log"} />
       </nav>
 
       {/* Agent List */}
@@ -88,6 +92,21 @@ export function Sidebar({ agents, connected, currentPath }: SidebarProps) {
           )}
         </div>
       </div>
+
+      {/* Log out */}
+      {onLogout && (
+        <div class="p-3 border-t border-maia-border">
+          <button
+            type="button"
+            onClick={onLogout}
+            class="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm
+              text-maia-text-dim hover:bg-maia-surface-light hover:text-maia-text transition-colors"
+          >
+            <span>🚪</span>
+            <span>Log out</span>
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

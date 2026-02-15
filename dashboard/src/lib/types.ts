@@ -89,11 +89,11 @@ export interface ThreadUpdate {
   };
 }
 
-/** Approval request push (tool proposal, agent creation, MCP server proposal, or flagged agent). */
+/** Approval request push (tool proposal, agent creation, MCP server proposal, widget review, or flagged agent). */
 export interface ApprovalRequest {
   type: "approval_request";
   id: string;
-  kind: "tool_proposal" | "agent_creation_request" | "mcp_server_proposal" | "flagged_agent";
+  kind: "tool_proposal" | "agent_creation_request" | "mcp_server_proposal" | "widget_review_request" | "flagged_agent";
   summary: string;
   proposalId?: string;
   requestId?: string;
@@ -102,6 +102,13 @@ export interface ApprovalRequest {
   agentName?: string;
   reason?: string;
   snippet?: string;
+  /** Widget review: requesting agent and widget id/name and code */
+  requestingAgentId?: string;
+  widgetId?: string;
+  name?: string;
+  html?: string;
+  css?: string;
+  js?: string;
 }
 
 /** Status report push from Maia. */
@@ -110,4 +117,42 @@ export interface StatusReport {
   title?: string;
   body?: string;
   severity?: string;
+}
+
+/** Single audit log entry from GET /api/audit/entries. */
+export interface AuditEntry {
+  timestamp: string;
+  type: string;
+  metadata: Record<string, unknown>;
+}
+
+/** Single LLM call record from GET /api/llm-calls or GET /api/threads/:id/llm-calls. */
+export interface LlmCall {
+  id: string;
+  agentId: string;
+  sessionId: string;
+  threadId: string | null;
+  requestMessages: Array<{ role: string; content: string; name?: string }>;
+  responseContent: string;
+  responseToolCalls: unknown[] | null;
+  createdAt: string;
+}
+
+/** Approved dashboard widget from GET /api/agents/:id/dashboard. */
+export interface ApprovedDashboardWidget {
+  id: string;
+  agentId: string;
+  widgetId: string;
+  name: string | null;
+  html: string;
+  css: string;
+  js: string;
+  createdAt: string;
+}
+
+/** Agent dashboard config from GET /api/agents/:id/dashboard. */
+export interface AgentDashboardConfig {
+  layout?: string;
+  panels?: unknown[];
+  approvedWidgets: ApprovedDashboardWidget[];
 }

@@ -36,6 +36,8 @@ export interface HandleMessageResult {
   content: string;
   /** When the LLM included a remember block and it was applied; content per file for hover tooltip. */
   remembered?: RememberedContent;
+  /** Human-readable one-liners for each tool call executed (e.g. "Created agent wally"); shown in chat like "will remember that". */
+  toolCallsSummary?: string[];
   /** When the LLM reported a security concern (inline); backend should check approved snippets then stop/notify if needed. */
   securityFlagged?: { reason: string; snippet: string };
   /** When the LLM self-reported progress (accomplished/stuck/failed); backend may send DM. */
@@ -43,12 +45,200 @@ export interface HandleMessageResult {
 }
 
 /**
+ * @brief Builds a short human-readable summary for a tool call (for chat UI).
+ * @param name - Tool name (e.g. agent_create, web_fetch)
+ * @param args - Tool arguments
+ * @returns One-line summary (e.g. "Created agent wally")
+ */
+function formatToolCallSummary(
+  name: string,
+  args: Record<string, unknown>,
+): string {
+  switch (name) {
+    case "agent_create": {
+      const id = typeof args.id === "string" ? args.id : undefined;
+      return id ? `Created agent ${id}` : "Created an agent";
+    }
+    case "agent_list":
+      return "Listed agents";
+    case "agent_remove": {
+      const id = typeof args.id === "string" ? args.id : undefined;
+      return id ? `Removed agent ${id}` : "Removed an agent";
+    }
+    case "agent_message":
+      return "Sent a message to an agent";
+    case "agent_inspect":
+      return "Inspected an agent";
+    case "agent_update":
+      return "Updated an agent";
+    case "web_fetch":
+      return "Fetched a URL";
+    case "remember":
+      return "Saved something to memory";
+    case "memory_search":
+      return "Searched memory";
+    case "memory_store":
+      return "Stored in memory";
+    case "memory_forget":
+      return "Forgot a memory";
+    case "task_manage":
+      return "Updated task list";
+    case "submit_widget_for_review":
+      return "Submitted a widget for review";
+    default:
+      return `Used ${name}`;
+  }
+}
+
+/**
+ * @brief Returns true if content looks like raw tool-call JSON (to strip from display).
+ */
+function isRawToolCallContent(content: string): boolean {
+  const t = content.trim();
+  if (!t.startsWith("{") || !t.endsWith("}")) return false;
+  try {
+    const o = JSON.parse(t) as Record<string, unknown>;
+    return typeof o.tool === "string" && "arguments" in o;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @brief Finds the index of the matching closing brace for an object starting at startIndex.
+ * Respects strings (so braces inside quoted strings are ignored).
+ * @param content - Full string
+ * @param startIndex - Index of the opening {
+ * @returns Index of the closing }, or -1 if not found
+ */
+function findMatchingBrace(content: string, startIndex: number): number {
+  if (content[startIndex] !== "{") return -1;
+  let depth = 1;
+  let inString = false;
+  let escape = false;
+  let quoteChar = "\0";
+  for (let i = startIndex + 1; i < content.length; i++) {
+    const c = content[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (c === "\\") {
+        escape = true;
+        continue;
+      }
+      if (c === quoteChar) {
+        inString = false;
+        continue;
+      }
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      inString = true;
+      quoteChar = c;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * @brief Removes any embedded raw tool-call JSON from content (e.g. inside <p> or markdown).
+ * Repeatedly finds { "tool": "...", "arguments": ... } objects and removes them so they are never shown to the user.
+ */
+function stripRawToolCallJson(content: string): string {
+  let out = content;
+  let searchStart = 0;
+  for (;;) {
+    const idx = out.indexOf("{", searchStart);
+    if (idx === -1) break;
+    const end = findMatchingBrace(out, idx);
+    if (end === -1) {
+      searchStart = idx + 1;
+      continue;
+    }
+    const slice = out.slice(idx, end + 1);
+    try {
+      const o = JSON.parse(slice) as Record<string, unknown>;
+      if (typeof o.tool === "string" && "arguments" in o) {
+        out = out.slice(0, idx).trimEnd() + " " + out.slice(end + 1).trimStart();
+        out = out.trim();
+        searchStart = 0;
+        continue;
+      }
+    } catch {
+      // not valid JSON or not tool-call shape
+    }
+    searchStart = idx + 1;
+  }
+  return out.trim();
+}
+
+/**
+ * @brief Structured JSON response shape: chat_response (message to user) + tool_calls (array to execute).
+ */
+interface StructuredResponse {
+  chat_response: string;
+  tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }>;
+}
+
+/**
+ * @brief Tries to parse response content as structured JSON (chat_response + tool_calls).
+ * Strips markdown code fences (```json ... ```) if present.
+ * @returns Parsed result or null if not valid structured response
+ */
+function parseStructuredResponse(content: string): StructuredResponse | null {
+  let t = content.trim();
+  if (t.startsWith("```")) {
+    const afterOpen = t.indexOf("\n", 3);
+    const close = t.indexOf("```", afterOpen > 0 ? afterOpen : 3);
+    if (close !== -1) {
+      t = (afterOpen > 0 ? t.slice(afterOpen + 1, close) : t.slice(3, close)).trim();
+    }
+  }
+  if (!t.startsWith("{") || !t.endsWith("}")) return null;
+  try {
+    const o = JSON.parse(t) as Record<string, unknown>;
+    if (typeof o.chat_response !== "string") return null;
+    const chat_response = o.chat_response as string;
+    let tool_calls: Array<{ name: string; arguments?: Record<string, unknown> }> = [];
+    if (Array.isArray(o.tool_calls)) {
+      for (const tc of o.tool_calls) {
+        if (tc && typeof tc === "object" && typeof (tc as Record<string, unknown>).name === "string") {
+          const name = (tc as Record<string, unknown>).name as string;
+          const args = (tc as Record<string, unknown>).arguments;
+          tool_calls.push({
+            name,
+            arguments: args && typeof args === "object" && !Array.isArray(args)
+              ? (args as Record<string, unknown>)
+              : {},
+          });
+        }
+      }
+    }
+    return { chat_response, tool_calls };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @brief Parses optional ---REMEMBER--- block from LLM response and appends to workspace files.
  * When present, runtime uses returned displayContent for reply and passes rememberedContent to result.
  */
 export type ParseRememberFn = (
-  rawContent: string
-) => Promise<{ displayContent: string; remembered: boolean; rememberedContent?: RememberedContent }>;
+  rawContent: string,
+) => Promise<{
+  displayContent: string;
+  remembered: boolean;
+  rememberedContent?: RememberedContent;
+}>;
 
 /**
  * @brief Dependencies for createAgentRuntime.
@@ -108,6 +298,22 @@ export interface AgentRuntimeDeps {
    * Only used when the runtime is Maia's main brain (high-level "what to do next").
    */
   getQueueStatusSummaryRef?: { current: (() => string) | null };
+  /**
+   * @brief Agent ID for this runtime (e.g. "maia" or sub-agent id). Used when logging LLM calls.
+   */
+  agentId?: string;
+  /**
+   * @brief When set, records each LLM request/response round for audit and per-thread views.
+   * Called after each callProvider (initial and each tool round). Fire-and-forget so it does not block.
+   */
+  logLlmCall?: (params: {
+    agentId: string;
+    sessionId: string;
+    threadId?: string | null;
+    requestMessages: Array<{ role: string; content: string; name?: string }>;
+    responseContent: string;
+    responseToolCalls?: unknown[];
+  }) => Promise<void>;
 }
 
 /**
@@ -175,7 +381,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     onSecurityFlagged,
     onAfterReply,
     getQueueStatusSummaryRef,
+    agentId: runtimeAgentId,
+    logLlmCall,
   } = deps;
+
+  const agentId = runtimeAgentId ?? "maia";
 
   /** Maps "channelId:senderId" to session IDs */
   const sessionMap = new Map<string, string>();
@@ -200,18 +410,70 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     return sessionId;
   }
 
+  /** @brief Max chars of system content to log when MAIA_LOG_PROMPTS=1 (rest truncated). */
+  const LOG_PROMPTS_SYSTEM_MAX = 2000;
+  /** @brief Whether to log full prompts (env MAIA_LOG_PROMPTS=1). */
+  const logPrompts =
+    typeof process !== "undefined" && process.env?.MAIA_LOG_PROMPTS === "1";
+
+  /**
+   * @brief Logs the exact conversation and tool defs sent to the LLM (when MAIA_LOG_PROMPTS=1).
+   * Redacts secrets and truncates large system content for safety.
+   * @param conversation - Full messages array
+   * @param chatOptions - Options including tools
+   * @param round - Optional tool round (0 = initial call)
+   */
+  function logPromptsIfEnabled(
+    conversation: ChatMessage[],
+    chatOptions: ChatOptions | undefined,
+    round?: number,
+  ): void {
+    if (!logPrompts) return;
+    const summary = conversation.map((m) => {
+      let content = m.content;
+      if (m.role === "system" && content.length > LOG_PROMPTS_SYSTEM_MAX) {
+        content =
+          content.slice(0, LOG_PROMPTS_SYSTEM_MAX) +
+          `\n...[truncated, total ${content.length} chars]`;
+      }
+      content = redactSecretsFromResponse(content);
+      return { role: m.role, contentLength: content.length, content };
+    });
+    const toolNames = chatOptions?.tools?.map((t) => t.name) ?? [];
+    logger.debug("LLM prompt (exact)", {
+      round: round ?? 0,
+      messageCount: conversation.length,
+      toolNames: toolNames.length > 0 ? toolNames : undefined,
+      messages: summary,
+    });
+  }
+
   /**
    * @brief Collects the full streaming response from the provider.
    * @param messages - Conversation messages to send
    * @param options - Chat options including tools
+   * @param toolRound - When in tool loop, the current round (1-based) for logging
    * @returns Complete assistant message content and any tool calls
    */
   async function callProvider(
     messages: ChatMessage[],
-    options?: ChatOptions
-  ): Promise<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> }> {
+    options?: ChatOptions,
+    toolRound?: number,
+  ): Promise<{
+    content: string;
+    toolCalls: Array<{
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }>;
+  }> {
+    logPromptsIfEnabled(messages, options, toolRound);
     let content = "";
-    const toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
+    const toolCalls: Array<{
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }> = [];
 
     const stream = provider.chat(messages, options);
     for await (const chunk of stream) {
@@ -236,7 +498,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       const privacyMode = isPrivacyActive?.(sessionId) ?? false;
 
       // Merge path: combined reply + memory extraction every N minutes (no tools this turn)
-      if (mergeStrategy && !privacyMode && (await mergeStrategy.shouldRunMerge())) {
+      if (
+        mergeStrategy &&
+        !privacyMode &&
+        (await mergeStrategy.shouldRunMerge())
+      ) {
         const userMsg: ChatMessage = {
           role: "user",
           content: message.content,
@@ -244,7 +510,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         };
         sessionManager.addMessage(sessionId, userMsg);
         const reply = await mergeStrategy.runMerge(message.content, sessionId);
-        sessionManager.addMessage(sessionId, { role: "assistant", content: reply });
+        sessionManager.addMessage(sessionId, {
+          role: "assistant",
+          content: reply,
+        });
         const outbound: OutboundMessage = {
           channelId: message.channelId,
           recipientId: message.senderId,
@@ -257,7 +526,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           recipientId: message.senderId,
           messageId: message.id,
         });
-        logger.debug("Message processed (merge path)", { sessionId, responseLength: reply.length });
+        logger.debug("Message processed (merge path)", {
+          sessionId,
+          responseLength: reply.length,
+        });
         return { content: reply };
       }
 
@@ -279,7 +551,8 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         threadSummary: getThreadSummary?.(sessionId),
         queueStatusSummary: getQueueStatusSummaryRef?.current?.() ?? undefined,
       };
-      const systemMessage = await contextBuilder.buildSystemPrompt(contextInput);
+      const systemMessage =
+        await contextBuilder.buildSystemPrompt(contextInput);
 
       // Step 3: Check compaction
       if (sessionManager.needsCompaction(sessionId)) {
@@ -319,7 +592,48 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         ...response,
         content: redactSecretsFromResponse(response.content),
       };
+      // If the model responded with structured JSON (chat_response + tool_calls), use it instead of provider tool_calls
+      const parsed0 = parseStructuredResponse(response.content);
+      if (parsed0) {
+        response = {
+          content: parsed0.chat_response,
+          toolCalls: (parsed0.tool_calls ?? []).map((tc, i) => ({
+            id: `json_0_${i}`,
+            name: tc.name,
+            arguments: tc.arguments ?? {},
+          })),
+        };
+      }
+      const threadId =
+        (message.metadata?.threadId as string | undefined) ?? null;
+      if (logLlmCall) {
+        logLlmCall({
+          agentId,
+          sessionId,
+          threadId,
+          requestMessages: conversation.map((m) => ({
+            role: m.role,
+            content: m.content,
+            name: m.name,
+          })),
+          responseContent: response.content,
+          responseToolCalls: response.toolCalls?.length
+            ? response.toolCalls
+            : undefined,
+        }).catch((err) =>
+          logger.warn("logLlmCall failed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
       let toolRounds = 0;
+
+      /** Accumulated from remember/security_report/progress_report tool calls (preferred over inline blocks). */
+      let accumulatedRemembered: RememberedContent | undefined;
+      let accumulatedSecurityFlagged: HandleMessageResult["securityFlagged"];
+      let accumulatedProgressReport: HandleMessageResult["progressReport"];
+      /** Human-readable one-liners for each tool call (for chat UI, like "Created agent wally"). */
+      const accumulatedToolCallsSummary: string[] = [];
 
       // Tool call loop
       while (response.toolCalls.length > 0 && toolRounds < MAX_TOOL_ROUNDS) {
@@ -347,7 +661,46 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
               channelId: message.channelId,
               senderId: message.senderId,
               privacyMode,
-            }
+            },
+          );
+
+          // Accumulate tool results for remember/security/progress (tools replace inline blocks)
+          if (
+            result.data?.rememberedContent &&
+            typeof result.data.rememberedContent === "object"
+          ) {
+            const rc = result.data.rememberedContent as RememberedContent;
+            accumulatedRemembered = { ...accumulatedRemembered, ...rc };
+          }
+          if (
+            result.data?.securityFlagged &&
+            typeof result.data.securityFlagged === "object"
+          ) {
+            const sf = result.data.securityFlagged as {
+              reason: string;
+              snippet: string;
+            };
+            accumulatedSecurityFlagged = {
+              reason: typeof sf.reason === "string" ? sf.reason : "",
+              snippet: typeof sf.snippet === "string" ? sf.snippet : "",
+            };
+          }
+          if (
+            result.data?.progressReport &&
+            typeof result.data.progressReport === "object"
+          ) {
+            const pr = result.data.progressReport as {
+              status: string;
+              summary: string;
+            };
+            accumulatedProgressReport = {
+              status: typeof pr.status === "string" ? pr.status : "",
+              summary: typeof pr.summary === "string" ? pr.summary : "",
+            };
+          }
+
+          accumulatedToolCallsSummary.push(
+            formatToolCallSummary(toolCall.name, toolCall.arguments),
           );
 
           // Add tool result to conversation
@@ -369,18 +722,83 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           systemMessage,
           ...sessionManager.getMessages(sessionId),
         ];
-        response = await callProvider(updatedConversation, chatOptions);
+        response = await callProvider(
+          updatedConversation,
+          chatOptions,
+          toolRounds,
+        );
         response = {
           ...response,
           content: redactSecretsFromResponse(response.content),
         };
+        const parsedNext = parseStructuredResponse(response.content);
+        if (parsedNext) {
+          response = {
+            content: parsedNext.chat_response,
+            toolCalls: (parsedNext.tool_calls ?? []).map((tc, i) => ({
+              id: `json_${toolRounds}_${i}`,
+              name: tc.name,
+              arguments: tc.arguments ?? {},
+            })),
+          };
+        }
+        if (logLlmCall) {
+          logLlmCall({
+            agentId,
+            sessionId,
+            threadId,
+            requestMessages: updatedConversation.map((m) => ({
+              role: m.role,
+              content: m.content,
+              name: m.name,
+            })),
+            responseContent: response.content,
+            responseToolCalls: response.toolCalls?.length
+              ? response.toolCalls
+              : undefined,
+          }).catch((err) =>
+            logger.warn("logLlmCall failed", {
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+        }
       }
 
-      // Step 7: Parse structured blocks (REMEMBER, SECURITY, PROGRESS) and get display content
+      // Step 7: Display content and remember/security/progress (prefer tool results, fallback to inline blocks)
       const parsedBlocks = parseResponseBlocks(response.content);
       let displayContent = parsedBlocks.displayContent;
-      let remembered: RememberedContent | undefined;
-      if (parseRemember && !privacyMode && parsedBlocks.rememberBlockRaw) {
+
+      // If displayContent is the structured JSON envelope (chat_response + tool_calls), extract chat_response so we never show raw JSON
+      const parsedDisplay = parseStructuredResponse(displayContent);
+      if (parsedDisplay) {
+        displayContent = parsedDisplay.chat_response;
+      }
+
+      // Strip any raw tool-call JSON (whole or embedded, e.g. inside <p>) so we never show it in chat
+      displayContent = stripRawToolCallJson(displayContent);
+      if (displayContent.trim() && isRawToolCallContent(displayContent)) {
+        displayContent = "";
+      }
+      // If we executed tools but have no text reply, show a short fallback so the user always sees a message
+      if (!displayContent.trim() && accumulatedToolCallsSummary.length > 0) {
+        displayContent =
+          accumulatedToolCallsSummary.length === 1
+            ? accumulatedToolCallsSummary[0] + "."
+            : "Done.";
+      }
+      // If content is still empty (e.g. model output tool-call JSON as text but provider didn't run tools), show a fallback so the user never sees a blank reply
+      if (!displayContent.trim()) {
+        displayContent =
+          "I attempted that action. If you don't see a result, try asking again or rephrase your request.";
+      }
+
+      let remembered: RememberedContent | undefined = accumulatedRemembered;
+      if (
+        remembered === undefined &&
+        parseRemember &&
+        !privacyMode &&
+        parsedBlocks.rememberBlockRaw
+      ) {
         const fullRaw =
           displayContent +
           "\n" +
@@ -395,8 +813,9 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
             : undefined;
       }
 
-      let securityFlagged: HandleMessageResult["securityFlagged"];
-      if (parsedBlocks.security?.flagged) {
+      let securityFlagged: HandleMessageResult["securityFlagged"] =
+        accumulatedSecurityFlagged;
+      if (securityFlagged === undefined && parsedBlocks.security?.flagged) {
         const reason = parsedBlocks.security.reason ?? "";
         const snippet = parsedBlocks.security.snippet ?? "";
         onSecurityFlagged?.(reason, snippet);
@@ -404,12 +823,14 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       }
 
       const progressReport: HandleMessageResult["progressReport"] =
-        parsedBlocks.progress?.status != null && parsedBlocks.progress.summary != null
+        accumulatedProgressReport ??
+        (parsedBlocks.progress?.status != null &&
+        parsedBlocks.progress.summary != null
           ? {
               status: parsedBlocks.progress.status,
               summary: parsedBlocks.progress.summary,
             }
-          : undefined;
+          : undefined);
 
       // Step 8: Add final assistant response and send reply
       const assistantMessage: ChatMessage = {
@@ -459,6 +880,10 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       return {
         content: displayContent,
         remembered,
+        toolCallsSummary:
+          accumulatedToolCallsSummary.length > 0
+            ? accumulatedToolCallsSummary
+            : undefined,
         securityFlagged,
         progressReport,
       };

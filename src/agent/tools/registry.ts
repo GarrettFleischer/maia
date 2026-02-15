@@ -7,7 +7,7 @@
  * by name and the agent runtime retrieves them for function calling.
  */
 
-import type { Logger, ToolDefinition } from "../../core/types.js";
+import type { AuditLog, Logger, ToolDefinition } from "../../core/types.js";
 import type { AgentTool, ToolContext, ToolResult } from "./base.js";
 
 /**
@@ -17,6 +17,8 @@ export interface ToolRegistryDeps {
   logger: Logger;
   /** Optional permission checker: returns true if tool is allowed in context */
   isAllowed?: (toolName: string, context: ToolContext) => boolean;
+  /** Optional audit log to record every tool execution for auditing. */
+  auditLog?: AuditLog;
 }
 
 /**
@@ -72,8 +74,11 @@ export interface ToolRegistry {
  * const defs = registry.definitions(); // pass to LLM
  * const result = await registry.execute("memory_search", { query: "Alice" }, context);
  */
+/** @brief Max length for result summary in audit log to avoid huge payloads. */
+const AUDIT_RESULT_SUMMARY_MAX = 200;
+
 export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
-  const { logger, isAllowed } = deps;
+  const { logger, isAllowed, auditLog } = deps;
   const tools = new Map<string, AgentTool>();
 
   return {
@@ -101,6 +106,16 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
       const tool = tools.get(name);
       if (!tool) {
         logger.warn("Tool not found", { name });
+        if (auditLog) {
+          await auditLog.log("TOOL_EXECUTION", {
+            toolName: name,
+            success: false,
+            resultSummary: "tool not found",
+            sessionId: context.sessionId,
+            channelId: context.channelId,
+            senderId: context.senderId,
+          });
+        }
         return {
           content: `Tool '${name}' not found.`,
           success: false,
@@ -114,11 +129,26 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
           sessionId: context.sessionId,
           channelId: context.channelId,
         });
+        if (auditLog) {
+          await auditLog.log("TOOL_EXECUTION", {
+            toolName: name,
+            success: false,
+            resultSummary: "permission denied",
+            sessionId: context.sessionId,
+            channelId: context.channelId,
+            senderId: context.senderId,
+          });
+        }
         return {
           content: `Permission denied for tool '${name}'.`,
           success: false,
         };
       }
+
+      const argsSummary =
+        Object.keys(args).length > 0
+          ? JSON.stringify(args).slice(0, AUDIT_RESULT_SUMMARY_MAX)
+          : undefined;
 
       try {
         logger.debug("Executing tool", { name, args });
@@ -127,10 +157,40 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
           name,
           success: result.success,
         });
+        if (auditLog) {
+          const content = result.content ?? "";
+          const resultSummary =
+            typeof content === "string"
+              ? content.length > AUDIT_RESULT_SUMMARY_MAX
+                ? `${content.slice(0, AUDIT_RESULT_SUMMARY_MAX)}...`
+                : content
+              : String(content).slice(0, AUDIT_RESULT_SUMMARY_MAX);
+          await auditLog.log("TOOL_EXECUTION", {
+            toolName: name,
+            argsSummary,
+            success: result.success,
+            resultSummary,
+            contentLength: typeof content === "string" ? content.length : 0,
+            sessionId: context.sessionId,
+            channelId: context.channelId,
+            senderId: context.senderId,
+          });
+        }
         return result;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error("Tool execution failed", { name, error: message });
+        if (auditLog) {
+          await auditLog.log("TOOL_EXECUTION", {
+            toolName: name,
+            argsSummary,
+            success: false,
+            resultSummary: `error: ${message}`,
+            sessionId: context.sessionId,
+            channelId: context.channelId,
+            senderId: context.senderId,
+          });
+        }
         return {
           content: `Tool '${name}' failed: ${message}`,
           success: false,

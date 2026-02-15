@@ -1,6 +1,9 @@
 /**
  * @fileoverview Agent list page.
  * @module routes/Agents
+ *
+ * @note Agents list comes from WebSocket initial_state when connected;
+ * no refetch on mount to avoid GET spam.
  */
 
 import { route } from "preact-router";
@@ -12,6 +15,8 @@ interface AgentsProps {
   agents: Agent[];
   loading: boolean;
   error: string | null;
+  /** Manual refresh (e.g. after agent_created or user request). */
+  refresh?: () => void;
 }
 
 /**

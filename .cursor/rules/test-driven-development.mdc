@@ -1,13 +1,14 @@
 ---
-description: Test Driven Development - create or update tests before changing code
+description: Test Driven Development - create or update tests before changing code; agent runs tests to verify.
 alwaysApply: true
 ---
 
 # Test Driven Development (TDD)
 
-When drafting a plan for any feature, refactor, or bugfix:
+For **any** feature, refactor, or bugfix—whether you are planning first or implementing directly in agent mode:
 
 1. **Always state** that we are following **Test Driven Development (TDD)**.
-2. **Order of work**: Create or update the relevant tests **first**, then implement or change the code to satisfy those tests.
+2. **Order of work**: Create or update the relevant tests **first**, then implement or change the code to satisfy those tests. Do not skip to implementation without addressing tests first.
+3. **Verify**: After implementation, **run the test suite** (e.g. `bun test` or the fix workflow: typecheck → build → tests) to confirm everything passes. Do not skip running tests or assume the user will run them.
 
-In plans and task breakdowns, explicitly include a step to write or update tests before writing or modifying implementation code. Do not skip to implementation without addressing tests first.
+This applies in planning mode (include test steps in plans and task breakdowns) and in regular agent mode (write or update tests before implementation, then run tests when done). No exceptions.

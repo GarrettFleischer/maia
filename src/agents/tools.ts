@@ -7,7 +7,7 @@
  * and inspect other agents. New agents choose their own name and soul via set_identity.
  */
 
-import type { CryptoProvider, Logger, InboundMessage } from "../core/types.js";
+import type { CryptoProvider, Logger, InboundMessage, EventBus } from "../core/types.js";
 import type { AgentTool, ToolContext, ToolResult } from "../agent/tools/base.js";
 import type { ToolDefinition } from "../core/types.js";
 import type { AgentRegistry, AgentConfig, AgentModelConfig } from "./registry.js";
@@ -39,6 +39,10 @@ export interface AgentToolsDeps {
   taskMonitor?: TaskMonitor;
   /** Optional ref to TaskMonitor (for Maia's agent_list when monitor is created later). */
   taskMonitorRef?: { current: TaskMonitor | null };
+  /** Optional event bus to emit agentCreated when an agent is created (direct path). */
+  events?: EventBus;
+  /** Default provider and model for new agents (e.g. Maia's primary); used when agent_create does not specify provider/model. */
+  defaultModel?: { provider: string; model: string };
 }
 
 // ─── agent_create ─────────────────────────────────────────────────
@@ -73,7 +77,10 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
     creationRequestsRepo,
     onAgentCreationRequest,
     onAgentCreated,
+    events,
+    defaultModel,
   } = deps;
+  const fallbackModel = defaultModel ?? { provider: "gemini", model: "gemini-2.0-flash" };
 
   return {
     name: "agent_create",
@@ -123,8 +130,8 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
             schedule: (args.schedule as string) ?? "",
             tools: (args.tools as string[]) ?? ["memory_search", "memory_store"],
             model: {
-              provider: (args.provider as string) ?? "gemini",
-              model: (args.model as string) ?? "gemini-2.0-flash",
+              provider: (args.provider as string) ?? fallbackModel.provider,
+              model: (args.model as string) ?? fallbackModel.model,
             } as AgentModelConfig,
             instructions: args.instructions as string | undefined,
             emoji: (args.emoji as string) ?? "🤖",
@@ -154,8 +161,8 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
           schedule: (args.schedule as string) ?? "",
           tools: (args.tools as string[]) ?? ["memory_search", "memory_store"],
           model: {
-            provider: (args.provider as string) ?? "gemini",
-            model: (args.model as string) ?? "gemini-2.0-flash",
+            provider: (args.provider as string) ?? fallbackModel.provider,
+            model: (args.model as string) ?? fallbackModel.model,
           } as AgentModelConfig,
           instructions: args.instructions as string | undefined,
         };
@@ -164,6 +171,7 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
         const subAgent = createRuntime(registered);
         activeAgents.set(id, subAgent);
         onAgentCreated?.(subAgent);
+        await events?.emit("agentCreated", { agentId: id });
 
         logger.info("Agent created via tool", { id, createdBy: callerId });
         return {

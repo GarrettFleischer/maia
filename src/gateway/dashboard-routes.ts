@@ -13,6 +13,9 @@ import type { AgentRegistry } from "../agents/registry.js";
 import type { ThreadService } from "../threads/service.js";
 import type { TaskMonitor } from "../agents/task-monitor.js";
 import type { SubAgent } from "../agents/factory.js";
+import type { AuditLog, AuditEventType } from "../core/types.js";
+import type { LlmCallsRepository } from "../llm-calls.js";
+import type { ApprovedDashboardWidgetsRepository } from "../agents/approved-dashboard-widgets.js";
 
 /**
  * @brief Dependencies for dashboard route registration.
@@ -26,6 +29,12 @@ export interface DashboardRouteDeps {
   taskMonitor: TaskMonitor;
   /** Active sub-agent runtimes */
   activeAgents: Map<string, SubAgent>;
+  /** Optional audit log for GET /api/audit/entries */
+  auditLog?: AuditLog;
+  /** Optional LLM calls repository for GET /api/llm-calls and GET /api/threads/:id/llm-calls */
+  llmCallsRepo?: LlmCallsRepository;
+  /** Optional approved dashboard widgets repo for GET /api/agents/:id/dashboard */
+  approvedDashboardWidgetsRepo?: ApprovedDashboardWidgetsRepository;
 }
 
 /**
@@ -47,12 +56,91 @@ export function registerDashboardRoutes(
   gateway: GatewayServer,
   deps: DashboardRouteDeps
 ): void {
-  const { agentRegistry, threadService, taskMonitor, activeAgents } = deps;
+  const { agentRegistry, threadService, taskMonitor, activeAgents, auditLog, llmCallsRepo, approvedDashboardWidgetsRepo } = deps;
   const router = gateway.getRouter();
   const json = (data: unknown, status = 200) => ({
     status,
     headers: { "Content-Type": "application/json" } as Record<string, string>,
     body: JSON.stringify(data),
+  });
+
+  // ─── Audit ───────────────────────────────────────────────────
+
+  /**
+   * @brief GET /api/audit/entries - List audit log entries with optional filters.
+   * @param type - Optional event type filter (e.g. TOOL_EXECUTION)
+   * @param since - Optional ISO date string; only entries at or after this time
+   * @param limit - Optional max number of entries (default 100)
+   * @returns JSON array of audit entries
+   */
+  router.get("/api/audit/entries", async (req) => {
+    if (!auditLog) {
+      return json({ error: "Audit log not available" }, 503);
+    }
+    try {
+      const typeParam = req.query.type;
+      const sinceParam = req.query.since;
+      const limitParam = req.query.limit;
+
+      const type = typeParam as AuditEventType | undefined;
+      const since = sinceParam ? new Date(sinceParam) : undefined;
+      const limit = limitParam ? parseInt(limitParam, 10) : 100;
+      const safeLimit = Number.isNaN(limit) || limit <= 0 ? 100 : Math.min(limit, 1000);
+
+      const entries = await auditLog.read({ type, since, limit: safeLimit });
+      return json(entries);
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  // ─── LLM calls (prompt/response audit) ───────────────────────
+
+  /**
+   * @brief GET /api/llm-calls - List LLM call records with optional filters.
+   * @param threadId - Optional thread ID filter
+   * @param agentId - Optional agent ID filter
+   * @param since - Optional ISO date filter
+   * @param limit - Optional limit (default 50)
+   * @returns JSON array of LLM call records
+   */
+  router.get("/api/llm-calls", async (req) => {
+    if (!llmCallsRepo) {
+      return json({ error: "LLM calls repository not available" }, 503);
+    }
+    try {
+      const threadId = req.query.threadId;
+      const agentId = req.query.agentId;
+      const since = req.query.since;
+      const limitParam = req.query.limit;
+      const limit = limitParam ? parseInt(limitParam, 10) : 50;
+      const safeLimit = Number.isNaN(limit) || limit <= 0 ? 50 : Math.min(limit, 500);
+      const entries = await llmCallsRepo.list({ threadId, agentId, since, limit: safeLimit });
+      return json(entries);
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  /**
+   * @brief GET /api/threads/:id/llm-calls - List LLM calls for a specific thread.
+   * @param id - Thread ID
+   * @returns JSON array of LLM call records for that thread
+   */
+  router.get("/api/threads/:id/llm-calls", async (req) => {
+    if (!llmCallsRepo) {
+      return json({ error: "LLM calls repository not available" }, 503);
+    }
+    try {
+      const threadId = req.params.id;
+      const limitParam = req.query.limit;
+      const limit = limitParam ? parseInt(limitParam, 10) : 50;
+      const safeLimit = Number.isNaN(limit) || limit <= 0 ? 50 : Math.min(limit, 500);
+      const entries = await llmCallsRepo.list({ threadId, limit: safeLimit });
+      return json(entries);
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
   });
 
   // ─── Agents ──────────────────────────────────────────────────
@@ -94,6 +182,40 @@ export function registerDashboardRoutes(
         isRunning: activeAgents.has(req.params.id),
         tasks,
         threadCount: threads.length,
+      });
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  /**
+   * @brief GET /api/agents/:id/dashboard - Get agent dashboard config and approved widgets.
+   * @param id - Agent identifier
+   * @returns JSON with layout, panels (optional), and approvedWidgets array
+   */
+  router.get("/api/agents/:id/dashboard", async (req) => {
+    try {
+      const agentId = req.params.id;
+      const config = await agentRegistry.get(agentId);
+      if (!config) {
+        return json({ error: "Agent not found" }, 404);
+      }
+      const approvedWidgets = approvedDashboardWidgetsRepo
+        ? await approvedDashboardWidgetsRepo.listByAgent(agentId)
+        : [];
+      return json({
+        layout: "chat_only",
+        panels: [],
+        approvedWidgets: approvedWidgets.map((w) => ({
+          id: w.id,
+          agentId: w.agentId,
+          widgetId: w.widgetId,
+          name: w.name,
+          html: w.html,
+          css: w.css,
+          js: w.js,
+          createdAt: w.createdAt,
+        })),
       });
     } catch (err) {
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);

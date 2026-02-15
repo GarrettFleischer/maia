@@ -8,7 +8,7 @@
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Logger } from "../core/types.js";
 import type {
   AgentTool,

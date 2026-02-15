@@ -125,4 +125,29 @@ describe("ContextBuilder", () => {
     expect(msg.role).toBe("system");
     expect(msg.content).toContain("System Info");
   });
+
+  it("should include instructions to use tools and take action", async () => {
+    const { builder } = setup();
+    const msg = await builder.buildSystemPrompt();
+    expect(msg.content).toContain("Using tools");
+    expect(msg.content).toContain("agent_create");
+    expect(msg.content).toMatch(/use.*tools?.*(fulfill|act|request)/i);
+  });
+
+  it("should include GOALS.md and goals/self-scheduling section", async () => {
+    const { builder } = setup();
+    const msg = await builder.buildSystemPrompt();
+    expect(msg.content).toContain("Goals");
+    expect(msg.content).toContain("Goals and self-scheduling");
+    expect(msg.content).toContain("task_manage");
+    expect(msg.content).toMatch(/long-term|short-term/i);
+  });
+
+  it("should include Response format (JSON chat_response + tool_calls)", async () => {
+    const { builder } = setup();
+    const msg = await builder.buildSystemPrompt();
+    expect(msg.content).toContain("Response format");
+    expect(msg.content).toContain("chat_response");
+    expect(msg.content).toContain("tool_calls");
+  });
 });

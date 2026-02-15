@@ -15,6 +15,8 @@ import type {
   HttpClient,
   Logger,
   ModelInfo,
+  ToolDefinition,
+  ToolCall,
 } from "../core/types.js";
 import { ProviderError } from "../core/errors.js";
 
@@ -63,6 +65,49 @@ function toGeminiContents(messages: ChatMessage[]): Array<{ role: string; parts:
 }
 
 /**
+ * @brief Maps ToolDefinition[] to Gemini tools array (functionDeclarations).
+ * @param tools - Maia tool definitions
+ * @returns Gemini API tools payload
+ */
+function toGeminiTools(tools: ToolDefinition[]): Array<{ functionDeclarations: Array<{ name: string; description: string; parameters: Record<string, unknown> }> }> {
+  if (tools.length === 0) return [];
+  return [
+    {
+      functionDeclarations: tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters ?? { type: "object", properties: {} },
+      })),
+    },
+  ];
+}
+
+/**
+ * @brief Parses Gemini response parts into content and toolCalls.
+ * @param parts - response candidates[0].content.parts
+ * @returns { content, toolCalls }
+ */
+function parseGeminiResponseParts(
+  parts: Array<{ text?: string; functionCall?: { name?: string; args?: Record<string, unknown> } }> | undefined
+): { content: string; toolCalls: ToolCall[] } {
+  let content = "";
+  const toolCalls: ToolCall[] = [];
+  if (!parts) return { content, toolCalls };
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.text != null) content += p.text;
+    if (p.functionCall?.name) {
+      toolCalls.push({
+        id: `gemini-${i}`,
+        name: p.functionCall.name,
+        arguments: (p.functionCall.args as Record<string, unknown>) ?? {},
+      });
+    }
+  }
+  return { content, toolCalls };
+}
+
+/**
  * @brief Creates a Gemini LLM provider.
  * @param deps - Dependencies: http, credentials, logger, credentialName, optional model
  * @returns LLMProvider implementation for Gemini
@@ -91,13 +136,17 @@ export function createGeminiProvider(deps: GeminiProviderDeps) {
       const contents = toGeminiContents(messages);
 
       const url = `${BASE_URL}/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
-      const body = JSON.stringify({
+      const payload: Record<string, unknown> = {
         contents,
         generationConfig: {
           temperature: options?.temperature,
           maxOutputTokens: options?.maxTokens,
         },
-      });
+      };
+      if (options?.tools && options.tools.length > 0) {
+        payload.tools = toGeminiTools(options.tools);
+      }
+      const body = JSON.stringify(payload);
 
       try {
         const res = await http.fetch(url, {
@@ -113,14 +162,13 @@ export function createGeminiProvider(deps: GeminiProviderDeps) {
 
         const data = JSON.parse(res.body) as {
           candidates?: Array<{
-            content?: { parts?: Array<{ text?: string }> };
+            content?: { parts?: Array<{ text?: string; functionCall?: { name?: string; args?: Record<string, unknown> } }> };
           }>;
         };
 
-        const text =
-          data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ??
-          "";
-        yield { content: text, done: true };
+        const parts = data.candidates?.[0]?.content?.parts;
+        const { content: text, toolCalls } = parseGeminiResponseParts(parts);
+        yield { content: text, done: true, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error("Gemini chat failed", { error: msg });

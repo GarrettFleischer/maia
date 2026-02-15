@@ -564,6 +564,7 @@ export function testConfig(overrides?: Partial<MaiaConfig>): MaiaConfig {
     scheduler: {
       enabled: true,
       checkIntervalMs: 60000,
+      maiaBrainIntervalMs: 0,
     },
     watchdog: {
       enabled: true,
