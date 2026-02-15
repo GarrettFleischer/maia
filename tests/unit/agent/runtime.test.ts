@@ -216,18 +216,14 @@ describe("AgentRuntime", () => {
       callCount++;
       if (callCount === 1) {
         yield {
-          content: "",
+          content: '{"chat_response":"Searching memory.","tool_calls":[{"name":"memory_search","arguments":{"query":"test"}}]}',
           done: true,
-          toolCalls: [
-            {
-              id: "tc-1",
-              name: "memory_search",
-              arguments: { query: "test" },
-            } as ToolCall,
-          ],
         };
       } else {
-        yield { content: "I searched memory and found nothing.", done: true };
+        yield {
+          content: '{"chat_response":"I searched memory and found nothing.","tool_calls":[]}',
+          done: true,
+        };
       }
     }
 

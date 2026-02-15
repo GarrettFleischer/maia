@@ -393,6 +393,9 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
   /** Maximum tool call rounds per message (prevents infinite loops) */
   const MAX_TOOL_ROUNDS = 5;
 
+  /** Maximum retries when the LLM response is not valid structured JSON (re-prompt with error) */
+  const MAX_PARSE_RETRIES = 3;
+
   /**
    * @brief Gets or creates a session for a channel+sender pair.
    * @param channelId - Channel identifier
@@ -484,6 +487,66 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
     }
 
     return { content, toolCalls };
+  }
+
+  /**
+   * @brief Calls the provider and parses structured JSON (chat_response + tool_calls).
+   * If parsing fails, re-prompts the LLM with the error and retries up to MAX_PARSE_RETRIES.
+   * @param conversation - Full messages to send
+   * @param chatOptions - Options including tools
+   * @param toolRound - Current tool round (0 = initial) for id generation
+   * @returns Normalized response (content = chat_response, toolCalls with ids) or last raw response if still invalid after retries
+   */
+  async function callProviderUntilValidStructuredResponse(
+    conversation: ChatMessage[],
+    chatOptions: ChatOptions,
+    toolRound: number,
+  ): Promise<{
+    content: string;
+    toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  }> {
+    let currentConversation = conversation;
+    let lastResponse: { content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> } = {
+      content: "",
+      toolCalls: [],
+    };
+
+    for (let attempt = 0; attempt <= MAX_PARSE_RETRIES; attempt++) {
+      lastResponse = await callProvider(currentConversation, chatOptions, toolRound);
+      lastResponse = {
+        ...lastResponse,
+        content: redactSecretsFromResponse(lastResponse.content),
+      };
+      const parsed = parseStructuredResponse(lastResponse.content);
+      if (parsed) {
+        return {
+          content: parsed.chat_response,
+          toolCalls: (parsed.tool_calls ?? []).map((tc, i) => ({
+            id: `json_${toolRound}_${i}`,
+            name: tc.name,
+            arguments: tc.arguments ?? {},
+          })),
+        };
+      }
+      if (attempt < MAX_PARSE_RETRIES) {
+        const errorMsg =
+          "System: Your response was not valid JSON. You must respond with a single JSON object only: {\"chat_response\": \"your message to the user\", \"tool_calls\": [{\"name\": \"tool_name\", \"arguments\": {...}}, ...]}. No markdown, no code fences, no extra text. If no tools, use []. Error: Could not parse. Try again.";
+        currentConversation = [
+          ...currentConversation,
+          { role: "assistant" as const, content: lastResponse.content },
+          { role: "user" as const, content: errorMsg, name: "system" },
+        ];
+        logger.debug("Structured JSON parse failed, re-prompting LLM", {
+          attempt: attempt + 1,
+          maxRetries: MAX_PARSE_RETRIES,
+        });
+      }
+    }
+
+    logger.warn("Structured JSON parse failed after retries, using raw response", {
+      retries: MAX_PARSE_RETRIES,
+    });
+    return lastResponse;
   }
 
   return {
@@ -587,23 +650,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         chatOptions.tools = toolDefs;
       }
 
-      let response = await callProvider(conversation, chatOptions);
-      response = {
-        ...response,
-        content: redactSecretsFromResponse(response.content),
-      };
-      // If the model responded with structured JSON (chat_response + tool_calls), use it instead of provider tool_calls
-      const parsed0 = parseStructuredResponse(response.content);
-      if (parsed0) {
-        response = {
-          content: parsed0.chat_response,
-          toolCalls: (parsed0.tool_calls ?? []).map((tc, i) => ({
-            id: `json_0_${i}`,
-            name: tc.name,
-            arguments: tc.arguments ?? {},
-          })),
-        };
-      }
+      let response = await callProviderUntilValidStructuredResponse(
+        conversation,
+        chatOptions,
+        0,
+      );
       const threadId =
         (message.metadata?.threadId as string | undefined) ?? null;
       if (logLlmCall) {
@@ -722,26 +773,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           systemMessage,
           ...sessionManager.getMessages(sessionId),
         ];
-        response = await callProvider(
+        response = await callProviderUntilValidStructuredResponse(
           updatedConversation,
           chatOptions,
           toolRounds,
         );
-        response = {
-          ...response,
-          content: redactSecretsFromResponse(response.content),
-        };
-        const parsedNext = parseStructuredResponse(response.content);
-        if (parsedNext) {
-          response = {
-            content: parsedNext.chat_response,
-            toolCalls: (parsedNext.tool_calls ?? []).map((tc, i) => ({
-              id: `json_${toolRounds}_${i}`,
-              name: tc.name,
-              arguments: tc.arguments ?? {},
-            })),
-          };
-        }
         if (logLlmCall) {
           logLlmCall({
             agentId,
