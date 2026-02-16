@@ -30,6 +30,11 @@ import { createSessionManager } from "../agent/session.js";
 import { createToolRegistry } from "../agent/tools/registry.js";
 import { createWebFetchTool } from "../agent/tools/web-fetch.js";
 import {
+  createFileReadTool,
+  createFileWriteTool,
+  createFileListTool,
+} from "../agent/tools/file-operations.js";
+import {
   createMemorySearchTool,
   createMemoryStoreTool,
   createMemoryForgetTool,
@@ -151,36 +156,27 @@ export function createSubAgentRuntime(
     logger,
   });
 
-  // Tool registry (agent-specific tools)
+  // Tool registry (agent-specific tools). All agents get all tools.
   const toolRegistry = createToolRegistry({ logger, auditLog });
 
-  // Register tools based on agent config
-  const allowedTools = new Set(agentConfig.tools);
+  const ssrfGuard = createSsrfGuard({ blockPrivateIPs: config.security.ssrf.blockPrivateIPs });
+  toolRegistry.register(createWebFetchTool({ http, ssrfGuard, logger }));
 
-  if (allowedTools.has("web_fetch")) {
-    const ssrfGuard = createSsrfGuard({ blockPrivateIPs: config.security.ssrf.blockPrivateIPs });
-    toolRegistry.register(createWebFetchTool({ http, ssrfGuard, logger }));
-  }
+  toolRegistry.register(createFileReadTool({ fs: agentFs, logger }));
+  toolRegistry.register(createFileWriteTool({ fs: agentFs, logger }));
+  toolRegistry.register(createFileListTool({ fs: agentFs, logger }));
 
-  // Memory tools (always scoped to agent's namespace)
   const memoryStore = createMemoryStore({ db, crypto, logger, agentId: agentConfig.id });
-
-  if (allowedTools.has("memory_search")) {
-    toolRegistry.register(createMemorySearchTool({ store: memoryStore, logger }));
-  }
-  if (allowedTools.has("memory_store")) {
-    toolRegistry.register(createMemoryStoreTool({ store: memoryStore, logger }));
-  }
-  if (allowedTools.has("memory_forget")) {
-    toolRegistry.register(createMemoryForgetTool({ store: memoryStore, logger }));
-  }
+  toolRegistry.register(createMemorySearchTool({ store: memoryStore, logger }));
+  toolRegistry.register(createMemoryStoreTool({ store: memoryStore, logger }));
+  toolRegistry.register(createMemoryForgetTool({ store: memoryStore, logger }));
 
   // Response tools: remember, security_report, progress_report (LLM invokes these instead of inline blocks)
   toolRegistry.register(createRememberTool({ fs: agentFs, logger, workspacePath: agentWorkspacePath }));
   toolRegistry.register(createSecurityReportTool({}));
   toolRegistry.register(createProgressReportTool());
 
-  // create_agent, chat_with_agent, dm_user, agent_list, set_identity are registered in index after sub-agent creation
+  // create_agent, message, agent_list, set_identity are registered in index after sub-agent creation
   // when sharedAgentDeps includes agentRegistry, createRuntime, activeAgents, creationRequestsRepo, onAgentCreationRequest
 
   // Auto-recall for this agent's memories
@@ -245,7 +241,7 @@ export function createSubAgentRuntime(
       return await autoRecall.formatContextBlock(query);
     },
     sendReply: async () => {
-      // Sub-agent replies are collected by the caller (e.g. agent_message tool)
+      // Sub-agent replies are collected by the caller (e.g. message tool with agent recipientId)
     },
     mergeStrategy,
     onAfterReply: async ({ userContent, responseContent, privacyMode }) => {

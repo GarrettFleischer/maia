@@ -22,8 +22,7 @@
     "test:watch": "bun test --watch",
     "test:coverage": "bun run scripts/check-coverage.ts",
     "typecheck": "bunx tsc --noEmit",
-    "dashboard:build": "bun run --cwd dashboard build",
-    "compile": "bun run dashboard:build && bun build src/index.ts --compile --outfile=maia"
+    "compile": "bun build src/index.ts --compile --outfile=maia"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

@@ -555,16 +555,13 @@ export function testConfig(overrides?: Partial<MaiaConfig>): MaiaConfig {
       encryption: { enabled: false, scope: [] },
       secretScanner: { enabled: true, patterns: [] },
       auditLog: { enabled: true },
-      toolPermissions: {
-        main: { allow: ["*"] },
-        group: { allow: ["memory_search"], deny: ["web_fetch"] },
-      },
       sandbox: { enabled: true },
     },
     scheduler: {
       enabled: true,
       checkIntervalMs: 60000,
       maiaBrainIntervalMs: 0,
+      maiaThinkingIntervalMs: 0,
     },
     watchdog: {
       enabled: true,

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Unit tests for all 6 agent management tools.
+ * @fileoverview Unit tests for agent management tools (create, list, remove, inspect, update).
  * @module tests/unit/agents/tools
  */
 
@@ -8,7 +8,6 @@ import {
   createAgentCreateTool,
   createAgentListTool,
   createAgentRemoveTool,
-  createAgentMessageTool,
   createAgentInspectTool,
   createAgentUpdateTool,
 } from "../../../src/agents/tools.js";
@@ -213,60 +212,6 @@ describe("agent_remove tool", () => {
 
     expect(result.success).toBe(false);
     expect(result.content).toContain("not found");
-  });
-});
-
-// ─── agent_message ───────────────────────────────────────────────
-
-describe("agent_message tool", () => {
-  it("should send message to active agent and return response", async () => {
-    const activeAgents = new Map<string, SubAgent>();
-    activeAgents.set("chat-bot", mockSubAgent("chat-bot", "I got your message!"));
-    const tool = createAgentMessageTool(makeDeps({ activeAgents }));
-
-    const result = await tool.execute({ id: "chat-bot", content: "Hello!" }, defaultContext());
-
-    expect(result.success).toBe(true);
-    expect(result.content).toContain("I got your message!");
-  });
-
-  it("should fail when agent not active", async () => {
-    const tool = createAgentMessageTool(makeDeps());
-
-    const result = await tool.execute({ id: "offline", content: "Hello" }, defaultContext());
-
-    expect(result.success).toBe(false);
-    expect(result.content).toContain("not active");
-  });
-
-  it("should use context.senderId in the message", async () => {
-    let capturedSenderId: string | undefined;
-    const mockAgent: SubAgent = {
-      config: sampleConfig({ id: "spy-bot" }),
-      runtime: {
-        handleMessage: async (msg) => {
-          capturedSenderId = msg.senderId;
-          return { content: "ack" };
-        },
-        getSessionId: () => undefined,
-        getToolRegistry: () => ({
-          register: () => {},
-          get: () => undefined,
-          definitions: () => [],
-          execute: async () => ({ content: "", success: false }),
-          list: () => [],
-        }),
-      },
-      workspacePath: "/workspace/agents/spy-bot",
-    };
-    const activeAgents = new Map<string, SubAgent>();
-    activeAgents.set("spy-bot", mockAgent);
-    const tool = createAgentMessageTool(makeDeps({ activeAgents }));
-
-    const ctx = { ...defaultContext(), senderId: "maia-manager" };
-    await tool.execute({ id: "spy-bot", content: "test" }, ctx);
-
-    expect(capturedSenderId).toBe("maia-manager");
   });
 });
 

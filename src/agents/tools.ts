@@ -7,7 +7,7 @@
  * and inspect other agents. New agents choose their own name and soul via set_identity.
  */
 
-import type { CryptoProvider, Logger, InboundMessage, EventBus } from "../core/types.js";
+import type { CryptoProvider, Logger, EventBus } from "../core/types.js";
 import type { AgentTool, ToolContext, ToolResult } from "../agent/tools/base.js";
 import type { ToolDefinition } from "../core/types.js";
 import type { AgentRegistry, AgentConfig, AgentModelConfig } from "./registry.js";
@@ -33,7 +33,7 @@ export interface AgentToolsDeps {
   creationRequestsRepo?: AgentCreationRequestsRepository;
   /** Called when a non-Maia agent submits an agent creation request (e.g. to push approval to dashboard). */
   onAgentCreationRequest?: (request: AgentCreationRequest) => void;
-  /** Called when an agent is created (direct path) so the host can register chat_with_agent/dm_user on it. */
+  /** Called when an agent is created (direct path) so the host can register message and other tools on it. */
   onAgentCreated?: (subAgent: SubAgent) => void;
   /** Optional: for agent_list to include each agent's assigned tasks. */
   taskMonitor?: TaskMonitor;
@@ -89,11 +89,15 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
       return {
         name: "agent_create",
         description:
-          "Create a new agent with its own workspace, schedule, and tools. Provide at least id. The new agent will choose their own name and soul after creation. If you are not Maia, your request must be approved by Maia first.",
+          "Create a new agent with its own workspace, schedule, and tools. Provide at least id. Optionally provide description (what the agent is for); the new agent uses it to choose their own name and soul. If you are not Maia, your request must be approved by Maia first.",
         parameters: {
           type: "object",
           properties: {
             id: { type: "string", description: "Unique kebab-case identifier (e.g. 'research-bot')" },
+            description: {
+              type: "string",
+              description: "Short description of what this agent is for (e.g. 'Research assistant that finds and summarizes papers'). The new agent uses this to choose their own name and soul.",
+            },
             schedule: { type: "string", description: "Cron schedule (e.g. '0 9 * * *') or empty for no schedule" },
             tools: {
               type: "array",
@@ -127,6 +131,7 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
         if (!isMaia && creationRequestsRepo && onAgentCreationRequest) {
           const proposedConfig = {
             id,
+            description: args.description as string | undefined,
             schedule: (args.schedule as string) ?? "",
             tools: (args.tools as string[]) ?? ["memory_search", "memory_store"],
             model: {
@@ -146,7 +151,7 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
           if (request) onAgentCreationRequest(request);
           logger.info("Agent creation request submitted", { requestId, id, requestingAgentId: callerId });
           return {
-            content: `Agent creation request for '${id}' submitted. Maia must approve before the agent is created. You will be able to chat with them using chat_with_agent once they exist.`,
+            content: `Agent creation request for '${id}' submitted. Maia must approve before the agent is created. You will be able to message them using message(recipientId: '${id}', content: '...') once they exist.`,
             success: true,
             data: { requestId, agentId: id },
           };
@@ -165,6 +170,7 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
             model: (args.model as string) ?? fallbackModel.model,
           } as AgentModelConfig,
           instructions: args.instructions as string | undefined,
+          description: args.description as string | undefined,
         };
 
         const registered = await registry.register(config);
@@ -175,7 +181,7 @@ export function createAgentCreateTool(deps: AgentToolsDeps): AgentTool {
 
         logger.info("Agent created via tool", { id, createdBy: callerId });
         return {
-          content: `Agent (${id}) created successfully with tools: ${config.tools.join(", ")}. They will choose their own name and soul using set_identity. ${config.schedule ? `Scheduled: ${config.schedule}` : "No schedule."}`,
+          content: `Agent (${id}) created successfully with full tool access. They will choose their own name and soul using set_identity. ${config.schedule ? `Scheduled: ${config.schedule}` : "No schedule."}`,
           success: true,
           data: { agentId: id },
         };
@@ -259,6 +265,61 @@ export function createAgentListTool(deps: AgentToolsDeps): AgentTool {
   };
 }
 
+// ─── agent_shutdown ───────────────────────────────────────────────
+
+/**
+ * @brief Creates the agent_shutdown tool (self-shutdown for sub-agents only).
+ * @param deps - Shared agent tool dependencies (registry, activeAgents, resolveAgentId required)
+ * @returns AgentTool that deactivates the calling agent
+ */
+export function createAgentShutdownTool(deps: AgentToolsDeps): AgentTool {
+  const { registry, logger, activeAgents, resolveAgentId } = deps;
+
+  return {
+    name: "agent_shutdown",
+    description: "Shut yourself down when your purpose is fully served. Only you can call this; Maia cannot.",
+    definition(): ToolDefinition {
+      return {
+        name: "agent_shutdown",
+        description:
+          "Deactivate yourself and stop running. Use this when your purpose is fully served and you have nothing left to do. Only the agent themselves can call this; Maia cannot shut herself down.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      };
+    },
+
+    async execute(_args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+      try {
+        const callerId = resolveAgentId?.(context);
+        if (!callerId || callerId === "maia") {
+          return {
+            content: "Only a sub-agent can shut themselves down. Maia cannot call agent_shutdown.",
+            success: false,
+          };
+        }
+        if (!activeAgents.has(callerId)) {
+          return { content: "You are not active.", success: false };
+        }
+        await registry.update(callerId, { active: false });
+        activeAgents.delete(callerId);
+        logger.info("Agent shut down via tool", { id: callerId });
+        return {
+          content: `You have shut down. You can be restarted by Maia or the user if needed.`,
+          success: true,
+        };
+      } catch (err) {
+        return {
+          content: `Failed to shut down: ${err instanceof Error ? err.message : String(err)}`,
+          success: false,
+        };
+      }
+    },
+  };
+}
+
 // ─── agent_remove ─────────────────────────────────────────────────
 
 /**
@@ -299,74 +360,6 @@ export function createAgentRemoveTool(deps: AgentToolsDeps): AgentTool {
       } catch (err) {
         return {
           content: `Failed to remove agent: ${err instanceof Error ? err.message : String(err)}`,
-          success: false,
-        };
-      }
-    },
-  };
-}
-
-// ─── agent_message ────────────────────────────────────────────────
-
-/**
- * @brief Creates the agent_message tool.
- * @param deps - Shared agent tool dependencies
- * @returns AgentTool that sends a message to a sub-agent and returns the response
- */
-export function createAgentMessageTool(deps: AgentToolsDeps): AgentTool {
-  const { activeAgents, logger, crypto } = deps;
-
-  return {
-    name: "agent_message",
-    description: "Send a message to a sub-agent and get its response.",
-    definition(): ToolDefinition {
-      return {
-        name: "agent_message",
-        description: "Send a message to a specific sub-agent. Returns the agent's response.",
-        parameters: {
-          type: "object",
-          properties: {
-            id: { type: "string", description: "Agent ID to message" },
-            content: { type: "string", description: "Message content to send" },
-          },
-          required: ["id", "content"],
-        },
-      };
-    },
-
-    async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-      try {
-        const id = args.id as string;
-        const content = args.content as string;
-
-        const subAgent = activeAgents.get(id);
-        if (!subAgent) {
-          return { content: `Agent '${id}' is not active. It may not exist or hasn't been loaded.`, success: false };
-        }
-
-        const message: InboundMessage = {
-          id: crypto.randomUUID(),
-          channelId: `agent:${id}`,
-          senderId: context.senderId,
-          content,
-          timestamp: new Date().toISOString(),
-          isGroup: false,
-        };
-
-        const result = await subAgent.runtime.handleMessage(message);
-        logger.debug("Agent message exchanged", {
-          agentId: id,
-          responseLength: result.content.length,
-        });
-
-        return {
-          content: `[${subAgent.config.name}]: ${result.content}`,
-          success: true,
-          data: { agentId: id, response: result.content },
-        };
-      } catch (err) {
-        return {
-          content: `Failed to message agent: ${err instanceof Error ? err.message : String(err)}`,
           success: false,
         };
       }

@@ -145,13 +145,6 @@ export const configSchema = z.object({
       auditLog: z.object({
         enabled: z.boolean().default(true),
       }).default({ enabled: true }),
-      toolPermissions: z.record(z.string(), z.object({
-        allow: z.array(z.string()).optional(),
-        deny: z.array(z.string()).optional(),
-      })).default({
-        main: { allow: ["*"] },
-        group: { allow: ["memory_search"], deny: ["web_fetch"] },
-      }),
       sandbox: z.object({
         enabled: z.boolean().default(true),
         root: z.string().optional(),
@@ -164,10 +157,6 @@ export const configSchema = z.object({
       encryption: { enabled: false, scope: [] },
       secretScanner: { enabled: true, patterns: [] },
       auditLog: { enabled: true },
-      toolPermissions: {
-        main: { allow: ["*"] },
-        group: { allow: ["memory_search"], deny: ["web_fetch"] },
-      },
       sandbox: { enabled: true },
     }),
 
@@ -176,7 +165,9 @@ export const configSchema = z.object({
     checkIntervalMs: z.number().positive().default(60000),
     /** Interval for Maia's periodic \"brain\" run (review goals, schedule self). 0 = disabled. Default 3600000 = 1 hour. */
     maiaBrainIntervalMs: z.number().min(0).default(3600000),
-  }).default({ enabled: true, checkIntervalMs: 60000, maiaBrainIntervalMs: 3600000 }),
+    /** Interval for Maia's \"thinking\" run (reflect, optionally message user/agents). 0 = disabled. Default 0. */
+    maiaThinkingIntervalMs: z.number().min(0).default(0),
+  }).default({ enabled: true, checkIntervalMs: 60000, maiaBrainIntervalMs: 3600000, maiaThinkingIntervalMs: 0 }),
 
   watchdog: z.object({
     enabled: z.boolean().default(true),

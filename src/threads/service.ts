@@ -35,6 +35,16 @@ export interface Thread {
 }
 
 /**
+ * @brief Kind of a thread message for chat log display (user, assistant, tool_call, tool_result, agent_dm).
+ */
+export type ThreadMessageKind =
+  | "user"
+  | "assistant"
+  | "tool_call"
+  | "tool_result"
+  | "agent_dm";
+
+/**
  * @brief A single message within a thread.
  */
 export interface ThreadMessage {
@@ -44,6 +54,10 @@ export interface ThreadMessage {
   senderType: SenderType;
   content: string;
   createdAt: string;
+  /** Optional kind for chat log (assistant, tool_call, tool_result, etc.). */
+  kind?: ThreadMessageKind;
+  /** Optional JSON metadata (e.g. tool name, args, result summary). */
+  metadata?: string;
 }
 
 /**
@@ -96,9 +110,18 @@ export interface ThreadService {
    * @param senderId - ID of the sender
    * @param senderType - Type of sender (user, agent, maia)
    * @param content - Message content
+   * @param kind - Optional message kind (assistant, tool_call, tool_result, etc.)
+   * @param metadata - Optional JSON string metadata (e.g. tool name, args)
    * @returns The created message
    */
-  addMessage(threadId: string, senderId: string, senderType: SenderType, content: string): Promise<ThreadMessage>;
+  addMessage(
+    threadId: string,
+    senderId: string,
+    senderType: SenderType,
+    content: string,
+    kind?: ThreadMessageKind,
+    metadata?: string
+  ): Promise<ThreadMessage>;
 
   /**
    * @brief Gets a thread by ID.
@@ -213,6 +236,8 @@ interface MessageRow {
   sender_type: string;
   content: string;
   created_at: string;
+  kind?: string | null;
+  metadata?: string | null;
 }
 
 /**
@@ -255,6 +280,8 @@ function rowToMessage(row: MessageRow): ThreadMessage {
     senderType: row.sender_type as SenderType,
     content: row.content,
     createdAt: row.created_at,
+    ...(row.kind != null && row.kind !== "" ? { kind: row.kind as ThreadMessage["kind"] } : {}),
+    ...(row.metadata != null && row.metadata !== "" ? { metadata: row.metadata } : {}),
   };
 }
 
@@ -299,15 +326,17 @@ export function createThreadService(deps: ThreadServiceDeps): ThreadService {
       threadId: string,
       senderId: string,
       senderType: SenderType,
-      content: string
+      content: string,
+      kind?: ThreadMessageKind,
+      metadata?: string
     ): Promise<ThreadMessage> {
       const id = crypto.randomUUID();
       const now = clock.timestamp();
 
       await db.execute(
-        `INSERT INTO thread_messages (id, thread_id, sender_id, sender_type, content, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [id, threadId, senderId, senderType, content, now]
+        `INSERT INTO thread_messages (id, thread_id, sender_id, sender_type, content, created_at, kind, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, threadId, senderId, senderType, content, now, kind ?? null, metadata ?? null]
       );
 
       // Update thread's updated_at timestamp
@@ -316,7 +345,7 @@ export function createThreadService(deps: ThreadServiceDeps): ThreadService {
         [now, threadId]
       );
 
-      logger.debug("Message added to thread", { threadId, senderId, senderType });
+      logger.debug("Message added to thread", { threadId, senderId, senderType, kind });
 
       return {
         id,
@@ -325,6 +354,8 @@ export function createThreadService(deps: ThreadServiceDeps): ThreadService {
         senderType,
         content,
         createdAt: now,
+        ...(kind != null ? { kind } : {}),
+        ...(metadata != null ? { metadata } : {}),
       };
     },
 
@@ -340,7 +371,7 @@ export function createThreadService(deps: ThreadServiceDeps): ThreadService {
 
     async getMessages(threadId: string, limit = 50, offset = 0): Promise<ThreadMessage[]> {
       const rows = await db.query<MessageRow>(
-        `SELECT id, thread_id, sender_id, sender_type, content, created_at
+        `SELECT id, thread_id, sender_id, sender_type, content, created_at, kind, metadata
          FROM thread_messages
          WHERE thread_id = ?
          ORDER BY created_at ASC

@@ -71,9 +71,12 @@ function mockThreadService(overrides?: Partial<ThreadService>): ThreadService {
 
 /**
  * Mock queue: enqueue returns jobId; waitForJobResult runs the action and returns the result.
- * Uses activeAgents to run handleAgentCheckin / handleAgentToAgentChat.
+ * Uses activeAgents to run handleAgentCheckin / handleAgentToAgentChat; when toAgentId is "maia", uses maiaRuntime.
  */
-function mockQueue(activeAgents: Map<string, SubAgent>): OrchestratorQueue {
+function mockQueue(
+  activeAgents: Map<string, SubAgent>,
+  maiaRuntime?: { handleMessage: (msg: InboundMessage) => Promise<HMR> }
+): OrchestratorQueue {
   const pending = new Map<string, Promise<HMR>>();
   let jobCounter = 0;
   return {
@@ -93,6 +96,9 @@ function mockQueue(activeAgents: Map<string, SubAgent>): OrchestratorQueue {
         }
         if (action === "handleAgentToAgentChat") {
           const toAgentId = args.toAgentId as string;
+          if (toAgentId === "maia" && maiaRuntime) {
+            return maiaRuntime.handleMessage(args.message as InboundMessage);
+          }
           const subAgent = activeAgents.get(toAgentId);
           if (subAgent) return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HMR>;
           return Promise.resolve({ content: "" });
@@ -165,21 +171,65 @@ describe("Orchestrator", () => {
       }),
     };
 
+    const maiaRuntime = { handleMessage: async () => ({ content: "" }) };
     const orchestrator = createOrchestrator({
       clock: fixedClock(),
       crypto: mockCryptoProvider(),
       logger: capturingLogger(),
       threadService: ts,
-      priorityQueue: mockQueue(activeAgents),
+      priorityQueue: mockQueue(activeAgents, maiaRuntime),
       activeAgents,
-      maiaRuntime: { handleMessage: async () => ({ content: "" }) },
+      maiaRuntime,
       wsPush: (type, payload) => wsPushCalls.push({ type, ...payload } as { type: string; payload: Record<string, unknown> }),
     });
 
-    const result = await orchestrator.agentToAgentChat("maia", "bot", "Hi");
+    const result =     await orchestrator.agentToAgentChat("maia", "bot", "Hi");
     expect(result).toBe("Hello back.");
     expect(addMessageCalls).toBeGreaterThanOrEqual(2);
     expect(wsPushCalls.some((c) => c.type === "thread_update")).toBe(true);
+  });
+
+  it("agentToAgentChat with toAgentId maia invokes maiaRuntime and returns Maia reply", async () => {
+    const bot = createSubAgent("bot", "Bot", { content: "Hi" });
+    activeAgents.set("bot", bot);
+
+    const maiaRuntime = {
+      handleMessage: async (msg: InboundMessage) => ({
+        content: `Maia received: ${msg.content}`,
+      }),
+    };
+
+    const addMessageCalls: Array<{ senderId: string; senderType: string; content: string }> = [];
+    const threadService = mockThreadService({
+      addMessage: async (_threadId, senderId, senderType, content) => {
+        addMessageCalls.push({ senderId, senderType, content });
+        return {
+          id: "m",
+          threadId: "t1",
+          senderId,
+          senderType: senderType as "user" | "agent" | "maia",
+          content,
+          createdAt: "",
+        };
+      },
+    });
+
+    const orchestrator = createOrchestrator({
+      clock: fixedClock(),
+      crypto: mockCryptoProvider(),
+      logger: capturingLogger(),
+      threadService,
+      priorityQueue: mockQueue(activeAgents, maiaRuntime),
+      activeAgents,
+      maiaRuntime,
+      wsPush: () => {},
+    });
+
+    const result = await orchestrator.agentToAgentChat("bot", "maia", "Hello Maia");
+    expect(result).toBe("Maia received: Hello Maia");
+    const maiaReply = addMessageCalls.find((c) => c.senderId === "maia" && c.senderType === "maia");
+    expect(maiaReply).toBeDefined();
+    expect(maiaReply!.content).toBe("Maia received: Hello Maia");
   });
 
   it("agentToAgentChat when response has securityFlagged: flag applies to conversation partner (fromAgent), not responder", async () => {

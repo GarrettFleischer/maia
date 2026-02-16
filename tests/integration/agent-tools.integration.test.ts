@@ -564,24 +564,6 @@ describe("Tool registry (integration)", () => {
     expect(result.content).toContain("not found");
   });
 
-  it("should deny execution when isAllowed returns false", async () => {
-    const logger = capturingLogger();
-    const crypto = createRealCryptoProvider();
-    const store = createMemoryStore({ db, crypto, logger });
-    const registry = createToolRegistry({
-      logger,
-      isAllowed: () => false,
-    });
-    registry.register(createMemorySearchTool({ store, logger }));
-    const result = await registry.execute(
-      "memory_search",
-      { query: "test" },
-      defaultContext,
-    );
-    expect(result.success).toBe(false);
-    expect(result.content).toContain("Permission denied");
-  });
-
   it("should return failure when tool execute throws", async () => {
     const logger = capturingLogger();
     const registry = createToolRegistry({ logger });

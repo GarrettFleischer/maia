@@ -96,6 +96,23 @@ describe("Config Schema", () => {
     }
   });
 
+  it("should default scheduler.maiaThinkingIntervalMs to 0", () => {
+    const config = {
+      provider: { primary: "ollama", model: "test" },
+    };
+    const result = configSchema.parse(config);
+    expect(result.scheduler.maiaThinkingIntervalMs).toBe(0);
+  });
+
+  it("should accept scheduler.maiaThinkingIntervalMs when set", () => {
+    const config = {
+      provider: { primary: "ollama", model: "test" },
+      scheduler: { enabled: true, checkIntervalMs: 60000, maiaBrainIntervalMs: 3600000, maiaThinkingIntervalMs: 600000 },
+    };
+    const result = configSchema.parse(config);
+    expect(result.scheduler.maiaThinkingIntervalMs).toBe(600000);
+  });
+
   it("should accept telegram channel with optional userChatId and webhookSecret", () => {
     const config = {
       provider: { primary: "ollama", model: "test" },

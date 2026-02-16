@@ -143,11 +143,20 @@ describe("ContextBuilder", () => {
     expect(msg.content).toMatch(/long-term|short-term/i);
   });
 
-  it("should include Response format (JSON chat_response + tool_calls)", async () => {
+  it("should include Response format (JSON chat_message + optional single tool)", async () => {
     const { builder } = setup();
     const msg = await builder.buildSystemPrompt();
     expect(msg.content).toContain("Response format");
-    expect(msg.content).toContain("chat_response");
-    expect(msg.content).toContain("tool_calls");
+    expect(msg.content).toContain("chat_message");
+    expect(msg.content).toContain("tool");
+  });
+
+  it("should include Conversation flow with message(recipientId, content) guidance", async () => {
+    const { builder } = setup();
+    const msg = await builder.buildSystemPrompt();
+    expect(msg.content).toContain("Conversation flow");
+    expect(msg.content).toContain("message");
+    expect(msg.content).toMatch(/recipientId|'user'|'maia'|agent id/);
+    expect(msg.content).toContain("progress_report");
   });
 });

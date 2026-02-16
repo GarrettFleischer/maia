@@ -140,7 +140,6 @@ Connect Maia as a Discord bot.
 - Responds to direct messages
 - In servers, responds when mentioned (`@Maia`) or when configured prefixes are used
 - Group chat rules from AGENTS.md apply in server channels
-- Tool permissions are restricted in group contexts
 
 ### Message Formatting
 

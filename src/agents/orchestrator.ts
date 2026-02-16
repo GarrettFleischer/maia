@@ -98,6 +98,8 @@ export interface OrchestratorDeps {
   auditLog?: AuditLog;
   /** Optional: forward DM content to external channels (e.g. Telegram). Called after thread + wsPush. */
   forwardDmToUser?: (content: string) => Promise<void>;
+  /** Optional: called when an agent reports progress (for thinking sidebar). */
+  onAgentThought?: (agentId: string, content: string) => void;
 }
 
 /**
@@ -170,6 +172,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     agentWorkspaceFs,
     auditLog,
     forwardDmToUser,
+    onAgentThought,
   } = deps;
 
   let checkInTimer: ReturnType<typeof setInterval> | null = null;
@@ -242,7 +245,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           `Check-in: ${subAgent.config.name}`
         );
 
-        const checkinPrompt = "How is your current task going? Any updates, progress, or blockers to report?";
+        const checkinPrompt =
+          "How is your current task going? Any updates, progress, or blockers to report? If there is something you want to tell the user or Maia, say it here or use progress_report or message(recipientId: 'user' or 'maia', content: '...') so it can be surfaced.";
 
         await threadService.addMessage(thread.id, "maia", "maia", checkinPrompt);
 
@@ -297,14 +301,39 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         if (response.progressReport) {
           const { status, summary } = response.progressReport;
-          await orchestrator.sendDmToUser(
-            agentId,
-            subAgent.config.name,
-            `Progress: [${status}] ${summary}`
-          );
+          onAgentThought?.(agentId, `[${status}] ${summary}`);
+          if (status !== "thinking" && status !== "planning") {
+            await orchestrator.sendDmToUser(
+              agentId,
+              subAgent.config.name,
+              `Progress: [${status}] ${summary}`
+            );
+          }
         }
 
         await threadService.addMessage(thread.id, agentId, "agent", response.content);
+
+        const contentLower = response.content.toLowerCase();
+        const seemsIdle =
+          /nothing to do|no task|don't have (a )?task|not doing anything|idle|nothing (right )?now|no (current )?work|nothing on my plate/i.test(contentLower) ||
+          (contentLower.includes("nothing") && contentLower.includes("do"));
+
+        if (seemsIdle) {
+          const followUp =
+            "If you'd like something to do, you can use task_manage to schedule a goal or task for yourself. If you prefer, I can suggest a task—just say what would be useful. If your purpose is fully served, you can call agent_shutdown.";
+          await threadService.addMessage(thread.id, "maia", "maia", followUp);
+          const followUpMsg: InboundMessage = {
+            id: crypto.randomUUID(),
+            channelId: `checkin:${agentId}`,
+            senderId: "maia",
+            content: followUp,
+            timestamp: clock.timestamp(),
+            isGroup: false,
+          };
+          const followUpJobId = priorityQueue.enqueue("handleAgentCheckin", { message: followUpMsg, agentId }, "background", agentId);
+          const followUpResponse = await priorityQueue.waitForJobResult(followUpJobId);
+          await threadService.addMessage(thread.id, agentId, "agent", followUpResponse.content);
+        }
 
         wsPush("agent_status_update", {
           agentId,
@@ -433,31 +462,52 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return;
       }
 
-      // Create or find a DM thread
-      const dmThreadId = threadId ?? (await (async () => {
-        const thread = await threadService.findOrCreateThread(
-          "agent-dm",
-          [senderId, "user"],
-          `DM from ${senderName}`
-        );
-        return thread.id;
-      })());
+      // For Maia, use the user-maia chat thread so the message appears in the dashboard when the user opens Maia.
+      // For other agents, use an agent-dm thread and push agent_dm.
+      const isMaia = senderId === "maia";
+      const dmThreadId =
+        threadId ??
+        (await (async () => {
+          if (isMaia) {
+            const thread = await threadService.findOrCreateThread(
+              "user-maia",
+              ["user", "maia"],
+              "Chat"
+            );
+            return thread.id;
+          }
+          const thread = await threadService.findOrCreateThread(
+            "agent-dm",
+            [senderId, "user"],
+            `DM from ${senderName}`
+          );
+          return thread.id;
+        })());
+
+      const senderType = isMaia ? "maia" : "agent";
 
       // Record the message in the thread
-      await threadService.addMessage(
-        dmThreadId,
-        senderId,
-        senderId === "maia" ? "maia" : "agent",
-        content
-      );
+      await threadService.addMessage(dmThreadId, senderId, senderType, content);
 
-      // Push via WebSocket to the dashboard
-      wsPush("agent_dm", {
-        agentId: senderId,
-        agentName: senderName,
-        threadId: dmThreadId,
-        content,
-      });
+      // Push so the dashboard shows it: thread_update for Maia (user-maia thread), agent_dm for others
+      if (isMaia) {
+        wsPush("thread_update", {
+          threadId: dmThreadId,
+          message: {
+            senderId,
+            senderType,
+            content,
+            createdAt: clock.timestamp(),
+          },
+        });
+      } else {
+        wsPush("agent_dm", {
+          agentId: senderId,
+          agentName: senderName,
+          threadId: dmThreadId,
+          content,
+        });
+      }
 
       // Forward to external channels (e.g. Telegram) if configured
       if (forwardDmToUser) {
@@ -473,9 +523,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       content: string
     ): Promise<string> {
       const toAgent = activeAgents.get(toAgentId);
-      if (!toAgent) {
+      const isMaia = toAgentId === "maia";
+      if (!isMaia && !toAgent) {
         throw new Error(`Agent '${toAgentId}' is not active`);
       }
+      const toAgentName = isMaia ? "Maia" : (toAgent?.config.name ?? toAgentId);
 
       // Find or create the agent-agent thread
       const thread = await threadService.findOrCreateThread(
@@ -540,8 +592,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             "maia",
             "Maia",
             flaggedPartyId === "maia"
-              ? `Agent **${toAgent.config.name}** (${toAgentId}) reported a concern about my message: ${reason}. Please review in the dashboard.`
-              : `Agent **${toAgent.config.name}** (${toAgentId}) reported a concern about **${flaggedPartyName}** (${flaggedPartyId}). I've stopped ${flaggedPartyName}. Please choose what to do in the dashboard.`
+              ? `Agent **${toAgentName}** (${toAgentId}) reported a concern about my message: ${reason}. Please review in the dashboard.`
+              : `Agent **${toAgentName}** (${toAgentId}) reported a concern about **${flaggedPartyName}** (${flaggedPartyId}). I've stopped ${flaggedPartyName}. Please choose what to do in the dashboard.`
           );
           logger.warn("Agent reported security concern; stopped flagged party", {
             flaggedPartyId,
@@ -553,11 +605,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       if (response.progressReport) {
         const { status, summary } = response.progressReport;
-        await orchestrator.sendDmToUser(
-          toAgentId,
-          toAgent.config.name,
-          `Progress: [${status}] ${summary}`
-        );
+        onAgentThought?.(toAgentId, `[${status}] ${summary}`);
+        if (status !== "thinking" && status !== "planning") {
+          await orchestrator.sendDmToUser(
+            toAgentId,
+            toAgentName,
+            `Progress: [${status}] ${summary}`
+          );
+        }
       }
 
       if (response.remembered && agentWorkspaceFs && agentRegistry) {
@@ -580,7 +635,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
 
       // Record the response
-      await threadService.addMessage(thread.id, toAgentId, "agent", response.content);
+      await threadService.addMessage(
+        thread.id,
+        toAgentId,
+        isMaia ? "maia" : "agent",
+        response.content
+      );
 
       // Push thread update to dashboard
       wsPush("thread_update", {

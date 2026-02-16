@@ -153,22 +153,15 @@ Any string value in the config can reference environment variables using `${VAR_
     },
     "auditLog": {
       "enabled": true
-    },
-    "toolPermissions": {
-      "main": {
-        "allow": ["*"]              // All tools in main sessions
-      },
-      "group": {
-        "allow": ["memory_search"],  // Limited in group contexts
-        "deny": ["web_fetch", "memory_store"]
-      }
     }
   },
 
   // ─── Scheduler ──────────────────────────────────────────
   "scheduler": {
     "enabled": true,
-    "checkIntervalMs": 60000         // Check for due tasks every minute
+    "checkIntervalMs": 60000,        // Check for due tasks every minute
+    "maiaBrainIntervalMs": 3600000,  // Maia brain run (goals, task_manage). 0 = disabled. Default 1 hour
+    "maiaThinkingIntervalMs": 0      // Maia thinking run (reflect, optionally message user/agents). 0 = disabled. Increase for more frequent conversation flow; increases LLM usage. Quiet hours and pending-DM merging still apply
   },
 
   // ─── Watchdog ───────────────────────────────────────────

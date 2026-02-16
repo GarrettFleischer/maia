@@ -111,4 +111,52 @@ describe("Scheduler", () => {
     const completed = tasks.find((t) => t.id === task.id);
     expect(completed?.status).toBe("completed");
   });
+
+  it("should normalize object schedule to string on load (cron)", async () => {
+    const fs = inMemoryFileSystem();
+    const clock = fixedClock(new Date("2026-02-13T09:00:00.000Z")); // 09:00 so "0 9 * * *" matches
+    const schedulerPath = "/data/scheduler.json";
+    const raw = [
+      {
+        id: "c2240360ae7ce9d5abc604f5d2a32506",
+        schedule: { cron: "0 9 * * *" },
+        prompt: "Legacy task",
+        channel: "agent:test",
+        status: "pending",
+        createdAt: "2026-02-01T00:00:00.000Z",
+      },
+    ];
+    await fs.mkdir("/data");
+    await fs.writeFile(schedulerPath, JSON.stringify(raw, null, 2));
+
+    const scheduler = createScheduler({ fs, clock, schedulerPath });
+    const due = await scheduler.getDueTasks();
+    expect(due).toHaveLength(1);
+    expect(due[0].schedule).toBe("0 9 * * *");
+    expect(due[0].prompt).toBe("Legacy task");
+  });
+
+  it("should drop task with object schedule when no string can be extracted", async () => {
+    const fs = inMemoryFileSystem();
+    const clock = fixedClock(new Date("2026-02-13T14:00:00.000Z"));
+    const schedulerPath = "/data/scheduler.json";
+    const raw = [
+      {
+        id: "bad-task-id",
+        schedule: { type: "custom", config: {} },
+        prompt: "Invalid",
+        channel: "cli",
+        status: "pending",
+        createdAt: "2026-02-01T00:00:00.000Z",
+      },
+    ];
+    await fs.mkdir("/data");
+    await fs.writeFile(schedulerPath, JSON.stringify(raw, null, 2));
+
+    const scheduler = createScheduler({ fs, clock, schedulerPath });
+    const list = await scheduler.list();
+    expect(list).toHaveLength(0);
+    const due = await scheduler.getDueTasks();
+    expect(due).toHaveLength(0);
+  });
 });

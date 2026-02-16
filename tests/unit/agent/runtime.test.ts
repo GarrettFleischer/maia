@@ -15,7 +15,7 @@ import {
   testConfig,
   fixedClock,
 } from "../../helpers/index.js";
-import type { ChatChunk, LLMProvider, InboundMessage, ToolCall } from "../../../src/core/types.js";
+import type { ChatChunk, LLMProvider, InboundMessage } from "../../../src/core/types.js";
 import { createMemorySearchTool } from "../../../src/agent/tools/memory-tools.js";
 import { mockCryptoProvider } from "../../helpers/index.js";
 import { createMemoryStore } from "../../../src/memory/store.js";
@@ -216,12 +216,12 @@ describe("AgentRuntime", () => {
       callCount++;
       if (callCount === 1) {
         yield {
-          content: '{"chat_response":"Searching memory.","tool_calls":[{"name":"memory_search","arguments":{"query":"test"}}]}',
+          content: '{"chat_message":"Searching memory.","tool":{"name":"memory_search","args":{"query":"test"}}}',
           done: true,
         };
       } else {
         yield {
-          content: '{"chat_response":"I searched memory and found nothing.","tool_calls":[]}',
+          content: '{"chat_message":"I searched memory and found nothing.","tool":null}',
           done: true,
         };
       }
@@ -262,6 +262,75 @@ describe("AgentRuntime", () => {
     expect(callCount).toBe(2);
     expect(result.content).toContain("I searched memory");
     expect(sentReplies.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("should parse new response shape (chat_message + single tool) and return messages", async () => {
+    const db = createSQLiteDatabase(":memory:");
+    const sqlPath = path.resolve("src/core/migrations/migrations/001_initial_schema.sql");
+    const sql = await fsNative.readFile(sqlPath, "utf-8");
+    await db.execute(sql);
+    const logger = capturingLogger();
+    const crypto = mockCryptoProvider();
+    const store = createMemoryStore({ db, crypto, logger });
+    const toolRegistry = createToolRegistry({ logger });
+    toolRegistry.register(createMemorySearchTool({ store, logger }));
+
+    let callCount = 0;
+    async function* providerNewShape(): AsyncGenerator<ChatChunk> {
+      callCount++;
+      if (callCount === 1) {
+        yield {
+          content: '{"chat_message":"Looking that up.","tool":{"name":"memory_search","args":{"query":"test"}}}',
+          done: true,
+        };
+      } else {
+        yield {
+          content: '{"chat_message":"I found nothing.","tool":null}',
+          done: true,
+        };
+      }
+    }
+
+    const runtime = createAgentRuntime({
+      config: testConfig(),
+      logger,
+      events: mockEventBus(),
+      provider: {
+        id: "mock",
+        name: "Mock",
+        chat: providerNewShape,
+        healthCheck: async () => true,
+        listModels: async () => [],
+        contextWindowSize: () => 4096,
+      },
+      sessionManager: createSessionManager({
+        contextWindowSize: 4096,
+        compactionThresholdPercent: 80,
+        preserveRecentMessages: 10,
+        logger,
+        clock: fixedClock(),
+      }),
+      contextBuilder: createContextBuilder({
+        fs: inMemoryFileSystem({ "/test/workspace/SOUL.md": "# Soul" }),
+        config: testConfig(),
+        logger,
+      }),
+      toolRegistry,
+      sendReply: async () => {},
+    });
+
+    const result = await runtime.handleMessage(testMessage("Search for test"));
+    expect(callCount).toBe(2);
+    expect(result.content).toContain("I found nothing");
+    expect(result.messages).toBeDefined();
+    expect(Array.isArray(result.messages)).toBe(true);
+    const assistants = result.messages!.filter((m) => m.kind === "assistant");
+    const toolCalls = result.messages!.filter((m) => m.kind === "tool_call");
+    const toolResults = result.messages!.filter((m) => m.kind === "tool_result");
+    expect(assistants.length).toBeGreaterThanOrEqual(1);
+    expect(toolCalls.length).toBe(1);
+    expect(toolCalls[0].toolName).toBe("memory_search");
+    expect(toolResults.length).toBe(1);
   });
 
   it("should skip memory recall when privacy is active", async () => {

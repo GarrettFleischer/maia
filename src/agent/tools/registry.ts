@@ -1,6 +1,6 @@
 /**
  * @fileoverview Tool registry for the agent. Manages registration, lookup,
- * and permission-checked execution of agent tools.
+ * and execution of agent tools.
  * @module agent/tools/registry
  *
  * @note Implements a Factory + Registry pattern. Tools register themselves
@@ -15,8 +15,6 @@ import type { AgentTool, ToolContext, ToolResult } from "./base.js";
  */
 export interface ToolRegistryDeps {
   logger: Logger;
-  /** Optional permission checker: returns true if tool is allowed in context */
-  isAllowed?: (toolName: string, context: ToolContext) => boolean;
   /** Optional audit log to record every tool execution for auditing. */
   auditLog?: AuditLog;
 }
@@ -46,7 +44,7 @@ export interface ToolRegistry {
   definitions(): ToolDefinition[];
 
   /**
-   * @brief Executes a tool by name with permission checking.
+   * @brief Executes a tool by name.
    * @param name - Tool name to execute
    * @param args - Arguments from the LLM
    * @param context - Execution context
@@ -63,7 +61,7 @@ export interface ToolRegistry {
 
 /**
  * @brief Creates a tool registry for managing agent tools.
- * @param deps - Dependencies: logger, optional isAllowed permission checker
+ * @param deps - Dependencies: logger, optional auditLog
  * @returns ToolRegistry instance
  *
  * @example
@@ -78,7 +76,7 @@ export interface ToolRegistry {
 const AUDIT_RESULT_SUMMARY_MAX = 200;
 
 export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
-  const { logger, isAllowed, auditLog } = deps;
+  const { logger, auditLog } = deps;
   const tools = new Map<string, AgentTool>();
 
   return {
@@ -118,29 +116,6 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
         }
         return {
           content: `Tool '${name}' not found.`,
-          success: false,
-        };
-      }
-
-      // Permission check
-      if (isAllowed && !isAllowed(name, context)) {
-        logger.warn("Tool execution denied by permissions", {
-          name,
-          sessionId: context.sessionId,
-          channelId: context.channelId,
-        });
-        if (auditLog) {
-          await auditLog.log("TOOL_EXECUTION", {
-            toolName: name,
-            success: false,
-            resultSummary: "permission denied",
-            sessionId: context.sessionId,
-            channelId: context.channelId,
-            senderId: context.senderId,
-          });
-        }
-        return {
-          content: `Permission denied for tool '${name}'.`,
           success: false,
         };
       }

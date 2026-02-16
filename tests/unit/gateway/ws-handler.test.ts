@@ -213,6 +213,58 @@ describe("WSHandler", () => {
     expect(JSON.parse(response!).error).toContain("not configured");
   });
 
+  // ── thread_message (DM threads including user-maia) ──────────────────
+
+  it("should handle thread_message and call onThreadMessage with threadId and content", async () => {
+    let captured: { connectionId: string; senderId: string; threadId: string; content: string } | null = null;
+    const handler = createWSHandler({
+      logger: capturingLogger(),
+      events: mockEventBus(),
+      onThreadMessage: async (connectionId, senderId, threadId, content) => {
+        captured = { connectionId, senderId, threadId, content };
+        return { content: `Echo: ${content}` };
+      },
+    });
+    handler.connect("ws-1", "user-1");
+    const response = await handler.handleMessage(
+      "ws-1",
+      JSON.stringify({
+        type: "thread_message",
+        threadId: "thread-abc",
+        content: "Hello Maia",
+      })
+    );
+    expect(response).not.toBeNull();
+    const parsed = JSON.parse(response!);
+    expect(parsed.type).toBe("thread_message_response");
+    expect(parsed.threadId).toBe("thread-abc");
+    expect(parsed.content).toBe("Echo: Hello Maia");
+    expect(captured).not.toBeNull();
+    expect(captured!.connectionId).toBe("ws-1");
+    expect(captured!.senderId).toBe("user-1");
+    expect(captured!.threadId).toBe("thread-abc");
+    expect(captured!.content).toBe("Hello Maia");
+  });
+
+  it("should return error when thread_message missing threadId or content", async () => {
+    const handler = createWSHandler({
+      logger: capturingLogger(),
+      events: mockEventBus(),
+      onThreadMessage: async () => ({ content: "" }),
+    });
+    handler.connect("ws-1", "user-1");
+    const r1 = await handler.handleMessage(
+      "ws-1",
+      JSON.stringify({ type: "thread_message", content: "Hi" })
+    );
+    expect(JSON.parse(r1!).error).toContain("threadId and content");
+    const r2 = await handler.handleMessage(
+      "ws-1",
+      JSON.stringify({ type: "thread_message", threadId: "t-1" })
+    );
+    expect(JSON.parse(r2!).error).toContain("threadId and content");
+  });
+
   // ── broadcast (widget_approved and other push types) ─────────────────
 
   it("should broadcast widget_approved to all connections with correct payload", () => {

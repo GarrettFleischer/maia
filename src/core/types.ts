@@ -333,7 +333,6 @@ export interface MaiaConfig {
     encryption: { enabled: boolean; scope: string[] };
     secretScanner: { enabled: boolean; patterns: string[] };
     auditLog: { enabled: boolean };
-    toolPermissions: Record<string, { allow?: string[]; deny?: string[] }>;
     sandbox: { enabled: boolean; root?: string };
   };
   scheduler: {
@@ -341,6 +340,8 @@ export interface MaiaConfig {
     checkIntervalMs: number;
     /** Interval for Maia's periodic brain run (ms). 0 = disabled. */
     maiaBrainIntervalMs: number;
+    /** Interval for Maia's thinking run (ms). 0 = disabled. */
+    maiaThinkingIntervalMs: number;
   };
   watchdog: {
     enabled: boolean;

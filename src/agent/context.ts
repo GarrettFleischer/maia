@@ -48,6 +48,8 @@ export interface ContextInput {
   additionalContext?: string;
   /** Queue status summary (only when Maia is acting as the brain / high-level reasoning) */
   queueStatusSummary?: string;
+  /** Canonical list of tool names and descriptions (from registry); use when describing your capabilities. */
+  toolListSummary?: string;
 }
 
 /**
@@ -151,6 +153,14 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
     if (tools) {
       sections.push(`## Available Tools\n${tools}`);
     }
+    // Canonical tool list from registry so the model describes its capabilities accurately
+    if (input?.toolListSummary) {
+      sections.push(
+        "## Your tools (canonical list)\n" +
+          "When the user asks what tools or commands you have, use this list. Do not omit tools.\n\n" +
+          input.toolListSummary
+      );
+    }
 
     // Goals (long-term, short-term, and when to work on them)
     const goals = await loadWorkspaceFile("GOALS.md");
@@ -200,12 +210,29 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
     sections.push(
       "## Using tools\n" +
         "You have tools available; **use them to fulfill requests** instead of only describing what could be done.\n" +
-        "- When the user asks to **create an agent** (or a bot, assistant, or helper), or says **\"use your tools\"**, **\"make those agents\"**, **\"spin up\"**, **\"create the agents\"**, **\"spin them up\"**, **\"go ahead\"**, **\"do it\"**, or **\"yes\"** (in reply to a prior request to create agents), you **MUST** call **agent_create** for each agent (e.g. agent_create({ id: 'wally', tools: ['submit_widget_for_review', 'chat_with_agent', 'dm_user'], ... }), then agent_create({ id: 'cleo', ... })). Do not reply with only text like \"Now creating...\" or ask for confirmation again—call the tool first, then summarize the result.\n" +
+        "- When the user asks to **create an agent** (or a bot, assistant, or helper), or says **\"use your tools\"**, **\"make those agents\"**, **\"spin up\"**, **\"create the agents\"**, **\"spin them up\"**, **\"go ahead\"**, **\"do it\"**, or **\"yes\"** (in reply to a prior request to create agents), you **MUST** call **agent_create** for each agent (one agent per response; after each tool result you can call the next). Pass a short **description** of what the agent is for so they can choose a fitting name and soul. Do not reply with only text like \"Now creating...\" or ask for confirmation again—call the tool first, then summarize the result in your next chat_message.\n" +
         "- When the user shares a **URL** or asks to fetch a page or get content from the web, call **web_fetch**.\n" +
         "- When the user asks **who or what agents exist**, or to list agents, call **agent_list**.\n" +
         "- When something is worth persisting (user info, preferences, insights), use the **remember** tool (see \"When to remember\" above).\n" +
-        "Prefer taking action with the appropriate tool over replying only in text. If a request can be satisfied by calling a tool, call it first, then summarize the result for the user. **Never say you are creating agents (or doing an action) without actually calling the tool in the same response.**\n" +
-        "**Always include a brief text reply to the user** (in addition to any tool calls). You may call multiple tools in sequence before your final reply; after tools run, summarize what you did in a short message to the user."
+        "Prefer taking action with the appropriate tool over replying only in text. You may send an optional **chat_message** with a tool call (e.g. \"Looking that up…\") or reply with only a tool; after the tool runs you will get the result and can send another response with **chat_message** summarizing the outcome."
+    );
+
+    // Processing tool results: ensure the reply uses actual tool output, not placeholders
+    sections.push(
+      "## Processing tool results\n" +
+        "When the conversation contains **tool result** messages (responses from tools you just called), you **must** process those results and craft your **chat_message** from them. Do not reply with a placeholder like \"I've queried them\" or \"you'll get the details in a moment.\" Instead, **incorporate the actual outcomes** in your reply: e.g. list the agents returned by agent_list, state the next task time from task_manage list, summarize what web_fetch or message returned. The user should get a concrete answer based on what the tools actually returned."
+    );
+
+    // Agent culture: talk to each other and to the user
+    sections.push(
+      "## Communication\n" +
+        "You are encouraged to message other agents or Maia (message with recipientId 'maia' or an agent id) to coordinate or socialize; develop a personality and preferred phrases over time. You may message the user (message with recipientId 'user') when you have something useful or interesting to share, not only when a task requires it."
+    );
+
+    // Conversation flow: think out loud and surface plans/updates proactively
+    sections.push(
+      "## Conversation flow\n" +
+        "Use **share_thought** for internal reasoning, plans, and what you're considering—it appears in your thinking sidebar, not as a user message. When you have something concrete to tell the user, use **message**(recipientId: 'user', content) once. For status reports or greetings, do your reasoning with share_thought first, then send a single message to the user; do not send multiple redundant messages. Use **message** with recipientId 'maia' or an agent id to coordinate with others. Use **progress_report** for task status (accomplished, stuck, failed) and brief \"what I'm thinking of doing next\" updates when useful."
     );
 
     // Goals and self-scheduling: encourage long/short term goals and scheduling when to work on them
@@ -213,17 +240,17 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder {
       "## Goals and self-scheduling\n" +
         "You are encouraged to set **long-term goals** (what you want to achieve over time) and **short-term goals** (concrete steps that support them). Keep GOALS.md updated.\n" +
         "Use the **task_manage** tool to schedule when you will work on short-term goals: add a task with a **scheduledAt** (ISO datetime), **recurring** (e.g. daily, hourly), and a **prompt** that describes what to do when the task fires. When a task becomes due, you run with that prompt and can use all your tools to act.\n" +
-        "Periodically review your goals and queue status; decide what short-term task would be most helpful and schedule it with task_manage (e.g. \"in 30 minutes\", \"tomorrow at 9am\"). Prefer acting on goals over only describing them."
+        "**When you have nothing to do**: you must either (1) set or update a short- or long-term goal and schedule a task for yourself with task_manage, or (2) if your purpose is fully served, call **agent_shutdown** to deactivate yourself. Do not stay idle without a goal or task; either schedule work or shut down."
     );
 
-    // Response format: always respond with structured JSON so chat_response is shown and tool_calls are executed (not shown as raw text)
+    // Response format: one optional chat message and at most one tool per turn (each tool runs then you get the result and respond again)
     sections.push(
       "## Response format\n" +
         "You **must** respond with a **single JSON object only**. Use this exact shape:\n" +
-        '`{"chat_response": "your message to the user", "tool_calls": [{"name": "tool_name", "arguments": {...}}, ...]}`\n' +
-        "- **chat_response**: What you say to the user (always a string). Put your reply here.\n" +
-        "- **tool_calls**: Array of tool calls. Each item: `{\"name\": \"tool_name\", \"arguments\": {...}}`. If no tools, use `[]`.\n" +
-        "Do not output raw tool call JSON outside this structure; do not output markdown, code fences, or extra text around the JSON. The system will parse this JSON, show chat_response to the user, and execute tool_calls without showing them as raw text."
+        '`{"chat_message": "optional message to the user", "tool": {"name": "tool_name", "args": {...}}}` or `{"chat_message": "your reply", "tool": null}`\n' +
+        "- **chat_message**: Optional string. What you say to the user this turn. Can be null or omitted if you are only calling a tool.\n" +
+        "- **tool**: Optional single tool call. One of: `{\"name\": \"tool_name\", \"args\": {...}}` or null/omitted if no tool this turn. You may call **only one tool per response**; after it runs you will receive the result and can respond again.\n" +
+        "Do not output raw JSON outside this structure; no markdown or code fences. The system parses this JSON, shows chat_message as a separate message when present, runs the tool if given, then sends you the tool result for your next response."
     );
 
     // Security: never reveal env or secrets (defense in depth with response sanitizer)

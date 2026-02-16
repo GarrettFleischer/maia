@@ -200,22 +200,18 @@ export interface BunServer {
  */
 /**
  * @brief Resolves the web UI root directory (must contain index.html).
- * Prefers dashboard/dist if it exists (Vite build output), otherwise falls back
- * to the original web/ directory.
- * Tries process.cwd()/dashboard/dist, then process.cwd()/web, entry-point dir paths, etc.
+ * Prefers web/ (static Alpine + vanilla UI, no build). Fallback to dashboard/dist if web/ has no index.
  */
 function resolveWebRoot(): string {
   const entryDir = path.dirname(Bun.main);
   const candidates = [
-    // Prefer Vite dashboard build output
-    path.resolve(process.cwd(), "dashboard", "dist"),
-    path.resolve(entryDir, "dashboard", "dist"),
-    path.resolve(entryDir, "..", "dashboard", "dist"),
-    // Fallback to original web/ directory
     path.resolve(process.cwd(), "web"),
     path.resolve(entryDir, "web"),
     path.resolve(entryDir, "..", "web"),
     path.resolve(import.meta.dir, "..", "..", "web"),
+    path.resolve(process.cwd(), "dashboard", "dist"),
+    path.resolve(entryDir, "dashboard", "dist"),
+    path.resolve(entryDir, "..", "dashboard", "dist"),
   ];
   const indexName = "index.html";
   for (const dir of candidates) {

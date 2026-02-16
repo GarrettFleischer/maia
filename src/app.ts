@@ -57,6 +57,11 @@ import { createSessionManager } from "./agent/session.js";
 import { createToolRegistry } from "./agent/tools/registry.js";
 import { createWebFetchTool } from "./agent/tools/web-fetch.js";
 import {
+  createFileReadTool,
+  createFileWriteTool,
+  createFileListTool,
+} from "./agent/tools/file-operations.js";
+import {
   createMemorySearchTool,
   createMemoryStoreTool,
   createMemoryForgetTool,
@@ -87,7 +92,6 @@ import {
   createAgentCreateTool,
   createAgentListTool,
   createAgentRemoveTool,
-  createAgentMessageTool,
   createAgentInspectTool,
   createAgentUpdateTool,
 } from "./agents/tools.js";
@@ -303,6 +307,9 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
   // Register built-in tools
   const ssrfGuard = createSsrfGuard({ blockPrivateIPs: config.security.ssrf.blockPrivateIPs });
   toolRegistry.register(createWebFetchTool({ http, ssrfGuard, logger }));
+  toolRegistry.register(createFileReadTool({ fs, logger }));
+  toolRegistry.register(createFileWriteTool({ fs, logger }));
+  toolRegistry.register(createFileListTool({ fs, logger }));
 
   // ── Step 13: Agent registry + management tools ───────────────────
 
@@ -341,7 +348,6 @@ export async function createApp(options?: CreateAppOptions): Promise<MaiaApp> {
   toolRegistry.register(createAgentCreateTool(agentToolDeps));
   toolRegistry.register(createAgentListTool(agentToolDeps));
   toolRegistry.register(createAgentRemoveTool(agentToolDeps));
-  toolRegistry.register(createAgentMessageTool(agentToolDeps));
   toolRegistry.register(createAgentInspectTool(agentToolDeps));
   toolRegistry.register(createAgentUpdateTool(agentToolDeps));
 

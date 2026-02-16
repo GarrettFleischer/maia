@@ -3,74 +3,107 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Maia — WebChat</title>
+  <title>Maia</title>
   <link rel="stylesheet" href="styles.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 </head>
 <body>
-  <div id="app">
-    <header class="chat-header">
-      <div class="header-left">
-        <span class="header-emoji">🌙</span>
-        <h1>Maia</h1>
-      </div>
-      <div class="header-right">
-        <button type="button" id="reenter-token-btn" class="reenter-token-btn" title="Use a different access token" style="display: none;">
-          Re-enter token
-        </button>
-        <span id="connection-status" class="status-indicator disconnected">
-          Disconnected
-        </span>
-      </div>
-    </header>
-
-    <div id="token-gate" class="token-gate" role="dialog" aria-label="Access token required">
+  <div id="app" x-data="maiaApp()" x-init="init()" class="app">
+    <!-- Token gate -->
+    <div id="token-gate" class="token-gate" x-show="!token" x-transition>
       <div class="token-gate-card">
         <p class="token-gate-emoji">🔐</p>
         <h2 class="token-gate-title">Access token required</h2>
-        <p class="token-gate-desc">Maia requires an access token to connect. Use the token from your <code>MAIA_AUTH_TOKEN</code> environment variable (e.g. from <code>~/.maia/.env</code>).</p>
-        <form id="token-form" class="token-form">
-          <input
-            type="password"
-            id="token-input"
-            placeholder="Paste your access token"
-            autocomplete="off"
-            autofocus
-            aria-label="Access token"
-          />
-          <button type="submit" id="token-connect-btn">Connect</button>
+        <p class="token-gate-desc">Use the token from <code>MAIA_AUTH_TOKEN</code> (e.g. <code>~/.maia/.env</code>).</p>
+        <form class="token-form" @submit.prevent="setTokenFromInput">
+          <input type="password" x-model="tokenInput" placeholder="Paste your access token" autocomplete="off" aria-label="Access token" />
+          <button type="submit">Connect</button>
         </form>
-        <p id="token-gate-error" class="token-gate-error" role="alert" hidden></p>
+        <p class="token-gate-error" x-show="tokenError" x-text="tokenError"></p>
       </div>
     </div>
 
-    <main id="chat-messages" class="chat-messages">
-      <div class="welcome-message">
-        <p class="welcome-emoji">🌙</p>
-        <h2>Welcome to Maia</h2>
-        <p>Type a message below to start chatting.</p>
+    <template x-if="token">
+      <div class="layout">
+        <!-- Sidebar: Maia first, then agents -->
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <span class="sidebar-emoji">🌙</span>
+            <span class="sidebar-title">Maia</span>
+          </div>
+          <ul class="agent-list">
+            <template x-for="agent in agents" :key="agent.id">
+              <li>
+                <button type="button" class="agent-item" :class="{ active: selectedAgentId === agent.id }" @click="selectAgent(agent.id)">
+                  <span class="agent-emoji" x-text="agent.emoji || '🤖'"></span>
+                  <span class="agent-name" x-text="agent.name"></span>
+                </button>
+              </li>
+            </template>
+          </ul>
+          <div class="sidebar-footer">
+            <span class="status" :class="connected ? 'connected' : 'disconnected'" x-text="connected ? 'Connected' : 'Disconnected'"></span>
+            <button type="button" class="reenter-token" @click="logout">Re-enter token</button>
+          </div>
+        </aside>
+
+        <!-- Main: chat + widgets + thinking sidebar -->
+        <main class="main">
+          <template x-if="selectedAgentId">
+            <div class="main-wrap">
+              <div class="main-inner">
+                <header class="chat-header">
+                  <h1 class="chat-title" x-text="selectedAgentName"></h1>
+                </header>
+
+                <div class="messages" ref="messagesContainer">
+                  <template x-for="msg in messages" :key="msg.id">
+                    <div class="message" :class="msg.senderType">
+                      <div class="message-bubble">
+                        <span class="message-sender" x-text="msg.senderId === 'user' ? 'You' : (agentNameById(msg.senderId))"></span>
+                        <div class="message-content" x-text="msg.content"></div>
+                        <span class="message-time" x-text="formatTime(msg.createdAt)"></span>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+
+                <form class="input-area" @submit.prevent="sendMessage">
+                  <textarea x-model="inputText" placeholder="Type a message..." rows="1" @keydown.enter.exact.prevent="sendMessage"></textarea>
+                  <button type="submit" title="Send">Send</button>
+                </form>
+
+                <div class="widgets" x-show="widgets.length > 0">
+                  <h2 class="widgets-title">Widgets</h2>
+                  <div class="widget-grid">
+                    <template x-for="w in widgets" :key="w.id">
+                      <div class="widget-card">
+                        <div class="widget-header" x-show="w.name || w.widgetId" x-text="w.name || w.widgetId"></div>
+                        <iframe :title="w.name || w.widgetId" sandbox="allow-scripts" :srcdoc="widgetSrcdoc(w)" class="widget-iframe"></iframe>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+
+              <aside class="thinking-sidebar" aria-label="Agent thinking">
+                <h2 class="thinking-sidebar-title">Thinking</h2>
+                <div class="thinking-list" ref="thoughtsContainer">
+                  <template x-for="t in thoughts" :key="t.id">
+                    <div class="thinking-item">
+                      <div class="thinking-content" x-text="t.content"></div>
+                      <span class="thinking-time" x-text="formatTime(t.createdAt)"></span>
+                    </div>
+                  </template>
+                  <p class="thinking-empty" x-show="thoughts.length === 0" x-text="'No thoughts yet.'"></p>
+                </div>
+              </aside>
+            </div>
+          </template>
+        </main>
       </div>
-    </main>
-
-    <footer class="chat-input-area">
-      <form id="chat-form">
-        <div class="input-wrapper">
-          <textarea
-            id="chat-input"
-            placeholder="Type a message..."
-            rows="1"
-            autocomplete="off"
-            autofocus
-          ></textarea>
-          <button type="submit" id="send-button" title="Send message">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-            </svg>
-          </button>
-        </div>
-      </form>
-    </footer>
+    </template>
   </div>
-
-  <script src="chat.ts" type="module"></script>
+  <script src="app.js"></script>
 </body>
 </html>

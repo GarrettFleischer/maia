@@ -29,7 +29,7 @@ export interface SecurityReportToolDeps {
   onSecurityFlagged?: (reason: string, snippet: string) => void;
 }
 
-const PROGRESS_STATUSES = ["accomplished", "stuck", "failed"] as const;
+const PROGRESS_STATUSES = ["accomplished", "stuck", "failed", "planning", "thinking"] as const;
 
 /**
  * @brief Creates the remember tool: append markdown to MEMORY.md, USER.md, or SOUL.md.
@@ -194,7 +194,7 @@ export function createSecurityReportTool(deps: SecurityReportToolDeps = {}): Age
 }
 
 /**
- * @brief Creates the progress_report tool: report accomplished/stuck/failed status.
+ * @brief Creates the progress_report tool: report accomplished/stuck/failed/planning/thinking status.
  * @returns AgentTool that the LLM can call to report task progress
  *
  * @example
@@ -205,20 +205,20 @@ export function createProgressReportTool(): AgentTool {
   return {
     name: "progress_report",
     description:
-      "Report significant progress, being stuck, or task failure so the user can be notified.",
+      "Report significant progress, being stuck, or task failure so the user can be notified. Use planning or thinking for brief \"what I'm doing next\" updates.",
 
     definition() {
       return {
         name: "progress_report",
         description:
-          "When you have made significant progress, gotten stuck, or believe you have failed the task, call this with status (accomplished, stuck, or failed) and a one-line summary.",
+          "When you have made significant progress, gotten stuck, or believe you have failed the task, call this with status (accomplished, stuck, failed, planning, or thinking) and a one-line summary. Use planning or thinking for brief \"what I'm thinking of doing next\" updates.",
         parameters: {
           type: "object",
           properties: {
             status: {
               type: "string",
               enum: [...PROGRESS_STATUSES],
-              description: "accomplished, stuck, or failed",
+              description: "accomplished, stuck, failed, planning, or thinking",
             },
             summary: {
               type: "string",
@@ -238,7 +238,8 @@ export function createProgressReportTool(): AgentTool {
       const summary = typeof args.summary === "string" ? args.summary : "";
       if (!status || !PROGRESS_STATUSES.includes(status as (typeof PROGRESS_STATUSES)[number])) {
         return {
-          content: "Error: status is required and must be one of accomplished, stuck, failed.",
+          content:
+            "Error: status is required and must be one of accomplished, stuck, failed, planning, thinking.",
           success: false,
         };
       }

@@ -15,8 +15,8 @@ export type { MonitorCallbacks, MonitoredProviderDeps } from "./monitor.js";
 export {
   createAgentCreateTool,
   createAgentListTool,
+  createAgentShutdownTool,
   createAgentRemoveTool,
-  createAgentMessageTool,
   createAgentInspectTool,
   createAgentUpdateTool,
 } from "./tools.js";

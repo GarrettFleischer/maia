@@ -76,8 +76,71 @@ function randomHexId(): string {
  * @returns True if it looks like an ISO timestamp
  */
 function isIsoTimestamp(schedule: string): boolean {
+  if (typeof schedule !== "string") return false;
   const isoRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/;
   return isoRegex.test(schedule.trim());
+}
+
+/**
+ * @brief Extracts a schedule string from a value that may be a string or an object (cron, expression, value, schedule, scheduledAt).
+ * @param scheduleRaw - Schedule as string or object
+ * @returns Schedule string or undefined if none found
+ */
+export function scheduleToString(scheduleRaw: unknown): string | undefined {
+  if (typeof scheduleRaw === "string") return scheduleRaw;
+  if (scheduleRaw === null || typeof scheduleRaw !== "object") return undefined;
+  const obj = scheduleRaw as Record<string, unknown>;
+  if (typeof obj.cron === "string") return obj.cron;
+  if (typeof obj.expression === "string") return obj.expression;
+  if (typeof obj.value === "string") return obj.value;
+  if (typeof obj.schedule === "string") return obj.schedule;
+  if (typeof obj.scheduledAt === "string") return obj.scheduledAt;
+  return undefined;
+}
+
+/**
+ * @brief Normalizes a raw task from JSON so schedule is always a string.
+ * Handles legacy or malformed data where schedule was persisted as an object.
+ * @param raw - Parsed task (schedule may be string or object)
+ * @param logger - Optional logger for reporting normalized/dropped schedules
+ * @returns Normalized task with schedule as string, or null if task is invalid
+ */
+function normalizeLoadedTask(
+  raw: Record<string, unknown> & { id: string; schedule?: unknown; prompt?: string; channel?: string; status?: string; createdAt?: string; lastRunAt?: string },
+  logger?: Logger
+): (ScheduledTask & { agentId?: string }) | null {
+  const id = raw.id;
+  const scheduleRaw = raw.schedule;
+
+  const schedule = scheduleToString(scheduleRaw);
+  if (schedule === undefined) {
+    if (scheduleRaw !== null && typeof scheduleRaw === "object") {
+      logger?.warn("Scheduler skipping task with non-string schedule (unable to extract string)", {
+        taskId: id,
+        scheduleType: "object",
+      });
+    } else {
+      logger?.warn("Scheduler skipping task with invalid schedule type", {
+        taskId: id,
+        scheduleType: typeof scheduleRaw,
+      });
+    }
+    return null;
+  }
+  if (typeof scheduleRaw === "object" && scheduleRaw !== null) {
+    logger?.debug("Scheduler normalized task schedule from object to string", { taskId: id });
+  }
+
+  return {
+    id,
+    schedule,
+    prompt: typeof raw.prompt === "string" ? raw.prompt : "",
+    channel: typeof raw.channel === "string" ? raw.channel : "",
+    status: (raw.status === "pending" || raw.status === "running" || raw.status === "completed" || raw.status === "failed" ? raw.status : "pending") as TaskStatus,
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString(),
+    lastRunAt: typeof raw.lastRunAt === "string" ? raw.lastRunAt : undefined,
+    agentId: typeof raw.agentId === "string" ? raw.agentId : undefined,
+  };
 }
 
 /**
@@ -96,6 +159,7 @@ function isIsoTimestamp(schedule: string): boolean {
  * Does not support ranges or lists.
  */
 function cronMatchesNow(cron: string, now: Date): boolean {
+  if (typeof cron !== "string") return false;
   const parts = cron.trim().split(/\s+/);
   if (parts.length !== 5) return false;
 
@@ -141,10 +205,24 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const exists = await fs.exists(schedulerPath);
       if (exists) {
         const content = await fs.readFile(schedulerPath);
-        const parsed = JSON.parse(content) as ScheduledTask[];
-        for (const task of parsed) {
-          tasks.set(task.id, task);
+        const parsed = JSON.parse(content) as Record<string, unknown>[];
+        let changed = false;
+        for (const raw of parsed) {
+          if (!raw || typeof raw !== "object" || typeof raw.id !== "string") continue;
+          const task = normalizeLoadedTask(
+            raw as Parameters<typeof normalizeLoadedTask>[0],
+            logger
+          );
+          if (task) {
+            tasks.set(task.id, task);
+            if (typeof (raw as { schedule?: unknown }).schedule !== "string") {
+              changed = true; // was normalized from object to string
+            }
+          } else {
+            changed = true; // dropped invalid task
+          }
         }
+        if (changed) await persist();
       }
     } catch {
       // File may not exist or be invalid; start fresh
@@ -172,11 +250,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   return {
     async add(task: AddTaskInput): Promise<ScheduledTask> {
       await ensureLoaded();
+      const scheduleStr = scheduleToString(task.schedule);
+      if (scheduleStr === undefined) {
+        logger?.warn("Scheduler add: schedule must be a string or object with cron/expression/value/schedule/scheduledAt", {
+          scheduleType: typeof task.schedule,
+        });
+        throw new Error("Invalid schedule: expected string or object with extractable schedule");
+      }
       const id = randomHexId();
       const now = clock.now().toISOString();
       const scheduled: ScheduledTask & { agentId?: string } = {
         id,
-        schedule: task.schedule,
+        schedule: scheduleStr,
         prompt: task.prompt,
         channel: task.channel,
         status: "pending",
@@ -206,6 +291,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const due: ScheduledTask[] = [];
       for (const task of tasks.values()) {
         if (task.status !== "pending") continue;
+        if (typeof task.schedule !== "string") {
+          logger?.warn("Scheduler skipping task with non-string schedule", {
+            taskId: task.id,
+            scheduleType: typeof task.schedule,
+          });
+          continue;
+        }
 
         // ISO timestamp: one-shot task
         if (isIsoTimestamp(task.schedule)) {

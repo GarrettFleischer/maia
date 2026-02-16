@@ -186,4 +186,26 @@ describe("progress_report tool", () => {
     expect(result.success).toBe(false);
     expect(result.content).toContain("status");
   });
+
+  it("accepts planning and thinking status for brief updates", async () => {
+    const tool = createProgressReportTool();
+    const planning = await tool.execute(
+      { status: "planning", summary: "Considering which agent to assign next." },
+      defaultContext()
+    );
+    expect(planning.success).toBe(true);
+    expect(planning.data?.progressReport).toEqual({
+      status: "planning",
+      summary: "Considering which agent to assign next.",
+    });
+    const thinking = await tool.execute(
+      { status: "thinking", summary: "Reviewing goals before next step." },
+      defaultContext()
+    );
+    expect(thinking.success).toBe(true);
+    expect(thinking.data?.progressReport).toEqual({
+      status: "thinking",
+      summary: "Reviewing goals before next step.",
+    });
+  });
 });

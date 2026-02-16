@@ -76,7 +76,16 @@ export interface WSHandlerDeps {
   ) => Promise<{
     content: string;
     remembered?: { memoryMd?: string; userMd?: string; soulMd?: string };
-    toolCallsSummary?: string[];
+    toolCallsSummary?: Array<{ name: string; summary: string; success: boolean; detail?: string }>;
+    /** Per-message chat log entries (assistant, tool_call, tool_result) for separate bubbles. */
+    messages?: Array<{
+      kind: string;
+      content: string;
+      toolName?: string;
+      toolArgs?: Record<string, unknown>;
+      toolSummary?: string;
+      toolSuccess?: boolean;
+    }>;
     securityFlagged?: { reason: string; snippet: string };
     progressReport?: { status: string; summary: string };
     responderId?: string;
@@ -259,6 +268,7 @@ export function createWSHandler(deps: WSHandlerDeps): WSHandler {
                 ...(result.toolCallsSummary && result.toolCallsSummary.length > 0
                   ? { toolCallsSummary: result.toolCallsSummary }
                   : {}),
+                ...(result.messages && result.messages.length > 0 ? { messages: result.messages } : {}),
                 ...(result.responderId ? { responderId: result.responderId } : {}),
                 ...(result.securityFlagged ? { securityFlagged: result.securityFlagged } : {}),
                 ...(result.progressReport ? { progressReport: result.progressReport } : {}),

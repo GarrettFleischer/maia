@@ -182,20 +182,6 @@ Prevents accidentally leaked secrets from being stored in memory:
 - On detection: **block the write**, redact the content, log an audit event
 - Custom patterns configurable via `security.secretScanner.patterns`
 
-## Tool Permission Model
-
-Context-aware access control for tool usage:
-
-| Context | Default Allowed Tools | Restricted |
-|---------|----------------------|------------|
-| **Main session** (private) | All tools | None |
-| **Group/channel** | `memory_search` | `web_fetch`, file writes, `memory_store` |
-| **Consolidation** (automated) | Memory/knowledge writes | Network, file access outside workspace |
-
-- Configured via `security.toolPermissions` in config
-- **Deny always wins** over allow (fail-safe)
-- Tool invocations are logged to the audit log with context type
-
 ## Encryption at Rest
 
 Optional AES-256-GCM encryption for sensitive workspace files:

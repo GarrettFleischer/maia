@@ -33,7 +33,7 @@ import { createThreadService } from "./threads/service.js";
 import { createTaskMonitor } from "./agents/task-monitor.js";
 import { createOrchestrator, type OrchestratorQueue } from "./agents/orchestrator.js";
 import { createQueueManager } from "./providers/queue-manager.js";
-import type { HandleMessageResult } from "./agent/runtime.js";
+import type { HandleMessageResult, ChatLogMessage } from "./agent/runtime.js";
 import type { InboundMessage } from "./core/types.js";
 import { createApprovedSnippetsRepository } from "./security/approved-snippets.js";
 import { createAgentCreationRequestsRepository } from "./agents/agent-creation-requests.js";
@@ -88,17 +88,25 @@ import type { McpServerProposal } from "./agents/mcp-server-proposals.js";
 import {
   createAgentCreateTool,
   createAgentListTool,
+  createAgentShutdownTool,
   PLACEHOLDER_NAME,
   PLACEHOLDER_SOUL,
 } from "./agents/tools.js";
-import { createScheduler } from "./agent/scheduler.js";
-import { createChatWithAgentTool } from "./agents/tools/chat-with-agent.js";
-import { createDmUserTool } from "./agents/tools/dm-user.js";
+import { createScheduler, scheduleToString } from "./agent/scheduler.js";
+import { MAIA_THINKING_PROMPT } from "./agent/prompts.js";
+import { createMessageTool } from "./agents/tools/message.js";
 import { createSetIdentityTool } from "./agents/tools/set-identity.js";
 import { createProposeMcpServerTool } from "./agents/tools/propose-mcp-server.js";
 import { createSubmitWidgetForReviewTool } from "./agents/tools/submit-widget-for-review.js";
+import {
+  createWidgetCreateOrEditTool,
+  createWidgetDeleteTool,
+} from "./agents/tools/widget-file-tools.js";
 import { createCheckQueueJobTool } from "./agents/tools/check-queue-job.js";
 import { createTaskManageTool } from "./agents/tools/task-manage.js";
+import { createTaskAssignTool } from "./agents/tools/task-assign.js";
+import { createShareThoughtTool } from "./agents/tools/share-thought.js";
+import { createAgentThoughtsStore } from "./agents/agent-thoughts.js";
 import type { TaskMonitor } from "./agents/task-monitor.js";
 
 import * as fs from "node:fs";
@@ -566,6 +574,13 @@ async function runStart(): Promise<void> {
     { agentId: string; agentName: string; snippet: string; reason: string }
   >();
 
+  /** In-memory store for agent thinking monologue; pushed to sidebar via WS. */
+  const agentThoughtsStore = createAgentThoughtsStore();
+  /** Set after bunServer exists; pushes thought to store and broadcasts agent_thought. */
+  const pushAgentThoughtRef: {
+    current: ((agentId: string, content: string) => void) | null;
+  } = { current: null };
+
   // ── Priority LLM Queue (sync queue + manager with workers) ─────────
   const queuePersistPath = path.join(app.getDataDir(), "queue.json");
   const priorityQueue = createQueueManager({
@@ -576,7 +591,25 @@ async function runStart(): Promise<void> {
     fs: app.getRawFs(),
   });
   priorityQueue.registerHandler("handleUserChat", async (args) => {
-    return runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
+    const connectionId = args.connectionId as string | undefined;
+    const onIntermediateMessages =
+      connectionId && bunServer
+        ? (messages: ChatLogMessage[]) => {
+            bunServer.wsSend(connectionId, JSON.stringify({ type: "chat_message_added", messages }));
+            // Push progress_report tool results to the thinking sidebar in real time
+            for (const m of messages) {
+              if (
+                m.kind === "tool_result" &&
+                m.toolName === "progress_report" &&
+                typeof m.content === "string" &&
+                m.content.trim()
+              ) {
+                pushAgentThoughtRef.current?.("maia", m.content.trim());
+              }
+            }
+          }
+        : undefined;
+    return runtime.handleMessage(args.message as InboundMessage, { onIntermediateMessages }) as Promise<HandleMessageResult>;
   });
   // Inject queue status into Maia's LLM context only when she's the brain (user chat, high-level reasoning)
   getQueueStatusSummaryRef.current = () => {
@@ -590,6 +623,11 @@ async function runStart(): Promise<void> {
     }
     return lines.join("\n");
   };
+
+  const widgetsPendingDir = path.join(app.getDataDir(), "widgets", "pending");
+  const widgetsApprovedDir = path.join(app.getDataDir(), "widgets", "approved");
+  await app.getRawFs().mkdir(widgetsPendingDir).catch(() => {});
+  await app.getRawFs().mkdir(widgetsApprovedDir).catch(() => {});
 
   let onAgentCreationRequest: (request: AgentCreationRequest) => void = () => {};
   let onMcpProposalForUserApproval: (proposal: McpServerProposal) => void = () => {};
@@ -615,7 +653,7 @@ async function runStart(): Promise<void> {
     logger: ctx.logger,
     events: ctx.events,
     onApprovalResponse: (connId, senderId, payload) => approvalResponseHandler(connId, senderId, payload),
-    onChatMessage: async (_connectionId, senderId, content) => {
+    onChatMessage: async (connectionId, senderId, content) => {
       const message = {
         id: ctx.crypto.randomUUID(),
         channelId: "webchat",
@@ -625,8 +663,8 @@ async function runStart(): Promise<void> {
         isGroup: false,
       };
 
-      // User chat goes through priority queue at highest priority
-      const jobId = priorityQueue.enqueue("handleUserChat", { message }, "user", "user");
+      // User chat goes through priority queue; pass connectionId so we can push live message updates
+      const jobId = priorityQueue.enqueue("handleUserChat", { message, connectionId }, "user", "user");
       const result = (await priorityQueue.waitForJobResult(jobId)) as HandleMessageResult;
 
       if (result.securityFlagged) {
@@ -647,24 +685,108 @@ async function runStart(): Promise<void> {
 
       if (result.progressReport && orchestratorRef) {
         const { status, summary } = result.progressReport;
-        await orchestratorRef.sendDmToUser(
-          "maia",
-          "Maia",
-          `Progress: [${status}] ${summary}`
-        );
+        pushAgentThoughtRef.current?.("maia", `[${status}] ${summary}`);
+        if (status !== "thinking" && status !== "planning") {
+          await orchestratorRef.sendDmToUser(
+            "maia",
+            "Maia",
+            `Progress: [${status}] ${summary}`
+          );
+        }
       }
 
       return {
         content: result.content,
         remembered: result.remembered,
+        toolCallsSummary: result.toolCallsSummary,
+        messages: result.messages,
         securityFlagged: result.securityFlagged,
         progressReport: result.progressReport,
         responderId: "maia",
       };
     },
-    onThreadMessage: async (_connectionId, senderId, threadId, content) => {
-      // Add the user's message to the thread
+    onThreadMessage: async (connectionId, senderId, threadId, content) => {
       await threadService.addMessage(threadId, senderId, "user", content);
+      const thread = await threadService.getThread(threadId);
+      if (thread?.type === "user-maia") {
+        const message: InboundMessage = {
+          id: ctx.crypto.randomUUID(),
+          channelId: `thread:${threadId}`,
+          senderId,
+          content,
+          timestamp: ctx.clock.timestamp(),
+          isGroup: false,
+        };
+        const jobId = priorityQueue.enqueue(
+          "handleUserChat",
+          { message, connectionId },
+          "user",
+          "user"
+        );
+        const result = (await priorityQueue.waitForJobResult(jobId)) as HandleMessageResult;
+        if (result.securityFlagged) {
+          const { reason, snippet } = result.securityFlagged;
+          const approved = await approvedSnippetsRepo.isApproved("maia", snippet);
+          if (!approved) {
+            await ctx.auditLog.log("INLINE_SECURITY_FLAG", {
+              flaggedPartyId: senderId,
+              reportedBy: "maia",
+              reason,
+              snippet: snippet.slice(0, 200),
+              timestamp: ctx.clock.timestamp(),
+            });
+            pushFlaggedAgentApproval("maia", "Maia", reason, snippet);
+          }
+        }
+        if (result.progressReport && orchestratorRef) {
+          const { status, summary } = result.progressReport;
+          pushAgentThoughtRef.current?.("maia", `[${status}] ${summary}`);
+          if (status !== "thinking" && status !== "planning") {
+            await orchestratorRef.sendDmToUser("maia", "Maia", `Progress: [${status}] ${summary}`);
+          }
+        }
+        const replyContent = result.content ?? "";
+        await threadService.addMessage(threadId, "maia", "maia", replyContent);
+        bunServer.wsBroadcast(
+          JSON.stringify({
+            type: "thread_update",
+            threadId,
+            message: {
+              senderId: "maia",
+              senderType: "maia",
+              content: replyContent,
+              createdAt: ctx.clock.timestamp(),
+            },
+          })
+        );
+        return { content: replyContent };
+      }
+      if (thread?.type === "user-agent") {
+        const agentId = thread.participants.find((p) => p !== "user");
+        if (agentId) {
+          const jobId = priorityQueue.enqueue(
+            "handleUserAgentThreadMessage",
+            { threadId, agentId, content },
+            "user",
+            agentId
+          );
+          const result = (await priorityQueue.waitForJobResult(jobId)) as { content?: string };
+          const replyContent = result?.content ?? "";
+          bunServer.wsBroadcast(
+            JSON.stringify({
+              type: "thread_update",
+              threadId,
+              message: {
+                senderId: agentId,
+                senderType: "agent",
+                content: replyContent,
+                createdAt: ctx.clock.timestamp(),
+              },
+            })
+          );
+          return { content: replyContent };
+        }
+      }
       return { content: "Message added to thread." };
     },
     onUserActivity: () => {
@@ -713,15 +835,15 @@ async function runStart(): Promise<void> {
       }
       if (result.progressReport && orchestratorRef) {
         const { status, summary } = result.progressReport;
-        await orchestratorRef.sendDmToUser(
-          "maia",
-          "Maia",
-          `Progress: [${status}] ${summary}`
-        );
+        pushAgentThoughtRef.current?.("maia", `[${status}] ${summary}`);
+        if (status !== "thinking" && status !== "planning") {
+          await orchestratorRef.sendDmToUser("maia", "Maia", `Progress: [${status}] ${summary}`);
+        }
       }
       return {
         content: result.content,
         remembered: result.remembered,
+        toolCallsSummary: result.toolCallsSummary,
         securityFlagged: result.securityFlagged,
         progressReport: result.progressReport,
         responderId: "maia",
@@ -747,6 +869,11 @@ async function runStart(): Promise<void> {
     logger: ctx.logger,
     getOnWsConnect: () => onWsConnectRef.current,
   });
+
+  pushAgentThoughtRef.current = (agentId: string, content: string) => {
+    const thought = agentThoughtsStore.push(agentId, content);
+    bunServer.wsBroadcast(JSON.stringify({ type: "agent_thought", ...thought }));
+  };
 
   ctx.events.on("agentCreated", async (data: Record<string, unknown>) => {
     const agentId = data.agentId as string | undefined;
@@ -991,6 +1118,9 @@ async function runStart(): Promise<void> {
   });
   priorityQueue.registerHandler("handleAgentToAgentChat", async (args) => {
     const toAgentId = args.toAgentId as string;
+    if (toAgentId === "maia") {
+      return runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
+    }
     const subAgent = activeAgents.get(toAgentId);
     if (!subAgent) throw new Error(`Agent not found: ${toAgentId}`);
     return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
@@ -1001,13 +1131,77 @@ async function runStart(): Promise<void> {
     if (!subAgent) throw new Error(`Agent not found: ${agentId}`);
     return subAgent.runtime.handleMessage(args.message as InboundMessage) as Promise<HandleMessageResult>;
   });
+  priorityQueue.registerHandler("handleUserAgentThreadMessage", async (args) => {
+    const threadId = args.threadId as string;
+    const agentId = args.agentId as string;
+    const content = args.content as string;
+    const subAgent = activeAgents.get(agentId);
+    if (!subAgent) {
+      ctx.logger.warn("User agent thread message: agent not active", { threadId, agentId });
+      return { content: "Agent is not active." };
+    }
+    const message: InboundMessage = {
+      id: ctx.crypto.randomUUID(),
+      channelId: `thread:${threadId}`,
+      senderId: "user",
+      content,
+      timestamp: ctx.clock.timestamp(),
+      isGroup: false,
+    };
+    const result = (await subAgent.runtime.handleMessage(message)) as HandleMessageResult;
+    const replyContent = result.content ?? "";
+    await threadService.addMessage(threadId, agentId, "agent", replyContent);
+    return { content: replyContent };
+  });
+  const IDLE_PROMPT =
+    "You have no immediate task. Choose one: (1) Set or update a short- or long-term goal and schedule a task for yourself with task_manage, (2) If your purpose is fully served, call agent_shutdown to deactivate yourself, (3) Otherwise you may wait. Respond with your choice and act if needed.";
+  priorityQueue.registerHandler("handleAgentIdle", async (args) => {
+    const agentId = args.agentId as string;
+    const subAgent = activeAgents.get(agentId);
+    if (!subAgent) return { content: "Agent no longer active.", messages: [] };
+    const message: InboundMessage = {
+      id: ctx.crypto.randomUUID(),
+      channelId: `idle:${agentId}`,
+      senderId: "system",
+      content: IDLE_PROMPT,
+      timestamp: ctx.clock.timestamp(),
+      isGroup: false,
+    };
+    return subAgent.runtime.handleMessage(message) as Promise<HandleMessageResult>;
+  });
   priorityQueue.registerHandler("handleMaiaBrainRun", async () => {
     const message: InboundMessage = {
       id: ctx.crypto.randomUUID(),
       channelId: "maia:brain",
       senderId: "system",
       content:
-        "Review your goals (see GOALS.md) and your task list (task_manage list). What short-term goal should you work on? Use task_manage to schedule yourself if needed.",
+        "Review your goals (see GOALS.md) and your task list (task_manage list). What short-term goal should you work on? Use task_manage to schedule yourself if needed. If you have a short thought or plan the user or an agent should know (e.g. what you are focusing on, what you are asking an agent to do next), use message(recipientId, content) with recipientId 'user', 'maia', or an agent id to share it.",
+      timestamp: ctx.clock.timestamp(),
+      isGroup: false,
+    };
+    return runtime.handleMessage(message) as Promise<HandleMessageResult>;
+  });
+  const MAIA_STARTUP_PROMPT =
+    "You have just started. (1) Think first using share_thought: review your goals (GOALS.md), your plans, and what your agents are doing (agent_list, task_manage list). Use share_thought to record each step of your reasoning (e.g. 'Reviewing GOALS', 'Checking agent list', 'Forming plan'). Do not message the user during this phase. (2) When you have a clear picture, send exactly one message to the user: call message(recipientId: 'user', content: '...') once with a brief status report and what you plan to do next. Do not call message(recipientId: 'user') more than once. (3) Then do it: take the actions you said you would—schedule or assign tasks, message agents, work toward a goal. Do not stop after the greeting; follow through on your stated plan.";
+  const maiaStartupUserMessageSentRef = { current: false };
+  priorityQueue.registerHandler("handleMaiaStartup", async () => {
+    maiaStartupUserMessageSentRef.current = false;
+    const message: InboundMessage = {
+      id: ctx.crypto.randomUUID(),
+      channelId: "maia:startup",
+      senderId: "system",
+      content: MAIA_STARTUP_PROMPT,
+      timestamp: ctx.clock.timestamp(),
+      isGroup: false,
+    };
+    return runtime.handleMessage(message) as Promise<HandleMessageResult>;
+  });
+  priorityQueue.registerHandler("handleMaiaThinking", async () => {
+    const message: InboundMessage = {
+      id: ctx.crypto.randomUUID(),
+      channelId: "maia:thinking",
+      senderId: "system",
+      content: MAIA_THINKING_PROMPT,
       timestamp: ctx.clock.timestamp(),
       isGroup: false,
     };
@@ -1045,6 +1239,7 @@ async function runStart(): Promise<void> {
           tools: p.tools ?? ["memory_search", "memory_store"],
           model: p.model ?? defaultModel,
           instructions: p.instructions,
+          description: p.description,
         };
         const registered = await agentRegistry.register(config);
         const subAgent = createAndActivateAgent(registered);
@@ -1059,14 +1254,14 @@ async function runStart(): Promise<void> {
           agentId: request.requestingAgentId,
         });
         await creatorMemoryStore.store({
-          text: `I requested creation of agent ${config.id}. I can chat with them using chat_with_agent.`,
+          text: `I requested creation of agent ${config.id}. I can message them using message(recipientId: '${config.id}', content: '...').`,
           category: "fact",
           importance: 0.5,
         });
         await orchestrator.agentToAgentChat(
           "maia",
           request.requestingAgentId,
-          `Your agent creation request for **${config.id}** was approved. They are now active. You can chat with them using chat_with_agent.`
+          `Your agent creation request for **${config.id}** was approved. They are now active. You can message them using message(recipientId: '${config.id}', content: '...').`
         );
         ctx.logger.info("Agent creation request approved", {
           requestId,
@@ -1144,6 +1339,21 @@ services:
           js: request.js,
         });
         await widgetReviewRequestsRepo.updateStatus(requestId, "approved");
+        const widgetFilename = `${request.requestingAgentId}_${request.widgetId}.html`;
+        const pendingPath = path.join(widgetsPendingDir, widgetFilename);
+        const approvedPath = path.join(widgetsApprovedDir, widgetFilename);
+        try {
+          if (await app.getRawFs().exists(pendingPath)) {
+            const content = await app.getRawFs().readFile(pendingPath);
+            await app.getRawFs().writeFile(approvedPath, content);
+            await app.getRawFs().remove(pendingPath);
+          }
+        } catch (moveErr) {
+          ctx.logger.warn("Widget file move on approve failed", {
+            pendingPath,
+            error: moveErr instanceof Error ? moveErr.message : String(moveErr),
+          });
+        }
         if (orchestratorRef) {
           await orchestrator.agentToAgentChat(
             "maia",
@@ -1214,16 +1424,24 @@ services:
     checkIntervalMs: ctx.config.scheduler.checkIntervalMs,
   });
 
-  // Register schedules from loaded agents
+  // Register schedules from loaded agents (skip if schedule is object we can't extract string from)
   for (const [agentId, subAgent] of activeAgents) {
-    if (subAgent.config.schedule) {
-      await scheduler.add({
-        schedule: subAgent.config.schedule,
-        prompt: `Execute your scheduled task as ${subAgent.config.name}.`,
-        channel: `agent:${agentId}`,
+    const scheduleRaw = subAgent.config.schedule;
+    if (!scheduleRaw) continue;
+    const scheduleStr = scheduleToString(scheduleRaw);
+    if (scheduleStr === undefined) {
+      ctx.logger.warn("Skipping agent schedule registration: schedule must be string or object with cron/expression/value/schedule/scheduledAt", {
         agentId,
+        scheduleType: typeof scheduleRaw,
       });
+      continue;
     }
+    await scheduler.add({
+      schedule: scheduleStr,
+      prompt: `Execute your scheduled task as ${subAgent.config.name}.`,
+      channel: `agent:${agentId}`,
+      agentId,
+    });
   }
 
   scheduler.start(async (task) => {
@@ -1276,11 +1494,14 @@ services:
       }
       if (result.progressReport && orchestratorRef) {
         const { status, summary } = result.progressReport;
-        await orchestratorRef.sendDmToUser(
-          agentId,
-          subAgent.config.name,
-          `Progress: [${status}] ${summary}`
-        );
+        pushAgentThoughtRef.current?.(agentId, `[${status}] ${summary}`);
+        if (status !== "thinking" && status !== "planning") {
+          await orchestratorRef.sendDmToUser(
+            agentId,
+            subAgent.config.name,
+            `Progress: [${status}] ${summary}`
+          );
+        }
       }
       await ctx.events.emit("agentTaskCompleted", { agentId, taskId: task.id });
     } catch (err) {
@@ -1304,6 +1525,24 @@ services:
     },
     4,
   );
+
+  // Idle check: every 5 min, give each agent an "idle" prompt so they schedule work or shut down (rate-limited per agent)
+  const IDLE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+  const lastIdleEnqueueAt = new Map<string, number>();
+  let idleCheckTimer: ReturnType<typeof setInterval> | null = null;
+  idleCheckTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [agentId] of activeAgents) {
+      const last = lastIdleEnqueueAt.get(agentId) ?? 0;
+      if (now - last < IDLE_CHECK_INTERVAL_MS) continue;
+      lastIdleEnqueueAt.set(agentId, now);
+      priorityQueue.enqueue("handleAgentIdle", { agentId }, "background", agentId);
+    }
+  }, IDLE_CHECK_INTERVAL_MS);
+  ctx.shutdown.register("idleCheck", async () => {
+    if (idleCheckTimer) clearInterval(idleCheckTimer);
+    idleCheckTimer = null;
+  }, 5);
 
   // ── Task Monitor (tasks.json scanner) ────────────────────────
   const taskMonitor = createTaskMonitor({
@@ -1359,12 +1598,15 @@ services:
       }
       if (result.progressReport && orchestratorRef) {
         const { status, summary } = result.progressReport;
-        const name = agentId === "maia" ? "Maia" : subAgent!.config.name;
-        await orchestratorRef.sendDmToUser(
-          agentId,
-          name,
-          `Progress: [${status}] ${summary}`
-        );
+        pushAgentThoughtRef.current?.(agentId, `[${status}] ${summary}`);
+        if (status !== "thinking" && status !== "planning") {
+          const name = agentId === "maia" ? "Maia" : subAgent!.config.name;
+          await orchestratorRef.sendDmToUser(
+            agentId,
+            name,
+            `Progress: [${status}] ${summary}`
+          );
+        }
       }
     } catch (err) {
       ctx.logger.warn("Task monitor job failed", { agentId, taskId: task.id, error: err instanceof Error ? err.message : String(err) });
@@ -1377,6 +1619,21 @@ services:
       logger: ctx.logger,
       taskMonitor,
       resolveAgentId: () => "maia",
+    })
+  );
+  // task_assign: Maia can assign a task to any agent (e.g. during check-in when they have nothing to do)
+  runtime.getToolRegistry().register(
+    createTaskAssignTool({
+      logger: ctx.logger,
+      taskMonitor,
+      resolveAgentId: () => "maia",
+    })
+  );
+  runtime.getToolRegistry().register(
+    createShareThoughtTool({
+      logger: ctx.logger,
+      resolveAgentId: () => "maia",
+      onThought: (agentId, content) => pushAgentThoughtRef.current?.(agentId, content),
     })
   );
 
@@ -1561,10 +1818,25 @@ services:
     agentWorkspaceFs: app.getRawFs(),
     auditLog: ctx.auditLog,
     forwardDmToUser,
+    onAgentThought: (agentId, content) => pushAgentThoughtRef.current?.(agentId, content),
   });
 
   orchestratorRef = orchestrator;
   orchestrator.start();
+
+  // Register message tool for Maia (user, maia, or any agent); one user message per startup run
+  runtime.getToolRegistry().register(
+    createMessageTool({
+      logger: ctx.logger,
+      orchestrator,
+      activeAgents,
+      resolveAgentId: () => "maia",
+      singleUserMessageGuard: { channelId: "maia:startup", sentRef: maiaStartupUserMessageSentRef },
+    })
+  );
+
+  // One-off Maia startup: review jobs and agents, do something useful or message the user
+  priorityQueue.enqueue("handleMaiaStartup", {}, "background", "maia");
 
   // Maia's periodic brain run: review goals and schedule self (when enabled)
   let maiaBrainTimer: ReturnType<typeof setInterval> | null = null;
@@ -1586,6 +1858,26 @@ services:
     );
   }
 
+  // Maia's periodic thinking run: reflect and optionally message user/agents (when enabled)
+  let maiaThinkingTimer: ReturnType<typeof setInterval> | null = null;
+  const maiaThinkingIntervalMs = ctx.config.scheduler.maiaThinkingIntervalMs ?? 0;
+  if (maiaThinkingIntervalMs > 0) {
+    ctx.logger.info("Maia thinking timer started", { intervalMs: maiaThinkingIntervalMs });
+    maiaThinkingTimer = setInterval(() => {
+      priorityQueue.enqueue("handleMaiaThinking", {}, "background", "maia");
+    }, maiaThinkingIntervalMs);
+    ctx.shutdown.register(
+      "maia-thinking",
+      async () => {
+        if (maiaThinkingTimer) {
+          clearInterval(maiaThinkingTimer);
+          maiaThinkingTimer = null;
+        }
+      },
+      5
+    );
+  }
+
   const rawFs = app.getRawFs();
 
   const writeAgentWorkspaceFile = async (agentId: string, filename: string, content: string) => {
@@ -1595,18 +1887,18 @@ services:
 
   const registerAgentTools = (agentId: string, subAgent: SubAgent) => {
     subAgent.runtime.getToolRegistry().register(
-      createChatWithAgentTool({
-        logger: ctx.logger,
-        orchestrator,
-        resolveAgentId: () => agentId,
-      })
-    );
-    subAgent.runtime.getToolRegistry().register(
-      createDmUserTool({
+      createMessageTool({
         logger: ctx.logger,
         orchestrator,
         activeAgents,
         resolveAgentId: () => agentId,
+      })
+    );
+    subAgent.runtime.getToolRegistry().register(
+      createShareThoughtTool({
+        logger: ctx.logger,
+        resolveAgentId: () => agentId,
+        onThought: (id, content) => pushAgentThoughtRef.current?.(id, content),
       })
     );
     subAgent.runtime.getToolRegistry().register(
@@ -1648,6 +1940,27 @@ services:
       })
     );
     subAgent.runtime.getToolRegistry().register(
+      createWidgetCreateOrEditTool({
+        logger: ctx.logger,
+        crypto: ctx.crypto,
+        fs: app.getRawFs(),
+        getWidgetsPendingDir: () => widgetsPendingDir,
+        getWidgetsApprovedDir: () => widgetsApprovedDir,
+        widgetReviewRequestsRepo,
+        resolveAgentId: () => agentId,
+        onWidgetReviewRequest: (req) => getOnWidgetReviewRequestRef.current?.(req),
+      })
+    );
+    subAgent.runtime.getToolRegistry().register(
+      createWidgetDeleteTool({
+        logger: ctx.logger,
+        fs: app.getRawFs(),
+        getWidgetsPendingDir: () => widgetsPendingDir,
+        getWidgetsApprovedDir: () => widgetsApprovedDir,
+        resolveAgentId: () => agentId,
+      })
+    );
+    subAgent.runtime.getToolRegistry().register(
       createCheckQueueJobTool({
         logger: ctx.logger,
         getJobStatus: (jobId) => priorityQueue.getJobStatus(jobId),
@@ -1660,14 +1973,28 @@ services:
         resolveAgentId: () => agentId,
       })
     );
+    subAgent.runtime.getToolRegistry().register(
+      createAgentShutdownTool({
+        registry: agentRegistry,
+        logger: ctx.logger,
+        createRuntime: createAndActivateAgent,
+        activeAgents,
+        crypto: ctx.crypto,
+        resolveAgentId: () => agentId,
+      })
+    );
   };
   for (const [agentId, subAgent] of activeAgents) {
     registerAgentTools(agentId, subAgent);
   }
   getOnAgentCreatedRef.current = () => (subAgent: SubAgent) => {
     registerAgentTools(subAgent.config.id, subAgent);
+    const creationContext =
+      subAgent.config.description?.trim() ||
+      subAgent.config.instructions?.trim() ||
+      subAgent.config.id;
     const welcomeContent =
-      "You were just created. Use the set_identity tool to choose your name and soul (personality). They must be unique among all agents. Call set_identity with your chosen name and soul.";
+      `You were just created for: ${creationContext}\n\nYour first and required step is to call the set_identity tool with your chosen name and soul (personality) that fit this purpose. Use set_identity now with name and soul; both must be unique among all agents. Do not skip this.`;
     const message: InboundMessage = {
       id: ctx.crypto.randomUUID(),
       channelId: "welcome",
@@ -1696,6 +2023,9 @@ services:
     auditLog: ctx.auditLog,
     llmCallsRepo,
     approvedDashboardWidgetsRepo,
+    getWidgetsApprovedDir: () => widgetsApprovedDir,
+    fs: app.getRawFs(),
+    agentThoughtsStore,
   });
 
   // Send full agents + threads to each client on WebSocket connect so dashboard can avoid GET spam

@@ -90,13 +90,6 @@
     "auditLog": {
       "enabled": true
     },
-    "toolPermissions": {
-      "main": { "allow": ["*"] },
-      "group": {
-        "allow": ["memory_search"],
-        "deny": ["web_fetch", "memory_store"]
-      }
-    },
     "sandbox": {
       "enabled": true,
       "root": "~/.maia"

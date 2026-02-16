@@ -2,7 +2,7 @@
  * @fileoverview Dashboard API routes for agent management, threads, and tasks.
  * @module gateway/dashboard-routes
  *
- * @brief Registers REST API endpoints for the Preact dashboard:
+ * @brief Registers REST API endpoints for the web UI (Alpine + vanilla):
  * - GET/POST/DELETE for agents and agent tasks
  * - GET/POST for threads and thread messages
  * All routes require Bearer token auth (handled by gateway middleware).
@@ -16,6 +16,8 @@ import type { SubAgent } from "../agents/factory.js";
 import type { AuditLog, AuditEventType } from "../core/types.js";
 import type { LlmCallsRepository } from "../llm-calls.js";
 import type { ApprovedDashboardWidgetsRepository } from "../agents/approved-dashboard-widgets.js";
+import type { FileSystem } from "../core/types.js";
+import type { AgentThoughtsStore } from "../agents/agent-thoughts.js";
 
 /**
  * @brief Dependencies for dashboard route registration.
@@ -23,6 +25,8 @@ import type { ApprovedDashboardWidgetsRepository } from "../agents/approved-dash
 export interface DashboardRouteDeps {
   /** Agent registry for CRUD operations */
   agentRegistry: AgentRegistry;
+  /** Optional store for agent thinking monologue (sidebar) */
+  agentThoughtsStore?: AgentThoughtsStore;
   /** Thread service for conversation threading */
   threadService: ThreadService;
   /** Task monitor for reading/writing agent tasks */
@@ -35,6 +39,10 @@ export interface DashboardRouteDeps {
   llmCallsRepo?: LlmCallsRepository;
   /** Optional approved dashboard widgets repo for GET /api/agents/:id/dashboard */
   approvedDashboardWidgetsRepo?: ApprovedDashboardWidgetsRepository;
+  /** Optional widgets approved dir for file-based widget listing */
+  getWidgetsApprovedDir?: () => string;
+  /** Optional filesystem for reading approved widget files */
+  fs?: FileSystem;
 }
 
 /**
@@ -56,7 +64,18 @@ export function registerDashboardRoutes(
   gateway: GatewayServer,
   deps: DashboardRouteDeps
 ): void {
-  const { agentRegistry, threadService, taskMonitor, activeAgents, auditLog, llmCallsRepo, approvedDashboardWidgetsRepo } = deps;
+  const {
+    agentRegistry,
+    threadService,
+    taskMonitor,
+    activeAgents,
+    auditLog,
+    llmCallsRepo,
+    approvedDashboardWidgetsRepo,
+    getWidgetsApprovedDir,
+    fs: routeFs,
+    agentThoughtsStore,
+  } = deps;
   const router = gateway.getRouter();
   const json = (data: unknown, status = 200) => ({
     status,
@@ -189,6 +208,23 @@ export function registerDashboardRoutes(
   });
 
   /**
+   * @brief GET /api/agents/:id/chat-thread - Find or create the user chat thread for this agent.
+   * @param id - Agent identifier (use "maia" for user-maia thread)
+   * @returns JSON thread object (id, type, participants, etc.)
+   */
+  router.get("/api/agents/:id/chat-thread", async (req) => {
+    try {
+      const agentId = req.params.id;
+      const type = agentId === "maia" ? "user-maia" : "user-agent";
+      const participants = agentId === "maia" ? ["user", "maia"] : ["user", agentId];
+      const thread = await threadService.findOrCreateThread(type, participants, "Chat");
+      return json(thread);
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  /**
    * @brief GET /api/agents/:id/dashboard - Get agent dashboard config and approved widgets.
    * @param id - Agent identifier
    * @returns JSON with layout, panels (optional), and approvedWidgets array
@@ -200,22 +236,61 @@ export function registerDashboardRoutes(
       if (!config) {
         return json({ error: "Agent not found" }, 404);
       }
-      const approvedWidgets = approvedDashboardWidgetsRepo
-        ? await approvedDashboardWidgetsRepo.listByAgent(agentId)
+      const fromDb =
+        approvedDashboardWidgetsRepo ?
+          await approvedDashboardWidgetsRepo.listByAgent(agentId)
         : [];
+      let fromFiles: Array<{ id: string; agentId: string; widgetId: string; name: string | null; html: string; css: string; js: string; fullHtml?: string; createdAt: string }> = [];
+      if (getWidgetsApprovedDir && routeFs) {
+        const approvedDir = getWidgetsApprovedDir();
+        try {
+          const exists = await routeFs.exists(approvedDir);
+          if (exists) {
+            const entries = await routeFs.readDir(approvedDir);
+            const prefix = `${agentId}_`;
+            const suffix = ".html";
+            for (const name of entries) {
+              if (name.startsWith(prefix) && name.endsWith(suffix)) {
+                const widgetId = name.slice(prefix.length, -suffix.length);
+                const filePath = `${approvedDir}/${name}`.replace(/\/+/g, "/");
+                const content = await routeFs.readFile(filePath);
+                fromFiles.push({
+                  id: `file-${agentId}-${widgetId}`,
+                  agentId,
+                  widgetId,
+                  name: widgetId,
+                  html: "",
+                  css: "",
+                  js: "",
+                  fullHtml: content,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+            }
+          }
+        } catch {
+          // ignore filesystem errors; fall back to DB only
+        }
+      }
+      const byWidgetId = new Map(fromDb.map((w) => [w.widgetId, w]));
+      for (const w of fromFiles) {
+        byWidgetId.set(w.widgetId, w);
+      }
+      const approvedWidgets = Array.from(byWidgetId.values()).map((w) => ({
+        id: w.id,
+        agentId: w.agentId,
+        widgetId: w.widgetId,
+        name: w.name,
+        html: w.html,
+        css: w.css,
+        js: w.js,
+        ...("fullHtml" in w && w.fullHtml != null ? { fullHtml: w.fullHtml } : {}),
+        createdAt: w.createdAt,
+      }));
       return json({
         layout: "chat_only",
         panels: [],
-        approvedWidgets: approvedWidgets.map((w) => ({
-          id: w.id,
-          agentId: w.agentId,
-          widgetId: w.widgetId,
-          name: w.name,
-          html: w.html,
-          css: w.css,
-          js: w.js,
-          createdAt: w.createdAt,
-        })),
+        approvedWidgets,
       });
     } catch (err) {
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -223,6 +298,19 @@ export function registerDashboardRoutes(
   });
 
   // ─── Agent Tasks ─────────────────────────────────────────────
+
+  /**
+   * @brief GET /api/agents/:id/thoughts - Get an agent's thinking monologue (for sidebar).
+   * @param id - Agent identifier (maia or sub-agent id)
+   * @returns JSON array of { id, agentId, content, createdAt }
+   */
+  router.get("/api/agents/:id/thoughts", async (req) => {
+    if (!agentThoughtsStore) {
+      return json([], 200);
+    }
+    const thoughts = agentThoughtsStore.get(req.params.id);
+    return json(thoughts);
+  });
 
   /**
    * @brief GET /api/agents/:id/tasks - Get an agent's tasks.

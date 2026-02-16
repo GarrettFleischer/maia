@@ -9,7 +9,6 @@ export { createSsrfGuard } from "./ssrf-guard.js";
 export { createContentSanitizer } from "./content-sanitizer.js";
 export { createSecretScanner } from "./secret-scanner.js";
 export { createCredentialStore } from "./credential-store.js";
-export { createToolPermissions } from "./tool-permissions.js";
 export { createEncryptionService } from "./encryption.js";
 export { createAuditLog } from "./audit-log.js";
 export { createSandboxedFileSystem } from "./sandbox-fs.js";
