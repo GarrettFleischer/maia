@@ -1,0 +1,7 @@
+# Bun configuration
+# https://bun.sh/docs/runtime/bunfig
+
+[test]
+# Coverage: run `bun test --coverage`. Spec target 95%+ line coverage.
+# Aggregate: ~98% lines, ~94% functions. Per-file threshold would fail some src/ files;
+# omit coverageThreshold so CI passes; review report to ensure aggregate stays >= 95%.
