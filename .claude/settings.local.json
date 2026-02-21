@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(npm install:*)",
+      "Bash(bun add:*)",
+      "Bash(cat:*)",
+      "Bash(/f/Development/maia/*)",
+      "Bash(test:*)",
+      "Bash(bash -c \"ls /f/Development/maia/\")",
+      "Bash(bash -c \"pwd\")",
+      "Bash(printf:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh:*)",
+      "Skill(keybindings-help)",
+      "Skill(keybindings-help:*)",
+      "Bash(node:*)",
+      "Bash(python3:*)",
+      "Bash(bun run tsc:*)",
+      "Bash(bun -e:*)",
+      "Bash(findstr:*)",
+      "Bash(bun --eval:*)",
+      "Bash(bun test:*)"
+    ]
+  }
+}
