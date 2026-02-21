@@ -2,9 +2,22 @@
 import type { AppContext } from "./lib/context";
 
 let _appCtx: AppContext | null = null;
+let _registerPromise: Promise<void> | null = null;
 
 /** Returns the production AppContext — only valid after register() has run. */
 export function getAppContext(): AppContext {
+  if (!_appCtx) throw new Error("AppContext not yet initialized");
+  return _appCtx;
+}
+
+/**
+ * Returns the AppContext, running register() once if not yet initialized.
+ * Use in route handlers when the process may handle requests before instrumentation ran (e.g. dev workers).
+ */
+export async function ensureAppContext(): Promise<AppContext> {
+  if (_appCtx) return _appCtx;
+  if (!_registerPromise) _registerPromise = register();
+  await _registerPromise;
   if (!_appCtx) throw new Error("AppContext not yet initialized");
   return _appCtx;
 }
@@ -18,6 +31,7 @@ export function _setTestContext(ctx: AppContext): void {
 }
 
 export async function register() {
+  if (_appCtx) return;
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { getDb } = await import("./lib/db");
     const {
