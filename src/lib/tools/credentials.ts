@@ -27,28 +27,28 @@ export const credentialCreateTool = makeTool(
   "credential_create",
   "Store a new credential (key/value). The value is encrypted and never revealed to you again.",
   z.object({ key: z.string(), value: z.string() }),
-  async ({ key, value }) => { credentialCreate(key, value); }
+  async ({ key, value }, ctx) => { credentialCreate(ctx, key, value); }
 );
 
 export const credentialUpdateTool = makeTool(
   "credential_update",
   "Update the value of an existing credential.",
   z.object({ key: z.string(), value: z.string() }),
-  async ({ key, value }) => { credentialUpdate(key, value); }
+  async ({ key, value }, ctx) => { credentialUpdate(ctx, key, value); }
 );
 
 export const credentialDeleteTool = makeTool(
   "credential_delete",
   "Delete a credential by key.",
   z.object({ key: z.string() }),
-  async ({ key }) => { credentialDelete(key); }
+  async ({ key }, ctx) => { credentialDelete(ctx, key); }
 );
 
 export const credentialListTool = makeTool(
   "credential_list",
   "List all stored credential keys (values are never returned).",
   z.object({}),
-  async () => credentialList()
+  async (_args, ctx) => credentialList(ctx)
 );
 
 export const credentialTools: Tool[] = [

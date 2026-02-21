@@ -1,13 +1,16 @@
 import type { AIProvider, AIResponse, Message, ToolCall, ToolDefinition } from "./types";
+import type { HttpClient } from "../context";
 
 export class OpenRouterProvider implements AIProvider {
   private model: string;
   private apiKey: string;
+  private http: HttpClient;
 
-  constructor(model: string, apiKey: string) {
+  constructor(model: string, apiKey: string, http: HttpClient) {
     // strip "openrouter/" prefix
     this.model = model.replace(/^openrouter\//, "");
     this.apiKey = apiKey;
+    this.http = http;
   }
 
   async complete(
@@ -36,7 +39,7 @@ export class OpenRouterProvider implements AIProvider {
       body.tool_choice = "auto";
     }
 
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const resp = await this.http.fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

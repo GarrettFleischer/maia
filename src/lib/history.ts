@@ -1,46 +1,53 @@
 import { v4 as uuidv4 } from "uuid";
-import { getDb } from "./db";
+import type { AppContext } from "./context";
 import type { HistoryEntry, Session, SessionMeta } from "./types";
 
-// ─── Session CRUD ────────────────────────────────────────────────────────────
+// -- Session CRUD --
 
 export function createSession(
+  ctx: AppContext,
   participants: string[] = ["user", "maia"],
   type: "user" | "agents" = "user"
 ): string {
-  const db = getDb();
   const id = uuidv4();
   const now = new Date().toISOString();
-  db.prepare(
+  ctx.db.prepare(
     `INSERT INTO sessions (id, name, description, participants, tags, type, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(id, "", "", JSON.stringify(participants), JSON.stringify([]), type, now, now);
   return id;
 }
 
-export function listSessions(type?: "user" | "agents" | "all"): SessionMeta[] {
-  const db = getDb();
+export function listSessions(
+  ctx: AppContext,
+  type?: "user" | "agents" | "all"
+): SessionMeta[] {
   let rows: Record<string, unknown>[];
   if (!type || type === "all") {
-    rows = db.prepare("SELECT * FROM sessions ORDER BY updated_at DESC").all() as Record<string, unknown>[];
+    rows = ctx.db
+      .prepare("SELECT * FROM sessions ORDER BY updated_at DESC")
+      .all() as Record<string, unknown>[];
   } else {
-    rows = db.prepare("SELECT * FROM sessions WHERE type = ? ORDER BY updated_at DESC").all(type) as Record<string, unknown>[];
+    rows = ctx.db
+      .prepare("SELECT * FROM sessions WHERE type = ? ORDER BY updated_at DESC")
+      .all(type) as Record<string, unknown>[];
   }
   return rows.map(rowToMeta);
 }
 
-export function getSession(id: string): Session | null {
-  const db = getDb();
-  const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+export function getSession(ctx: AppContext, id: string): Session | null {
+  const row = ctx.db
+    .prepare("SELECT * FROM sessions WHERE id = ?")
+    .get(id) as Record<string, unknown> | undefined;
   if (!row) return null;
 
-  const original = db
+  const original = ctx.db
     .prepare(
       "SELECT * FROM history_entries WHERE session_id = ? AND is_compressed = 0 ORDER BY timestamp ASC"
     )
     .all(id) as Record<string, unknown>[];
 
-  const compressed = db
+  const compressed = ctx.db
     .prepare(
       "SELECT * FROM history_entries WHERE session_id = ? AND is_compressed = 1 ORDER BY timestamp ASC"
     )
@@ -54,10 +61,10 @@ export function getSession(id: string): Session | null {
 }
 
 export function updateSessionMeta(
+  ctx: AppContext,
   id: string,
   meta: Partial<{ name: string; description: string; tags: string[] }>
 ): void {
-  const db = getDb();
   const parts: string[] = [];
   const vals: unknown[] = [];
   if (meta.name !== undefined) { parts.push("name = ?"); vals.push(meta.name); }
@@ -66,19 +73,19 @@ export function updateSessionMeta(
   parts.push("updated_at = ?");
   vals.push(new Date().toISOString());
   vals.push(id);
-  db.prepare(`UPDATE sessions SET ${parts.join(", ")} WHERE id = ?`).run(...vals);
+  ctx.db.prepare(`UPDATE sessions SET ${parts.join(", ")} WHERE id = ?`).run(...vals);
 }
 
-// ─── Entry management ────────────────────────────────────────────────────────
+// -- Entry management --
 
 export function appendEntry(
+  ctx: AppContext,
   sessionId: string,
   entry: Omit<HistoryEntry, "id">,
   isCompressed = false
 ): HistoryEntry {
-  const db = getDb();
   const id = uuidv4();
-  db.prepare(
+  ctx.db.prepare(
     `INSERT INTO history_entries (id, session_id, role, content, tool_name, tool_args, timestamp, is_compressed)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
@@ -92,51 +99,51 @@ export function appendEntry(
     isCompressed ? 1 : 0
   );
   // bump session updated_at
-  db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
+  ctx.db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
     new Date().toISOString(),
     sessionId
   );
   return { ...entry, id };
 }
 
-// ─── Active session ──────────────────────────────────────────────────────────
+// -- Active session --
 
-export function getActiveSessionId(): string | null {
-  const db = getDb();
-  const row = db.prepare("SELECT session_id FROM active_session WHERE singleton = 1").get() as
-    | { session_id: string | null }
-    | undefined;
+export function getActiveSessionId(ctx: AppContext): string | null {
+  const row = ctx.db
+    .prepare("SELECT session_id FROM active_session WHERE singleton = 1")
+    .get() as { session_id: string | null } | undefined;
   return row?.session_id ?? null;
 }
 
-export function setActiveSessionId(sessionId: string): void {
-  const db = getDb();
-  db.prepare("UPDATE active_session SET session_id = ? WHERE singleton = 1").run(sessionId);
+export function setActiveSessionId(ctx: AppContext, sessionId: string): void {
+  ctx.db
+    .prepare("UPDATE active_session SET session_id = ? WHERE singleton = 1")
+    .run(sessionId);
 }
 
-// ─── Fuzzy search ─────────────────────────────────────────────────────────────
+// -- Fuzzy search --
 
 export function searchEntries(
+  ctx: AppContext,
   query: string,
   sessionId?: string,
   mode: "compressed" | "original" | "both" = "both"
 ): HistoryEntry[] {
-  const db = getDb();
   const keywords = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (!keywords.length) return [];
 
-  let rows: Record<string, unknown>[];
   const compressionFilter =
     mode === "both" ? "" : `AND is_compressed = ${mode === "compressed" ? 1 : 0}`;
 
+  let rows: Record<string, unknown>[];
   if (sessionId) {
-    rows = db
+    rows = ctx.db
       .prepare(
         `SELECT * FROM history_entries WHERE session_id = ? ${compressionFilter} ORDER BY timestamp ASC`
       )
       .all(sessionId) as Record<string, unknown>[];
   } else {
-    rows = db
+    rows = ctx.db
       .prepare(
         `SELECT * FROM history_entries WHERE 1=1 ${compressionFilter} ORDER BY timestamp ASC`
       )
@@ -154,18 +161,19 @@ export function searchEntries(
 }
 
 export function searchAcrossSessions(
+  ctx: AppContext,
   query: string,
   mode: "compressed" | "original" | "both" = "both",
   tags?: string[]
 ): { sessionId: string; sessionName: string; entries: HistoryEntry[] }[] {
-  const sessions = listSessions("all");
+  const sessions = listSessions(ctx, "all");
   const filtered = tags?.length
     ? sessions.filter((s) => tags.some((t) => s.tags.includes(t)))
     : sessions;
 
   const results = [];
   for (const s of filtered) {
-    const entries = searchEntries(query, s.id, mode);
+    const entries = searchEntries(ctx, query, s.id, mode);
     if (entries.length) {
       results.push({ sessionId: s.id, sessionName: s.name, entries });
     }
@@ -173,7 +181,7 @@ export function searchAcrossSessions(
   return results;
 }
 
-// ─── Row mappers ──────────────────────────────────────────────────────────────
+// -- Row mappers --
 
 function rowToMeta(r: Record<string, unknown>): SessionMeta {
   return {

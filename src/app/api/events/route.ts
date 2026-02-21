@@ -1,10 +1,11 @@
 import { NextRequest } from "next/server";
-import { subscribe } from "@/lib/events";
+import { getAppContext } from "@/instrumentation";
 import type { SystemSSEEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest) {
+  const ctx = getAppContext();
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -19,7 +20,7 @@ export async function GET(_req: NextRequest) {
         send({ event: "ping", data: { timestamp: new Date().toISOString() } });
       }, 15_000);
 
-      const unsubscribe = subscribe(send);
+      const unsubscribe = ctx.events.subscribe(send);
 
       // Clean up when client disconnects
       _req.signal.addEventListener("abort", () => {

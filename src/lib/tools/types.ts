@@ -1,8 +1,8 @@
 import type { ZodTypeAny } from "zod";
 import type { ToolDefinition } from "../ai/types";
-import type { Database } from "better-sqlite3";
+import type { AppContext } from "../context";
 
-export interface ToolContext {
+export interface ToolContext extends AppContext {
   agentId: string;
   sessionId: string;
   volumeRoot: string;

@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getAppContext } from "@/instrumentation";
 import type { CronJob } from "@/lib/types";
 
 export async function GET() {
-  const db = getDb();
+  const { db } = getAppContext();
   const rows = db.prepare("SELECT * FROM cron_jobs ORDER BY created_at").all() as Record<string, unknown>[];
   const jobs: CronJob[] = rows.map((r) => ({
     id: r.id as string,

@@ -1,14 +1,14 @@
 import { v4 as uuidv4 } from "uuid";
-import { getDb } from "../db";
+import type { AppContext } from "../context";
 
 export function logSecurityEvent(
+  ctx: AppContext,
   agentId: string,
   sessionId: string,
   eventType: string,
   detail: Record<string, unknown>
 ): void {
-  const db = getDb();
-  db.prepare(
+  ctx.db.prepare(
     `INSERT INTO security_events (id, agent_id, session_id, event_type, detail, occurred_at)
      VALUES (?, ?, ?, ?, ?, ?)`
   ).run(
@@ -22,13 +22,14 @@ export function logSecurityEvent(
 }
 
 export function logInjectionDetected(
+  ctx: AppContext,
   agentId: string,
   sessionId: string,
   source: string,
   patternMatched: string,
   originalLength: number
 ): void {
-  logSecurityEvent(agentId, sessionId, "injection_detected", {
+  logSecurityEvent(ctx, agentId, sessionId, "injection_detected", {
     source,
     pattern_matched: patternMatched,
     original_length: originalLength,

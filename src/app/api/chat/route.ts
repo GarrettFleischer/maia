@@ -1,15 +1,14 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
+import { getAppContext } from "@/instrumentation";
 import { runAgent } from "@/lib/agent/runner";
+import { createProvider } from "@/lib/ai/factory";
 import {
   createSession,
   getActiveSessionId,
   setActiveSessionId,
 } from "@/lib/history";
 import type { SSEEvent } from "@/lib/types";
-
-// Ensure messaging service is wired up
-import "@/lib/messaging-service";
 
 const bodySchema = z.object({
   message: z.string(),
@@ -21,17 +20,18 @@ export async function POST(req: NextRequest) {
   let body: z.infer<typeof bodySchema>;
   try {
     body = bodySchema.parse(await req.json());
-  } catch (err) {
+  } catch {
     return new Response(JSON.stringify({ error: "Invalid request body" }), { status: 400 });
   }
 
+  const ctx = getAppContext();
   const agentId = body.targetAgent ?? "maia";
 
   // Resolve session
-  let sessionId = body.sessionId ?? getActiveSessionId();
+  let sessionId = body.sessionId ?? getActiveSessionId(ctx);
   if (!sessionId) {
-    sessionId = createSession(["user", agentId]);
-    setActiveSessionId(sessionId);
+    sessionId = createSession(ctx, ["user", agentId]);
+    setActiveSessionId(ctx, sessionId);
   }
 
   const stream = new ReadableStream({
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
       }
 
       try {
-        await runAgent(agentId, sessionId!, body.message, send);
+        await runAgent(ctx, createProvider, agentId, sessionId!, body.message, send);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         send({ type: "error", message });

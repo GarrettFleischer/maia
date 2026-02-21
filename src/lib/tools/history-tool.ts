@@ -22,7 +22,7 @@ export const historyFindTool = makeTool(
     query: z.string().describe("Search query"),
     mode: z.enum(["compressed", "original", "both"]).optional(),
   }),
-  async ({ query, mode }, ctx) => searchEntries(query, ctx.sessionId, mode)
+  async ({ query, mode }, ctx) => searchEntries(ctx, query, ctx.sessionId, mode)
 );
 
 export const historySearchAllTool = makeTool(
@@ -33,9 +33,9 @@ export const historySearchAllTool = makeTool(
     tags: z.string().optional().describe("Comma-separated tags to filter by"),
     mode: z.enum(["compressed", "original", "both"]).optional(),
   }),
-  async ({ query, tags, mode }) => {
+  async ({ query, tags, mode }, ctx) => {
     const tagList = tags?.split(",").map((t) => t.trim()).filter(Boolean);
-    return searchAcrossSessions(query, mode, tagList);
+    return searchAcrossSessions(ctx, query, mode, tagList);
   }
 );
 
@@ -46,8 +46,8 @@ export const historyGetSessionTool = makeTool(
     sessionId: z.string(),
     mode: z.enum(["compressed", "original", "both"]).optional(),
   }),
-  async ({ sessionId, mode }) => {
-    const session = getSession(sessionId);
+  async ({ sessionId, mode }, ctx) => {
+    const session = getSession(ctx, sessionId);
     if (!session) return null;
     if (mode === "compressed") return { ...session, original: [] };
     if (mode === "original") return { ...session, compressed: [] };

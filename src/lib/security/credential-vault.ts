@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { getDb } from "../db";
+import type { AppContext } from "../context";
 import type { EncryptedValue } from "../types";
 
 function getMasterKey(): Buffer {
@@ -44,40 +44,36 @@ function decrypt(enc: EncryptedValue): string {
 }
 
 // LLM-accessible operations (no value read)
-export function credentialCreate(key: string, value: string): void {
-  const db = getDb();
+export function credentialCreate(ctx: AppContext, key: string, value: string): void {
   const now = new Date().toISOString();
   const enc = encrypt(value);
-  db.prepare(
-    `INSERT OR REPLACE INTO credentials (key, iv, tag, ciphertext, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
+  ctx.db.prepare(
+    `INSERT OR REPLACE INTO credentials (key, iv, tag, ciphertext, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).run(key, enc.iv, enc.tag, enc.ciphertext, now, now);
 }
 
-export function credentialUpdate(key: string, value: string): void {
-  const db = getDb();
+export function credentialUpdate(ctx: AppContext, key: string, value: string): void {
   const now = new Date().toISOString();
   const enc = encrypt(value);
-  const result = db.prepare(
+  const result = ctx.db.prepare(
     `UPDATE credentials SET iv = ?, tag = ?, ciphertext = ?, updated_at = ? WHERE key = ?`
   ).run(enc.iv, enc.tag, enc.ciphertext, now, key);
   if (result.changes === 0) throw new Error(`Credential not found: ${key}`);
 }
 
-export function credentialDelete(key: string): void {
-  const db = getDb();
-  db.prepare("DELETE FROM credentials WHERE key = ?").run(key);
+export function credentialDelete(ctx: AppContext, key: string): void {
+  ctx.db.prepare("DELETE FROM credentials WHERE key = ?").run(key);
 }
 
-export function credentialList(): string[] {
-  const db = getDb();
-  const rows = db.prepare("SELECT key FROM credentials ORDER BY key").all() as { key: string }[];
+export function credentialList(ctx: AppContext): string[] {
+  const rows = ctx.db.prepare("SELECT key FROM credentials ORDER BY key").all() as { key: string }[];
   return rows.map((r) => r.key);
 }
 
 // Internal-only — NOT exposed to LLM
-export function credentialGet(key: string): string {
-  const db = getDb();
-  const row = db.prepare("SELECT iv, tag, ciphertext FROM credentials WHERE key = ?").get(key) as
+export function credentialGet(ctx: AppContext, key: string): string {
+  const row = ctx.db.prepare("SELECT iv, tag, ciphertext FROM credentials WHERE key = ?").get(key) as
     | EncryptedValue
     | undefined;
   if (!row) throw new Error(`Credential not found: ${key}`);

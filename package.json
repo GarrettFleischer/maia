@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "test:coverage": "bun run scripts/check-coverage-threshold.ts",
+    "test:coverage:raw": "bun test --coverage"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",

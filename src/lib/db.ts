@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import type { DbAdapter } from "./context";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "maia.db");
@@ -9,16 +10,17 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 let _db: Database.Database | null = null;
 
-export function getDb(): Database.Database {
-  if (_db) return _db;
+export function getDb(): DbAdapter {
+  if (_db) return _db as unknown as DbAdapter;
   _db = new Database(DB_PATH);
   _db.pragma("journal_mode = WAL");
   _db.pragma("foreign_keys = ON");
-  initSchema(_db);
-  return _db;
+  initSchema(_db as unknown as DbAdapter);
+  return _db as unknown as DbAdapter;
 }
 
-function initSchema(db: Database.Database): void {
+/** Exported so the test helper can reuse the same schema definition. */
+export function initSchema(db: DbAdapter): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,

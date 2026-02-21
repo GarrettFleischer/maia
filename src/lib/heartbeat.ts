@@ -1,7 +1,6 @@
-import { emit } from "./events";
+import type { AppContext } from "./context";
 import { listAgents } from "./agent/identity";
 import { getSettings } from "./settings";
-import { runAgent } from "./agent/runner";
 import { createSession } from "./history";
 
 const HEARTBEAT_MESSAGE = `[HEARTBEAT] Timestamp: {{TIMESTAMP}}
@@ -12,20 +11,23 @@ If you need to collaborate with another agent, use the messaging tool.
 Update your identity files with any new information.
 Take meaningful action or report any blockers.`;
 
-export async function fireHeartbeat(): Promise<void> {
+export async function fireHeartbeat(
+  ctx: AppContext,
+  runAgentFn: (ctx: AppContext, agentId: string, sessionId: string, message: string) => Promise<void>
+): Promise<void> {
   const timestamp = new Date().toISOString();
   const message = HEARTBEAT_MESSAGE.replace("{{TIMESTAMP}}", timestamp);
 
-  emit({ event: "heartbeat", data: { timestamp } });
+  ctx.events.emit({ event: "heartbeat", data: { timestamp } });
 
-  const agents = listAgents();
+  const agents = listAgents(ctx);
   for (const agent of agents) {
     if (agent.status !== "active") continue;
 
     // Each heartbeat gets its own ephemeral session
-    const sessionId = createSession([agent.id], "agents");
+    const sessionId = createSession(ctx, [agent.id], "agents");
 
-    runAgent(agent.id, sessionId, message, () => {}).catch((err) => {
+    runAgentFn(ctx, agent.id, sessionId, message).catch((err) => {
       console.error(`Heartbeat failed for agent ${agent.id}:`, err);
     });
   }
@@ -33,12 +35,15 @@ export async function fireHeartbeat(): Promise<void> {
 
 let _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-export function startHeartbeatScheduler(): void {
+export function startHeartbeatScheduler(
+  ctx: AppContext,
+  runAgentFn: (ctx: AppContext, agentId: string, sessionId: string, message: string) => Promise<void>
+): void {
   if (_heartbeatTimer) return;
-  const settings = getSettings();
+  const settings = getSettings(ctx);
   const intervalMs = settings.heartbeatIntervalMinutes * 60 * 1000;
   _heartbeatTimer = setInterval(() => {
-    fireHeartbeat().catch(console.error);
+    fireHeartbeat(ctx, runAgentFn).catch(console.error);
   }, intervalMs);
   console.log(`Heartbeat scheduler started (every ${settings.heartbeatIntervalMinutes} min)`);
 }

@@ -1,11 +1,8 @@
 import { z } from "zod";
-import { exec } from "child_process";
-import { promisify } from "util";
 import { zodToJsonSchema } from "../zod-to-json";
 import type { Tool, ToolContext } from "./types";
 import type { ExecResult } from "../types";
 
-const execAsync = promisify(exec);
 const TERMINAL_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT = 50 * 1024;
 
@@ -21,33 +18,24 @@ export const terminalTool: Tool<z.infer<typeof schema>, ExecResult> = {
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(schema) };
   },
-  async execute({ command, cwd }, _ctx) {
-    const SANDBOX_CONTAINER = process.env.SANDBOX_CONTAINER_NAME ?? "maia-sandbox";
+  async execute({ command, cwd }, ctx) {
+    const container = ctx.sandboxContainerName ?? "maia-sandbox";
     const workdir = cwd ?? "/workspace";
 
     const dockerCmd = [
       "docker", "exec",
       "--workdir", workdir,
-      SANDBOX_CONTAINER,
+      container,
       "bash", "-c", command,
     ].map((arg) => `"${arg.replace(/"/g, '\\"')}"`).join(" ");
 
-    try {
-      const { stdout, stderr } = await execAsync(dockerCmd, {
-        timeout: TERMINAL_TIMEOUT_MS,
-      });
-      return {
-        stdout: stdout.length > MAX_OUTPUT ? stdout.slice(0, MAX_OUTPUT) + "\n[truncated]" : stdout,
-        stderr: stderr.length > MAX_OUTPUT ? stderr.slice(0, MAX_OUTPUT) + "\n[truncated]" : stderr,
-        exitCode: 0,
-      };
-    } catch (err: unknown) {
-      const e = err as { stdout?: string; stderr?: string; code?: number };
-      return {
-        stdout: (e.stdout ?? "").slice(0, MAX_OUTPUT),
-        stderr: (e.stderr ?? String(err)).slice(0, MAX_OUTPUT),
-        exitCode: e.code ?? 1,
-      };
-    }
+    const { stdout, stderr, exitCode } = await ctx.processRunner.exec(dockerCmd, {
+      timeout: TERMINAL_TIMEOUT_MS,
+    });
+    return {
+      stdout: stdout.length > MAX_OUTPUT ? stdout.slice(0, MAX_OUTPUT) + "\n[truncated]" : stdout,
+      stderr: stderr.length > MAX_OUTPUT ? stderr.slice(0, MAX_OUTPUT) + "\n[truncated]" : stderr,
+      exitCode,
+    };
   },
 };

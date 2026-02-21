@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAppContext } from "@/instrumentation";
 import { getSettingsPublic, updateSettings } from "@/lib/settings";
 
 export async function GET() {
-  return NextResponse.json(getSettingsPublic());
+  const ctx = getAppContext();
+  return NextResponse.json(getSettingsPublic(ctx));
 }
 
 export async function PUT(req: NextRequest) {
+  const ctx = getAppContext();
   const body = await req.json();
-  updateSettings(body);
-  return NextResponse.json(getSettingsPublic());
+  updateSettings(ctx, body);
+  return NextResponse.json(getSettingsPublic(ctx));
 }

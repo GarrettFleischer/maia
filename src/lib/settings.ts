@@ -1,9 +1,8 @@
-import { getDb } from "./db";
+import type { AppContext } from "./context";
 import type { Settings, SettingsPublic } from "./types";
 
-export function getSettings(): Settings {
-  const db = getDb();
-  const rows = db.prepare("SELECT key, value FROM settings").all() as {
+export function getSettings(ctx: AppContext): Settings {
+  const rows = ctx.db.prepare("SELECT key, value FROM settings").all() as {
     key: string;
     value: string;
   }[];
@@ -22,8 +21,8 @@ export function getSettings(): Settings {
   };
 }
 
-export function getSettingsPublic(): SettingsPublic {
-  const s = getSettings();
+export function getSettingsPublic(ctx: AppContext): SettingsPublic {
+  const s = getSettings(ctx);
   return {
     whitelistedModels: s.whitelistedModels,
     compressionModel: s.compressionModel,
@@ -33,9 +32,13 @@ export function getSettingsPublic(): SettingsPublic {
   };
 }
 
-export function updateSettings(partial: Partial<SettingsPublic & { openRouterApiKey?: string }>): void {
-  const db = getDb();
-  const update = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
+export function updateSettings(
+  ctx: AppContext,
+  partial: Partial<SettingsPublic & { openRouterApiKey?: string }>
+): void {
+  const update = ctx.db.prepare(
+    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)"
+  );
 
   if (partial.whitelistedModels !== undefined) {
     update.run("whitelistedModels", JSON.stringify(partial.whitelistedModels));

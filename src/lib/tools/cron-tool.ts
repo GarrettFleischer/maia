@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { zodToJsonSchema } from "../zod-to-json";
-import { getDb } from "../db";
 import type { Tool, ToolContext } from "./types";
 import type { CronJob } from "../types";
 
@@ -25,11 +24,11 @@ export const cronScheduleTool = makeTool(
     taskDescription: z.string().describe("Human-readable description of what will happen"),
   }),
   async ({ expression, taskDescription }, ctx) => {
-    const db = getDb();
     const id = uuidv4();
     const now = new Date().toISOString();
-    db.prepare(
-      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at) VALUES (?, ?, ?, ?, 0, ?)`
+    ctx.db.prepare(
+      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at)
+       VALUES (?, ?, ?, ?, 0, ?)`
     ).run(id, expression, taskDescription, ctx.agentId, now);
     return id;
   }
@@ -39,9 +38,8 @@ export const cronListTool = makeTool(
   "cron_list",
   "List all cron jobs. Maia only.",
   z.object({}),
-  async () => {
-    const db = getDb();
-    const rows = db.prepare("SELECT * FROM cron_jobs ORDER BY created_at").all() as Record<string, unknown>[];
+  async (_args, ctx) => {
+    const rows = ctx.db.prepare("SELECT * FROM cron_jobs ORDER BY created_at").all() as Record<string, unknown>[];
     return rows.map((r): CronJob => ({
       id: r.id as string,
       expression: r.expression as string,
@@ -57,12 +55,11 @@ export const cronDeleteTool = makeTool(
   "cron_delete",
   "Delete a cron job by ID. Cannot delete built-in jobs. Maia only.",
   z.object({ jobId: z.string() }),
-  async ({ jobId }) => {
-    const db = getDb();
-    const row = db.prepare("SELECT is_built_in FROM cron_jobs WHERE id = ?").get(jobId) as { is_built_in: number } | undefined;
+  async ({ jobId }, ctx) => {
+    const row = ctx.db.prepare("SELECT is_built_in FROM cron_jobs WHERE id = ?").get(jobId) as { is_built_in: number } | undefined;
     if (!row) throw new Error(`Cron job not found: ${jobId}`);
     if (row.is_built_in) throw new Error("Cannot delete built-in cron jobs");
-    db.prepare("DELETE FROM cron_jobs WHERE id = ?").run(jobId);
+    ctx.db.prepare("DELETE FROM cron_jobs WHERE id = ?").run(jobId);
   }
 );
 

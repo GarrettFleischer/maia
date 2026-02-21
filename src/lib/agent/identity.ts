@@ -1,20 +1,18 @@
-import fs from "fs";
 import path from "path";
-import { getDb } from "../db";
+import type { AppContext } from "../context";
 import type { AgentDefinition, AgentWithIdentity } from "../types";
 
 const AGENTS_DIR = path.join(process.cwd(), "data", "agents");
 
-export function getAgentIdentity(agentId: string): AgentWithIdentity | null {
-  const db = getDb();
-  const row = db
+export function getAgentIdentity(ctx: AppContext, agentId: string): AgentWithIdentity | null {
+  const row = ctx.db
     .prepare("SELECT * FROM agents WHERE id = ? AND status != 'deleted'")
     .get(agentId) as Record<string, unknown> | undefined;
   if (!row) return null;
 
   const dir = path.join(AGENTS_DIR, agentId);
   const read = (file: string) => {
-    try { return fs.readFileSync(path.join(dir, file), "utf8"); } catch { return ""; }
+    try { return ctx.fs.readFile(path.join(dir, file)); } catch { return ""; }
   };
 
   return {
@@ -32,10 +30,9 @@ export function getAgentIdentity(agentId: string): AgentWithIdentity | null {
   };
 }
 
-export function listAgents(): AgentDefinition[] {
-  const db = getDb();
+export function listAgents(ctx: AppContext): AgentDefinition[] {
   return (
-    db.prepare("SELECT * FROM agents WHERE status != 'deleted' ORDER BY created_at").all() as Record<string, unknown>[]
+    ctx.db.prepare("SELECT * FROM agents WHERE status != 'deleted' ORDER BY created_at").all() as Record<string, unknown>[]
   ).map((r) => ({
     id: r.id as string,
     name: r.name as string,
@@ -47,9 +44,8 @@ export function listAgents(): AgentDefinition[] {
   }));
 }
 
-export function setAgentStatus(agentId: string, status: "idle" | "running" | "paused"): void {
-  const db = getDb();
-  db.prepare("UPDATE agents SET status = ?, updated_at = ? WHERE id = ?").run(
+export function setAgentStatus(ctx: AppContext, agentId: string, status: "idle" | "running" | "paused"): void {
+  ctx.db.prepare("UPDATE agents SET status = ?, updated_at = ? WHERE id = ?").run(
     status,
     new Date().toISOString(),
     agentId

@@ -1,39 +1,36 @@
-import { createProvider } from "../ai/factory";
-import { getSettings } from "../settings";
-import { appendEntry, updateSessionMeta } from "../history";
+import type { AppContext } from "../context";
+import type { AIProvider } from "../ai/types";
+import { appendEntry, updateSessionMeta, getSession } from "../history";
 import type { HistoryEntry } from "../types";
 import type { Message } from "../ai/types";
 
-const COMPRESSION_PROMPT = `You are a compression agent. Convert the following exchange into a compressed form.
-Rules:
-- Remove all greetings, affirmations, pleasantries, filler words
-- Remove conversational connectors ("Of course!", "Great!", "Sure, let me...")
-- Preserve ALL: facts, decisions, code, file paths, errors, numbers, names
-- Code blocks: preserve verbatim (only strip non-essential comments)
-- Prose: convert to terse bullet points or key-value facts
-- Tool calls: preserve tool name, args, and result summary
-- Never invent data. Never infer unstated facts.
-- Output: a JSON object with keys "content" (string), "role" (same as input), "tags" (string[])
-- tags should be technology names, domains, statuses, or agent names relevant to the exchange`;
+const COMPRESSION_PROMPT = `You are a memory compression assistant. Given a conversation entry, produce a compact JSON summary that preserves the key information.
+
+Respond ONLY with a JSON object in this exact format:
+{
+  "content": "<concise summary of the entry>",
+  "role": "<same role as the original>",
+  "tags": ["<optional>", "<topic tags>"]
+}
+
+Be concise. Preserve tool names and important results. Drop filler and repetition.`;
 
 export async function compressEntry(
+  ctx: AppContext,
+  provider: AIProvider | null,
   entry: HistoryEntry,
   sessionId: string
 ): Promise<HistoryEntry> {
-  const settings = getSettings();
-  let provider;
-  try {
-    provider = createProvider(settings.compressionModel);
-  } catch {
-    // If compression model unavailable, store as-is (compressed = original)
-    return appendEntry(sessionId, entry, true);
+  if (!provider) {
+    // No compression provider available — store as-is
+    return appendEntry(ctx, sessionId, entry, true);
   }
 
   const messages: Message[] = [
     { role: "system", content: COMPRESSION_PROMPT },
     {
       role: "user",
-      content: `EXCHANGE TO COMPRESS:\n${JSON.stringify(entry, null, 2)}`,
+      content: `Role: ${entry.role}\nContent: ${entry.content}`,
     },
   ];
 
@@ -42,7 +39,7 @@ export async function compressEntry(
     const result = await provider.complete(messages, [], (token) => { raw += token; });
     raw = result.content || raw;
   } catch {
-    return appendEntry(sessionId, entry, true);
+    return appendEntry(ctx, sessionId, entry, true);
   }
 
   // Parse JSON from response
@@ -64,14 +61,12 @@ export async function compressEntry(
 
   // Update session tags if provided
   if (compressed.tags?.length) {
-    const db = (await import("../db")).getDb();
-    const existing = db.prepare("SELECT tags FROM sessions WHERE id = ?").get(sessionId) as { tags: string } | undefined;
+    const existing = getSession(ctx, sessionId);
     if (existing) {
-      const current: string[] = JSON.parse(existing.tags);
-      const merged = Array.from(new Set([...current, ...compressed.tags]));
-      updateSessionMeta(sessionId, { tags: merged });
+      const merged = Array.from(new Set([...existing.tags, ...compressed.tags]));
+      updateSessionMeta(ctx, sessionId, { tags: merged });
     }
   }
 
-  return appendEntry(sessionId, compressedEntry, true);
+  return appendEntry(ctx, sessionId, compressedEntry, true);
 }

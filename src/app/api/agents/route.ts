@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { getAppContext } from "@/instrumentation";
 import { listAgents } from "@/lib/agent/identity";
 
 export async function GET() {
-  const agents = listAgents();
+  const ctx = getAppContext();
+  const agents = listAgents(ctx);
   return NextResponse.json({ agents });
 }

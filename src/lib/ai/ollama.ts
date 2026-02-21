@@ -1,13 +1,16 @@
 import type { AIProvider, AIResponse, Message, ToolCall, ToolDefinition } from "./types";
+import type { HttpClient } from "../context";
 
 export class OllamaProvider implements AIProvider {
   private model: string;
   private baseUrl: string;
+  private http: HttpClient;
 
-  constructor(model: string, baseUrl: string) {
+  constructor(model: string, baseUrl: string, http: HttpClient) {
     // strip "ollama/" prefix
     this.model = model.replace(/^ollama\//, "");
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.http = http;
   }
 
   async complete(
@@ -35,7 +38,7 @@ export class OllamaProvider implements AIProvider {
       }));
     }
 
-    const resp = await fetch(`${this.baseUrl}/api/chat`, {
+    const resp = await this.http.fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

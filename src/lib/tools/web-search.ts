@@ -9,9 +9,9 @@ const schema = z.object({
   maxResults: z.number().optional().describe("Maximum number of results (default 5)"),
 });
 
-async function searchDuckDuckGo(query: string, max: number): Promise<SearchResult[]> {
+async function searchDuckDuckGo(query: string, max: number, ctx: ToolContext): Promise<SearchResult[]> {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const resp = await fetch(url, {
+  const resp = await ctx.http.fetch(url, {
     headers: { "User-Agent": "Mozilla/5.0 (compatible; MaiaBot/1.0)" },
   });
   const html = await resp.text();
@@ -57,8 +57,8 @@ export const webSearchTool: Tool<z.infer<typeof schema>, SearchResult[]> = {
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(schema) };
   },
-  async execute({ query, maxResults }, _ctx) {
+  async execute({ query, maxResults }, ctx) {
     const max = maxResults ?? 5;
-    return searchDuckDuckGo(query, max);
+    return searchDuckDuckGo(query, max, ctx);
   },
 };

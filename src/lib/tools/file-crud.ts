@@ -1,5 +1,4 @@
 import { z } from "zod";
-import fs from "fs";
 import path from "path";
 import { zodToJsonSchema } from "../zod-to-json";
 import type { Tool, ToolContext } from "./types";
@@ -7,7 +6,7 @@ import type { Tool, ToolContext } from "./types";
 function validatePath(userPath: string, volumeRoot: string): string {
   const resolved = path.resolve(volumeRoot, userPath);
   if (!resolved.startsWith(path.resolve(volumeRoot))) {
-    throw new Error(`SecurityError: Path traversal attempt: ${userPath}`);
+    throw new Error();
   }
   return resolved;
 }
@@ -37,7 +36,7 @@ export const fileReadTool = makeFileTool(
   z.object({ path: z.string().describe("Path relative to workspace root") }),
   async ({ path: p }, ctx) => {
     const full = validatePath(p, ctx.volumeRoot);
-    const content = fs.readFileSync(full, "utf8");
+    const content = ctx.fs.readFile(full);
     return content.length > MAX_OUTPUT ? content.slice(0, MAX_OUTPUT) + "\n[truncated]" : content;
   }
 );
@@ -51,8 +50,8 @@ export const fileWriteTool = makeFileTool(
   }),
   async ({ path: p, content }, ctx) => {
     const full = validatePath(p, ctx.volumeRoot);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, content, "utf8");
+    ctx.fs.mkdirp(path.dirname(full));
+    ctx.fs.writeFile(full, content);
   }
 );
 
@@ -65,8 +64,8 @@ export const fileAppendTool = makeFileTool(
   }),
   async ({ path: p, content }, ctx) => {
     const full = validatePath(p, ctx.volumeRoot);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.appendFileSync(full, content, "utf8");
+    ctx.fs.mkdirp(path.dirname(full));
+    ctx.fs.appendFile(full, content);
   }
 );
 
@@ -76,7 +75,7 @@ export const fileDeleteTool = makeFileTool(
   z.object({ path: z.string().describe("Path relative to workspace root") }),
   async ({ path: p }, ctx) => {
     const full = validatePath(p, ctx.volumeRoot);
-    fs.rmSync(full, { recursive: false });
+    ctx.fs.deleteFile(full);
   }
 );
 
@@ -86,7 +85,7 @@ export const fileListTool = makeFileTool(
   z.object({ directory: z.string().describe("Directory path relative to workspace root") }),
   async ({ directory }, ctx) => {
     const full = validatePath(directory, ctx.volumeRoot);
-    return fs.readdirSync(full);
+    return ctx.fs.listDir(full);
   }
 );
 
@@ -100,8 +99,8 @@ export const fileMoveTool = makeFileTool(
   async ({ from, to }, ctx) => {
     const fullFrom = validatePath(from, ctx.volumeRoot);
     const fullTo = validatePath(to, ctx.volumeRoot);
-    fs.mkdirSync(path.dirname(fullTo), { recursive: true });
-    fs.renameSync(fullFrom, fullTo);
+    ctx.fs.mkdirp(path.dirname(fullTo));
+    ctx.fs.rename(fullFrom, fullTo);
   }
 );
 
@@ -111,7 +110,7 @@ export const fileExistsTool = makeFileTool(
   z.object({ path: z.string().describe("Path relative to workspace root") }),
   async ({ path: p }, ctx) => {
     const full = validatePath(p, ctx.volumeRoot);
-    return fs.existsSync(full);
+    return ctx.fs.exists(full);
   }
 );
 
