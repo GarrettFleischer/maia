@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { SettingsPublic } from "@/lib/types";
+import AppHeader from "@/app/components/AppHeader";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsPublic | null>(null);
@@ -45,19 +46,7 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
-        <div className="flex items-center gap-3">
-          <a href="/" className="w-8 h-8 rounded-full bg-violet-600 flex items-center justify-center text-sm font-bold">M</a>
-          <div>
-            <div className="font-semibold text-sm">Maia</div>
-            <div className="text-xs text-zinc-500">Settings</div>
-          </div>
-        </div>
-        <nav className="flex gap-4 text-sm text-zinc-400">
-          <a href="/" className="hover:text-zinc-100 transition-colors">Chat</a>
-          <a href="/agents" className="hover:text-zinc-100 transition-colors">Agents</a>
-        </nav>
-      </header>
+      <AppHeader subtitle="Settings" />
 
       <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
         <h1 className="text-xl font-semibold">Settings</h1>
@@ -70,12 +59,14 @@ export default function SettingsPage() {
               <h2 className="font-medium text-sm text-zinc-300">AI Providers</h2>
 
               <div>
-                <label className="block text-xs text-zinc-500 mb-1">Ollama Base URL</label>
+                <label htmlFor="settings-ollama-url" className="block text-xs text-zinc-500 mb-1">Ollama Base URL</label>
                 <input
+                  id="settings-ollama-url"
                   type="text"
                   value={ollamaUrl}
                   onChange={(e) => setOllamaUrl(e.target.value)}
                   className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Ollama Base URL"
                 />
               </div>
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { AgentDefinition } from "@/lib/types";
+import AppHeader from "@/app/components/AppHeader";
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
@@ -16,19 +17,7 @@ export default function AgentsPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
-        <div className="flex items-center gap-3">
-          <a href="/" className="w-8 h-8 rounded-full bg-violet-600 flex items-center justify-center text-sm font-bold">M</a>
-          <div>
-            <div className="font-semibold text-sm">Maia</div>
-            <div className="text-xs text-zinc-500">Agents</div>
-          </div>
-        </div>
-        <nav className="flex gap-4 text-sm text-zinc-400">
-          <a href="/" className="hover:text-zinc-100 transition-colors">Chat</a>
-          <a href="/settings" className="hover:text-zinc-100 transition-colors">Settings</a>
-        </nav>
-      </header>
+      <AppHeader subtitle="Agents" />
 
       <main className="max-w-3xl mx-auto px-4 py-8">
         <h1 className="text-xl font-semibold mb-6">Agents</h1>
