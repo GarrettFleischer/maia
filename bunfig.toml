@@ -1,7 +1,7 @@
 [test]
-root = "."
-# Match both src/__tests__ and any *.test.ts alongside source files
-preload = ["./src/__tests__/setup.ts"]
+root = "src/__tests__"
+# E2E (e2e/*.spec.ts) are run via Playwright: bun run test:e2e
+preload = ["./src/__tests__/happydom.ts", "./src/__tests__/setup.ts", "./src/__tests__/testing-library.ts"]
 # Coverage when running with --coverage (bun test --coverage)
 # Overall threshold is enforced by scripts/check-coverage-threshold.ts (overall app only, not per-file).
 coverageSkipTestFiles = true
