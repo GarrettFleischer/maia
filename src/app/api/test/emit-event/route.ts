@@ -29,6 +29,13 @@ interface EmitEventBody {
  * Body: { "event": "message", "data": { "sessionId": "...", "entry": {...}, "participants": [] } }
  */
 export async function POST(req: NextRequest) {
+  // Only allow in test/E2E context so production never exposes this endpoint.
+  const isTestEnv =
+    process.env.NODE_ENV === "test" || process.env.E2E_TEST === "1";
+  if (!isTestEnv) {
+    return new Response(null, { status: 404 });
+  }
+
   let body: EmitEventBody;
   try {
     const parsed = await req.json();
