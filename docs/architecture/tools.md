@@ -87,7 +87,7 @@ Each tool's schema is converted to a JSON Schema for the AI provider:
 | `file_move` | `from: string, to: string` | `void` | Move/rename |
 | `file_exists` | `path: string` | `boolean` | Check existence |
 
-All paths are validated against the volume root. Operations outside the volume throw `SecurityError`.
+Paths are resolved against the volume root. In addition, paths starting with `knowledge/` (e.g. `knowledge/reports/summary.md`) resolve to the shared knowledge base at `data/knowledge/`, so agents can read and write reports there with the same file tools. Operations outside the volume or knowledge base throw.
 
 ### `terminal` — Shell Execution
 
@@ -117,7 +117,46 @@ interface SearchResult {
 
 Results pass through `InjectionFilter` before returning. If redaction occurred, the result includes a warning field.
 
-Provider: Configurable (e.g., SearXNG self-hosted, Brave Search API, DuckDuckGo scraping).
+Provider: Configurable (e.g., SearXNG self-hosted, Brave Search API, DuckDuckGo scraping). **Unchanged** when using the browser tool suite below.
+
+### `fetch_web_page` — Page Content via Real Browser
+
+| Function | Args | Returns |
+|----------|------|---------|
+| `fetch_web_page` | `url: string, maxContentLength?: number` | `WebPageContent` |
+
+```typescript
+interface WebPageContent {
+  url: string;
+  title: string;
+  content: string;   // main text, injection-filtered
+  fetchedAt: string;
+  injectionWarning?: string;
+}
+```
+
+- Opens the URL in a **one-off** Playwright browser (no shared session). Uses Chromium or Brave if `BRAVE_EXECUTABLE_PATH` is set.
+- Waits for DOM/content, extracts title and main body text, runs content through `filterText` with source `fetch_web_page:<url>`.
+- Optional `maxContentLength` truncates content to avoid context overflow.
+- Improves resilience to bot protections (real browser, JS execution). Timeout ~30s; navigation errors surface as thrown errors.
+
+### Browser automation suite — Session-scoped Brave
+
+One browser **page per session** (keyed by `sessionId`). Use for multi-step agent-mode tasks (navigate, snapshot, click, type, fill forms). **`web_search` is unchanged** and remains the tool for “search and return links.”
+
+| Function | Args | Returns |
+|----------|------|---------|
+| `browser_navigate` | `url: string` | `{ ok, url }` |
+| `browser_snapshot` | `interactiveOnly?: boolean, maxDepth?: number` | `{ snapshot: string }` |
+| `browser_click` | `ref?: string, selector?: string, button?, modifiers?` | `{ ok }` |
+| `browser_type` | `ref?, selector?, text: string, clear?, submit?` | `{ ok }` |
+| `browser_fill` | `ref?, selector?, value: string` | `{ ok }` |
+| `browser_select_option` | `ref?, selector?, values: string[]` | `{ ok }` |
+| `browser_go_back` | _(none)_ | `{ ok }` |
+| `browser_close` | _(none)_ | `{ ok }` |
+
+- **Refs**: `browser_snapshot` injects `data-maia-ref` on interactive elements and returns a text list (e.g. `[1] button "Submit"`). Use `ref: "1"` in click/type/fill/select. Alternatively pass a CSS `selector` (e.g. `#id`, `.class`).
+- **Browser**: Brave via Playwright when `BRAVE_EXECUTABLE_PATH` (or OS default) is set; otherwise Chromium. Optional env `BROWSER_TOOLS_ENABLED=1` can gate the suite (documented in README/env).
 
 ### `credentials` — Credential Vault (LLM-facing)
 
@@ -150,6 +189,20 @@ Provider: Configurable (e.g., SearXNG self-hosted, Brave Search API, DuckDuckGo 
 ### `history` — Session Management
 
 Full API in [PLAN.md — History Tool API](../PLAN.md#history-tool-api).
+
+### Knowledge base and semantic search
+
+**Storage**: The knowledge base is markdown files under `data/knowledge/`. Agents use the **existing file tools** to read and write there: any path starting with `knowledge/` (e.g. `knowledge/reports/q4-summary.md`) is resolved to `data/knowledge/...`. Store human-readable reports and durable knowledge under `knowledge/` so they are discoverable via semantic search.
+
+**Indexing**: The knowledge base is indexed once on startup and every 60 minutes (one embedding per file, no chunking). Session history is indexed on append (original and compressed entries). Both use the same embedding model (e.g. `nomic-embed-text` via Ollama) and a shared vector store.
+
+| Function | Args | Returns |
+|----------|------|---------|
+| `knowledge_search` | `query: string, limit?: number` | `{ path, content, score }[]` |
+| `history_semantic_search` | `query: string, limit?: number` | `{ sessionId, entryId, content, isCompressed, score }[]` |
+
+- **`knowledge_search`**: Semantic search over the knowledge base. Returns the most relevant documents (full content). Use to find stored reports and durable knowledge.
+- **`history_semantic_search`**: Semantic search over past session history. Returns the most relevant past messages or tool results. Use when you need to find something by meaning rather than keywords. Existing fuzzy search (`history_find`, `history_search_all`) remains available.
 
 ### `agent_management` — Agent Lifecycle (Maia only)
 
@@ -202,6 +255,11 @@ When an AI response contains tool calls:
 5. Collect results.
 6. Append tool calls + results as entries to the session (original form).
 7. Continue the AI loop with results in context.
+
+### Environment (optional)
+
+- **`BRAVE_EXECUTABLE_PATH`** — Path to Brave browser for Playwright. When set, `fetch_web_page` and the browser automation suite use Brave; otherwise Chromium. OS defaults: Windows `C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe`, macOS `/Applications/Brave Browser.app/Contents/MacOS/Brave Browser`, Linux `/usr/bin/brave-browser` (or first existing of `brave`, `brave-browser-stable`).
+- **`BROWSER_TOOLS_ENABLED`** — Browser automation suite is **off by default**. Set to `1` to register and enable `browser_navigate`, `browser_snapshot`, `browser_click`, etc., until Brave (or Chromium) is available.
 
 ### Tool Error Handling
 
