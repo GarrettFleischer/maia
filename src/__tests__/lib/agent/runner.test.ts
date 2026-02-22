@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { runAgent } from "@/lib/agent/runner";
-import { makeTestContext, FakeEvents } from "../../helpers/fakes";
+import { makeTestContext, FakeEvents, FakeResponse } from "../../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
 import { createSession } from "@/lib/history";
 import type { AppContext } from "@/lib/context";
@@ -40,6 +40,11 @@ describe("runAgent", () => {
     updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"] });
     seedAgent(ctx);
     sessionId = createSession(ctx, ["user", "maia"]);
+    // Stub embeddings so history index (fire-and-forget) does not throw
+    (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
+      "/api/embeddings",
+      async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] }))
+    );
   });
 
   it("throws when agent does not exist", async () => {

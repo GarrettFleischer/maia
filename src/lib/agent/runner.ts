@@ -4,6 +4,7 @@ import { getAgentIdentity, setAgentStatus } from "./identity";
 import { getSession, appendEntry } from "../history";
 import { getToolsForAgent } from "../tools/registry";
 import { compressEntry } from "./compression";
+import { indexHistoryEntry } from "../knowledge/history-index";
 import { SECURITY_PREAMBLE } from "../security/preamble";
 import { filterText } from "../security/injection-filter";
 import type { AppContext } from "../context";
@@ -70,6 +71,9 @@ async function _runLoop(
     content: userMessage,
     timestamp: new Date().toISOString(),
   });
+  indexHistoryEntry(ctx, userEntry.id).catch((err) =>
+    console.error("History index (user entry) failed:", err)
+  );
 
   // Build context window
   const session = getSession(ctx, sessionId);
@@ -115,8 +119,17 @@ async function _runLoop(
     if (response.toolCalls.length === 0) {
       agentEntry.content = response.content || agentResponseContent;
       const storedEntry = appendEntry(ctx, sessionId, agentEntry);
-      await compressEntry(ctx, compressionProvider, userEntry, sessionId);
-      await compressEntry(ctx, compressionProvider, storedEntry, sessionId);
+      indexHistoryEntry(ctx, storedEntry.id).catch((err) =>
+        console.error("History index (agent entry) failed:", err)
+      );
+      const compressedUser = await compressEntry(ctx, compressionProvider, userEntry, sessionId);
+      indexHistoryEntry(ctx, compressedUser.id).catch((err) =>
+        console.error("History index (compressed user) failed:", err)
+      );
+      const compressedStored = await compressEntry(ctx, compressionProvider, storedEntry, sessionId);
+      indexHistoryEntry(ctx, compressedStored.id).catch((err) =>
+        console.error("History index (compressed agent) failed:", err)
+      );
       onEvent({ type: "done", sessionId, compressed: storedEntry, original: storedEntry });
       break;
     }

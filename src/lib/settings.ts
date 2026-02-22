@@ -18,6 +18,7 @@ export function getSettings(ctx: AppContext): Settings {
     heartbeatIntervalMinutes: parseInt(map.heartbeatIntervalMinutes ?? "30"),
     ollamaBaseUrl: map.ollamaBaseUrl ?? "http://localhost:11434",
     openRouterApiKey: map.openRouterApiKey || undefined,
+    embeddingModel: map.embeddingModel ?? "nomic-embed-text",
   };
 }
 
@@ -29,6 +30,7 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
     heartbeatIntervalMinutes: s.heartbeatIntervalMinutes,
     ollamaBaseUrl: s.ollamaBaseUrl,
     hasOpenRouterKey: !!s.openRouterApiKey,
+    embeddingModel: s.embeddingModel,
   };
 }
 
@@ -54,5 +56,8 @@ export function updateSettings(
   }
   if (partial.openRouterApiKey !== undefined) {
     update.run("openRouterApiKey", partial.openRouterApiKey);
+  }
+  if (partial.embeddingModel !== undefined) {
+    update.run("embeddingModel", partial.embeddingModel);
   }
 }

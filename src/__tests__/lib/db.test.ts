@@ -13,6 +13,8 @@ const EXPECTED_TABLES = [
   "credentials",
   "cron_jobs",
   "history_entries",
+  "history_vectors",
+  "knowledge_vectors",
   "security_events",
   "sessions",
   "settings",

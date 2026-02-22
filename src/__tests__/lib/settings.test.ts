@@ -29,6 +29,7 @@ describe("settings", () => {
     it("returns openRouterApiKey as undefined when empty string in DB", () => {
       const s = getSettings(ctx);
       expect(s.openRouterApiKey).toBeUndefined();
+      expect(s.embeddingModel).toBe("nomic-embed-text");
     });
   });
 
@@ -80,6 +81,11 @@ describe("settings", () => {
     it("stores and retrieves the openRouterApiKey internally", () => {
       updateSettings(ctx, { openRouterApiKey: "sk-secret" });
       expect(getSettings(ctx).openRouterApiKey).toBe("sk-secret");
+    });
+
+    it("updates embeddingModel", () => {
+      updateSettings(ctx, { embeddingModel: "nomic-embed-text-v2" });
+      expect(getSettings(ctx).embeddingModel).toBe("nomic-embed-text-v2");
     });
   });
 });
