@@ -12,6 +12,8 @@ import {
 import { makeTestContext, FakeFs } from "../../helpers/fakes";
 import type { ToolContext } from "@/lib/tools/types";
 
+const KNOWLEDGE_DIR = path.join(process.cwd(), "data", "knowledge");
+
 // Use path.resolve so the volume root matches what validatePath produces on any OS
 const VOLUME = path.resolve("/workspace/agent-1");
 
@@ -45,6 +47,14 @@ describe("fileReadTool", () => {
     await expect(fileReadTool.execute({ path: "missing.txt" }, ctx)).rejects.toThrow();
   });
 
+  it("resolves knowledge/ prefix to data/knowledge/", async () => {
+    const fs = new FakeFs();
+    fs.seed(path.join(KNOWLEDGE_DIR, "report.md"), "Knowledge content");
+    const ctx = makeToolCtx(fs);
+    const result = await fileReadTool.execute({ path: "knowledge/report.md" }, ctx);
+    expect(result).toBe("Knowledge content");
+  });
+
   it("truncates files over 50KB", async () => {
     const fs = new FakeFs();
     const bigContent = "x".repeat(51 * 1024);
@@ -57,6 +67,14 @@ describe("fileReadTool", () => {
 });
 
 describe("fileWriteTool", () => {
+  it("writes to data/knowledge/ when path is knowledge/...", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    await fileWriteTool.execute({ path: "knowledge/reports/q4.md", content: "Q4 report" }, ctx);
+    const full = path.join(KNOWLEDGE_DIR, "reports", "q4.md");
+    expect(fs.snapshot()[full]).toBe("Q4 report");
+  });
+
   it("writes a file to the volume", async () => {
     const fs = new FakeFs();
     const ctx = makeToolCtx(fs);

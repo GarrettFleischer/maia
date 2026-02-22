@@ -57,7 +57,9 @@ export class FakeFs implements FileSystemAdapter {
   }
 
   exists(path: string): boolean {
-    return this.files.has(path);
+    if (this.files.has(path)) return true;
+    const prefix = path.endsWith(nodePath.sep) ? path : path + nodePath.sep;
+    return Array.from(this.files.keys()).some((k) => k === path || k.startsWith(prefix));
   }
 
   mkdirp(_path: string): void {
