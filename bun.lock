@@ -9,6 +9,7 @@
         "drizzle-orm": "^0.45.1",
         "next": "16.1.6",
         "node-cron": "^4.2.1",
+        "playwright": "^1.58.2",
         "react": "19.2.3",
         "react-dom": "19.2.3",
         "uuid": "^13.0.0",

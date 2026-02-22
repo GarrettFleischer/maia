@@ -82,6 +82,8 @@ export interface Settings {
   heartbeatIntervalMinutes: number;
   ollamaBaseUrl: string;
   openRouterApiKey?: string;
+  /** Embedding model for knowledge base and history semantic search (e.g. nomic-embed-text). */
+  embeddingModel: string;
 }
 
 export interface SettingsPublic {
@@ -90,6 +92,7 @@ export interface SettingsPublic {
   heartbeatIntervalMinutes: number;
   ollamaBaseUrl: string;
   hasOpenRouterKey: boolean;
+  embeddingModel: string;
 }
 
 export interface EncryptedValue {
@@ -102,6 +105,15 @@ export interface SearchResult {
   title: string;
   url: string;
   snippet: string;
+  fetchedAt: string;
+  injectionWarning?: string;
+}
+
+/** Result of fetch_web_page: URL, title, main text content, and optional injection warning. */
+export interface WebPageContent {
+  url: string;
+  title: string;
+  content: string;
   fetchedAt: string;
   injectionWarning?: string;
 }

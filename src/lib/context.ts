@@ -90,6 +90,30 @@ export interface ProcessRunner {
 
 // ─── AppContext ───────────────────────────────────────────────────────────────
 
+/**
+ * Minimal page interface for one-off browser (fetch_web_page).
+ * Used by tests to inject a fake; production uses Playwright Page.
+ */
+export interface OneOffBrowserPage {
+  goto(url: string): Promise<void>;
+  evaluate<R>(pageFunction: () => R): Promise<R>;
+}
+
+/**
+ * One-off browser launcher for fetch_web_page. When provided (e.g. in tests), fetch_web_page uses it instead of real Playwright.
+ */
+export type LaunchOneOffBrowser = () => Promise<{
+  page: OneOffBrowserPage;
+  close(): Promise<void>;
+}>;
+
+/**
+ * Session browser getter for browser_* tools. When provided (e.g. in tests), tools use it instead of getOrCreatePage from browser-session.
+ */
+export type GetBrowserPage = (
+  sessionId: string
+) => Promise<{ browser: { close(): Promise<void> }; page: import("playwright").Page }>;
+
 export interface AppContext {
   db: DbAdapter;
   fs: FileSystemAdapter;
@@ -99,6 +123,10 @@ export interface AppContext {
   processRunner: ProcessRunner;
   /** Sandbox container name for terminal_exec. Defaults to maia-sandbox if unset. */
   sandboxContainerName?: string;
+  /** Optional one-off browser launcher for fetch_web_page. When set (e.g. in tests), fetch_web_page uses it instead of launching real Playwright. */
+  launchOneOffBrowser?: LaunchOneOffBrowser;
+  /** Optional session browser getter for browser_* tools. When set (e.g. in tests), tools use it instead of getOrCreatePage. */
+  getBrowserPage?: GetBrowserPage;
 }
 
 // ─── Production adapters ──────────────────────────────────────────────────────
