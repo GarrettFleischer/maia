@@ -1,6 +1,10 @@
+/**
+ * @fileoverview POST /api/chat — streamed agent chat. Ensures messaging service is initialized so message_to_user and message_send work.
+ * @module app/api/chat/route
+ */
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { getAppContext } from "@/instrumentation";
+import { ensureAppContext } from "@/instrumentation";
 import { runAgent } from "@/lib/agent/runner";
 import { createProvider } from "@/lib/ai/factory";
 import {
@@ -8,6 +12,8 @@ import {
   getActiveSessionId,
   setActiveSessionId,
 } from "@/lib/history";
+import { initMessagingService } from "@/lib/messaging-service";
+import type { AppContext } from "@/lib/context";
 import type { SSEEvent } from "@/lib/types";
 
 const bodySchema = z.object({
@@ -24,7 +30,7 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: "Invalid request body" }), { status: 400 });
   }
 
-  const ctx = getAppContext();
+  const ctx = await ensureAppContext();
   const agentId = body.targetAgent ?? "maia";
 
   // Resolve session
@@ -42,6 +48,11 @@ export async function POST(req: NextRequest) {
         const data = `data: ${JSON.stringify(event)}\n\n`;
         controller.enqueue(encoder.encode(data));
       }
+
+      const runAgentFn = async (c: AppContext, toAgentId: string, toSessionId: string, message: string) => {
+        await runAgent(c, createProvider, toAgentId, toSessionId, message, () => {});
+      };
+      initMessagingService(ctx, runAgentFn);
 
       try {
         await runAgent(ctx, createProvider, agentId, sessionId!, body.message, send);

@@ -1,11 +1,11 @@
 import { NextRequest } from "next/server";
-import { getAppContext } from "@/instrumentation";
+import { ensureAppContext } from "@/instrumentation";
 import type { SystemSSEEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest) {
-  const ctx = getAppContext();
+  const ctx = await ensureAppContext();
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
