@@ -45,11 +45,10 @@ describe("GET /api/events", () => {
   it("handles abort without error (cleanup on client disconnect)", async () => {
     const ac = new AbortController();
     const req = createNextRequest("http://localhost/api/events", { signal: ac.signal });
-    const resPromise = GET(req);
-    ac.abort();
-    const res = await resPromise;
+    const res = await GET(req);
     expect(res.status).toBe(200);
     expect(res.body).toBeDefined();
+    ac.abort();
     const reader = res.body!.getReader();
     await reader.read().catch(() => {});
     reader.releaseLock();
