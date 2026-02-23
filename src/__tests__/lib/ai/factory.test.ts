@@ -7,6 +7,8 @@ import { makeTestContext } from "../../helpers/fakes";
 import { createProvider } from "@/lib/ai/factory";
 import { OllamaProvider } from "@/lib/ai/ollama";
 import { OpenRouterProvider } from "@/lib/ai/openrouter";
+import { VllmProvider } from "@/lib/ai/vllm";
+import { DockerProvider } from "@/lib/ai/docker";
 import { updateSettings } from "@/lib/settings";
 import type { AppContext } from "@/lib/context";
 
@@ -38,6 +40,22 @@ describe("createProvider", () => {
     expect(() =>
       createProvider("openrouter/anthropic/claude-3.5-haiku", ctx)
     ).toThrow("OpenRouter API key not configured");
+  });
+
+  it("returns VllmProvider for vllm/ models", () => {
+    updateSettings(ctx, {
+      whitelistedModels: ["ollama/llama3.2", "vllm/Meta-Llama-3-8B-Instruct"],
+    });
+    const provider = createProvider("vllm/Meta-Llama-3-8B-Instruct", ctx);
+    expect(provider).toBeInstanceOf(VllmProvider);
+  });
+
+  it("returns DockerProvider for docker/ models", () => {
+    updateSettings(ctx, {
+      whitelistedModels: ["ollama/llama3.2", "docker/Meta-Llama-3-8B-Instruct"],
+    });
+    const provider = createProvider("docker/Meta-Llama-3-8B-Instruct", ctx);
+    expect(provider).toBeInstanceOf(DockerProvider);
   });
 
   it("throws for unknown provider prefix when model is whitelisted", () => {
