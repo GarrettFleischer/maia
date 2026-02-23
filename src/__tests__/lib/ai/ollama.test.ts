@@ -206,4 +206,43 @@ describe("OllamaProvider", () => {
 
     expect(model).toBe("qwen2.5-coder");
   });
+
+  it("sends Authorization Bearer header when apiKey is provided", async () => {
+    let capturedHeaders: Record<string, string> = {};
+    http.on(/\/api\/chat/, async (_url, init) => {
+      capturedHeaders = (init?.headers as Record<string, string>) ?? {};
+      return streamResponse(200, [
+        JSON.stringify({ message: { content: "Hi" }, done: true }),
+      ]);
+    });
+
+    const provider = new OllamaProvider(
+      "ollama/minimax-m2:cloud",
+      "https://ollama.com",
+      ctx.http,
+      "my-ollama-cloud-key"
+    );
+    await provider.complete([{ role: "user", content: "Hello" }], [], () => {});
+
+    expect(capturedHeaders["Authorization"]).toBe("Bearer my-ollama-cloud-key");
+  });
+
+  it("does not send Authorization header when apiKey is omitted", async () => {
+    let capturedHeaders: Record<string, string> = {};
+    http.on(/\/api\/chat/, async (_url, init) => {
+      capturedHeaders = (init?.headers as Record<string, string>) ?? {};
+      return streamResponse(200, [
+        JSON.stringify({ message: { content: "Hi" }, done: true }),
+      ]);
+    });
+
+    const provider = new OllamaProvider(
+      "ollama/llama3.2",
+      "http://localhost:11434",
+      ctx.http
+    );
+    await provider.complete([{ role: "user", content: "Hello" }], [], () => {});
+
+    expect(capturedHeaders["Authorization"]).toBeUndefined();
+  });
 });

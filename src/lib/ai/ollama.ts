@@ -1,3 +1,7 @@
+/**
+ * @fileoverview Ollama AI provider for local Ollama or Ollama Cloud. Supports optional API key for Cloud.
+ * @module lib/ai/ollama
+ */
 import type { AIProvider, AIResponse, Message, ToolCall, ToolDefinition } from "./types";
 import type { HttpClient } from "../context";
 
@@ -5,12 +9,20 @@ export class OllamaProvider implements AIProvider {
   private model: string;
   private baseUrl: string;
   private http: HttpClient;
+  private apiKey: string | undefined;
 
-  constructor(model: string, baseUrl: string, http: HttpClient) {
+  /**
+   * @param model - Model id with optional "ollama/" prefix (stripped before request).
+   * @param baseUrl - Ollama server URL (e.g. http://localhost:11434 or https://ollama.com for Cloud).
+   * @param http - HTTP client.
+   * @param apiKey - Optional API key for Ollama Cloud; when set, sent as Authorization: Bearer.
+   */
+  constructor(model: string, baseUrl: string, http: HttpClient, apiKey?: string) {
     // strip "ollama/" prefix
     this.model = model.replace(/^ollama\//, "");
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.http = http;
+    this.apiKey = apiKey;
   }
 
   async complete(
@@ -38,9 +50,13 @@ export class OllamaProvider implements AIProvider {
       }));
     }
 
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.apiKey) {
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
+    }
     const resp = await this.http.fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
     });
 
