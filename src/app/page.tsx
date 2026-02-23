@@ -14,10 +14,18 @@ import ChatMessageList from "@/app/components/ChatMessageList";
 import type { ChatMessageListItem } from "@/app/components/ChatMessageList";
 import ChatInputBar from "@/app/components/ChatInputBar";
 
-/** Map HistoryEntry.role to ChatMessageListItem.role (tool_call/tool_result treated as agent). */
+/** Map HistoryEntry from server to ChatMessageListItem (including tool_call as standalone tool bubble). */
 function entryToItem(entry: HistoryEntry): ChatMessageListItem {
-  const role: ChatMessageListItem["role"] =
-    entry.role === "user" ? "user" : entry.role === "agent" || entry.role === "tool_call" || entry.role === "tool_result" ? "agent" : "system";
+  if (entry.role === "tool_call") {
+    return {
+      role: "tool",
+      tool: entry.toolName ?? "",
+      args: entry.toolArgs ?? {},
+      result: entry.content || undefined,
+    };
+  }
+  const role: "user" | "agent" | "system" =
+    entry.role === "user" ? "user" : entry.role === "agent" ? "agent" : "system";
   return { role, content: entry.content };
 }
 
@@ -33,16 +41,18 @@ export default function Home() {
 
   useEffect(() => {
     fetch("/api/sessions/active")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) return null;
+        return r.json() as Promise<{ sessionId?: string; session?: { original: HistoryEntry[] } }>;
+      })
       .then((data) => {
+        if (!data) return;
         if (data.sessionId) setSessionId(data.sessionId);
         if (data.session?.original?.length) {
-          setMessages(
-            data.session.original.map((e: { role: string; content: string }) => ({
-              role: e.role === "user" ? "user" : "agent",
-              content: e.content,
-            }))
-          );
+          setMessages((prev) => {
+            if (prev.length > 0) return prev; // avoid overwriting streamed messages if fetch completes late
+            return data!.session!.original.map(entryToItem);
+          });
         }
       })
       .catch(() => {});
@@ -90,7 +100,6 @@ export default function Home() {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let accumulated = "";
-      let currentToolCalls: { tool: string; args: Record<string, unknown> }[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -109,18 +118,24 @@ export default function Home() {
             accumulated += event.content;
             setCurrentToken(accumulated);
           } else if (event.type === "tool_call") {
-            currentToolCalls = [...currentToolCalls, { tool: event.tool, args: event.args }];
+            setMessages((prev) => [...prev, { role: "tool" as const, tool: event.tool, args: event.args }]);
+          } else if (event.type === "tool_result") {
+            setMessages((prev) => {
+              const idx = prev.findIndex((m) => m.role === "tool" && (m as { result?: unknown }).result === undefined);
+              if (idx === -1) return prev;
+              const item = prev[idx];
+              if (item.role !== "tool") return prev;
+              return [...prev.slice(0, idx), { ...item, result: event.result }, ...prev.slice(idx + 1)];
+            });
           } else if (event.type === "done") {
             if (event.sessionId) setSessionId(event.sessionId);
-            setMessages((prev) => [
-              ...prev,
-              { role: "agent", content: accumulated, toolCalls: currentToolCalls.length ? currentToolCalls : undefined },
-            ]);
+            setMessages((prev) => [...prev, { role: "agent", content: accumulated }]);
             setCurrentToken("");
             accumulated = "";
-            currentToolCalls = [];
           } else if (event.type === "error") {
             setMessages((prev) => [...prev, { role: "system", content: `Error: ${event.message}` }]);
+            setCurrentToken("");
+            accumulated = "";
           }
         }
       }
@@ -138,13 +153,15 @@ export default function Home() {
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
       <AppHeader subtitle="AI Agent System" />
 
-      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4 max-w-3xl mx-auto w-full">
-        <ChatMessageList
-          messages={messages}
-          currentToken={currentToken}
-          loading={loading}
-          bottomRef={bottomRef}
-        />
+      <div className="chat-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+        <div className="px-4 py-6 space-y-4 max-w-3xl mx-auto w-full">
+          <ChatMessageList
+            messages={messages}
+            currentToken={currentToken}
+            loading={loading}
+            bottomRef={bottomRef}
+          />
+        </div>
       </div>
 
       <ChatInputBar

@@ -5,11 +5,17 @@
  * @brief Renders welcome state, message bubbles, streaming token bubble, and loading indicator.
  */
 
-export interface ChatMessageListItem {
-  role: "user" | "agent" | "system";
-  content: string;
-  toolCalls?: { tool: string; args: Record<string, unknown> }[];
+/** Single tool call plus optional result for display. */
+export interface ToolCallDisplay {
+  tool: string;
+  args: Record<string, unknown>;
+  result?: unknown;
 }
+
+/** A regular message (user, agent, system) or a standalone tool-call bubble. */
+export type ChatMessageListItem =
+  | { role: "user" | "agent" | "system"; content: string; toolCalls?: ToolCallDisplay[] }
+  | { role: "tool"; tool: string; args: Record<string, unknown>; result?: unknown };
 
 export interface ChatMessageListProps {
   /** List of messages to show. */
@@ -20,6 +26,47 @@ export interface ChatMessageListProps {
   loading: boolean;
   /** Ref for the scroll anchor at the bottom. */
   bottomRef?: React.RefObject<HTMLDivElement | null>;
+}
+
+/** Single expandable tool-call bubble (args + optional result). */
+function ToolCallBubble({
+  tool,
+  args,
+  result,
+}: { tool: string; args: Record<string, unknown>; result?: unknown }) {
+  return (
+    <details className="group max-w-[80%] rounded-xl rounded-bl-sm overflow-hidden bg-zinc-800/80 text-zinc-200 border border-zinc-700">
+      <summary className="list-none cursor-pointer px-4 py-2.5 text-sm font-mono flex items-center gap-2 hover:bg-zinc-700/50 [&::-webkit-details-marker]:hidden">
+        <span className="text-zinc-400 select-none">⚙</span>
+        <span className="truncate">
+          {tool}
+          {Object.keys(args).length > 0 && (
+            <span className="text-zinc-500 font-normal">
+              {" "}({JSON.stringify(args).slice(0, 40)}
+              {JSON.stringify(args).length > 40 ? "…)" : ")"}
+            </span>
+          )}
+        </span>
+        <span className="ml-auto text-zinc-500 text-xs shrink-0" aria-hidden>▾</span>
+      </summary>
+      <div className="px-4 pb-3 pt-0 text-xs font-mono border-t border-zinc-700 space-y-2">
+        <div>
+          <span className="text-zinc-500">args</span>
+          <pre className="mt-0.5 p-2 rounded bg-zinc-900/80 text-zinc-400 overflow-x-auto whitespace-pre-wrap break-all">
+            {JSON.stringify(args, null, 2)}
+          </pre>
+        </div>
+        {result !== undefined && (
+          <div>
+            <span className="text-zinc-500">result</span>
+            <pre className="mt-0.5 p-2 rounded bg-zinc-900/80 text-zinc-400 overflow-x-auto whitespace-pre-wrap break-all">
+              {typeof result === "string" ? result : JSON.stringify(result, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+    </details>
+  );
 }
 
 export default function ChatMessageList({
@@ -39,27 +86,39 @@ export default function ChatMessageList({
       )}
 
       {messages.map((msg, i) => (
-        <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-          <div
-            className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-              msg.role === "user"
-                ? "bg-violet-600 text-white rounded-br-sm"
-                : msg.role === "system"
-                  ? "bg-red-900/50 text-red-200 border border-red-800 rounded-lg"
-                  : "bg-zinc-800 text-zinc-100 rounded-bl-sm"
-            }`}
-          >
-            <div className="whitespace-pre-wrap">{msg.content}</div>
-            {msg.toolCalls && (
-              <div className="mt-2 pt-2 border-t border-zinc-700 space-y-1">
-                {msg.toolCalls.map((tc, j) => (
-                  <div key={j} className="text-xs text-zinc-400 font-mono">
-                    ⚙ {tc.tool}({JSON.stringify(tc.args)})
-                  </div>
-                ))}
+        <div key={i} className="space-y-2">
+          {msg.role === "user" || msg.role === "system" ? (
+            <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                  msg.role === "user"
+                    ? "bg-violet-600 text-white rounded-br-sm"
+                    : "bg-red-900/50 text-red-200 border border-red-800 rounded-lg"
+                }`}
+              >
+                <div className="whitespace-pre-wrap">{msg.content}</div>
               </div>
-            )}
-          </div>
+            </div>
+          ) : msg.role === "tool" ? (
+            <div className="flex justify-start">
+              <ToolCallBubble tool={msg.tool} args={msg.args} result={msg.result} />
+            </div>
+          ) : (
+            <>
+              {msg.content ? (
+                <div className="flex justify-start">
+                  <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed bg-zinc-800 text-zinc-100">
+                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                  </div>
+                </div>
+              ) : null}
+              {msg.toolCalls?.map((tc, j) => (
+                <div key={`${i}-tool-${j}`} className="flex justify-start">
+                  <ToolCallBubble tool={tc.tool} args={tc.args} result={tc.result} />
+                </div>
+              ))}
+            </>
+          )}
         </div>
       ))}
 
