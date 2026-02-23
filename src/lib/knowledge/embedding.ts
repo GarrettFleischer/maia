@@ -2,7 +2,7 @@
  * @fileoverview Embedding adapter for knowledge base and history semantic search.
  * @module lib/knowledge/embedding
  *
- * Uses Ollama /api/embeddings (e.g. nomic-embed-text) by default.
+ * Uses Ollama /api/embed (e.g. nomic-embed-text) by default.
  */
 
 import type { HttpClient } from "../context";
@@ -14,7 +14,7 @@ export interface EmbeddingAdapter {
 }
 
 /**
- * Ollama embedding adapter. Calls POST {baseUrl}/api/embeddings.
+ * Ollama embedding adapter. Calls POST {baseUrl}/api/embed.
  * @param model - Model name (e.g. nomic-embed-text)
  * @param baseUrl - Ollama base URL (e.g. http://localhost:11434)
  * @param http - HTTP client
@@ -24,25 +24,34 @@ export function createOllamaEmbeddingAdapter(
   baseUrl: string,
   http: HttpClient
 ): EmbeddingAdapter {
-  const url = `${baseUrl.replace(/\/$/, "")}/api/embeddings`;
+  const url = `${baseUrl.replace(/\/$/, "")}/api/embed`;
 
   return {
     async embed(text: string): Promise<number[]> {
       const res = await http.fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, prompt: text }),
+        body: JSON.stringify({ model, input: text }),
       });
       if (!res.ok) {
         const body = await res.text();
-        throw new Error(`Ollama embeddings failed (${res.status}): ${body}`);
+        const hint =
+          res.status === 404 && /not found.*try pulling/i.test(body)
+            ? ` Run: ollama pull ${model}`
+            : "";
+        throw new Error(`Ollama embeddings failed (${res.status}): ${body}${hint}`);
       }
-      const data = (await res.json()) as { embeddings?: number[][] };
-      const embeddings = data.embeddings;
-      if (!Array.isArray(embeddings) || embeddings.length === 0 || !Array.isArray(embeddings[0])) {
-        throw new Error("Ollama embeddings: invalid response shape");
+      const data = (await res.json()) as {
+        embeddings?: number[][];
+        embedding?: number[];
+      };
+      if (Array.isArray(data.embeddings) && data.embeddings.length > 0 && Array.isArray(data.embeddings[0])) {
+        return data.embeddings[0];
       }
-      return embeddings[0];
+      if (Array.isArray(data.embedding) && data.embedding.length > 0) {
+        return data.embedding;
+      }
+      throw new Error("Ollama embeddings: invalid response shape");
     },
   };
 }

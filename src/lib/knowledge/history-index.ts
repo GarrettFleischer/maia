@@ -11,8 +11,12 @@ import { createVectorStore } from "./vector-store";
 import { getSettings } from "../settings";
 import type { AppContext } from "../context";
 
+/** Max characters to send to the embedding model (avoids context-length 400 from Ollama). */
+const MAX_EMBED_CONTENT_LENGTH = 6000;
+
 /**
  * Load an entry from history_entries, embed its content, and insert into history_vectors.
+ * Content is truncated to MAX_EMBED_CONTENT_LENGTH to avoid exceeding the model context.
  * Safe to call fire-and-forget; logs errors and does not throw.
  */
 export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promise<void> {
@@ -31,9 +35,14 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
 
   if (!row) return;
 
+  const contentToEmbed =
+    row.content.length > MAX_EMBED_CONTENT_LENGTH
+      ? row.content.slice(0, MAX_EMBED_CONTENT_LENGTH)
+      : row.content;
+
   const settings = getSettings(ctx);
   const embedder = createEmbeddingAdapter(settings, ctx.http);
-  const embedding = await embedder.embed(row.content);
+  const embedding = await embedder.embed(contentToEmbed);
   const store = createVectorStore(ctx.db);
   const id = uuidv4();
   const now = new Date().toISOString();

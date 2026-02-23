@@ -42,7 +42,7 @@ describe("runAgent", () => {
     sessionId = createSession(ctx, ["user", "maia"]);
     // Stub embeddings so history index (fire-and-forget) does not throw
     (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
-      "/api/embeddings",
+      "/api/embed",
       async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] }))
     );
   });

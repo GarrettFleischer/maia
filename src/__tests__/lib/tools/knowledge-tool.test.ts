@@ -14,7 +14,7 @@ describe("knowledge_search tool", () => {
   beforeEach(() => {
     ctx = makeTestContext();
     (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
-      "/api/embeddings",
+      "/api/embed",
       async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }))
     );
   });
@@ -53,7 +53,7 @@ describe("history_semantic_search tool", () => {
   beforeEach(() => {
     ctx = makeTestContext();
     (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
-      "/api/embeddings",
+      "/api/embed",
       async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] }))
     );
   });
