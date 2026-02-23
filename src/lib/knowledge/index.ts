@@ -11,8 +11,9 @@ import { v4 as uuidv4 } from "uuid";
 import type { AppContext } from "../context";
 import type { EmbeddingAdapter } from "./embedding";
 import { createVectorStore } from "./vector-store";
+import { getKnowledgeDir } from "../data-dir";
 
-const KNOWLEDGE_DIR = path.join(process.cwd(), "data", "knowledge");
+const KNOWLEDGE_DIR = getKnowledgeDir();
 
 function listMarkdownFiles(fs: AppContext["fs"], dir: string, baseDir: string): string[] {
   const out: string[] = [];

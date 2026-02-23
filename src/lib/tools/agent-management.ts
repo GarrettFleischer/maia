@@ -3,10 +3,9 @@ import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import { zodToJsonSchema } from "../zod-to-json";
 import { getSettings } from "../settings";
+import { getAgentsDir } from "../data-dir";
 import type { Tool, ToolContext } from "./types";
 import type { AgentDefinition } from "../types";
-
-const DATA_DIR = path.join(process.cwd(), "data", "agents");
 
 function makeTool<S extends z.ZodTypeAny>(
   name: string,
@@ -47,7 +46,7 @@ export const agentCreateTool = makeTool(
        VALUES (?, ?, ?, ?, 'active', ?, ?)`
     ).run(id, args.name, args.model, args.systemPromptExtra ?? null, now, now);
 
-    const agentDir = path.join(DATA_DIR, id);
+    const agentDir = path.join(getAgentsDir(), id);
     ctx.fs.mkdirp(agentDir);
     ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), args.soul ?? `# Soul\n\nI am ${args.name}, a helpful AI agent.\n`);
     ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), args.memory ?? "# Memory\n\nNo memories yet.\n");
@@ -84,7 +83,7 @@ export const agentGetTool = makeTool(
   async ({ agentId }, ctx) => {
     const row = ctx.db.prepare("SELECT * FROM agents WHERE id = ?").get(agentId) as Record<string, unknown> | undefined;
     if (!row) return null;
-    const agentDir = path.join(DATA_DIR, agentId);
+    const agentDir = path.join(getAgentsDir(), agentId);
     const read = (file: string) => {
       try { return ctx.fs.readFile(path.join(agentDir, file)); } catch { return ""; }
     };

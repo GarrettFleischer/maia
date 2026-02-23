@@ -9,10 +9,11 @@ import {
   fileMoveTool,
   fileExistsTool,
 } from "@/lib/tools/file-crud";
+import { getKnowledgeDir } from "@/lib/data-dir";
 import { makeTestContext, FakeFs } from "../../helpers/fakes";
 import type { ToolContext } from "@/lib/tools/types";
 
-const KNOWLEDGE_DIR = path.join(process.cwd(), "data", "knowledge");
+const KNOWLEDGE_DIR = getKnowledgeDir();
 
 // Use path.resolve so the volume root matches what validatePath produces on any OS
 const VOLUME = path.resolve("/workspace/agent-1");

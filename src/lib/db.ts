@@ -2,11 +2,11 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import type { DbAdapter } from "./context";
+import { getDataDir } from "./data-dir";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "maia.db");
+const DB_PATH = path.join(getDataDir(), "maia.db");
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(getDataDir(), { recursive: true });
 
 let _db: Database.Database | null = null;
 

@@ -2,8 +2,25 @@
  * @fileoverview Global test setup — runs before every test file via bunfig.toml preload.
  * @module __tests__/setup
  *
- * Provides browser globals that are missing in Node/Bun (e.g. EventSource for SSE).
+ * - Uses a dedicated temp data dir (MAIA_DATA_DIR) so tests never touch real data/.
+ * - Cleans up the temp dir when the test process exits.
+ * - Provides browser globals that are missing in Node/Bun (e.g. EventSource for SSE).
  */
+
+import fs from "fs";
+import path from "path";
+import os from "os";
+
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "maia-test-"));
+process.env.MAIA_DATA_DIR = testDataDir;
+
+process.on("exit", () => {
+  try {
+    fs.rmSync(testDataDir, { recursive: true, force: true });
+  } catch {
+    // ignore cleanup errors on exit
+  }
+});
 
 /** Minimal EventSource-like type for test mock (browser EventSource is not in Node/Bun). */
 type EventSourceConstructor = new (url: string) => {

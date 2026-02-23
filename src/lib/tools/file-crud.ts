@@ -10,7 +10,9 @@ import path from "path";
 import { zodToJsonSchema } from "../zod-to-json";
 import type { Tool, ToolContext } from "./types";
 
-const KNOWLEDGE_DIR = path.join(process.cwd(), "data", "knowledge");
+import { getKnowledgeDir } from "../data-dir";
+
+const KNOWLEDGE_DIR = getKnowledgeDir();
 const KNOWLEDGE_PREFIX = "knowledge/";
 
 /**

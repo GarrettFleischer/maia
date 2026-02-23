@@ -1,11 +1,10 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { getAgentIdentity, listAgents, setAgentStatus } from "@/lib/agent/identity";
+import { getAgentsDir } from "@/lib/data-dir";
 import { makeTestContext } from "../../helpers/fakes";
 import { FakeFs } from "../../helpers/fakes";
 import type { AppContext } from "@/lib/context";
 import path from "path";
-
-const AGENTS_DIR = path.join(process.cwd(), "data", "agents");
 
 function seedAgent(ctx: AppContext, id: string, name = "Test Agent", model = "ollama/llama3.2", status = "active") {
   const now = new Date().toISOString();
@@ -15,7 +14,7 @@ function seedAgent(ctx: AppContext, id: string, name = "Test Agent", model = "ol
 }
 
 function seedIdentityFiles(fs: FakeFs, agentId: string) {
-  const dir = path.join(AGENTS_DIR, agentId);
+  const dir = path.join(getAgentsDir(), agentId);
   fs.seed(path.join(dir, "SOUL.md"), "# Soul\nI am a helpful agent.");
   fs.seed(path.join(dir, "MEMORY.md"), "# Memory\nNo memories yet.");
   fs.seed(path.join(dir, "GOALS.md"), "# Goals\n- Be helpful");

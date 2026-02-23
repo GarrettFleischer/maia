@@ -4,11 +4,10 @@
  */
 import { describe, it, expect, beforeEach } from "bun:test";
 import path from "path";
+import { getWorkspaceRoot } from "@/lib/data-dir";
 import { makeTestContext, FakeProcessRunner } from "../../helpers/fakes";
 import { terminalTool } from "@/lib/tools/terminal";
 import type { ToolContext } from "@/lib/tools/types";
-
-const WORKSPACE_ROOT = path.join(process.cwd(), "data", "workspace");
 
 function makeToolCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   const ctx = makeTestContext();
@@ -16,7 +15,7 @@ function makeToolCtx(overrides: Partial<ToolContext> = {}): ToolContext {
     ...ctx,
     agentId: "maia",
     sessionId: "session-1",
-    volumeRoot: path.join(WORKSPACE_ROOT, "maia"),
+    volumeRoot: path.join(getWorkspaceRoot(), "maia"),
     ...overrides,
   };
 }

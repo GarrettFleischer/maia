@@ -12,11 +12,12 @@ import type { AIProvider } from "../ai/types";
 import type { HistoryEntry, SSEEvent } from "../types";
 import type { Message } from "../ai/types";
 import type { ToolContext } from "../tools/types";
+import { getWorkspaceRoot } from "../data-dir";
 
 export type SSECallback = (event: SSEEvent) => void;
 export type ProviderFactory = (model: string, ctx: AppContext) => AIProvider;
 
-const WORKSPACE_ROOT = path.join(process.cwd(), "data", "workspace");
+const WORKSPACE_ROOT = getWorkspaceRoot();
 
 export async function runAgent(
   ctx: AppContext,
