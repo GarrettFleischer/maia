@@ -111,10 +111,19 @@ async function _runLoop(
   while (loopCount < MAX_LOOPS) {
     loopCount++;
 
+    /** @note Debug: system prompt + user message sent, then LLM response (no tools list). */
+    const systemPrompt = messages[0]?.role === "system" ? messages[0].content : "";
+    console.debug("[LLM request]", JSON.stringify({ systemPrompt, userMessage }, null, 2));
+
     const response = await provider.complete(messages, toolDefs, (token) => {
       agentResponseContent += token;
       onEvent({ type: "token", content: token });
     });
+
+    console.debug(
+      "[LLM response]",
+      JSON.stringify({ content: response.content, toolCalls: response.toolCalls, stopped: response.stopped }, null, 2)
+    );
 
     // If there are no tool calls, this is the final response
     if (response.toolCalls.length === 0) {
@@ -123,15 +132,22 @@ async function _runLoop(
       indexHistoryEntry(ctx, storedEntry.id).catch((err) =>
         console.error("History index (agent entry) failed:", err)
       );
-      const compressedUser = await compressEntry(ctx, compressionProvider, userEntry, sessionId);
-      indexHistoryEntry(ctx, compressedUser.id).catch((err) =>
-        console.error("History index (compressed user) failed:", err)
-      );
-      const compressedStored = await compressEntry(ctx, compressionProvider, storedEntry, sessionId);
-      indexHistoryEntry(ctx, compressedStored.id).catch((err) =>
-        console.error("History index (compressed agent) failed:", err)
-      );
+
+      // Send "done" immediately so the stream closes and the UI never blocks. Run compression
+      // in the background so slow/hanging compression cannot leave the chat stuck.
       onEvent({ type: "done", sessionId, compressed: storedEntry, original: storedEntry });
+      void Promise.all([
+        compressEntry(ctx, compressionProvider, userEntry, sessionId).then((compressedUser) =>
+          indexHistoryEntry(ctx, compressedUser.id).catch((err) =>
+            console.error("History index (compressed user) failed:", err)
+          )
+        ),
+        compressEntry(ctx, compressionProvider, storedEntry, sessionId).then((compressedStored) =>
+          indexHistoryEntry(ctx, compressedStored.id).catch((err) =>
+            console.error("History index (compressed agent) failed:", err)
+          )
+        ),
+      ]).catch((err) => console.error("Background compression failed:", err));
       break;
     }
 
@@ -144,7 +160,15 @@ async function _runLoop(
       if (!tool) {
         const errorResult = `Unknown tool: ${tc.name}`;
         onEvent({ type: "tool_result", tool: tc.name, result: { error: errorResult } });
-        toolResults.push({ role: "tool", content: JSON.stringify({ error: errorResult }), toolCallId: tc.id, toolName: tc.name });
+        const contentStr = JSON.stringify({ error: errorResult });
+        appendEntry(ctx, sessionId, {
+          role: "tool_call",
+          content: contentStr,
+          toolName: tc.name,
+          toolArgs: tc.args,
+          timestamp: new Date().toISOString(),
+        });
+        toolResults.push({ role: "tool", content: contentStr, toolCallId: tc.id, toolName: tc.name });
         continue;
       }
 
@@ -153,11 +177,18 @@ async function _runLoop(
         const parsed = tool.schema.parse(tc.args);
         const result = await tool.execute(parsed, toolContext);
 
-        // Filter result for injection
-        const resultStr = typeof result === "string" ? result : JSON.stringify(result);
-        const filtered = filterText(resultStr, `tool:${tc.name}`);
+        // Filter result for injection (guard against undefined result)
+        const resultStr = typeof result === "string" ? result : JSON.stringify(result ?? null);
+        const filtered = filterText(resultStr ?? "", `tool:${tc.name}`);
 
         onEvent({ type: "tool_result", tool: tc.name, result: filtered.text });
+        appendEntry(ctx, sessionId, {
+          role: "tool_call",
+          content: filtered.text,
+          toolName: tc.name,
+          toolArgs: tc.args,
+          timestamp: new Date().toISOString(),
+        });
         toolResults.push({
           role: "tool",
           content: filtered.text,
@@ -167,9 +198,17 @@ async function _runLoop(
       } catch (err: unknown) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         onEvent({ type: "tool_result", tool: tc.name, result: { error: errorMsg } });
+        const contentStr = JSON.stringify({ error: errorMsg });
+        appendEntry(ctx, sessionId, {
+          role: "tool_call",
+          content: contentStr,
+          toolName: tc.name,
+          toolArgs: tc.args,
+          timestamp: new Date().toISOString(),
+        });
         toolResults.push({
           role: "tool",
-          content: JSON.stringify({ error: errorMsg }),
+          content: contentStr,
           toolCallId: tc.id,
           toolName: tc.name,
         });

@@ -34,9 +34,16 @@ export async function compressEntry(
     },
   ];
 
+  const COMPRESSION_TIMEOUT_MS = 15_000;
+
   let raw = "";
   try {
-    const result = await provider.complete(messages, [], (token) => { raw += token; });
+    const result = await Promise.race([
+      provider.complete(messages, [], (token) => { raw += token; }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Compression timeout")), COMPRESSION_TIMEOUT_MS)
+      ),
+    ]);
     raw = result.content || raw;
   } catch {
     return appendEntry(ctx, sessionId, entry, true);
