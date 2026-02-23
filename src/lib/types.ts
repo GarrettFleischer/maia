@@ -81,7 +81,13 @@ export interface Settings {
   compressionModel: string;
   heartbeatIntervalMinutes: number;
   ollamaBaseUrl: string;
+  /** Optional API key for Ollama Cloud (Bearer token). When set, sent as Authorization header. */
+  ollamaApiKey?: string;
   openRouterApiKey?: string;
+  /** vLLM server base URL (e.g. http://localhost:8000/v1). */
+  vllmBaseUrl: string;
+  /** Docker-hosted OpenAI-compatible API base URL (e.g. http://localhost:8000/v1). */
+  dockerBaseUrl: string;
   /** Embedding model for knowledge base and history semantic search (e.g. nomic-embed-text). */
   embeddingModel: string;
 }
@@ -91,7 +97,10 @@ export interface SettingsPublic {
   compressionModel: string;
   heartbeatIntervalMinutes: number;
   ollamaBaseUrl: string;
+  hasOllamaKey: boolean;
   hasOpenRouterKey: boolean;
+  vllmBaseUrl: string;
+  dockerBaseUrl: string;
   embeddingModel: string;
 }
 

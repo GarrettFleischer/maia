@@ -48,11 +48,15 @@ export const sessionActiveWithMessages: {
 
 /** GET /api/settings — public settings (no raw API key). */
 export const settingsPublic: SettingsPublic = {
-  whitelistedModels: ["ollama/llama3.2", "openrouter/anthropic/claude-3.5-sonnet"],
+  whitelistedModels: ["ollama/llama3.2", "ollama/qwen2.5-coder", "openrouter/anthropic/claude-3.5-sonnet"],
   compressionModel: "ollama/llama3.2",
   heartbeatIntervalMinutes: 30,
   ollamaBaseUrl: "http://localhost:11434",
+  hasOllamaKey: false,
   hasOpenRouterKey: false,
+  vllmBaseUrl: "http://localhost:8000/v1",
+  dockerBaseUrl: "http://localhost:8000/v1",
+  embeddingModel: "nomic-embed-text",
 };
 
 /** GET /api/settings with OpenRouter key already configured. */
@@ -80,7 +84,7 @@ export const agentsList: { agents: AgentDefinition[] } = {
     {
       id: "agent-2",
       name: "Helper",
-      model: "ollama/llama3.2",
+      model: "ollama/qwen2.5-coder",
       status: "active",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

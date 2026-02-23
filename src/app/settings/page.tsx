@@ -1,36 +1,63 @@
 "use client";
 
+/**
+ * @fileoverview Settings page: AI providers, agent system, whitelist, embedding model,
+ * and per-agent model assignment. Save persists settings; agent model changes PATCH immediately.
+ * @module app/settings/page
+ */
+
 import { useEffect, useState } from "react";
-import type { SettingsPublic } from "@/lib/types";
+import type { SettingsPublic, AgentDefinition } from "@/lib/types";
 import AppHeader from "@/app/components/AppHeader";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsPublic | null>(null);
+  const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [openRouterKey, setOpenRouterKey] = useState("");
   const [ollamaUrl, setOllamaUrl] = useState("");
+  const [ollamaApiKey, setOllamaApiKey] = useState("");
+  const [vllmBaseUrl, setVllmBaseUrl] = useState("");
+  const [dockerBaseUrl, setDockerBaseUrl] = useState("");
   const [compressionModel, setCompressionModel] = useState("");
   const [heartbeatInterval, setHeartbeatInterval] = useState(30);
+  const [embeddingModel, setEmbeddingModel] = useState("");
+  const [whitelistedModels, setWhitelistedModels] = useState<string[]>([]);
+  const [newModelInput, setNewModelInput] = useState("");
+  const [editingModel, setEditingModel] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [agentSavingId, setAgentSavingId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/settings")
-      .then((r) => r.json())
-      .then((d: SettingsPublic) => {
-        setSettings(d);
-        setOllamaUrl(d.ollamaBaseUrl);
-        setCompressionModel(d.compressionModel);
-        setHeartbeatInterval(d.heartbeatIntervalMinutes);
-      });
+    Promise.all([
+      fetch("/api/settings").then((r) => r.json()) as Promise<SettingsPublic>,
+      fetch("/api/agents").then((r) => r.json()).then((d: { agents: AgentDefinition[] }) => d.agents ?? []),
+    ]).then(([settingsData, agentsList]) => {
+      setSettings(settingsData);
+      setOllamaUrl(settingsData.ollamaBaseUrl);
+      setVllmBaseUrl(settingsData.vllmBaseUrl);
+      setDockerBaseUrl(settingsData.dockerBaseUrl);
+      setCompressionModel(settingsData.compressionModel);
+      setHeartbeatInterval(settingsData.heartbeatIntervalMinutes);
+      setEmbeddingModel(settingsData.embeddingModel);
+      setWhitelistedModels(settingsData.whitelistedModels);
+      setAgents(agentsList);
+    });
   }, []);
 
   const save = async () => {
     setSaving(true);
     const body: Record<string, unknown> = {
       ollamaBaseUrl: ollamaUrl,
+      vllmBaseUrl,
+      dockerBaseUrl,
       compressionModel,
       heartbeatIntervalMinutes: heartbeatInterval,
+      embeddingModel,
+      whitelistedModels,
     };
+    if (ollamaApiKey) body.ollamaApiKey = ollamaApiKey;
     if (openRouterKey) body.openRouterApiKey = openRouterKey;
 
     await fetch("/api/settings", {
@@ -41,7 +68,64 @@ export default function SettingsPage() {
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+    if (ollamaApiKey) setOllamaApiKey("");
     if (openRouterKey) setOpenRouterKey("");
+  };
+
+  const addWhitelistModel = () => {
+    const trimmed = newModelInput.trim();
+    if (!trimmed || whitelistedModels.includes(trimmed)) return;
+    setWhitelistedModels((prev) => [...prev, trimmed]);
+    setNewModelInput("");
+  };
+
+  const removeWhitelistModel = (model: string) => {
+    setWhitelistedModels((prev) => prev.filter((m) => m !== model));
+    if (editingModel === model) {
+      setEditingModel(null);
+      setEditValue("");
+    }
+  };
+
+  const startEditWhitelistModel = (model: string) => {
+    setEditingModel(model);
+    setEditValue(model);
+  };
+
+  const cancelEditWhitelistModel = () => {
+    setEditingModel(null);
+    setEditValue("");
+  };
+
+  const saveEditWhitelistModel = () => {
+    if (editingModel == null) return;
+    const trimmed = editValue.trim();
+    if (!trimmed) return;
+    const isDuplicate = whitelistedModels.some((m) => m !== editingModel && m === trimmed);
+    if (isDuplicate) return;
+    setWhitelistedModels((prev) =>
+      prev.map((m) => (m === editingModel ? trimmed : m))
+    );
+    setEditingModel(null);
+    setEditValue("");
+  };
+
+  const setAgentModel = async (agentId: string, model: string) => {
+    setAgentSavingId(agentId);
+    try {
+      const res = await fetch(`/api/agents/${agentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      if (res.ok) {
+        setAgents((prev) =>
+          prev.map((a) => (a.id === agentId ? { ...a, model } : a))
+        );
+      }
+    } finally {
+      setAgentSavingId(null);
+    }
   };
 
   return (
@@ -65,8 +149,49 @@ export default function SettingsPage() {
                   type="text"
                   value={ollamaUrl}
                   onChange={(e) => setOllamaUrl(e.target.value)}
+                  placeholder="http://localhost:11434 or https://ollama.com for Ollama Cloud"
                   className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
                   aria-label="Ollama Base URL"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1">
+                  Ollama API Key (for Ollama Cloud) {settings.hasOllamaKey && <span className="text-green-400">(configured)</span>}
+                </label>
+                <input
+                  type="password"
+                  value={ollamaApiKey}
+                  onChange={(e) => setOllamaApiKey(e.target.value)}
+                  placeholder={settings.hasOllamaKey ? "Enter new key to update" : "Required for cloud models (e.g. minimax-m2:cloud)"}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Ollama API Key"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="settings-vllm-url" className="block text-xs text-zinc-500 mb-1">vLLM Base URL</label>
+                <input
+                  id="settings-vllm-url"
+                  type="text"
+                  value={vllmBaseUrl}
+                  onChange={(e) => setVllmBaseUrl(e.target.value)}
+                  placeholder="http://localhost:8000/v1"
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="vLLM Base URL"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="settings-docker-url" className="block text-xs text-zinc-500 mb-1">Docker Base URL</label>
+                <input
+                  id="settings-docker-url"
+                  type="text"
+                  value={dockerBaseUrl}
+                  onChange={(e) => setDockerBaseUrl(e.target.value)}
+                  placeholder="http://localhost:8000/v1"
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Docker Base URL"
                 />
               </div>
 
@@ -88,12 +213,33 @@ export default function SettingsPage() {
               <h2 className="font-medium text-sm text-zinc-300">Agent System</h2>
 
               <div>
-                <label className="block text-xs text-zinc-500 mb-1">Compression Model</label>
-                <input
-                  type="text"
+                <label htmlFor="settings-compression-model" className="block text-xs text-zinc-500 mb-1">Compression Model</label>
+                <select
+                  id="settings-compression-model"
                   value={compressionModel}
                   onChange={(e) => setCompressionModel(e.target.value)}
                   className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Compression model"
+                >
+                  {(
+                    whitelistedModels.length > 0
+                      ? (whitelistedModels.includes(compressionModel) ? whitelistedModels : [compressionModel, ...whitelistedModels])
+                      : (compressionModel ? [compressionModel] : [])
+                  ).filter(Boolean).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="settings-embedding-model" className="block text-xs text-zinc-500 mb-1">Embedding model</label>
+                <input
+                  id="settings-embedding-model"
+                  type="text"
+                  value={embeddingModel}
+                  onChange={(e) => setEmbeddingModel(e.target.value)}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Embedding model"
                 />
               </div>
 
@@ -111,12 +257,117 @@ export default function SettingsPage() {
 
             <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
               <h2 className="font-medium text-sm text-zinc-300 mb-3">Whitelisted Models</h2>
-              <div className="space-y-1">
-                {settings.whitelistedModels.map((m) => (
-                  <div key={m} className="text-xs font-mono text-zinc-400 bg-zinc-800 rounded px-2 py-1">{m}</div>
+              <div className="space-y-2">
+                {whitelistedModels.map((m) => (
+                  <div key={m} className="flex items-center gap-2">
+                    {editingModel === m ? (
+                      <>
+                        <input
+                          type="text"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveEditWhitelistModel();
+                            if (e.key === "Escape") cancelEditWhitelistModel();
+                          }}
+                          className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
+                          aria-label="Edit model name"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={saveEditWhitelistModel}
+                          className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
+                          aria-label="Save edit"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEditWhitelistModel}
+                          className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
+                          aria-label="Cancel edit"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-xs font-mono text-zinc-400 bg-zinc-800 rounded px-2 py-1 flex-1">{m}</span>
+                        <button
+                          type="button"
+                          onClick={() => startEditWhitelistModel(m)}
+                          className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
+                          aria-label={`Edit ${m}`}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeWhitelistModel(m)}
+                          className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
+                          aria-label={`Remove ${m}`}
+                        >
+                          Remove
+                        </button>
+                      </>
+                    )}
+                  </div>
                 ))}
+                <div className="flex gap-2 mt-2">
+                  <input
+                    type="text"
+                    value={newModelInput}
+                    onChange={(e) => setNewModelInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addWhitelistModel()}
+                    placeholder="Add model"
+                    className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={addWhitelistModel}
+                    className="px-3 py-2 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-sm"
+                  >
+                    Add
+                  </button>
+                </div>
               </div>
             </section>
+
+            {agents.length > 0 && (
+              <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+                <h2 className="font-medium text-sm text-zinc-300">Model assignment</h2>
+                {agents.map((agent) => {
+                  const label = agent.id === "maia" ? "Maia (orchestrator)" : agent.name;
+                  const saving = agentSavingId === agent.id;
+                  const modelOptions =
+                    whitelistedModels.length > 0
+                      ? (whitelistedModels.includes(agent.model) ? whitelistedModels : [agent.model, ...whitelistedModels])
+                      : [agent.model];
+                  return (
+                    <div key={agent.id} className="flex items-center gap-3">
+                      <label htmlFor={`agent-model-${agent.id}`} className="text-sm text-zinc-300 w-40 shrink-0">
+                        {label}
+                      </label>
+                      <select
+                        id={`agent-model-${agent.id}`}
+                        value={agent.model}
+                        onChange={(e) => setAgentModel(agent.id, e.target.value)}
+                        disabled={saving}
+                        className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                        aria-label={`Model for ${label}`}
+                        role="combobox"
+                      >
+                        {modelOptions.map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                      {saving && <span className="text-xs text-zinc-500">Saving…</span>}
+                    </div>
+                  );
+                })}
+              </section>
+            )}
 
             <button
               onClick={save}

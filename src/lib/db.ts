@@ -127,7 +127,10 @@ export function initSchema(db: DbAdapter): void {
     compressionModel: "ollama/llama3.2",
     heartbeatIntervalMinutes: "30",
     ollamaBaseUrl: "http://localhost:11434",
+    ollamaApiKey: "",
     openRouterApiKey: "",
+    vllmBaseUrl: "http://localhost:8000/v1",
+    dockerBaseUrl: "http://localhost:8000/v1",
     embeddingModel: "nomic-embed-text",
   };
 

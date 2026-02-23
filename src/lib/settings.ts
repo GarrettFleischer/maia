@@ -17,7 +17,10 @@ export function getSettings(ctx: AppContext): Settings {
     compressionModel: map.compressionModel ?? "ollama/llama3.2",
     heartbeatIntervalMinutes: parseInt(map.heartbeatIntervalMinutes ?? "30"),
     ollamaBaseUrl: map.ollamaBaseUrl ?? "http://localhost:11434",
+    ollamaApiKey: map.ollamaApiKey || undefined,
     openRouterApiKey: map.openRouterApiKey || undefined,
+    vllmBaseUrl: map.vllmBaseUrl ?? "http://localhost:8000/v1",
+    dockerBaseUrl: map.dockerBaseUrl ?? "http://localhost:8000/v1",
     embeddingModel: map.embeddingModel ?? "nomic-embed-text",
   };
 }
@@ -29,14 +32,17 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
     compressionModel: s.compressionModel,
     heartbeatIntervalMinutes: s.heartbeatIntervalMinutes,
     ollamaBaseUrl: s.ollamaBaseUrl,
+    hasOllamaKey: !!s.ollamaApiKey,
     hasOpenRouterKey: !!s.openRouterApiKey,
+    vllmBaseUrl: s.vllmBaseUrl,
+    dockerBaseUrl: s.dockerBaseUrl,
     embeddingModel: s.embeddingModel,
   };
 }
 
 export function updateSettings(
   ctx: AppContext,
-  partial: Partial<SettingsPublic & { openRouterApiKey?: string }>
+  partial: Partial<SettingsPublic & { openRouterApiKey?: string; ollamaApiKey?: string }>
 ): void {
   const update = ctx.db.prepare(
     "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)"
@@ -54,8 +60,17 @@ export function updateSettings(
   if (partial.ollamaBaseUrl !== undefined) {
     update.run("ollamaBaseUrl", partial.ollamaBaseUrl);
   }
+  if (partial.ollamaApiKey !== undefined) {
+    update.run("ollamaApiKey", partial.ollamaApiKey);
+  }
   if (partial.openRouterApiKey !== undefined) {
     update.run("openRouterApiKey", partial.openRouterApiKey);
+  }
+  if (partial.vllmBaseUrl !== undefined) {
+    update.run("vllmBaseUrl", partial.vllmBaseUrl);
+  }
+  if (partial.dockerBaseUrl !== undefined) {
+    update.run("dockerBaseUrl", partial.dockerBaseUrl);
   }
   if (partial.embeddingModel !== undefined) {
     update.run("embeddingModel", partial.embeddingModel);
