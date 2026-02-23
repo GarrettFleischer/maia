@@ -1,8 +1,7 @@
 import path from "path";
 import type { AppContext } from "../context";
 import type { AgentDefinition, AgentWithIdentity } from "../types";
-
-const AGENTS_DIR = path.join(process.cwd(), "data", "agents");
+import { getAgentsDir } from "../data-dir";
 
 export function getAgentIdentity(ctx: AppContext, agentId: string): AgentWithIdentity | null {
   const row = ctx.db
@@ -10,7 +9,7 @@ export function getAgentIdentity(ctx: AppContext, agentId: string): AgentWithIde
     .get(agentId) as Record<string, unknown> | undefined;
   if (!row) return null;
 
-  const dir = path.join(AGENTS_DIR, agentId);
+  const dir = path.join(getAgentsDir(), agentId);
   const read = (file: string) => {
     try { return ctx.fs.readFile(path.join(dir, file)); } catch { return ""; }
   };
@@ -50,4 +49,28 @@ export function setAgentStatus(ctx: AppContext, agentId: string, status: "idle" 
     new Date().toISOString(),
     agentId
   );
+}
+
+/**
+ * Updates an agent's model and/or name. Does not change id or status.
+ * @param ctx - App context
+ * @param agentId - Agent id
+ * @param partial - Fields to update (model and/or name)
+ * @returns true if the agent existed and was updated, false if not found
+ * @note Caller must ensure model is whitelisted before calling.
+ */
+export function updateAgent(
+  ctx: AppContext,
+  agentId: string,
+  partial: { model?: string; name?: string }
+): boolean {
+  const row = ctx.db.prepare("SELECT model, name FROM agents WHERE id = ? AND status != 'deleted'").get(agentId) as
+    | { model: string; name: string }
+    | undefined;
+  if (!row) return false;
+  const model = partial.model ?? row.model;
+  const name = partial.name ?? row.name;
+  const now = new Date().toISOString();
+  ctx.db.prepare("UPDATE agents SET model = ?, name = ?, updated_at = ? WHERE id = ?").run(model, name, now, agentId);
+  return true;
 }
