@@ -54,3 +54,5 @@ package-lock.json
 # Python virtual environments
 /venv/
 /.venv/
+
+/data/
