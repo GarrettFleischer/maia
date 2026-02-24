@@ -6,7 +6,13 @@ import type { Tool, ToolContext } from "./types";
 // to avoid circular imports. The messaging service patches these at runtime.
 
 let _messageToUserImpl: ((agentId: string, sessionId: string, content: string) => Promise<void>) | null = null;
-let _messageSendImpl: ((fromAgentId: string, toAgentId: string, content: string) => Promise<void>) | null = null;
+/** Sends a message to another agent. When run in background, returns a status string; recipient reply is delivered to caller session when done. */
+let _messageSendImpl: ((
+  fromAgentId: string,
+  toAgentId: string,
+  content: string,
+  callerSessionId: string,
+) => Promise<string>) | null = null;
 
 export function registerMessagingImpls(
   toUser: typeof _messageToUserImpl,
@@ -40,18 +46,20 @@ const messageSendSchema = z.object({
   content: z.string().describe("Message content to send"),
 });
 
-export const messageSendTool: Tool<z.infer<typeof messageSendSchema>> = {
+export const messageSendTool: Tool<z.infer<typeof messageSendSchema>, string> = {
   name: "message_send",
-  description: "Send a message to another agent.",
+  description:
+    "Send a message to another agent. They work in a separate thread; when they reply, you will be run again in this thread to review and report to the user. Returns immediately.",
   schema: messageSendSchema,
   toDefinition: () => ({
     name: "message_send",
-    description: "Send a message to another agent.",
+    description:
+      "Send a message to another agent. They work in a separate thread; when they reply, you will be run again in this thread to review and report to the user. Returns immediately.",
     parameters: zodToJsonSchema(messageSendSchema),
   }),
   async execute({ toAgentId, content }, ctx) {
     if (!_messageSendImpl) throw new Error("Messaging service not initialized");
-    await _messageSendImpl(ctx.agentId, toAgentId, content);
+    return _messageSendImpl(ctx.agentId, toAgentId, content, ctx.sessionId);
   },
 };
 

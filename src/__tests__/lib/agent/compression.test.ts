@@ -46,15 +46,40 @@ describe("compressEntry", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("uses provider to compress content", async () => {
+  it("uses provider to compress content (data-only)", async () => {
     const compressedResponse = JSON.stringify({
-      content: "User asked about Paris being France's capital.",
+      content: "Paris; France capital",
       role: "user",
     });
     const provider = makeMockProvider(compressedResponse);
     const entry = makeEntry({ content: "What is the capital of France? I heard it might be Paris." });
     const result = await compressEntry(ctx, provider, entry, sessionId);
-    expect(result.content).toBe("User asked about Paris being France's capital.");
+    expect(result.content).toBe("Paris; France capital");
+  });
+
+  it("when skip is true, appends compressed entry with empty content", async () => {
+    const compressedResponse = JSON.stringify({
+      content: "",
+      role: "user",
+      skip: true,
+    });
+    const provider = makeMockProvider(compressedResponse);
+    const entry = makeEntry({ content: "Just saying hi!" });
+    const result = await compressEntry(ctx, provider, entry, sessionId);
+    expect(result.content).toBe("");
+    expect(result.role).toBe("user");
+    const rows = ctx.db
+      .prepare("SELECT * FROM history_entries WHERE session_id = ? AND is_compressed = 1")
+      .all(sessionId) as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].content).toBe("");
+  });
+
+  it("when content is empty and no skip flag, stores empty content", async () => {
+    const provider = makeMockProvider(JSON.stringify({ content: "", role: "user" }));
+    const entry = makeEntry({ content: "Filler message" });
+    const result = await compressEntry(ctx, provider, entry, sessionId);
+    expect(result.content).toBe("");
   });
 
   it("falls back to original content when provider returns unparseable JSON", async () => {

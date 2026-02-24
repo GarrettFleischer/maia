@@ -8,6 +8,7 @@ import {
   fileListTool,
   fileMoveTool,
   fileExistsTool,
+  directoryCreateTool,
 } from "@/lib/tools/file-crud";
 import { getKnowledgeDir } from "@/lib/data-dir";
 import { makeTestContext, FakeFs } from "../../helpers/fakes";
@@ -130,14 +131,16 @@ describe("fileDeleteTool", () => {
 });
 
 describe("fileListTool", () => {
-  it("lists files in a directory", async () => {
+  it("takes no args and lists all files and folders recursively under the agent workspace", async () => {
     const fs = new FakeFs();
     fs.seed(vol("dir", "a.txt"), "a");
     fs.seed(vol("dir", "b.txt"), "b");
+    fs.seed(vol("top.txt"), "top");
     const ctx = makeToolCtx(fs);
-    const result = await fileListTool.execute({ directory: "dir" }, ctx) as string[];
-    expect(result).toContain("a.txt");
-    expect(result).toContain("b.txt");
+    const result = await fileListTool.execute({}, ctx) as string[];
+    expect(result).toContain("top.txt");
+    expect(result).toContain(path.join("dir", "a.txt"));
+    expect(result).toContain(path.join("dir", "b.txt"));
   });
 
   it("returns unique entries (no duplicates)", async () => {
@@ -145,9 +148,16 @@ describe("fileListTool", () => {
     fs.seed(vol("subdir", "nested", "a.txt"), "a");
     fs.seed(vol("subdir", "nested", "b.txt"), "b");
     const ctx = makeToolCtx(fs);
-    const result = await fileListTool.execute({ directory: "subdir" }, ctx) as string[];
+    const result = await fileListTool.execute({}, ctx) as string[];
     const unique = new Set(result);
     expect(unique.size).toBe(result.length);
+  });
+
+  it("returns empty array when workspace is empty", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    const result = await fileListTool.execute({}, ctx) as string[];
+    expect(result).toEqual([]);
   });
 });
 
@@ -179,6 +189,41 @@ describe("fileExistsTool", () => {
   it("returns false for missing file", async () => {
     const ctx = makeToolCtx();
     expect(await fileExistsTool.execute({ path: "missing.txt" }, ctx)).toBe(false);
+  });
+});
+
+describe("directoryCreateTool", () => {
+  it("creates a directory path within the volume and returns created path", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    const result = (await directoryCreateTool.execute(
+      { path: "knowledge/jurisdictions" },
+      ctx,
+    )) as { created: string };
+    expect(result.created).toBe(path.join(KNOWLEDGE_DIR, "jurisdictions"));
+  });
+
+  it("resolves workspace-relative path", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    const result = (await directoryCreateTool.execute(
+      { path: "reports/2024" },
+      ctx,
+    )) as { created: string };
+    expect(result.created).toBe(vol("reports", "2024"));
+  });
+
+  it("prevents path traversal", async () => {
+    const ctx = makeToolCtx();
+    await expect(
+      directoryCreateTool.execute({ path: "../../etc" }, ctx),
+    ).rejects.toThrow();
+  });
+
+  it("has correct tool definition", () => {
+    const def = directoryCreateTool.toDefinition();
+    expect(def.name).toBe("directory_create");
+    expect(def.description).toContain("directory");
   });
 });
 

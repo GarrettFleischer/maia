@@ -41,7 +41,7 @@ describe("terminalTool", () => {
     expect(runner.lastExec?.opts?.timeout).toBe(30_000);
   });
 
-  it("uses default container name when sandboxContainerName is not set", async () => {
+  it("runs locally with volumeRoot cwd when sandboxContainerName is not set", async () => {
     const runner = new FakeProcessRunner();
     runner.setResult({ stdout: "", stderr: "", exitCode: 0 });
     const ctx = makeToolCtx({
@@ -51,7 +51,10 @@ describe("terminalTool", () => {
 
     await terminalTool.execute({ command: "true" }, ctx);
 
-    expect(runner.lastExec?.cmd).toContain("maia-sandbox");
+    expect(runner.lastExec?.cmd).toContain("bash -c");
+    expect(runner.lastExec?.cmd).toContain("true");
+    expect(runner.lastExec?.opts?.cwd).toBe(ctx.volumeRoot);
+    expect(runner.lastExec?.cmd).not.toContain("docker");
   });
 
   it("returns stdout, stderr and exitCode from process runner", async () => {

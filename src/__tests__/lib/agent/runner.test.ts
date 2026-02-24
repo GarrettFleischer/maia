@@ -1,12 +1,22 @@
+import path from "path";
 import { describe, it, expect, beforeEach } from "bun:test";
 import { runAgent } from "@/lib/agent/runner";
-import { makeTestContext, FakeEvents, FakeResponse } from "../../helpers/fakes";
+import { makeTestContext, FakeEvents, FakeResponse, FakeFs } from "../../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
-import { createSession } from "@/lib/history";
+import { createSession, appendEntry } from "@/lib/history";
+import { getAgentsDir } from "@/lib/data-dir";
 import type { AppContext } from "@/lib/context";
 import type { AIProvider, AIResponse } from "@/lib/ai/types";
 import type { SSEEvent } from "@/lib/types";
 import type { ProviderFactory } from "@/lib/agent/runner";
+
+function seedIdentityFiles(fs: FakeFs, agentId: string) {
+  const dir = path.join(getAgentsDir(), agentId);
+  fs.seed(path.join(dir, "SOUL.md"), "# Soul\nI am Maia, the orchestrator.");
+  fs.seed(path.join(dir, "MEMORY.md"), "# Memory\nUser prefers TDD.");
+  fs.seed(path.join(dir, "GOALS.md"), "# Goals\n- [ ] Coordinate agents");
+  fs.seed(path.join(dir, "USER.md"), "# User\nThe user is a developer.");
+}
 
 function seedAgent(ctx: AppContext, id = "maia", model = "ollama/llama3.2") {
   const now = new Date().toISOString();
@@ -138,6 +148,63 @@ describe("runAgent", () => {
     expect(callCount).toBe(4);
     expect(toolEvents.some((e) => e.type === "tool_call")).toBe(true);
     expect(toolEvents.some((e) => e.type === "tool_result")).toBe(true);
+  });
+
+  it("excludes empty compressed entries from context (skipped turns)", async () => {
+    const t1 = "2020-01-01T00:00:01.000Z";
+    const t2 = "2020-01-01T00:00:02.000Z";
+    const t3 = "2020-01-01T00:00:03.000Z";
+    appendEntry(ctx, sessionId, { role: "user", content: "prior data", timestamp: t1 }, true);
+    appendEntry(ctx, sessionId, { role: "agent", content: "", timestamp: t2 }, true);
+    appendEntry(ctx, sessionId, { role: "user", content: "second", timestamp: t3 }, true);
+    let capturedMessages: { role: string; content: string }[] = [];
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        // Capture only the main agent call (context has "prior data"); compression runs later with different messages.
+        const nonSystem = messages
+          .filter((m) => m.role !== "system")
+          .map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : String(m.content) }));
+        if (nonSystem.some((m) => m.content.includes("prior data")) || nonSystem.some((m) => m.content === "current"))
+          capturedMessages = nonSystem;
+        onToken("ok");
+        return { content: "ok", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, () => provider, "maia", sessionId, "current", () => {});
+    // Empty compressed entry must not appear in context; no message should have empty content.
+    expect(capturedMessages.every((m) => m.content.trim() !== "")).toBe(true);
+    const contents = capturedMessages.map((m) => m.content);
+    expect(contents).toContain("current");
+    expect(contents).toContain("prior data");
+  });
+
+  it("includes the running agent's own MD files (SOUL, MEMORY, GOALS, USER) in the system prompt", async () => {
+    seedIdentityFiles(ctx.fs as FakeFs, "maia");
+    (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
+      "/api/embed",
+      async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] }))
+    );
+
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        if (system && typeof system.content === "string" && system.content.includes("## Identity"))
+          systemContent = system.content;
+        onToken("Hi");
+        return { content: "Hi", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
+
+    expect(systemContent).toContain("I am Maia, the orchestrator.");
+    expect(systemContent).toContain("User prefers TDD.");
+    expect(systemContent).toContain("Coordinate agents");
+    expect(systemContent).toContain("The user is a developer.");
+    expect(systemContent).toContain("## Identity");
+    expect(systemContent).toContain("## Memory");
+    expect(systemContent).toContain("## Goals");
+    expect(systemContent).toContain("## User");
   });
 
   it("emits tool_result with error when registered tool receives invalid args (parse throws)", async () => {

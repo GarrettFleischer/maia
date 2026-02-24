@@ -4,6 +4,7 @@ import {
   agentDeleteTool,
   agentListTool,
   agentGetTool,
+  agentUpdateIdentityTool,
 } from "@/lib/tools/agent-management";
 import { makeTestContext, FakeFs } from "../../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
@@ -117,5 +118,48 @@ describe("agentGetTool", () => {
     };
     expect(result.agent.name).toBe("GetMe");
     expect(result.soul).toContain("My soul");
+  });
+});
+
+describe("agentUpdateIdentityTool", () => {
+  it("updates the current agent's MEMORY.md", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    const path = await import("path");
+    const { getAgentsDir } = await import("@/lib/data-dir");
+    const agentDir = path.join(getAgentsDir(), "maia");
+    await agentUpdateIdentityTool.execute(
+      { file: "memory", content: "# Memory\n\n- User prefers TDD.\n" },
+      ctx,
+    );
+    expect(fs.snapshot()[path.join(agentDir, "MEMORY.md")]).toBe("# Memory\n\n- User prefers TDD.\n");
+  });
+
+  it("updates SOUL.md when file is soul", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    const path = await import("path");
+    const { getAgentsDir } = await import("@/lib/data-dir");
+    const agentDir = path.join(getAgentsDir(), "maia");
+    await agentUpdateIdentityTool.execute({ file: "soul", content: "# Soul\n\nI am Maia.\n" }, ctx);
+    expect(fs.snapshot()[path.join(agentDir, "SOUL.md")]).toBe("# Soul\n\nI am Maia.\n");
+  });
+
+  it("updates GOALS.md and USER.md", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    const path = await import("path");
+    const { getAgentsDir } = await import("@/lib/data-dir");
+    const agentDir = path.join(getAgentsDir(), "maia");
+    await agentUpdateIdentityTool.execute(
+      { file: "goals", content: "# Goals\n\n- [ ] Task one\n" },
+      ctx,
+    );
+    await agentUpdateIdentityTool.execute(
+      { file: "user", content: "# User\n\nThe user is a developer.\n" },
+      ctx,
+    );
+    expect(fs.snapshot()[path.join(agentDir, "GOALS.md")]).toBe("# Goals\n\n- [ ] Task one\n");
+    expect(fs.snapshot()[path.join(agentDir, "USER.md")]).toBe("# User\n\nThe user is a developer.\n");
   });
 });

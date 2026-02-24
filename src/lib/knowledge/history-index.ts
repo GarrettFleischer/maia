@@ -35,6 +35,9 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
 
   if (!row) return;
 
+  // Skip indexing empty content (e.g. compressed skip entries); nothing to embed and Ollama may return invalid shape.
+  if (row.content.trim() === "") return;
+
   const contentToEmbed =
     row.content.length > MAX_EMBED_CONTENT_LENGTH
       ? row.content.slice(0, MAX_EMBED_CONTENT_LENGTH)

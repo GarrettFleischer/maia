@@ -34,7 +34,9 @@ export async function POST(req: NextRequest) {
   const agentId = body.targetAgent ?? "maia";
 
   // Resolve session
-  let sessionId = body.sessionId ?? getActiveSessionId(ctx);
+  const activeId = getActiveSessionId(ctx);
+  let sessionId = body.sessionId ?? activeId;
+  const created = !sessionId;
   if (!sessionId) {
     sessionId = createSession(ctx, ["user", agentId]);
     setActiveSessionId(ctx, sessionId);
@@ -45,12 +47,26 @@ export async function POST(req: NextRequest) {
       const encoder = new TextEncoder();
 
       function send(event: SSEEvent) {
-        const data = `data: ${JSON.stringify(event)}\n\n`;
-        controller.enqueue(encoder.encode(data));
+        try {
+          const data = `data: ${JSON.stringify(event)}\n\n`;
+          controller.enqueue(encoder.encode(data));
+        } catch (e) {
+          // Controller may already be closed (e.g. late token callback after runAgent returned).
+          // No-op so we don't throw and overwrite a successful response with an error event.
+          if (e instanceof Error && e.message?.includes("already closed") === true) return;
+          throw e;
+        }
       }
 
-      const runAgentFn = async (c: AppContext, toAgentId: string, toSessionId: string, message: string) => {
-        await runAgent(c, createProvider, toAgentId, toSessionId, message, () => {});
+      type RunAgentOptions = { emitHistoryEntries?: boolean };
+      const runAgentFn = async (
+        c: AppContext,
+        toAgentId: string,
+        toSessionId: string,
+        message: string,
+        options?: RunAgentOptions,
+      ) => {
+        return runAgent(c, createProvider, toAgentId, toSessionId, message, () => {}, options);
       };
       initMessagingService(ctx, runAgentFn);
 

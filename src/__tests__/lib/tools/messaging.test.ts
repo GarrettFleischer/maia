@@ -64,16 +64,27 @@ describe("messageSendTool", () => {
     ).rejects.toThrow("Messaging service not initialized");
   });
 
-  it("calls the registered toAgent implementation with correct args", async () => {
-    const calls: Array<{ from: string; to: string; content: string }> = [];
+  it("calls the registered toAgent implementation with callerSessionId and returns status string", async () => {
+    const calls: Array<{ from: string; to: string; content: string; callerSessionId: string }> = [];
+    const statusString =
+      "Message sent. They're working on it in a separate thread; when they reply you'll be run again here to review and report to the user.";
     registerMessagingImpls(
       null,
-      async (fromAgentId, toAgentId, content) => { calls.push({ from: fromAgentId, to: toAgentId, content }); }
+      async (fromAgentId, toAgentId, content, callerSessionId) => {
+        calls.push({ from: fromAgentId, to: toAgentId, content, callerSessionId });
+        return statusString;
+      }
     );
-    const ctx = makeToolCtx();
-    await messageSendTool.execute({ toAgentId: "agent-2", content: "Hey agent 2!" }, ctx);
+    const ctx = makeToolCtx("my-caller-session");
+    const reply = await messageSendTool.execute({ toAgentId: "agent-2", content: "Hey agent 2!" }, ctx);
+    expect(reply).toBe(statusString);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual({ from: "agent-1", to: "agent-2", content: "Hey agent 2!" });
+    expect(calls[0]).toEqual({
+      from: "agent-1",
+      to: "agent-2",
+      content: "Hey agent 2!",
+      callerSessionId: "my-caller-session",
+    });
   });
 
   it("has correct tool definition", () => {

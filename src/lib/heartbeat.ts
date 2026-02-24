@@ -1,3 +1,7 @@
+/**
+ * @fileoverview In-process heartbeat: wakes all active agents on a schedule and via POST /api/cron/heartbeat.
+ * @module lib/heartbeat
+ */
 import type { AppContext } from "./context";
 import { listAgents } from "./agent/identity";
 import { getSettings } from "./settings";
@@ -34,6 +38,14 @@ export async function fireHeartbeat(
 }
 
 let _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Returns whether the in-process heartbeat scheduler is currently running.
+ * @returns true if startHeartbeatScheduler has been called and not yet stopped
+ */
+export function isHeartbeatSchedulerRunning(): boolean {
+  return _heartbeatTimer !== null;
+}
 
 export function startHeartbeatScheduler(
   ctx: AppContext,

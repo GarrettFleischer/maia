@@ -22,7 +22,10 @@ const KNOWLEDGE_PREFIX = "knowledge/";
 function resolvePath(userPath: string, volumeRoot: string): string {
   const normalized = userPath.replace(/\\/g, "/").trim();
   if (normalized === "knowledge" || normalized.startsWith(KNOWLEDGE_PREFIX)) {
-    const suffix = normalized === "knowledge" ? "" : normalized.slice(KNOWLEDGE_PREFIX.length);
+    const suffix =
+      normalized === "knowledge"
+        ? ""
+        : normalized.slice(KNOWLEDGE_PREFIX.length);
     return path.join(KNOWLEDGE_DIR, suffix);
   }
   const resolved = path.resolve(volumeRoot, userPath);
@@ -38,7 +41,7 @@ function makeFileTool<TSchema extends z.ZodTypeAny>(
   name: string,
   description: string,
   schema: TSchema,
-  execute: (args: z.infer<TSchema>, context: ToolContext) => Promise<unknown>
+  execute: (args: z.infer<TSchema>, context: ToolContext) => Promise<unknown>,
 ): Tool<z.infer<TSchema>> {
   return {
     name,
@@ -58,8 +61,10 @@ export const fileReadTool = makeFileTool(
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
     const content = ctx.fs.readFile(full);
-    return content.length > MAX_OUTPUT ? content.slice(0, MAX_OUTPUT) + "\n[truncated]" : content;
-  }
+    return content.length > MAX_OUTPUT
+      ? content.slice(0, MAX_OUTPUT) + "\n[truncated]"
+      : content;
+  },
 );
 
 export const fileWriteTool = makeFileTool(
@@ -73,7 +78,7 @@ export const fileWriteTool = makeFileTool(
     const full = resolvePath(p, ctx.volumeRoot);
     ctx.fs.mkdirp(path.dirname(full));
     ctx.fs.writeFile(full, content);
-  }
+  },
 );
 
 export const fileAppendTool = makeFileTool(
@@ -87,7 +92,7 @@ export const fileAppendTool = makeFileTool(
     const full = resolvePath(p, ctx.volumeRoot);
     ctx.fs.mkdirp(path.dirname(full));
     ctx.fs.appendFile(full, content);
-  }
+  },
 );
 
 export const fileDeleteTool = makeFileTool(
@@ -97,17 +102,54 @@ export const fileDeleteTool = makeFileTool(
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
     ctx.fs.deleteFile(full);
-  }
+  },
 );
+
+/**
+ * Recursively list all files and directories under dir. Returns relative paths
+ * (relative to volumeRoot). Directories are suffixed with "/".
+ * Uses readFile to distinguish files from directories (readFile on a dir fails).
+ * @param fs - File system adapter
+ * @param volumeRoot - Root path (must be resolved)
+ * @param dir - Current directory (full path) to list
+ * @param rel - Current relative path prefix for results
+ */
+function listRecursive(
+  fs: ToolContext["fs"],
+  volumeRoot: string,
+  dir: string,
+  rel: string,
+): string[] {
+  let entries: string[];
+  try {
+    entries = fs.listDir(dir);
+  } catch {
+    return [];
+  }
+  const result: string[] = [];
+  for (const name of entries) {
+    const full = path.join(dir, name);
+    const relPath = rel ? path.join(rel, name) : name;
+    try {
+      fs.readFile(full);
+      result.push(relPath);
+    } catch {
+      result.push(relPath + path.sep);
+      for (const subRel of listRecursive(fs, volumeRoot, full, relPath)) {
+        result.push(subRel);
+      }
+    }
+  }
+  return result;
+}
 
 export const fileListTool = makeFileTool(
   "file_list",
-  "List files and directories within a directory in the workspace volume.",
-  z.object({ directory: z.string().describe("Directory path relative to workspace root") }),
-  async ({ directory }, ctx) => {
-    const full = resolvePath(directory, ctx.volumeRoot);
-    return ctx.fs.listDir(full);
-  }
+  "List all files and folders in your workspace (your writable directory). No arguments; returns a recursive listing of everything under your workspace.",
+  z.object({}),
+  async (_args, ctx) => {
+    return listRecursive(ctx.fs, ctx.volumeRoot, ctx.volumeRoot, "");
+  },
 );
 
 export const fileMoveTool = makeFileTool(
@@ -122,7 +164,7 @@ export const fileMoveTool = makeFileTool(
     const fullTo = resolvePath(to, ctx.volumeRoot);
     ctx.fs.mkdirp(path.dirname(fullTo));
     ctx.fs.rename(fullFrom, fullTo);
-  }
+  },
 );
 
 export const fileExistsTool = makeFileTool(
@@ -132,7 +174,28 @@ export const fileExistsTool = makeFileTool(
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
     return ctx.fs.exists(full);
-  }
+  },
+);
+
+/**
+ * Create a directory (and any missing parent directories). Path may be under
+ * the workspace volume or under knowledge/ (shared knowledge base).
+ */
+export const directoryCreateTool = makeFileTool(
+  "directory_create",
+  "Create a directory within the workspace or knowledge base. Creates parent directories as needed. Use this instead of terminal_exec for mkdir.",
+  z.object({
+    path: z
+      .string()
+      .describe(
+        "Directory path relative to workspace root, or under knowledge/ (e.g. knowledge/jurisdictions)",
+      ),
+  }),
+  async ({ path: p }, ctx) => {
+    const full = resolvePath(p, ctx.volumeRoot);
+    ctx.fs.mkdirp(full);
+    return { created: full };
+  },
 );
 
 export const fileCrudTools: Tool[] = [
@@ -143,4 +206,5 @@ export const fileCrudTools: Tool[] = [
   fileListTool,
   fileMoveTool,
   fileExistsTool,
+  directoryCreateTool,
 ];

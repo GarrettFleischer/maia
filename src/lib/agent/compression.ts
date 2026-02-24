@@ -1,20 +1,38 @@
+/**
+ * @fileoverview Compresses conversation entries for context: extract data only (no summaries), skip useless messages by storing empty content.
+ * @module lib/agent/compression
+ */
 import type { AppContext } from "../context";
 import type { AIProvider } from "../ai/types";
 import { appendEntry, updateSessionMeta, getSession } from "../history";
 import type { HistoryEntry } from "../types";
 import type { Message } from "../ai/types";
 
-const COMPRESSION_PROMPT = `You are a memory compression assistant. Given a conversation entry, produce a compact JSON summary that preserves the key information.
+const COMPRESSION_PROMPT = `You are a memory compression assistant. Given a conversation entry, extract only important data the LLM needs to recall. Do NOT summarize what was said.
+
+Rules:
+- Extract and keep: IDs, names, decisions, errors, key tool results, outcomes. Output only the data: facts and identifiers.
+- Do not write prose, full sentences, or "User requested X". No JSON or markdown inside the content. One line or a few bullets max.
+- If the message has nothing worth keeping (filler, greetings, redundant, no actionable data), set "skip": true or leave content empty.
 
 Respond ONLY with a JSON object in this exact format:
 {
-  "content": "<concise summary of the entry>",
+  "content": "<extracted data only, or empty if skip>",
   "role": "<same role as the original>",
-  "tags": ["<optional>", "<topic tags>"]
+  "tags": ["<optional>", "<topic tags>"],
+  "skip": false
 }
 
-Be concise. Preserve tool names and important results. Drop filler and repetition.`;
+When skip is true (or content is empty), we still store the turn with empty content so history is preserved; the original text is kept elsewhere.`;
 
+/**
+ * Compresses a single history entry via the provider; when skip, stores empty content so the original is not lost.
+ * @param ctx Application context
+ * @param provider AI provider for compression, or null to store as-is
+ * @param entry The original entry to compress
+ * @param sessionId Session to append the compressed entry to
+ * @returns The appended compressed entry (with empty content when skipped)
+ */
 export async function compressEntry(
   ctx: AppContext,
   provider: AIProvider | null,
@@ -49,8 +67,8 @@ export async function compressEntry(
     return appendEntry(ctx, sessionId, entry, true);
   }
 
-  // Parse JSON from response
-  let compressed: { content: string; role: string; tags?: string[] };
+  // Parse JSON from response; support optional skip (store empty content to preserve history)
+  let compressed: { content?: string; role?: string; tags?: string[]; skip?: boolean };
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     compressed = jsonMatch ? JSON.parse(jsonMatch[0]) : { content: entry.content, role: entry.role };
@@ -58,9 +76,14 @@ export async function compressEntry(
     compressed = { content: entry.content, role: entry.role };
   }
 
+  const shouldSkip =
+    compressed.skip === true ||
+    (typeof compressed.content === "string" && compressed.content.trim() === "");
+  const contentToStore = shouldSkip ? "" : (compressed.content?.trim() || entry.content);
+
   const compressedEntry: Omit<HistoryEntry, "id"> = {
-    role: entry.role,
-    content: compressed.content || entry.content,
+    role: (compressed.role as HistoryEntry["role"]) || entry.role,
+    content: contentToStore,
     toolName: entry.toolName,
     toolArgs: entry.toolArgs,
     timestamp: entry.timestamp,

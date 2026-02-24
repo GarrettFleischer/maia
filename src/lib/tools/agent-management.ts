@@ -91,6 +91,33 @@ export const agentGetTool = makeTool(
   }
 );
 
+const IDENTITY_FILE_MAP: Record<string, string> = {
+  soul: "SOUL.md",
+  memory: "MEMORY.md",
+  goals: "GOALS.md",
+  user: "USER.md",
+};
+
+/**
+ * Tool for agents to update their own identity files (MEMORY, SOUL, GOALS, USER).
+ * Use this to keep your memory, goals, and user notes up to date as you learn.
+ */
+export const agentUpdateIdentityTool = makeTool(
+  "agent_update_identity",
+  "Update your own identity file: memory, soul, goals, or user. Use this to keep MEMORY.md, GOALS.md, and USER.md up to date as you learn new things or complete tasks.",
+  z.object({
+    file: z.enum(["soul", "memory", "goals", "user"]).describe("Which identity file to update"),
+    content: z.string().describe("Full new content for the file (replaces entire file)"),
+  }),
+  async ({ file, content }, ctx) => {
+    const filename = IDENTITY_FILE_MAP[file];
+    const agentDir = path.join(getAgentsDir(), ctx.agentId);
+    ctx.fs.mkdirp(agentDir);
+    ctx.fs.writeFile(path.join(agentDir, filename), content);
+    return { updated: file };
+  }
+);
+
 function rowToAgent(r: Record<string, unknown>): AgentDefinition {
   return {
     id: r.id as string,
@@ -104,3 +131,6 @@ function rowToAgent(r: Record<string, unknown>): AgentDefinition {
 }
 
 export const agentManagementTools: Tool[] = [agentCreateTool, agentDeleteTool, agentListTool, agentGetTool];
+
+/** Available to all agents (not maiaOnly) so they can update their own identity files. */
+export const agentIdentityTools: Tool[] = [agentUpdateIdentityTool];

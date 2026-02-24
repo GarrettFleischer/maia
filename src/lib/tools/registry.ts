@@ -7,7 +7,7 @@ import { messagingTools } from "./messaging";
 import { historyTools } from "./history-tool";
 import { knowledgeTools } from "./knowledge-tool";
 import { credentialTools } from "./credentials";
-import { agentManagementTools } from "./agent-management";
+import { agentManagementTools, agentIdentityTools } from "./agent-management";
 import { cronTools } from "./cron-tool";
 import type { Tool, ToolRegistration } from "./types";
 
@@ -24,6 +24,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
   ...knowledgeTools.map((tool) => ({ tool, maiaOnly: false })),
   ...credentialTools.map((tool) => ({ tool, maiaOnly: false })),
   ...agentManagementTools.map((tool) => ({ tool, maiaOnly: true })),
+  ...agentIdentityTools.map((tool) => ({ tool, maiaOnly: false })),
   ...cronTools.map((tool) => ({ tool, maiaOnly: true })),
 ];
 

@@ -12,8 +12,7 @@ import path from "path";
  * @returns Absolute path to the data directory
  */
 export function getDataDir(): string {
-  const root =
-    process.env.MAIA_DATA_DIR ?? path.join(process.cwd(), "data");
+  const root = process.env.MAIA_DATA_DIR ?? path.join(process.cwd(), "data");
   return path.resolve(root);
 }
 

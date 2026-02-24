@@ -3,6 +3,7 @@
  * @module lib/knowledge/index
  *
  * One embedding per file (no chunking). Runs on startup and hourly.
+ * Content is truncated before embedding to avoid exceeding the model context length.
  */
 
 import path from "path";
@@ -14,6 +15,9 @@ import { createVectorStore } from "./vector-store";
 import { getKnowledgeDir } from "../data-dir";
 
 const KNOWLEDGE_DIR = getKnowledgeDir();
+
+/** Max characters to send to the embedding model (avoids context-length 400 from Ollama). */
+const MAX_EMBED_CONTENT_LENGTH = 6000;
 
 function listMarkdownFiles(fs: AppContext["fs"], dir: string, baseDir: string): string[] {
   const out: string[] = [];
@@ -81,11 +85,19 @@ export async function runKnowledgeIndex(
     if (existingHash === contentHash) continue;
 
     if (!embedder) continue;
-    const embedding = await embedder.embed(content);
-    const id = uuidv4();
-    const now = new Date().toISOString();
-    store.upsertKnowledge(id, relPath, content, contentHash, embedding, now);
-    indexed++;
+    const contentToEmbed =
+      content.length > MAX_EMBED_CONTENT_LENGTH
+        ? content.slice(0, MAX_EMBED_CONTENT_LENGTH)
+        : content;
+    try {
+      const embedding = await embedder.embed(contentToEmbed);
+      const id = uuidv4();
+      const now = new Date().toISOString();
+      store.upsertKnowledge(id, relPath, content, contentHash, embedding, now);
+      indexed++;
+    } catch (err) {
+      console.error(`Knowledge index: skip ${relPath} (embed failed):`, err);
+    }
   }
 
   const storedPaths = store.getAllKnowledgePaths();

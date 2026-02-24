@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { fireHeartbeat, startHeartbeatScheduler, stopHeartbeatScheduler } from "@/lib/heartbeat";
+import { fireHeartbeat, isHeartbeatSchedulerRunning, startHeartbeatScheduler, stopHeartbeatScheduler } from "@/lib/heartbeat";
 import { makeTestContext, FakeEvents } from "../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
 import type { AppContext } from "@/lib/context";
@@ -102,5 +102,14 @@ describe("startHeartbeatScheduler / stopHeartbeatScheduler", () => {
 
   it("stopHeartbeatScheduler is safe to call when not running", () => {
     expect(() => stopHeartbeatScheduler()).not.toThrow();
+  });
+
+  it("isHeartbeatSchedulerRunning returns true after start and false after stop", () => {
+    expect(isHeartbeatSchedulerRunning()).toBe(false);
+    updateSettings(ctx, { heartbeatIntervalMinutes: 60 });
+    startHeartbeatScheduler(ctx, async () => {});
+    expect(isHeartbeatSchedulerRunning()).toBe(true);
+    stopHeartbeatScheduler();
+    expect(isHeartbeatSchedulerRunning()).toBe(false);
   });
 });
