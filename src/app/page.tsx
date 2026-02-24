@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * @fileoverview Home chat page: message list, input, send; subscribes to /api/events
- * so server-driven (async) agent messages update the UI without user interaction.
+ * @fileoverview Home chat page: thread list sidebar, message list, input, send; subscribes to /api/events
+ * so server-driven (async) agent messages update the UI. Supports switching threads and starting new ones.
  * @module app/page
  */
 
@@ -13,6 +13,7 @@ import AppHeader from "@/app/components/AppHeader";
 import ChatMessageList from "@/app/components/ChatMessageList";
 import type { ChatMessageListItem } from "@/app/components/ChatMessageList";
 import ChatInputBar from "@/app/components/ChatInputBar";
+import ThreadList from "@/app/components/ThreadList";
 
 /** Map HistoryEntry from server to ChatMessageListItem (including tool_call as standalone tool bubble). */
 function entryToItem(entry: HistoryEntry): ChatMessageListItem {
@@ -29,29 +30,59 @@ function entryToItem(entry: HistoryEntry): ChatMessageListItem {
   return { role, content: entry.content };
 }
 
+type SessionType = "user" | "agents";
+
+interface ActiveSessionResponse {
+  sessionId?: string;
+  session?: {
+    original: HistoryEntry[];
+    type?: SessionType;
+  };
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessageListItem[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionType, setSessionType] = useState<SessionType>("user");
   const [loading, setLoading] = useState(false);
   const [currentToken, setCurrentToken] = useState("");
+  const [threadListRefetch, setThreadListRefetch] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
+
+  /** Load a session by id into messages and set as active. */
+  const loadSession = useCallback(async (id: string) => {
+    const res = await fetch("/api/sessions/active", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: id }),
+    });
+    if (!res.ok) return;
+    const data = (await fetch("/api/sessions/active").then((r) => r.json())) as ActiveSessionResponse;
+    if (data.sessionId) setSessionId(data.sessionId);
+    if (data.session?.type) setSessionType(data.session.type);
+    const entries = data.session?.original ?? [];
+    const items = entries.map(entryToItem);
+    setMessages(items);
+  }, []);
 
   useEffect(() => {
     fetch("/api/sessions/active")
       .then((r) => {
         if (!r.ok) return null;
-        return r.json() as Promise<{ sessionId?: string; session?: { original: HistoryEntry[] } }>;
+        return r.json() as Promise<ActiveSessionResponse>;
       })
       .then((data) => {
         if (!data) return;
         if (data.sessionId) setSessionId(data.sessionId);
+        if (data.session?.type) setSessionType(data.session.type);
         if (data.session?.original?.length) {
+          const loaded = data.session.original.map(entryToItem);
           setMessages((prev) => {
             if (prev.length > 0) return prev; // avoid overwriting streamed messages if fetch completes late
-            return data!.session!.original.map(entryToItem);
+            return loaded;
           });
         }
       })
@@ -100,45 +131,53 @@ export default function Home() {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let accumulated = "";
+      let lineBuffer = "";
+
+      function processLine(line: string): void {
+        if (!line.startsWith("data: ")) return;
+        const data = line.slice(6);
+        let event: SSEEvent;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          return;
+        }
+
+        if (event.type === "token") {
+          accumulated += event.content;
+          setCurrentToken(accumulated);
+        } else if (event.type === "tool_call") {
+          setMessages((prev) => [...prev, { role: "tool" as const, tool: event.tool, args: event.args }]);
+        } else if (event.type === "tool_result") {
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.role === "tool" && (m as { result?: unknown }).result === undefined);
+            if (idx === -1) return prev;
+            const item = prev[idx];
+            if (item.role !== "tool") return prev;
+            return [...prev.slice(0, idx), { ...item, result: event.result }, ...prev.slice(idx + 1)];
+          });
+        } else if (event.type === "done") {
+          if (event.sessionId) setSessionId(event.sessionId);
+          setMessages((prev) => [...prev, { role: "agent", content: accumulated }]);
+          setCurrentToken("");
+          accumulated = "";
+          setThreadListRefetch((n) => n + 1);
+        } else if (event.type === "error") {
+          setMessages((prev) => [...prev, { role: "system", content: `Error: ${event.message}` }]);
+          setCurrentToken("");
+          accumulated = "";
+        }
+      }
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6);
-          let event: SSEEvent;
-          try { event = JSON.parse(data); } catch { continue; }
-
-          if (event.type === "token") {
-            accumulated += event.content;
-            setCurrentToken(accumulated);
-          } else if (event.type === "tool_call") {
-            setMessages((prev) => [...prev, { role: "tool" as const, tool: event.tool, args: event.args }]);
-          } else if (event.type === "tool_result") {
-            setMessages((prev) => {
-              const idx = prev.findIndex((m) => m.role === "tool" && (m as { result?: unknown }).result === undefined);
-              if (idx === -1) return prev;
-              const item = prev[idx];
-              if (item.role !== "tool") return prev;
-              return [...prev.slice(0, idx), { ...item, result: event.result }, ...prev.slice(idx + 1)];
-            });
-          } else if (event.type === "done") {
-            if (event.sessionId) setSessionId(event.sessionId);
-            setMessages((prev) => [...prev, { role: "agent", content: accumulated }]);
-            setCurrentToken("");
-            accumulated = "";
-          } else if (event.type === "error") {
-            setMessages((prev) => [...prev, { role: "system", content: `Error: ${event.message}` }]);
-            setCurrentToken("");
-            accumulated = "";
-          }
-        }
+        lineBuffer += decoder.decode(value, { stream: true });
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+        for (const line of lines) processLine(line);
       }
+      if (lineBuffer.trim()) processLine(lineBuffer);
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -149,27 +188,77 @@ export default function Home() {
     }
   }, [input, loading, sessionId]);
 
+  const handleSelectSession = useCallback(
+    (id: string) => {
+      if (id === sessionId) return;
+      loadSession(id);
+    },
+    [sessionId, loadSession]
+  );
+
+  const handleNewThread = useCallback(async () => {
+    const res = await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participants: ["user", "maia"], type: "user" }),
+    });
+    if (!res.ok) return;
+    const body = (await res.json()) as { sessionId: string };
+    await loadSession(body.sessionId);
+    setSessionType("user");
+    setThreadListRefetch((n) => n + 1);
+  }, [loadSession]);
+
+  const handleThreadDeleted = useCallback((deletedId: string) => {
+    setThreadListRefetch((n) => n + 1);
+    if (deletedId === sessionId) {
+      setSessionId(null);
+      setMessages([]);
+    }
+  }, [sessionId]);
+
+  const isAgentOnlyThread = sessionType === "agents";
+
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
       <AppHeader subtitle="AI Agent System" />
 
-      <div className="chat-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-        <div className="px-4 py-6 space-y-4 max-w-3xl mx-auto w-full">
-          <ChatMessageList
-            messages={messages}
-            currentToken={currentToken}
-            loading={loading}
-            bottomRef={bottomRef}
-          />
+      <div className="flex flex-1 min-h-0">
+        <ThreadList
+          activeSessionId={sessionId}
+          onSelectSession={handleSelectSession}
+          onNewThread={handleNewThread}
+          refetchTrigger={threadListRefetch}
+          onThreadDeleted={handleThreadDeleted}
+        />
+
+        <div className="flex flex-col flex-1 min-w-0">
+          <div className="chat-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+            <div className="px-4 py-6 space-y-4 max-w-3xl mx-auto w-full">
+              {isAgentOnlyThread && (
+                <div className="rounded-lg bg-zinc-800/80 border border-zinc-700 px-4 py-2 text-sm text-zinc-400">
+                  Agent-to-agent thread (read-only). Switch to a user thread to send messages.
+                </div>
+              )}
+              <ChatMessageList
+                messages={messages}
+                currentToken={currentToken}
+                loading={loading}
+                bottomRef={bottomRef}
+              />
+            </div>
+          </div>
+
+          {!isAgentOnlyThread && (
+            <ChatInputBar
+              value={input}
+              onChange={setInput}
+              onSubmit={sendMessage}
+              disabled={loading}
+            />
+          )}
         </div>
       </div>
-
-      <ChatInputBar
-        value={input}
-        onChange={setInput}
-        onSubmit={sendMessage}
-        disabled={loading}
-      />
     </div>
   );
 }

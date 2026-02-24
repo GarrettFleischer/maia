@@ -10,6 +10,7 @@ import { installFetchMock, restoreFetch, jsonResponse, streamResponse } from "@/
 import {
   sessionActiveEmpty,
   sessionActiveWithMessages,
+  agentsEmpty,
 } from "@/__tests__/helpers/fixtures";
 
 describe("Home page", () => {
@@ -22,6 +23,14 @@ describe("Home page", () => {
       {
         url: "/api/sessions/active",
         handler: () => jsonResponse(sessionActiveEmpty),
+      },
+      {
+        url: "/api/sessions",
+        handler: () => jsonResponse({ sessions: [] }),
+      },
+      {
+        url: "/api/agents",
+        handler: () => jsonResponse(agentsEmpty),
       },
     ]);
     render(<Home />);
@@ -36,6 +45,14 @@ describe("Home page", () => {
       {
         url: "/api/sessions/active",
         handler: () => jsonResponse(sessionActiveWithMessages),
+      },
+      {
+        url: "/api/sessions",
+        handler: () => jsonResponse({ sessions: [] }),
+      },
+      {
+        url: "/api/agents",
+        handler: () => jsonResponse(agentsEmpty),
       },
     ]);
     render(<Home />);
@@ -52,6 +69,14 @@ describe("Home page", () => {
         handler: () => jsonResponse(sessionActiveEmpty),
       },
       {
+        url: "/api/sessions",
+        handler: () => jsonResponse({ sessions: [] }),
+      },
+      {
+        url: "/api/agents",
+        handler: () => jsonResponse(agentsEmpty),
+      },
+      {
         url: "/api/chat",
         handler: () =>
           streamResponse([
@@ -65,7 +90,7 @@ describe("Home page", () => {
     });
     const input = screen.getByPlaceholderText(/Message Maia/i);
     fireEvent.change(input, { target: { value: "Test message" } });
-    const sendButton = screen.getByRole("button");
+    const sendButton = screen.getByRole("button", { name: "Send message" });
     fireEvent.click(sendButton);
     await waitFor(() => {
       expect(screen.getByText("Test message")).toBeInTheDocument();

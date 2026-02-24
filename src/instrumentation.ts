@@ -48,7 +48,8 @@ export async function register() {
       http: makeNativeFetchClient(),
       events: globalEventBus,
       processRunner: makeNodeProcessRunner(),
-      sandboxContainerName: process.env.SANDBOX_CONTAINER_NAME ?? "maia-sandbox",
+      sandboxContainerName:
+        process.env.SANDBOX_CONTAINER_NAME?.trim() || undefined,
     };
 
     initMaiaAgent(_appCtx);
@@ -60,5 +61,18 @@ export async function register() {
       const settings = getSettings(_appCtx!);
       return createEmbeddingAdapter(settings, _appCtx!.http);
     });
+
+    const { startHeartbeatScheduler } = await import("./lib/heartbeat");
+    const { runAgent } = await import("./lib/agent/runner");
+    const { createProvider } = await import("./lib/ai/factory");
+    const runAgentFn = async (
+      c: AppContext,
+      agentId: string,
+      sessionId: string,
+      message: string
+    ): Promise<void> => {
+      await runAgent(c, createProvider, agentId, sessionId, message, () => {});
+    };
+    startHeartbeatScheduler(_appCtx, runAgentFn);
   }
 }

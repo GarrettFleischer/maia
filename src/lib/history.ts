@@ -76,6 +76,24 @@ export function updateSessionMeta(
   ctx.db.prepare(`UPDATE sessions SET ${parts.join(", ")} WHERE id = ?`).run(...vals);
 }
 
+/**
+ * Delete a session and its history. Clears active_session if this session was active.
+ * @param ctx - App context
+ * @param id - Session id to delete
+ * @returns true if a session was deleted, false if id did not exist
+ */
+export function deleteSession(ctx: AppContext, id: string): boolean {
+  const exists = ctx.db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(id);
+  if (!exists) return false;
+
+  ctx.db.prepare("DELETE FROM history_vectors WHERE session_id = ?").run(id);
+  if (getActiveSessionId(ctx) === id) {
+    ctx.db.prepare("UPDATE active_session SET session_id = ? WHERE singleton = 1").run(null);
+  }
+  ctx.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+  return true;
+}
+
 // -- Entry management --
 
 export function appendEntry(
@@ -190,6 +208,7 @@ function rowToMeta(r: Record<string, unknown>): SessionMeta {
     description: r.description as string,
     participants: JSON.parse(r.participants as string),
     tags: JSON.parse(r.tags as string),
+    type: (r.type as string) === "agents" ? "agents" : "user",
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };

@@ -1,0 +1,57 @@
+/**
+ * @fileoverview RTL tests for ChatMessageList (message bubbles, markdown rendering).
+ * @module __tests__/app/components/ChatMessageList.test
+ */
+
+import { describe, it, expect } from "bun:test";
+import { render, screen } from "@testing-library/react";
+import ChatMessageList from "@/app/components/ChatMessageList";
+import type { ChatMessageListItem } from "@/app/components/ChatMessageList";
+
+describe("ChatMessageList", () => {
+  it("renders agent message with markdown bold as strong", () => {
+    const messages: ChatMessageListItem[] = [
+      { role: "agent", content: "Here is **bold text** and more." },
+    ];
+    render(
+      <ChatMessageList messages={messages} currentToken="" loading={false} />
+    );
+    const strong = screen.getByText("bold text");
+    expect(strong.tagName).toBe("STRONG");
+    expect(screen.getByText(/Here is/)).toBeInTheDocument();
+  });
+
+  it("renders agent message with inline code as code element", () => {
+    const messages: ChatMessageListItem[] = [
+      { role: "agent", content: "Run `npm install` to install." },
+    ];
+    render(
+      <ChatMessageList messages={messages} currentToken="" loading={false} />
+    );
+    const code = screen.getByText("npm install");
+    expect(code.tagName).toBe("CODE");
+  });
+
+  it("renders user message as plain text (no markdown)", () => {
+    const messages: ChatMessageListItem[] = [
+      { role: "user", content: "Say **hello** literally." },
+    ];
+    render(
+      <ChatMessageList messages={messages} currentToken="" loading={false} />
+    );
+    // User content is shown as-is; ** should not create a strong element
+    expect(screen.getByText("Say **hello** literally.")).toBeInTheDocument();
+  });
+
+  it("renders streaming token with markdown", () => {
+    render(
+      <ChatMessageList
+        messages={[]}
+        currentToken="Answer: **yes**"
+        loading={false}
+      />
+    );
+    const strong = screen.getByText("yes");
+    expect(strong.tagName).toBe("STRONG");
+  });
+});

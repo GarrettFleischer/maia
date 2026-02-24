@@ -15,6 +15,7 @@ export interface Session {
   description: string;
   participants: string[];
   tags: string[];
+  type: "user" | "agents";
   original: HistoryEntry[];
   compressed: HistoryEntry[];
   createdAt: string;
@@ -27,6 +28,7 @@ export interface SessionMeta {
   description: string;
   participants: string[];
   tags: string[];
+  type: "user" | "agents";
   createdAt: string;
   updatedAt: string;
 }

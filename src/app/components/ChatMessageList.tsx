@@ -2,8 +2,28 @@
  * @fileoverview Presentational message list for the chat UI (welcome state, bubbles, streaming, loading).
  * @module app/components/ChatMessageList
  *
- * @brief Renders welcome state, message bubbles, streaming token bubble, and loading indicator.
+ * @brief Renders welcome state, message bubbles (with markdown for agent/system), streaming token bubble, and loading indicator.
  */
+
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+/** Shared class for markdown message content (agent, system, streaming) so code and lists look consistent. */
+const markdownContentClass =
+  "markdown-chat space-y-2 [&_p]:my-0 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_ul]:my-2 [&_ol]:my-2 [&_pre]:my-2 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:bg-zinc-900/80 [&_pre]:overflow-x-auto [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-zinc-900/80 [&_code]:text-zinc-300 [&_pre_code]:p-0 [&_pre_code]:bg-transparent";
+
+/**
+ * Renders a string as markdown with GFM (tables, strikethrough, etc.).
+ * @param content - Raw markdown text.
+ * @param className - Optional extra class names.
+ */
+function MarkdownContent({ content, className = "" }: { content: string; className?: string }) {
+  return (
+    <div className={`${markdownContentClass} ${className}`.trim()}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
+  );
+}
 
 /** Single tool call plus optional result for display. */
 export interface ToolCallDisplay {
@@ -96,7 +116,11 @@ export default function ChatMessageList({
                     : "bg-red-900/50 text-red-200 border border-red-800 rounded-lg"
                 }`}
               >
-                <div className="whitespace-pre-wrap">{msg.content}</div>
+                {msg.role === "user" ? (
+                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                ) : (
+                  <MarkdownContent content={msg.content} className="text-red-200 [&_code]:bg-red-900/50 [&_pre]:bg-red-900/50" />
+                )}
               </div>
             </div>
           ) : msg.role === "tool" ? (
@@ -108,7 +132,7 @@ export default function ChatMessageList({
               {msg.content ? (
                 <div className="flex justify-start">
                   <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed bg-zinc-800 text-zinc-100">
-                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                    <MarkdownContent content={msg.content} />
                   </div>
                 </div>
               ) : null}
@@ -125,8 +149,8 @@ export default function ChatMessageList({
       {currentToken && (
         <div className="flex justify-start">
           <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-3 bg-zinc-800 text-zinc-100 text-sm leading-relaxed">
-            <div className="whitespace-pre-wrap">{currentToken}</div>
-            <span className="inline-block w-1.5 h-4 bg-violet-400 ml-0.5 animate-pulse" />
+            <MarkdownContent content={currentToken} />
+            <span className="inline-block w-1.5 h-4 bg-violet-400 ml-0.5 animate-pulse" aria-hidden />
           </div>
         </div>
       )}

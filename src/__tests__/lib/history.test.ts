@@ -6,6 +6,7 @@ import {
   getSession,
   appendEntry,
   updateSessionMeta,
+  deleteSession,
   getActiveSessionId,
   setActiveSessionId,
   searchEntries,
@@ -93,6 +94,16 @@ describe("history", () => {
       expect(sessions[0].id).toBe(id2);
       expect(sessions[1].id).toBe(id1);
     });
+
+    it("returns session meta including type", () => {
+      const userId = createSession(ctx, ["user", "maia"], "user");
+      const agentsId = createSession(ctx, ["a", "b"], "agents");
+      const all = listSessions(ctx, "all");
+      const userSession = all.find((s) => s.id === userId);
+      const agentsSession = all.find((s) => s.id === agentsId);
+      expect(userSession?.type).toBe("user");
+      expect(agentsSession?.type).toBe("agents");
+    });
   });
 
   // ─── getSession ─────────────────────────────────────────────────────────────
@@ -107,6 +118,13 @@ describe("history", () => {
       const session = getSession(ctx, id);
       expect(session?.original).toEqual([]);
       expect(session?.compressed).toEqual([]);
+    });
+
+    it("returns session including type", () => {
+      const userId = createSession(ctx, ["user", "maia"], "user");
+      const agentsId = createSession(ctx, ["a", "b"], "agents");
+      expect(getSession(ctx, userId)?.type).toBe("user");
+      expect(getSession(ctx, agentsId)?.type).toBe("agents");
     });
 
     it("includes original entries in the original array", () => {
@@ -189,6 +207,42 @@ describe("history", () => {
       const session = getSession(ctx, id);
       expect(session?.name).toBe("Named");
       expect(session?.description).toBe("Described");
+    });
+  });
+
+  // ─── deleteSession ──────────────────────────────────────────────────────────
+
+  describe("deleteSession", () => {
+    it("removes session from list and getSession returns null", () => {
+      const id = createSession(ctx);
+      expect(listSessions(ctx, "all").some((s) => s.id === id)).toBe(true);
+      const deleted = deleteSession(ctx, id);
+      expect(deleted).toBe(true);
+      expect(listSessions(ctx, "all").some((s) => s.id === id)).toBe(false);
+      expect(getSession(ctx, id)).toBeNull();
+    });
+
+    it("clears active_session when deleted session was active", () => {
+      const id = createSession(ctx);
+      setActiveSessionId(ctx, id);
+      expect(getActiveSessionId(ctx)).toBe(id);
+      deleteSession(ctx, id);
+      expect(getActiveSessionId(ctx)).toBeNull();
+    });
+
+    it("leaves other sessions and active session unchanged when deleting non-active", () => {
+      const id1 = createSession(ctx);
+      const id2 = createSession(ctx);
+      setActiveSessionId(ctx, id2);
+      deleteSession(ctx, id1);
+      expect(getSession(ctx, id1)).toBeNull();
+      expect(getSession(ctx, id2)).not.toBeNull();
+      expect(getActiveSessionId(ctx)).toBe(id2);
+    });
+
+    it("returns false for non-existent session id", () => {
+      const deleted = deleteSession(ctx, "no-such-id");
+      expect(deleted).toBe(false);
     });
   });
 
