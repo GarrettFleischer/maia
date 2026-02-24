@@ -64,10 +64,48 @@ describe("webSearchTool", () => {
     }
   });
 
+  it("uses POST with form body and browser-like headers", async () => {
+    const html = makeDDGHtml([
+      { url: "https://example.com", title: "Example", snippet: "Snippet." },
+    ]);
+    let capturedInit: RequestInit | undefined;
+    http.on("html.duckduckgo.com/html", async (_url, init) => {
+      capturedInit = init;
+      return new FakeResponse(200, html);
+    });
+    const ctx = makeToolCtx(http);
+    await webSearchTool.execute({ query: "test query" }, ctx);
+    expect(capturedInit?.method).toBe("POST");
+    expect(capturedInit?.headers).toBeDefined();
+    const headers = capturedInit?.headers as HeadersInit;
+    const headerObj = headers instanceof Headers ? Object.fromEntries((headers as Headers).entries()) : (headers as Record<string, string>);
+    expect(headerObj["Referer"]).toBe("https://html.duckduckgo.com/");
+    expect(headerObj["Content-Type"]).toBe("application/x-www-form-urlencoded");
+    expect(headerObj["Accept-Language"]).toMatch(/^en/);
+    const body = typeof capturedInit?.body === "string" ? capturedInit.body : "";
+    expect(body).toContain("q=test+query");
+    expect(body).toMatch(/b=/);
+    expect(body).toMatch(/kl=/);
+  });
+
   it("throws when HTTP request fails", async () => {
     // FakeHttp with no handler throws
     const ctx = makeToolCtx(http);
     await expect(webSearchTool.execute({ query: "anything" }, ctx)).rejects.toThrow();
+  });
+
+  it("throws when response is not ok", async () => {
+    http.on("duckduckgo.com", async () => new FakeResponse(403, "Forbidden"));
+    const ctx = makeToolCtx(http);
+    await expect(webSearchTool.execute({ query: "test" }, ctx)).rejects.toThrow();
+  });
+
+  it("returns empty array when DDG returns CAPTCHA challenge page", async () => {
+    const captchaHtml = '<form id="challenge-form">Challenge</form>';
+    http.on("duckduckgo.com", async () => new FakeResponse(200, captchaHtml));
+    const ctx = makeToolCtx(http);
+    const results = await webSearchTool.execute({ query: "test" }, ctx) as SearchResult[];
+    expect(results).toEqual([]);
   });
 
   it("includes fetchedAt timestamp on results", async () => {
