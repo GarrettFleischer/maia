@@ -30,6 +30,9 @@ export default function AppHeader({ subtitle }: AppHeaderProps) {
         <a href="/agents" className="hover:text-zinc-100 transition-colors">
           Agents
         </a>
+        <a href="/tasks" className="hover:text-zinc-100 transition-colors">
+          Tasks
+        </a>
         <a href="/settings" className="hover:text-zinc-100 transition-colors">
           Settings
         </a>
