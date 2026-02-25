@@ -6,10 +6,11 @@ import type { AppContext } from "./context";
 import { listAgents } from "./agent/identity";
 import { getSettings } from "./settings";
 import { createSession } from "./history";
+import { runDataBackup } from "./data-backup";
 
 const HEARTBEAT_BASE = `[HEARTBEAT] Timestamp: {{TIMESTAMP}}
 
-Review your GOALS.md. Identify any tasks you can make progress on right now.
+Review the task board and your assigned tasks. Identify any tasks you can make progress on right now.
 Check your MEMORY.md for relevant context.
 If you need to collaborate with another agent, use the messaging tool.
 Update your identity files with any new information.
@@ -98,6 +99,12 @@ export async function fireHeartbeat(
     runAgentFn(ctx, agent.id, sessionId, message).catch((err) => {
       console.error(`Heartbeat failed for agent ${agent.id}:`, err);
     });
+  }
+
+  try {
+    await runDataBackup(ctx);
+  } catch (err) {
+    console.error("Data backup failed during heartbeat:", err);
   }
 }
 

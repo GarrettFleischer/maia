@@ -74,5 +74,8 @@ export async function register() {
       await runAgent(c, createProvider, agentId, sessionId, message, () => {});
     };
     startHeartbeatScheduler(_appCtx, runAgentFn);
+
+    const { startCronScheduler } = await import("./lib/cron/service");
+    startCronScheduler(_appCtx, runAgentFn);
   }
 }
