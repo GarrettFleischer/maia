@@ -16,12 +16,16 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [openRouterKey, setOpenRouterKey] = useState("");
+  const [braveApiKey, setBraveApiKey] = useState("");
+  const [braveAnswersApiKey, setBraveAnswersApiKey] = useState("");
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaApiKey, setOllamaApiKey] = useState("");
   const [vllmBaseUrl, setVllmBaseUrl] = useState("");
   const [dockerBaseUrl, setDockerBaseUrl] = useState("");
   const [compressionModel, setCompressionModel] = useState("");
   const [heartbeatInterval, setHeartbeatInterval] = useState(30);
+  const [recentFullCount, setRecentFullCount] = useState(10);
+  const [compressionBatchSize, setCompressionBatchSize] = useState(5);
   const [embeddingModel, setEmbeddingModel] = useState("");
   const [whitelistedModels, setWhitelistedModels] = useState<string[]>([]);
   const [newModelInput, setNewModelInput] = useState("");
@@ -40,6 +44,8 @@ export default function SettingsPage() {
       setDockerBaseUrl(settingsData.dockerBaseUrl);
       setCompressionModel(settingsData.compressionModel);
       setHeartbeatInterval(settingsData.heartbeatIntervalMinutes);
+      setRecentFullCount(settingsData.recentFullCount);
+      setCompressionBatchSize(settingsData.compressionBatchSize);
       setEmbeddingModel(settingsData.embeddingModel);
       setWhitelistedModels(settingsData.whitelistedModels);
       setAgents(agentsList);
@@ -54,22 +60,30 @@ export default function SettingsPage() {
       dockerBaseUrl,
       compressionModel,
       heartbeatIntervalMinutes: heartbeatInterval,
+      recentFullCount,
+      compressionBatchSize,
       embeddingModel,
       whitelistedModels,
     };
     if (ollamaApiKey) body.ollamaApiKey = ollamaApiKey;
     if (openRouterKey) body.openRouterApiKey = openRouterKey;
+    if (braveApiKey) body.braveSearchApiKey = braveApiKey;
+    if (braveAnswersApiKey) body.braveAnswersApiKey = braveAnswersApiKey;
 
-    await fetch("/api/settings", {
+    const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    const updated = (await res.json()) as SettingsPublic;
+    setSettings(updated);
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     if (ollamaApiKey) setOllamaApiKey("");
     if (openRouterKey) setOpenRouterKey("");
+    if (braveApiKey) setBraveApiKey("");
+    if (braveAnswersApiKey) setBraveAnswersApiKey("");
   };
 
   const addWhitelistModel = () => {
@@ -207,6 +221,34 @@ export default function SettingsPage() {
                   className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
                 />
               </div>
+
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1">
+                  Brave Search API Key {settings.hasBraveKey && <span className="text-green-400">(configured)</span>}
+                </label>
+                <input
+                  type="password"
+                  value={braveApiKey}
+                  onChange={(e) => setBraveApiKey(e.target.value)}
+                  placeholder={settings.hasBraveKey ? "Enter new key to update" : "Web search (stored encrypted)"}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Brave Search API Key"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1">
+                  Brave Answers API Key {settings.hasBraveAnswersKey && <span className="text-green-400">(configured)</span>}
+                </label>
+                <input
+                  type="password"
+                  value={braveAnswersApiKey}
+                  onChange={(e) => setBraveAnswersApiKey(e.target.value)}
+                  placeholder={settings.hasBraveAnswersKey ? "Enter new key to update" : "Brave Answers / chat (separate billing, stored encrypted)"}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Brave Answers API Key"
+                />
+              </div>
             </section>
 
             <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
@@ -229,6 +271,36 @@ export default function SettingsPage() {
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label htmlFor="settings-recent-full-count" className="block text-xs text-zinc-500 mb-1">Recent full messages (context)</label>
+                <input
+                  id="settings-recent-full-count"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={recentFullCount}
+                  onChange={(e) => setRecentFullCount(Number(e.target.value))}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Number of most recent messages to keep as full text in context"
+                />
+                <p className="text-xs text-zinc-500 mt-0.5">Messages older than this use compressed history.</p>
+              </div>
+
+              <div>
+                <label htmlFor="settings-compression-batch-size" className="block text-xs text-zinc-500 mb-1">Compression batch size</label>
+                <input
+                  id="settings-compression-batch-size"
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={compressionBatchSize}
+                  onChange={(e) => setCompressionBatchSize(Number(e.target.value))}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Number of entries to compress per batch"
+                />
+                <p className="text-xs text-zinc-500 mt-0.5">How many older messages to compress each run.</p>
               </div>
 
               <div>

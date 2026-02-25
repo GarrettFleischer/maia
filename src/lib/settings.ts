@@ -1,5 +1,12 @@
+import { credentialCreate, credentialList } from "./security/credential-vault";
 import type { AppContext } from "./context";
 import type { Settings, SettingsPublic } from "./types";
+
+/** Vault key used for Brave Search API key (encrypted). */
+export const BRAVE_SEARCH_CREDENTIAL_KEY = "BRAVE_SEARCH_API_KEY";
+
+/** Vault key used for Brave Answers API key (encrypted; separate product/billing). */
+export const BRAVE_ANSWERS_CREDENTIAL_KEY = "BRAVE_ANSWERS_API_KEY";
 
 export function getSettings(ctx: AppContext): Settings {
   const rows = ctx.db.prepare("SELECT key, value FROM settings").all() as {
@@ -22,11 +29,16 @@ export function getSettings(ctx: AppContext): Settings {
     vllmBaseUrl: map.vllmBaseUrl ?? "http://localhost:8000/v1",
     dockerBaseUrl: map.dockerBaseUrl ?? "http://localhost:8000/v1",
     embeddingModel: map.embeddingModel ?? "nomic-embed-text",
+    recentFullCount: Math.max(1, parseInt(map.recentFullCount ?? "10", 10) || 10),
+    compressionBatchSize: Math.max(1, parseInt(map.compressionBatchSize ?? "5", 10) || 5),
   };
 }
 
 export function getSettingsPublic(ctx: AppContext): SettingsPublic {
   const s = getSettings(ctx);
+  const creds = credentialList(ctx);
+  const hasBraveKey = creds.includes(BRAVE_SEARCH_CREDENTIAL_KEY);
+  const hasBraveAnswersKey = creds.includes(BRAVE_ANSWERS_CREDENTIAL_KEY);
   return {
     whitelistedModels: s.whitelistedModels,
     compressionModel: s.compressionModel,
@@ -34,15 +46,26 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
     ollamaBaseUrl: s.ollamaBaseUrl,
     hasOllamaKey: !!s.ollamaApiKey,
     hasOpenRouterKey: !!s.openRouterApiKey,
+    hasBraveKey,
+    hasBraveAnswersKey,
     vllmBaseUrl: s.vllmBaseUrl,
     dockerBaseUrl: s.dockerBaseUrl,
     embeddingModel: s.embeddingModel,
+    recentFullCount: s.recentFullCount,
+    compressionBatchSize: s.compressionBatchSize,
   };
 }
 
 export function updateSettings(
   ctx: AppContext,
-  partial: Partial<SettingsPublic & { openRouterApiKey?: string; ollamaApiKey?: string }>
+  partial: Partial<
+    SettingsPublic & {
+      openRouterApiKey?: string;
+      ollamaApiKey?: string;
+      braveSearchApiKey?: string;
+      braveAnswersApiKey?: string;
+    }
+  >
 ): void {
   const update = ctx.db.prepare(
     "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)"
@@ -74,5 +97,17 @@ export function updateSettings(
   }
   if (partial.embeddingModel !== undefined) {
     update.run("embeddingModel", partial.embeddingModel);
+  }
+  if (partial.recentFullCount !== undefined) {
+    update.run("recentFullCount", String(partial.recentFullCount));
+  }
+  if (partial.compressionBatchSize !== undefined) {
+    update.run("compressionBatchSize", String(partial.compressionBatchSize));
+  }
+  if (partial.braveSearchApiKey !== undefined) {
+    credentialCreate(ctx, BRAVE_SEARCH_CREDENTIAL_KEY, partial.braveSearchApiKey);
+  }
+  if (partial.braveAnswersApiKey !== undefined) {
+    credentialCreate(ctx, BRAVE_ANSWERS_CREDENTIAL_KEY, partial.braveAnswersApiKey);
   }
 }

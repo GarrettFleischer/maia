@@ -146,6 +146,8 @@ export function initSchema(db: DbAdapter): void {
     vllmBaseUrl: "http://localhost:8000/v1",
     dockerBaseUrl: "http://localhost:8000/v1",
     embeddingModel: "nomic-embed-text",
+    recentFullCount: "10",
+    compressionBatchSize: "5",
   };
 
   const insert = db.prepare(

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { makeTestContext } from "../helpers/fakes";
 import { getSettings, getSettingsPublic, updateSettings } from "@/lib/settings";
+import { credentialGet } from "@/lib/security/credential-vault";
 import type { AppContext } from "@/lib/context";
 
 describe("settings", () => {
@@ -14,6 +15,8 @@ describe("settings", () => {
     it("returns seeded default values", () => {
       const s = getSettings(ctx);
       expect(s.compressionModel).toBe("ollama/llama3.2");
+      expect(s.recentFullCount).toBe(10);
+      expect(s.compressionBatchSize).toBe(5);
       expect(s.heartbeatIntervalMinutes).toBe(30);
       expect(s.ollamaBaseUrl).toBe("http://localhost:11434");
       expect(s.vllmBaseUrl).toBe("http://localhost:8000/v1");
@@ -37,10 +40,12 @@ describe("settings", () => {
   });
 
   describe("getSettingsPublic", () => {
-    it("does not expose the raw openRouterApiKey or ollamaApiKey", () => {
+    it("does not expose the raw openRouterApiKey, ollamaApiKey, braveSearchApiKey, or braveAnswersApiKey", () => {
       const pub = getSettingsPublic(ctx);
       expect("openRouterApiKey" in pub).toBe(false);
       expect("ollamaApiKey" in pub).toBe(false);
+      expect("braveSearchApiKey" in pub).toBe(false);
+      expect("braveAnswersApiKey" in pub).toBe(false);
     });
 
     it("exposes hasOllamaKey = false when no key is set", () => {
@@ -63,6 +68,30 @@ describe("settings", () => {
       updateSettings(ctx, { openRouterApiKey: "sk-test-key" });
       const pub = getSettingsPublic(ctx);
       expect(pub.hasOpenRouterKey).toBe(true);
+    });
+
+    it("exposes hasBraveKey = false when no Brave credential in vault", () => {
+      const pub = getSettingsPublic(ctx);
+      expect(pub.hasBraveKey).toBe(false);
+    });
+
+    it("exposes hasBraveKey = true after setting braveSearchApiKey (stored in vault)", () => {
+      updateSettings(ctx, { braveSearchApiKey: "brave-secret-key" });
+      const pub = getSettingsPublic(ctx);
+      expect(pub.hasBraveKey).toBe(true);
+      expect(credentialGet(ctx, "BRAVE_SEARCH_API_KEY")).toBe("brave-secret-key");
+    });
+
+    it("exposes hasBraveAnswersKey = false when no Brave Answers credential in vault", () => {
+      const pub = getSettingsPublic(ctx);
+      expect(pub.hasBraveAnswersKey).toBe(false);
+    });
+
+    it("exposes hasBraveAnswersKey = true after setting braveAnswersApiKey (stored in vault)", () => {
+      updateSettings(ctx, { braveAnswersApiKey: "brave-answers-secret" });
+      const pub = getSettingsPublic(ctx);
+      expect(pub.hasBraveAnswersKey).toBe(true);
+      expect(credentialGet(ctx, "BRAVE_ANSWERS_API_KEY")).toBe("brave-answers-secret");
     });
 
     it("includes vllmBaseUrl in public settings", () => {
@@ -113,6 +142,18 @@ describe("settings", () => {
       expect(getSettings(ctx).openRouterApiKey).toBe("sk-secret");
     });
 
+    it("stores braveSearchApiKey in encrypted vault and hasBraveKey is true", () => {
+      updateSettings(ctx, { braveSearchApiKey: "brave-vault-key" });
+      expect(credentialGet(ctx, "BRAVE_SEARCH_API_KEY")).toBe("brave-vault-key");
+      expect(getSettingsPublic(ctx).hasBraveKey).toBe(true);
+    });
+
+    it("stores braveAnswersApiKey in encrypted vault and hasBraveAnswersKey is true", () => {
+      updateSettings(ctx, { braveAnswersApiKey: "brave-answers-vault-key" });
+      expect(credentialGet(ctx, "BRAVE_ANSWERS_API_KEY")).toBe("brave-answers-vault-key");
+      expect(getSettingsPublic(ctx).hasBraveAnswersKey).toBe(true);
+    });
+
     it("updates embeddingModel", () => {
       updateSettings(ctx, { embeddingModel: "nomic-embed-text-v2" });
       expect(getSettings(ctx).embeddingModel).toBe("nomic-embed-text-v2");
@@ -126,6 +167,18 @@ describe("settings", () => {
     it("updates dockerBaseUrl", () => {
       updateSettings(ctx, { dockerBaseUrl: "http://docker-host:8000/v1" });
       expect(getSettings(ctx).dockerBaseUrl).toBe("http://docker-host:8000/v1");
+    });
+
+    it("updates recentFullCount and persists", () => {
+      updateSettings(ctx, { recentFullCount: 20 });
+      expect(getSettings(ctx).recentFullCount).toBe(20);
+      expect(getSettingsPublic(ctx).recentFullCount).toBe(20);
+    });
+
+    it("updates compressionBatchSize and persists", () => {
+      updateSettings(ctx, { compressionBatchSize: 8 });
+      expect(getSettings(ctx).compressionBatchSize).toBe(8);
+      expect(getSettingsPublic(ctx).compressionBatchSize).toBe(8);
     });
   });
 });
