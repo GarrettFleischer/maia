@@ -11,6 +11,7 @@ import { credentialTools } from "./credentials";
 import { agentManagementTools, agentIdentityTools } from "./agent-management";
 import { cronTools } from "./cron-tool";
 import { taskTrackerTools } from "./task-tracker";
+import { yahooMailTools } from "./yahoo-mail";
 import type { Tool, ToolRegistration } from "./types";
 
 export const TOOL_REGISTRY: ToolRegistration[] = [
@@ -27,6 +28,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
   ...knowledgeTools.map((tool) => ({ tool, maiaOnly: false })),
   ...credentialTools.map((tool) => ({ tool, maiaOnly: false })),
   ...taskTrackerTools.map((tool) => ({ tool, maiaOnly: false })),
+  ...yahooMailTools.map((tool) => ({ tool, maiaOnly: false })),
   ...agentManagementTools.map((tool) => ({ tool, maiaOnly: true })),
   ...agentIdentityTools.map((tool) => ({ tool, maiaOnly: false })),
   ...cronTools.map((tool) => ({ tool, maiaOnly: true })),
