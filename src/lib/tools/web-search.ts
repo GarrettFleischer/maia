@@ -1,14 +1,13 @@
 /**
- * @fileoverview Web search tool using DuckDuckGo HTML (no-JS) endpoint.
+ * @fileoverview Web search tool using Brave Search API only.
  * @module lib/tools/web-search
  */
 import { z } from "zod";
 import { zodToJsonSchema } from "../zod-to-json";
 import { filterText } from "../security/injection-filter";
+import { getBraveSearchApiKey, BRAVE_WEB_SEARCH_URL } from "./brave-api";
 import type { Tool, ToolContext } from "./types";
 import type { SearchResult } from "../types";
-
-const DDG_HTML_URL = "https://html.duckduckgo.com/html/";
 
 const schema = z.object({
   query: z.string().describe("Search query"),
@@ -16,94 +15,74 @@ const schema = z.object({
 });
 
 /**
- * @brief Build application/x-www-form-urlencoded body for DDG HTML search.
- * @param query - Search query (will be encoded).
- * @returns Encoded form body string.
+ * @brief Brave Search API response web result item.
  */
-function buildDuckDuckGoFormBody(query: string): string {
-  const params = new URLSearchParams();
-  params.set("q", query);
-  params.set("b", "");
-  params.set("kl", "wt-wt");
-  return params.toString();
+interface BraveWebResult {
+  title?: string;
+  url?: string;
+  description?: string;
+  age?: string;
 }
 
 /**
- * @brief Fetch DuckDuckGo HTML search and parse results.
- * Uses POST with form data and browser-like headers to satisfy DDG's endpoint.
+ * @brief Call Brave Search API and map response to SearchResult[].
  * @param query - Search query.
  * @param max - Maximum number of results to return.
  * @param ctx - Tool context providing HTTP client.
  * @returns Array of search results (title, url, snippet, fetchedAt).
- * @throws Error if the HTTP response is not ok or request fails.
+ * @throws Error if BRAVE_SEARCH_API_KEY is unset or HTTP request fails.
+ * @note Brave Search API uses X-Subscription-Token header.
  */
-async function searchDuckDuckGo(query: string, max: number, ctx: ToolContext): Promise<SearchResult[]> {
-  const body = buildDuckDuckGoFormBody(query);
-  const resp = await ctx.http.fetch(DDG_HTML_URL, {
-    method: "POST",
+async function searchBrave(query: string, max: number, ctx: ToolContext): Promise<SearchResult[]> {
+  const key = getBraveSearchApiKey();
+  if (!key) {
+    throw new Error(
+      "Web search requires BRAVE_SEARCH_API_KEY. Set it in your environment (e.g. .env.local). Get a key at https://api.search.brave.com/.",
+    );
+  }
+
+  const url = `${BRAVE_WEB_SEARCH_URL}?${new URLSearchParams({ q: query }).toString()}`;
+  const resp = await ctx.http.fetch(url, {
+    method: "GET",
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Referer": "https://html.duckduckgo.com/",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+      "X-Subscription-Token": key,
     },
-    body,
   });
 
   if (!resp.ok) {
-    throw new Error(`Web search failed: ${resp.status} ${resp.status === 403 ? "(blocked or forbidden)" : ""}`);
+    throw new Error(`Web search failed: ${resp.status} ${resp.status === 401 ? "(invalid API key)" : ""}`);
   }
 
-  const html = await resp.text();
-
-  // DDG may return a CAPTCHA/challenge page when bot detection triggers
-  if (/id=["']challenge-form["']/i.test(html)) {
-    return [];
-  }
-
-  // Extract results from DDG HTML (result__a / result__snippet structure)
+  const data = (await resp.json()) as { web?: { results?: BraveWebResult[] } };
+  const raw = data?.web?.results ?? [];
   const results: SearchResult[] = [];
-  const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi;
-  const snippetRegex = /<a[^>]*class="result__snippet"[^>]*>(.*?)<\/a>/gi;
+  const slice = raw.slice(0, max);
 
-  let match: RegExpExecArray | null;
-  const urls: string[] = [];
-  const titles: string[] = [];
-  const snippets: string[] = [];
-
-  while ((match = resultRegex.exec(html)) !== null && urls.length < max) {
-    urls.push(match[1]);
-    titles.push(match[2].replace(/<[^>]+>/g, ""));
-  }
-
-  while ((match = snippetRegex.exec(html)) !== null && snippets.length < max) {
-    snippets.push(match[1].replace(/<[^>]+>/g, ""));
-  }
-
-  for (let i = 0; i < Math.min(urls.length, max); i++) {
-    const rawSnippet = snippets[i] ?? "";
-    const filtered = filterText(rawSnippet, `web_search:${urls[i]}`);
+  for (const r of slice) {
+    const snippet = r.description ?? "";
+    const filtered = filterText(snippet, `web_search:${r.url ?? ""}`);
     results.push({
-      title: titles[i] ?? "",
-      url: urls[i],
+      title: r.title ?? "",
+      url: r.url ?? "",
       snippet: filtered.text,
       fetchedAt: new Date().toISOString(),
       injectionWarning: filtered.redacted ? "Content was filtered for potential injection" : undefined,
     });
   }
-
   return results;
 }
 
 export const webSearchTool: Tool<z.infer<typeof schema>, SearchResult[]> = {
   name: "web_search",
-  description: "Search the web and return filtered results.",
+  description:
+    "Search the web using Brave Search API. Returns a list of results (title, url, snippet). Requires BRAVE_SEARCH_API_KEY to be set.",
   schema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(schema) };
   },
   async execute({ query, maxResults }, ctx) {
     const max = maxResults ?? 5;
-    return searchDuckDuckGo(query, max, ctx);
+    return searchBrave(query, max, ctx);
   },
 };

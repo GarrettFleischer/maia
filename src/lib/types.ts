@@ -149,4 +149,5 @@ export type SystemSSEEvent =
   | { event: "session_updated"; data: { sessionId: string; name: string; description: string; tags: string[] } }
   | { event: "agent_status"; data: { agentId: string; status: "idle" | "running" | "paused" } }
   | { event: "heartbeat"; data: { timestamp: string } }
-  | { event: "ping"; data: { timestamp: string } };
+  | { event: "ping"; data: { timestamp: string } }
+  | { event: "web_search_empty"; data: { reason: "captcha" | "no_results_parsed"; query: string } };
