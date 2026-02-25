@@ -100,7 +100,7 @@ Paths are resolved against the volume root. In addition, paths starting with `kn
 - `cwd` defaults to `/workspace` if not provided.
 - stdout and stderr are capped at 50KB each to prevent context flooding.
 
-### `web_search` — Web Content
+### `web_search` — Brave Web Search
 
 | Function | Args | Returns |
 |----------|------|---------|
@@ -115,9 +115,18 @@ interface SearchResult {
 }
 ```
 
-Results pass through `InjectionFilter` before returning. If redaction occurred, the result includes a warning field.
+- **Brave only**: Uses Brave Search API. Requires `BRAVE_SEARCH_API_KEY` (no fallback).
+- Results pass through `InjectionFilter`. If redaction occurred, the result includes a warning field.
 
-Provider: Configurable (e.g., SearXNG self-hosted, Brave Search API, DuckDuckGo scraping). **Unchanged** when using the browser tool suite below.
+### `brave_answers` — Brave Answers (AI-Grounded Answers)
+
+| Function | Args | Returns |
+|----------|------|---------|
+| `brave_answers` | `question: string, enableResearch?: boolean` | `{ answer: string, fetchedAt: string }` |
+
+- AI-generated answers backed by real-time web search (Brave Answers API, OpenAI-compatible chat/completions).
+- Same API key as `web_search`. Use for questions that need current, cited information.
+- `enableResearch: true` enables multi-search research mode (thorough but slower and higher cost).
 
 ### `fetch_web_page` — Page Content via Real Browser
 
@@ -142,7 +151,7 @@ interface WebPageContent {
 
 ### Browser automation suite — Session-scoped Brave
 
-One browser **page per session** (keyed by `sessionId`). Use for multi-step agent-mode tasks (navigate, snapshot, click, type, fill forms). **`web_search` is unchanged** and remains the tool for “search and return links.”
+One browser **page per session** (keyed by `sessionId`). Use for multi-step agent-mode tasks (navigate, snapshot, click, type, fill forms). **`web_search`** returns links; **`brave_answers`** returns AI-generated answers grounded in web search.
 
 | Function | Args | Returns |
 |----------|------|---------|
@@ -258,6 +267,7 @@ When an AI response contains tool calls:
 
 ### Environment (optional)
 
+- **`BRAVE_SEARCH_API_KEY`** — **Required** for `web_search` and `brave_answers`. No fallback. Get a key at [Brave Search API](https://api.search.brave.com/).
 - **`BRAVE_EXECUTABLE_PATH`** — Path to Brave browser for Playwright. When set, `fetch_web_page` and the browser automation suite use Brave; otherwise Chromium. OS defaults: Windows `C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe`, macOS `/Applications/Brave Browser.app/Contents/MacOS/Brave Browser`, Linux `/usr/bin/brave-browser` (or first existing of `brave`, `brave-browser-stable`).
 - **`BROWSER_TOOLS_ENABLED`** — Browser automation suite is **off by default**. Set to `1` to register and enable `browser_navigate`, `browser_snapshot`, `browser_click`, etc., until Brave (or Chromium) is available.
 

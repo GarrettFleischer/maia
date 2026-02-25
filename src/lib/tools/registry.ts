@@ -1,6 +1,7 @@
 import { fileCrudTools } from "./file-crud";
 import { terminalTool } from "./terminal";
 import { webSearchTool } from "./web-search";
+import { braveAnswersTool } from "./brave-answers";
 import { fetchWebPageTool } from "./fetch-web-page";
 import { browserTools } from "./browser-tools";
 import { messagingTools } from "./messaging";
@@ -15,6 +16,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
   ...fileCrudTools.map((tool) => ({ tool, maiaOnly: false })),
   { tool: terminalTool, maiaOnly: false },
   { tool: webSearchTool, maiaOnly: false },
+  { tool: braveAnswersTool, maiaOnly: false },
   { tool: fetchWebPageTool, maiaOnly: false },
   ...(process.env.BROWSER_TOOLS_ENABLED === "1"
     ? browserTools.map((tool) => ({ tool, maiaOnly: false }))

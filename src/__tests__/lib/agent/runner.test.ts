@@ -205,6 +205,10 @@ describe("runAgent", () => {
     expect(systemContent).toContain("## Memory");
     expect(systemContent).toContain("## Goals");
     expect(systemContent).toContain("## User");
+    // Tool usage guidance: prefer brave_answers, use web_search when needing links.
+    expect(systemContent).toContain("Using web tools");
+    expect(systemContent).toContain("brave_answers");
+    expect(systemContent).toContain("web_search");
   });
 
   it("emits tool_result with error when registered tool receives invalid args (parse throws)", async () => {

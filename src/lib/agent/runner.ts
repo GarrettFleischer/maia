@@ -334,6 +334,12 @@ Use your Memory, Goals, and User sections above constantly: read them at the sta
 - **USER**: When you learn about the user (role, preferences, constraints), update USER.md.
 Update these files as often as relevant—do not wait for the user to ask. This keeps your context accurate across sessions.`;
 
+const TOOL_USAGE_GUIDANCE = `\
+## Using web tools
+- For questions that can be answered from the web, prefer **brave_answers** to get an AI-generated answer grounded in current web search.
+- Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools.
+- Avoid calling both tools for the same simple factual question unless you need to verify sources or inspect pages directly.`;
+
 function buildSystemPrompt(agent: {
   soul: string;
   memory: string;
@@ -345,6 +351,8 @@ function buildSystemPrompt(agent: {
     SECURITY_PREAMBLE,
     "",
     IDENTITY_USAGE_GUIDANCE,
+    "",
+    TOOL_USAGE_GUIDANCE,
     "",
     "## Identity",
     agent.soul,
