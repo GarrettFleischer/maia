@@ -50,7 +50,9 @@ export default function Home() {
   const [threadListRefetch, setThreadListRefetch] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const loadingRef = useRef(false);
   sessionIdRef.current = sessionId;
+  loadingRef.current = loading;
 
   /** Load a session by id into messages and set as active. */
   const loadSession = useCallback(async (id: string) => {
@@ -96,7 +98,14 @@ export default function Home() {
         const payload = JSON.parse(e.data) as { sessionId: string; entry: HistoryEntry; participants: string[] };
         const current = sessionIdRef.current;
         if (payload.sessionId && payload.entry && current && payload.sessionId === current) {
-          setMessages((prev) => [...prev, entryToItem(payload.entry)]);
+          const item = entryToItem(payload.entry);
+          const contentLen = "content" in item ? (item.content?.length ?? 0) : 0;
+          if (payload.entry.role === "agent") {
+            setCurrentToken("");
+            if (loadingRef.current) return;
+            if (contentLen === 0) return;
+          }
+          setMessages((prev) => [...prev, item]);
         }
       } catch {
         // ignore non-message or malformed
@@ -132,6 +141,8 @@ export default function Home() {
       const decoder = new TextDecoder();
       let accumulated = "";
       let lineBuffer = "";
+      /** Only append agent message on first "done"; avoids second "done" appending with empty accumulated. */
+      let doneAppended = false;
 
       function processLine(line: string): void {
         if (!line.startsWith("data: ")) return;
@@ -158,8 +169,12 @@ export default function Home() {
           });
         } else if (event.type === "done") {
           if (event.sessionId) setSessionId(event.sessionId);
-          setMessages((prev) => [...prev, { role: "agent", content: accumulated }]);
-          setCurrentToken("");
+          const contentToAdd = accumulated;
+          if (!doneAppended && contentToAdd.length > 0) {
+            setMessages((prev) => [...prev, { role: "agent", content: contentToAdd }]);
+            doneAppended = true;
+            setCurrentToken("");
+          }
           accumulated = "";
           setThreadListRefetch((n) => n + 1);
         } else if (event.type === "error") {
