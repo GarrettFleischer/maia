@@ -46,8 +46,9 @@ export interface AgentDefinition {
 export interface AgentWithIdentity extends AgentDefinition {
   soul: string;
   memory: string;
-  goals: string;
   user: string;
+  /** Content of AGENTS.md from the agent's directory (data/agents/<id>/AGENTS.md). */
+  agentsMd: string;
 }
 
 export interface AgentCreateConfig {
@@ -55,7 +56,6 @@ export interface AgentCreateConfig {
   model: string;
   soul?: string;
   memory?: string;
-  goals?: string;
   user?: string;
   systemPromptExtra?: string;
 }
@@ -110,6 +110,10 @@ export interface Settings {
   dockerBaseUrl: string;
   /** Embedding model for knowledge base and history semantic search (e.g. nomic-embed-text). */
   embeddingModel: string;
+  /** Number of most recent history entries to keep as full (uncompressed) in context. Default 10. */
+  recentFullCount: number;
+  /** Number of entries to compress per batch when running compression. Default 5. */
+  compressionBatchSize: number;
 }
 
 export interface SettingsPublic {
@@ -119,9 +123,13 @@ export interface SettingsPublic {
   ollamaBaseUrl: string;
   hasOllamaKey: boolean;
   hasOpenRouterKey: boolean;
+  hasBraveKey: boolean;
+  hasBraveAnswersKey: boolean;
   vllmBaseUrl: string;
   dockerBaseUrl: string;
   embeddingModel: string;
+  recentFullCount: number;
+  compressionBatchSize: number;
 }
 
 export interface EncryptedValue {
@@ -168,4 +176,6 @@ export type SystemSSEEvent =
   | { event: "agent_status"; data: { agentId: string; status: "idle" | "running" | "paused" } }
   | { event: "heartbeat"; data: { timestamp: string } }
   | { event: "ping"; data: { timestamp: string } }
-  | { event: "web_search_empty"; data: { reason: "captcha" | "no_results_parsed"; query: string } };
+  | { event: "tasks_changed"; data: Record<string, never> }
+  | { event: "web_search_empty"; data: { reason: "captcha" | "no_results_parsed"; query: string } }
+  | { event: "cron_fired"; data: { jobId: string; agentId: string; timestamp: string } };
