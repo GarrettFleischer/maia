@@ -76,7 +76,7 @@ export function startCronScheduler(
           console.error(`Cron job ${jobId} failed for agent ${agentId}:`, err);
         });
       },
-      { scheduled: true, runOnInit }
+      {}
     );
     } catch (err) {
       console.error(`CronService: failed to schedule job ${jobId}:`, err);
