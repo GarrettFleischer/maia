@@ -1,11 +1,16 @@
 # Agent System Architecture
 
+## Agent behavior (AGENTS.md)
+
+`AGENTS.md` is loaded from the agent's directory (`data/agents/<id>/AGENTS.md`) and injected into every agent’s system prompt (after the security notice, before identity usage guidance). It describes how agents should function—session behavior, memory, safety, heartbeats, tools—and can be edited per agent without code changes. If the per-agent file is missing or empty, the system falls back to `AGENTS.md` at project root; if that is also missing or empty, no "How you function" section is added.
+
 ## Agent Identity
 
-Each agent is defined by a directory at `data/agents/<agent_id>/` containing four Markdown files. These files form the agent's persistent identity and are included in every context window.
+Each agent is defined by a directory at `data/agents/<agent_id>/` containing Markdown files. These form the agent's persistent identity and are included in every context window.
 
 ```
 data/agents/agent_007/
+├── AGENTS.md    # How this agent should function (fallback: project root AGENTS.md)
 ├── SOUL.md      # Who the agent is
 ├── MEMORY.md    # What the agent remembers
 ├── GOALS.md     # What the agent is working toward

@@ -3,9 +3,10 @@ import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import { zodToJsonSchema } from "../zod-to-json";
 import { getSettings } from "../settings";
-import { getAgentsDir } from "../data-dir";
+import { getAgentsDir, getDefaultAgentDir } from "../data-dir";
 import type { Tool, ToolContext } from "./types";
 import type { AgentDefinition } from "../types";
+import type { AppContext } from "../context";
 
 function makeTool<S extends z.ZodTypeAny>(
   name: string,
@@ -24,10 +25,49 @@ const agentCreateSchema = z.object({
   model: z.string(),
   soul: z.string().optional(),
   memory: z.string().optional(),
-  goals: z.string().optional(),
   user: z.string().optional(),
   systemPromptExtra: z.string().optional(),
 });
+
+/** Inline fallbacks when defaults/agent file is missing (e.g. in tests). */
+const FALLBACK_SOUL = "# Soul\n\nI am {{name}}, a helpful AI agent.\n";
+const FALLBACK_MEMORY = "# Memory\n\nNo memories yet.\n";
+const FALLBACK_USER = "# User\n\nNo user information yet.\n";
+const FALLBACK_AGENTS_MD = "# How you function\n\nFollow AGENTS.md from project root or defaults/agent. Copy the full system command there into this file for a complete prompt.\n";
+
+/**
+ * Reads a default agent template file from defaults/agent.
+ * @param ctx - App context (uses ctx.fs)
+ * @param filename - e.g. "SOUL.md"
+ * @param fallback - Used when file is missing or unreadable
+ * @returns File content or fallback
+ */
+function readDefaultAgentFile(ctx: AppContext, filename: string, fallback: string): string {
+  const filePath = path.join(getDefaultAgentDir(), filename);
+  try {
+    const raw = ctx.fs.readFile(filePath);
+    const s = typeof raw === "string" ? raw.trim() : "";
+    return s !== "" ? s : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Copies default agent template files from defaults/agent into an agent directory.
+ * Use when creating a new agent or when seeding an agent dir (e.g. maia on first run).
+ * @param ctx - App context (uses ctx.fs)
+ * @param agentDir - Absolute path to the agent directory (e.g. data/agents/<id>)
+ * @param agentName - Used to replace {{name}} in SOUL.md
+ */
+export function copyDefaultAgentFiles(ctx: AppContext, agentDir: string, agentName: string): void {
+  ctx.fs.mkdirp(agentDir);
+  const soulContent = readDefaultAgentFile(ctx, "SOUL.md", FALLBACK_SOUL).replace(/\{\{name\}\}/g, agentName);
+  ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), soulContent);
+  ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), readDefaultAgentFile(ctx, "MEMORY.md", FALLBACK_MEMORY));
+  ctx.fs.writeFile(path.join(agentDir, "USER.md"), readDefaultAgentFile(ctx, "USER.md", FALLBACK_USER));
+  ctx.fs.writeFile(path.join(agentDir, "AGENTS.md"), readDefaultAgentFile(ctx, "AGENTS.md", FALLBACK_AGENTS_MD));
+}
 
 export const agentCreateTool = makeTool(
   "agent_create",
@@ -47,11 +87,11 @@ export const agentCreateTool = makeTool(
     ).run(id, args.name, args.model, args.systemPromptExtra ?? null, now, now);
 
     const agentDir = path.join(getAgentsDir(), id);
-    ctx.fs.mkdirp(agentDir);
-    ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), args.soul ?? `# Soul\n\nI am ${args.name}, a helpful AI agent.\n`);
-    ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), args.memory ?? "# Memory\n\nNo memories yet.\n");
-    ctx.fs.writeFile(path.join(agentDir, "GOALS.md"), args.goals ?? "# Goals\n\n## Current Tasks\n- [ ] Awaiting instructions\n");
-    ctx.fs.writeFile(path.join(agentDir, "USER.md"), args.user ?? "# User\n\nNo user information yet.\n");
+    copyDefaultAgentFiles(ctx, agentDir, args.name);
+
+    if (args.soul !== undefined) ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), args.soul);
+    if (args.memory !== undefined) ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), args.memory);
+    if (args.user !== undefined) ctx.fs.writeFile(path.join(agentDir, "USER.md"), args.user);
 
     return id;
   }
@@ -87,26 +127,26 @@ export const agentGetTool = makeTool(
     const read = (file: string) => {
       try { return ctx.fs.readFile(path.join(agentDir, file)); } catch { return ""; }
     };
-    return { agent: rowToAgent(row), soul: read("SOUL.md"), memory: read("MEMORY.md"), goals: read("GOALS.md"), user: read("USER.md") };
+    return { agent: rowToAgent(row), soul: read("SOUL.md"), memory: read("MEMORY.md"), user: read("USER.md"), agentsMd: read("AGENTS.md") };
   }
 );
 
 const IDENTITY_FILE_MAP: Record<string, string> = {
   soul: "SOUL.md",
   memory: "MEMORY.md",
-  goals: "GOALS.md",
   user: "USER.md",
+  agents: "AGENTS.md",
 };
 
 /**
- * Tool for agents to update their own identity files (MEMORY, SOUL, GOALS, USER).
- * Use this to keep your memory, goals, and user notes up to date as you learn.
+ * Tool for agents to update their own identity files (MEMORY, SOUL, USER, AGENTS.md).
+ * Use this to keep your memory and user notes up to date as you learn. Use the tasks tool for task tracking.
  */
 export const agentUpdateIdentityTool = makeTool(
   "agent_update_identity",
-  "Update your own identity file: memory, soul, goals, or user. Use this to keep MEMORY.md, GOALS.md, and USER.md up to date as you learn new things or complete tasks.",
+  "Update your own identity file: memory, soul, user, or agents (AGENTS.md). Use this to keep MEMORY.md and USER.md up to date as you learn new things. Use the tasks tool for all task tracking.",
   z.object({
-    file: z.enum(["soul", "memory", "goals", "user"]).describe("Which identity file to update"),
+    file: z.enum(["soul", "memory", "user", "agents"]).describe("Which identity file to update"),
     content: z.string().describe("Full new content for the file (replaces entire file)"),
   }),
   async ({ file, content }, ctx) => {
@@ -115,6 +155,35 @@ export const agentUpdateIdentityTool = makeTool(
     ctx.fs.mkdirp(agentDir);
     ctx.fs.writeFile(path.join(agentDir, filename), content);
     return { updated: file };
+  }
+);
+
+const agentUpdateAgentIdentitySchema = z.object({
+  agentId: z.string().describe("ID of the agent whose identity file to update"),
+  file: z.enum(["soul", "memory", "user", "agents"]).describe("Which identity file to update"),
+  content: z.string().describe("Full new content for the file (replaces entire file)"),
+});
+
+/**
+ * Tool for Maia to update any agent's identity files (SOUL, MEMORY, USER, AGENTS.md).
+ * Only available to the Maia agent; used to maintain other agents' identity files.
+ */
+export const agentUpdateAgentIdentityTool = makeTool(
+  "agent_update_agent_identity",
+  "Update an agent's identity file (soul, memory, user, or agents). Maia only. Use to maintain another agent's SOUL.md, MEMORY.md, USER.md, or AGENTS.md.",
+  agentUpdateAgentIdentitySchema,
+  async ({ agentId, file, content }, ctx) => {
+    const row = ctx.db
+      .prepare("SELECT id FROM agents WHERE id = ? AND status != 'deleted'")
+      .get(agentId) as { id: string } | undefined;
+    if (!row) {
+      throw new Error(`Agent not found or deleted: ${agentId}`);
+    }
+    const filename = IDENTITY_FILE_MAP[file];
+    const agentDir = path.join(getAgentsDir(), agentId);
+    ctx.fs.mkdirp(agentDir);
+    ctx.fs.writeFile(path.join(agentDir, filename), content);
+    return { updated: file, agentId };
   }
 );
 
@@ -130,7 +199,13 @@ function rowToAgent(r: Record<string, unknown>): AgentDefinition {
   };
 }
 
-export const agentManagementTools: Tool[] = [agentCreateTool, agentDeleteTool, agentListTool, agentGetTool];
+export const agentManagementTools: Tool[] = [
+  agentCreateTool,
+  agentDeleteTool,
+  agentListTool,
+  agentGetTool,
+  agentUpdateAgentIdentityTool,
+];
 
 /** Available to all agents (not maiaOnly) so they can update their own identity files. */
 export const agentIdentityTools: Tool[] = [agentUpdateIdentityTool];

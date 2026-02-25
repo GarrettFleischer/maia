@@ -30,3 +30,12 @@ export function getWorkspaceRoot(): string {
 export function getKnowledgeDir(): string {
   return path.join(getDataDir(), "knowledge");
 }
+
+/**
+ * Default agent template files. New agents get copies of these; user can edit to change templates.
+ * Resolved from project root: <cwd>/defaults/agent (or MAIA_DATA_DIR when set does not affect this).
+ * @returns Absolute path to defaults/agent directory
+ */
+export function getDefaultAgentDir(): string {
+  return path.resolve(process.cwd(), "defaults", "agent");
+}

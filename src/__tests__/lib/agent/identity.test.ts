@@ -13,12 +13,14 @@ function seedAgent(ctx: AppContext, id: string, name = "Test Agent", model = "ol
   ).run(id, name, model, status, now, now);
 }
 
-function seedIdentityFiles(fs: FakeFs, agentId: string) {
+function seedIdentityFiles(fs: FakeFs, agentId: string, options?: { agentsMd?: string }) {
   const dir = path.join(getAgentsDir(), agentId);
   fs.seed(path.join(dir, "SOUL.md"), "# Soul\nI am a helpful agent.");
   fs.seed(path.join(dir, "MEMORY.md"), "# Memory\nNo memories yet.");
-  fs.seed(path.join(dir, "GOALS.md"), "# Goals\n- Be helpful");
   fs.seed(path.join(dir, "USER.md"), "# User\nThe user is a developer.");
+  if (options?.agentsMd !== undefined) {
+    fs.seed(path.join(dir, "AGENTS.md"), options.agentsMd);
+  }
 }
 
 describe("getAgentIdentity", () => {
@@ -41,15 +43,15 @@ describe("getAgentIdentity", () => {
 
   it("returns agent with identity files", () => {
     seedAgent(ctx, "agent-1");
-    seedIdentityFiles(fs, "agent-1");
+    seedIdentityFiles(fs, "agent-1", { agentsMd: "# How I function\nFollow AGENTS.md." });
     const result = getAgentIdentity(ctx, "agent-1");
     expect(result).not.toBeNull();
     expect(result!.id).toBe("agent-1");
     expect(result!.name).toBe("Test Agent");
     expect(result!.soul).toContain("# Soul");
     expect(result!.memory).toContain("# Memory");
-    expect(result!.goals).toContain("# Goals");
     expect(result!.user).toContain("# User");
+    expect(result!.agentsMd).toContain("# How I function");
   });
 
   it("returns empty strings for missing identity files (graceful fallback)", () => {
@@ -59,6 +61,7 @@ describe("getAgentIdentity", () => {
     expect(result).not.toBeNull();
     expect(result!.soul).toBe("");
     expect(result!.memory).toBe("");
+    expect(result!.agentsMd).toBe("");
   });
 
   it("includes all AgentDefinition fields", () => {

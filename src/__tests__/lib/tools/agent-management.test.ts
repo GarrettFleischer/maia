@@ -5,6 +5,7 @@ import {
   agentListTool,
   agentGetTool,
   agentUpdateIdentityTool,
+  agentUpdateAgentIdentityTool,
 } from "@/lib/tools/agent-management";
 import { makeTestContext, FakeFs } from "../../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
@@ -53,6 +54,7 @@ describe("agentCreateTool", () => {
     const keys = Object.keys(snap);
     expect(keys.some((k) => k.includes(id as string) && k.endsWith("SOUL.md"))).toBe(true);
     expect(keys.some((k) => k.includes(id as string) && k.endsWith("MEMORY.md"))).toBe(true);
+    expect(keys.some((k) => k.includes(id as string) && k.endsWith("AGENTS.md"))).toBe(true);
   });
 
   it("throws when model is not whitelisted", async () => {
@@ -145,21 +147,65 @@ describe("agentUpdateIdentityTool", () => {
     expect(fs.snapshot()[path.join(agentDir, "SOUL.md")]).toBe("# Soul\n\nI am Maia.\n");
   });
 
-  it("updates GOALS.md and USER.md", async () => {
+  it("updates USER.md", async () => {
     const fs = new FakeFs();
     const ctx = makeToolCtx(fs);
     const path = await import("path");
     const { getAgentsDir } = await import("@/lib/data-dir");
     const agentDir = path.join(getAgentsDir(), "maia");
     await agentUpdateIdentityTool.execute(
-      { file: "goals", content: "# Goals\n\n- [ ] Task one\n" },
-      ctx,
-    );
-    await agentUpdateIdentityTool.execute(
       { file: "user", content: "# User\n\nThe user is a developer.\n" },
       ctx,
     );
-    expect(fs.snapshot()[path.join(agentDir, "GOALS.md")]).toBe("# Goals\n\n- [ ] Task one\n");
     expect(fs.snapshot()[path.join(agentDir, "USER.md")]).toBe("# User\n\nThe user is a developer.\n");
+  });
+
+  it("updates AGENTS.md when file is agents", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    const path = await import("path");
+    const { getAgentsDir } = await import("@/lib/data-dir");
+    const agentDir = path.join(getAgentsDir(), "maia");
+    const content = "# How I function\n\nCustom system instructions.\n";
+    await agentUpdateIdentityTool.execute({ file: "agents", content }, ctx);
+    expect(fs.snapshot()[path.join(agentDir, "AGENTS.md")]).toBe(content);
+  });
+});
+
+describe("agentUpdateAgentIdentityTool", () => {
+  it("writes the specified identity file for the given agent when agent exists", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    const id = await agentCreateTool.execute({ name: "OtherBot", model: "ollama/llama3.2" }, ctx);
+    const path = await import("path");
+    const { getAgentsDir } = await import("@/lib/data-dir");
+    const agentDir = path.join(getAgentsDir(), id as string);
+    await agentUpdateAgentIdentityTool.execute(
+      { agentId: id as string, file: "soul", content: "# Soul\n\nI am OtherBot.\n" },
+      ctx,
+    );
+    expect(fs.snapshot()[path.join(agentDir, "SOUL.md")]).toBe("# Soul\n\nI am OtherBot.\n");
+  });
+
+  it("throws when agentId does not exist", async () => {
+    const ctx = makeToolCtx();
+    await expect(
+      agentUpdateAgentIdentityTool.execute(
+        { agentId: "nonexistent-id", file: "memory", content: "x" },
+        ctx,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("throws when agent is deleted", async () => {
+    const ctx = makeToolCtx();
+    const id = await agentCreateTool.execute({ name: "DeletedBot", model: "ollama/llama3.2" }, ctx);
+    await agentDeleteTool.execute({ agentId: id as string }, ctx);
+    await expect(
+      agentUpdateAgentIdentityTool.execute(
+        { agentId: id as string, file: "memory", content: "x" },
+        ctx,
+      ),
+    ).rejects.toThrow();
   });
 });

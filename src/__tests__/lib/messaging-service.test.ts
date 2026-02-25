@@ -18,7 +18,6 @@ function seedIdentityFiles(fs: FakeFs, agentId: string, soul = "# Soul\nI am Sen
   const dir = path.join(getAgentsDir(), agentId);
   fs.seed(path.join(dir, "SOUL.md"), soul);
   fs.seed(path.join(dir, "MEMORY.md"), "# Memory\nNo memories yet.");
-  fs.seed(path.join(dir, "GOALS.md"), "# Goals\n- Be helpful");
   fs.seed(path.join(dir, "USER.md"), "# User\nThe user is a developer.");
 }
 

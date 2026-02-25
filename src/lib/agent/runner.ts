@@ -13,6 +13,12 @@ import type { HistoryEntry, SSEEvent } from "../types";
 import type { Message } from "../ai/types";
 import type { ToolContext } from "../tools/types";
 import { getWorkspaceRoot } from "../data-dir";
+import { getCurrentSystemDateTime } from "../date-time";
+
+/**
+ * @fileoverview Core agent runner loop, including history compression, system prompt construction, and tool execution.
+ * @module lib/agent/runner
+ */
 
 export type SSECallback = (event: SSEEvent) => void;
 export type ProviderFactory = (model: string, ctx: AppContext) => AIProvider;
@@ -113,19 +119,28 @@ async function _runLoop(
     console.error("History index (user entry) failed:", err),
   );
 
-  // Build context window: use compressed history but omit entries with empty content (skipped turns)
+  // Build context window: older entries use compressed when available, last recentFullCount use full (original)
   const session = getSession(ctx, sessionId);
+  const original = session?.original ?? [];
   const compressed = session?.compressed ?? [];
-  const historyWithContent = compressed.filter((e) => e.content.trim() !== "");
+  const recentFullCount = Math.max(1, settings.recentFullCount);
+  const N = original.length;
+  const priorCount = N - 1; // exclude current user message (last original)
+  const priorTurns: HistoryEntry[] = [];
+  for (let i = 0; i < priorCount; i++) {
+    const useCompressed =
+      i < priorCount - recentFullCount && compressed[i] !== undefined;
+    const entry = useCompressed ? compressed[i]! : original[i]!;
+    priorTurns.push(entry);
+  }
+  const historyWithContent = priorTurns.filter((e) => e.content.trim() !== "");
+  const conversationHistoryBlock = formatConversationHistory(historyWithContent);
+  const systemPromptContent = buildSystemPrompt(ctx, agent);
+  const combinedSystemContent =
+    conversationHistoryBlock + "\n\n---\n\n" + systemPromptContent;
 
   const messages: Message[] = [
-    {
-      role: "system",
-      content: buildSystemPrompt(agent),
-    },
-    // Compressed history (all but the last entry which is the current user msg)
-    ...historyWithContent.slice(0, -1).map(entryToMessage),
-    // Current user message (original)
+    { role: "system", content: combinedSystemContent },
     { role: "user", content: userMessage },
   ];
 
@@ -154,18 +169,16 @@ async function _runLoop(
   while (loopCount < MAX_LOOPS) {
     loopCount++;
 
-    /** @note Debug: request start, full context (system + user + messages), then LLM response; clear separators between turns. */
+    /** @note Debug: we send exactly `messages` to the provider (one system, one user, then assistant/tool turns). Log summary + full payload so it's clear nothing is duplicated. */
     console.debug(`${DEBUG_BLOCK}\n  REQUEST START (loop ${loopCount})\n${DEBUG_BLOCK}`);
-    const systemPrompt =
-      messages[0]?.role === "system" ? messages[0].content : "";
+    const roles = messages.map((m) => m.role).join(", ");
+    const lengths = messages.map((m) => (typeof m.content === "string" ? m.content.length : 0));
     console.debug(
-      "[LLM request]",
-      JSON.stringify(
-        { systemPrompt, userMessage, context: messages },
-        null,
-        2,
-      ),
+      "[LLM request] Sending exactly this messages array (no duplication). Roles: [%s]. Content lengths: [%s]",
+      roles,
+      lengths.join(", "),
     );
+    console.debug("[LLM request payload]", JSON.stringify({ messages }, null, 2));
 
     const response = await provider.complete(messages, toolDefs, (token) => {
       agentResponseContent += token;
@@ -196,8 +209,8 @@ async function _runLoop(
         console.error("History index (agent entry) failed:", err),
       );
 
-      // Send "done" immediately so the stream closes and the UI never blocks. Run compression
-      // in the background so slow/hanging compression cannot leave the chat stuck.
+      // Send "done" immediately so the stream closes and the UI never blocks. Run batch compression
+      // in the background (fire-and-forget) so the agent never waits on compression.
       const finalContent = response.content || agentResponseContent;
       console.debug(`${DEBUG_SEP}\n  END OF TURN (done, no more tool calls)\n${DEBUG_BLOCK}\n`);
       onEvent({
@@ -206,20 +219,13 @@ async function _runLoop(
         compressed: storedEntry,
         original: storedEntry,
       });
-      void Promise.all([
-        compressEntry(ctx, compressionProvider, userEntry, sessionId).then(
-          (compressedUser) =>
-            indexHistoryEntry(ctx, compressedUser.id).catch((err) =>
-              console.error("History index (compressed user) failed:", err),
-            ),
-        ),
-        compressEntry(ctx, compressionProvider, storedEntry, sessionId).then(
-          (compressedStored) =>
-            indexHistoryEntry(ctx, compressedStored.id).catch((err) =>
-              console.error("History index (compressed agent) failed:", err),
-            ),
-        ),
-      ]).catch((err) => console.error("Background compression failed:", err));
+      runBackgroundCompression(
+        ctx,
+        sessionId,
+        compressionProvider,
+        settings.recentFullCount,
+        settings.compressionBatchSize,
+      );
       return finalContent;
     }
 
@@ -326,42 +332,137 @@ async function _runLoop(
   return "";
 }
 
-const IDENTITY_USAGE_GUIDANCE = `\
-## Using your identity files
-Use your Memory, Goals, and User sections above constantly: read them at the start of each turn and when planning. Keep them up to date using the agent_update_identity tool:
-- **MEMORY**: When you learn something important (preferences, facts, context), update MEMORY.md.
-- **GOALS**: When the user gives tasks or you make progress, update GOALS.md (add tasks, check them off).
-- **USER**: When you learn about the user (role, preferences, constraints), update USER.md.
-Update these files as often as relevant—do not wait for the user to ask. This keeps your context accurate across sessions.`;
+/**
+ * Runs compression in the background for the next batch of entries that are outside the last recentFullCount.
+ * Never blocks: called with void so the agent returns immediately.
+ * @param ctx - App context
+ * @param sessionId - Session id
+ * @param compressionProvider - AI provider for compression, or null to store as-is
+ * @param recentFullCount - Number of most recent entries to leave uncompressed
+ * @param compressionBatchSize - Max entries to compress in this batch
+ */
+function runBackgroundCompression(
+  ctx: AppContext,
+  sessionId: string,
+  compressionProvider: AIProvider | null,
+  recentFullCount: number,
+  compressionBatchSize: number,
+): void {
+  void (async () => {
+    try {
+      const session = getSession(ctx, sessionId);
+      if (!session) return;
+      const { original, compressed } = session;
+      const toCompress = original.length - recentFullCount - compressed.length;
+      if (toCompress < 1) return;
+      const start = compressed.length;
+      const end = Math.min(
+        compressed.length + compressionBatchSize,
+        original.length - recentFullCount,
+      );
+      const promises: Promise<HistoryEntry>[] = [];
+      for (let i = start; i < end; i++) {
+        const entry = original[i]!;
+        if (entry.role === "user" || entry.role === "agent") {
+          promises.push(compressEntry(ctx, compressionProvider, entry, sessionId));
+        } else {
+          // tool_call: store as-is with is_compressed=1 to keep 1:1 indices
+          promises.push(Promise.resolve(appendEntry(ctx, sessionId, entry, true)));
+        }
+      }
+      const results = await Promise.all(promises);
+      for (const appended of results) {
+        indexHistoryEntry(ctx, appended.id).catch((err) =>
+          console.error("History index (compressed entry) failed:", err),
+        );
+      }
+    } catch (err) {
+      console.error("Background compression failed:", err);
+    }
+  })();
+}
 
-const TOOL_USAGE_GUIDANCE = `\
-## Using web tools
-- For questions that can be answered from the web, prefer **brave_answers** to get an AI-generated answer grounded in current web search.
-- Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools.
-- Avoid calling both tools for the same simple factual question unless you need to verify sources or inspect pages directly.`;
+/**
+ * Fallback system instruction when AGENTS.md is missing or empty.
+ * @note Kept in code so the app still runs without the file; content should match AGENTS.md security + guidance sections.
+ */
+const FALLBACK_SYSTEM_INSTRUCTIONS = [
+  SECURITY_PREAMBLE,
+  "",
+  "## Using your identity files",
+  "Use your Memory and User sections above constantly. Keep them up to date using the agent_update_identity tool. Use the tasks tool for all task tracking (create, assign, update status).",
+  "- **MEMORY**: When you learn something important (preferences, facts, context), update MEMORY.md.",
+  "- **USER**: When you learn about the user (role, preferences, constraints), update USER.md.",
+  "Update these files as often as relevant—do not wait for the user to ask. This keeps your context accurate across sessions.",
+  "",
+  "## Using web tools",
+  "- For questions that can be answered from the web, prefer **brave_answers** to get an AI-generated answer grounded in current web search.",
+  "- Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools.",
+  "- Avoid calling both tools for the same simple factual question unless you need to verify sources or inspect pages directly.",
+].join("\n");
 
-function buildSystemPrompt(agent: {
-  soul: string;
-  memory: string;
-  goals: string;
-  user: string;
-  systemPromptExtra?: string;
-}): string {
+/**
+ * Reads AGENTS.md from project root if present.
+ * @brief Returns trimmed content or empty string when file is missing or unreadable.
+ * @param ctx - App context (uses ctx.fs for reading)
+ * @returns Contents of AGENTS.md or ""
+ * @note Used by buildSystemPrompt when agent dir has no AGENTS.md.
+ */
+function readAgentsMd(ctx: AppContext): string {
+  const agentsPath = path.join(process.cwd(), "AGENTS.md");
+  try {
+    const raw = ctx.fs.readFile(agentsPath);
+    return typeof raw === "string" ? raw.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Builds the full system prompt for an agent run.
+ * @brief Uses AGENTS.md (agent dir or project root) as the full system command, then appends Identity/Memory/Goals/User. If no file, uses fallback instructions.
+ * @param ctx - App context (for reading project-root AGENTS.md fallback via ctx.fs)
+ * @param agent - Loaded identity (soul, memory, user, agentsMd, optional systemPromptExtra)
+ * @returns Single string system prompt
+ */
+function buildSystemPrompt(
+  ctx: AppContext,
+  agent: {
+    soul: string;
+    memory: string;
+    user: string;
+    agentsMd: string;
+    systemPromptExtra?: string;
+  },
+): string {
+  const agentsContent =
+    (agent.agentsMd && agent.agentsMd.trim())
+      ? agent.agentsMd.trim()
+      : readAgentsMd(ctx);
+
+  const systemInstructions =
+    agentsContent !== ""
+      ? agentsContent
+      : FALLBACK_SYSTEM_INSTRUCTIONS;
+
+  const { iso, local, timezone } = getCurrentSystemDateTime();
+  const systemTimeSectionLines = [
+    "## System date and time",
+    `Current system ISO datetime (UTC): ${iso}`,
+    `Current system local datetime: ${local}`,
+    `System timezone: ${timezone}`,
+  ];
+
   return [
-    SECURITY_PREAMBLE,
+    systemInstructions,
     "",
-    IDENTITY_USAGE_GUIDANCE,
-    "",
-    TOOL_USAGE_GUIDANCE,
+    systemTimeSectionLines.join("\n"),
     "",
     "## Identity",
     agent.soul,
     "",
     "## Memory",
     agent.memory,
-    "",
-    "## Goals",
-    agent.goals,
     "",
     "## User",
     agent.user,
@@ -373,14 +474,26 @@ function buildSystemPrompt(agent: {
     .join("\n");
 }
 
-function entryToMessage(entry: HistoryEntry): Message {
-  return {
-    role:
-      entry.role === "agent"
-        ? "assistant"
-        : entry.role === "user"
-          ? "user"
-          : "user",
-    content: entry.content,
-  };
+/**
+ * Formats prior session turns into a single labeled text block for the system message.
+ * @brief Ensures the model sees conversation history as past turns, not the current request. Uses compressed (condensed) history only, not the full verbose transcript.
+ * @param entries - Compressed history entries (excluding the current user message)
+ * @returns Section heading plus formatted lines (User / Assistant / Tool: name)
+ */
+function formatConversationHistory(entries: HistoryEntry[]): string {
+  const heading =
+    "## Conversation history (compressed — previous turns only)\n\n";
+  if (entries.length === 0) {
+    return heading + "No prior messages in this session.";
+  }
+  const lines = entries.map((e) => {
+    const label =
+      e.role === "user"
+        ? "**User:**"
+        : e.role === "agent"
+          ? "**Assistant:**"
+          : `**Tool (${e.toolName ?? "unknown"}):**`;
+    return `${label}\n${e.content}`;
+  });
+  return heading + lines.join("\n\n");
 }

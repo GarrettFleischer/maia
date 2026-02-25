@@ -1,3 +1,7 @@
+/**
+ * @fileoverview Tests for the core agent runner loop and system prompt construction, including identity loading and system date/time section.
+ * @module __tests__/lib/agent/runner.test
+ */
 import path from "path";
 import { describe, it, expect, beforeEach } from "bun:test";
 import { runAgent } from "@/lib/agent/runner";
@@ -10,12 +14,14 @@ import type { AIProvider, AIResponse } from "@/lib/ai/types";
 import type { SSEEvent } from "@/lib/types";
 import type { ProviderFactory } from "@/lib/agent/runner";
 
-function seedIdentityFiles(fs: FakeFs, agentId: string) {
+function seedIdentityFiles(fs: FakeFs, agentId: string, options?: { agentsMd?: string }) {
   const dir = path.join(getAgentsDir(), agentId);
   fs.seed(path.join(dir, "SOUL.md"), "# Soul\nI am Maia, the orchestrator.");
   fs.seed(path.join(dir, "MEMORY.md"), "# Memory\nUser prefers TDD.");
-  fs.seed(path.join(dir, "GOALS.md"), "# Goals\n- [ ] Coordinate agents");
   fs.seed(path.join(dir, "USER.md"), "# User\nThe user is a developer.");
+  if (options?.agentsMd !== undefined) {
+    fs.seed(path.join(dir, "AGENTS.md"), options.agentsMd);
+  }
 }
 
 function seedAgent(ctx: AppContext, id = "maia", model = "ollama/llama3.2") {
@@ -144,8 +150,8 @@ describe("runAgent", () => {
     await runAgent(ctx, () => provider, "maia", sessionId, "do something", (e) => {
       if (e.type === "tool_call" || e.type === "tool_result") toolEvents.push(e);
     });
-    // 2 from agentic loop (tool call then final) + 2 from compressEntry (user + agent entry) when compression model matches agent model
-    expect(callCount).toBe(4);
+    // 2 from agentic loop (tool call then final); compression runs in background and does not call the provider
+    expect(callCount).toBe(2);
     expect(toolEvents.some((e) => e.type === "tool_call")).toBe(true);
     expect(toolEvents.some((e) => e.type === "tool_result")).toBe(true);
   });
@@ -154,31 +160,99 @@ describe("runAgent", () => {
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
     const t3 = "2020-01-01T00:00:03.000Z";
+    // Seed originals (full text) and compressed (empty for skipped turn) so context uses compressed for older
+    appendEntry(ctx, sessionId, { role: "user", content: "prior data", timestamp: t1 }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "", timestamp: t2 }, false);
+    appendEntry(ctx, sessionId, { role: "user", content: "second", timestamp: t3 }, false);
     appendEntry(ctx, sessionId, { role: "user", content: "prior data", timestamp: t1 }, true);
     appendEntry(ctx, sessionId, { role: "agent", content: "", timestamp: t2 }, true);
     appendEntry(ctx, sessionId, { role: "user", content: "second", timestamp: t3 }, true);
-    let capturedMessages: { role: string; content: string }[] = [];
+    let capturedSystem = "";
+    let capturedNonSystem: { role: string; content: string }[] = [];
     const provider: AIProvider = {
       async complete(messages, _tools, onToken) {
-        // Capture only the main agent call (context has "prior data"); compression runs later with different messages.
+        const system = messages.find((m) => m.role === "system");
         const nonSystem = messages
           .filter((m) => m.role !== "system")
           .map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : String(m.content) }));
-        if (nonSystem.some((m) => m.content.includes("prior data")) || nonSystem.some((m) => m.content === "current"))
-          capturedMessages = nonSystem;
+        if (nonSystem.some((m) => m.content === "current") || (system && typeof system.content === "string" && system.content.includes("prior data"))) {
+          capturedSystem = system && typeof system.content === "string" ? system.content : "";
+          capturedNonSystem = nonSystem;
+        }
         onToken("ok");
         return { content: "ok", toolCalls: [], stopped: true };
       },
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "current", () => {});
-    // Empty compressed entry must not appear in context; no message should have empty content.
-    expect(capturedMessages.every((m) => m.content.trim() !== "")).toBe(true);
-    const contents = capturedMessages.map((m) => m.content);
-    expect(contents).toContain("current");
-    expect(contents).toContain("prior data");
+    // Conversation history is in the system message; empty compressed entry is excluded (filtered by content).
+    expect(capturedSystem).toContain("## Conversation history (compressed — previous turns only)");
+    expect(capturedSystem).toContain("prior data");
+    // Only the current user message is a separate message; no duplicate history as user/assistant messages.
+    expect(capturedNonSystem).toHaveLength(1);
+    expect(capturedNonSystem[0].content).toBe("current");
+    expect(capturedNonSystem[0].role).toBe("user");
   });
 
-  it("includes the running agent's own MD files (SOUL, MEMORY, GOALS, USER) in the system prompt", async () => {
+  it("puts conversation history first in system message, then system prompt", async () => {
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        const content = system && typeof system.content === "string" ? system.content : "";
+        if (content.includes("## Conversation history (compressed — previous turns only)"))
+          systemContent = content;
+        onToken("Hi");
+        return { content: "Hi", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
+    const historyPos = systemContent.indexOf("## Conversation history (compressed — previous turns only)");
+    const securityPos = systemContent.indexOf("SECURITY NOTICE");
+    const identityPos = systemContent.indexOf("## Identity");
+    expect(historyPos).toBeGreaterThanOrEqual(0);
+    expect(securityPos).toBeGreaterThan(historyPos);
+    expect(identityPos).toBeGreaterThan(securityPos);
+  });
+
+  it("shows No prior messages in system when session has no prior turns", async () => {
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        const content = system && typeof system.content === "string" ? system.content : "";
+        if (content.includes("## Conversation history (compressed — previous turns only)"))
+          systemContent = content;
+        onToken("Hi");
+        return { content: "Hi", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, () => provider, "maia", sessionId, "First message", () => {});
+    expect(systemContent).toContain("## Conversation history (compressed — previous turns only)");
+    expect(systemContent).toContain("No prior messages in this session.");
+  });
+
+  it("includes the current system date and time section in the system prompt", async () => {
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        const content = system && typeof system.content === "string" ? system.content : "";
+        if (content.includes("## Conversation history (compressed — previous turns only)")) {
+          systemContent = content;
+        }
+        onToken("Hi");
+        return { content: "Hi", toolCalls: [], stopped: true };
+      },
+    };
+
+    await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
+
+    expect(systemContent).toContain("## System date and time");
+    expect(systemContent).toMatch(/Current system ISO datetime \(UTC\):\s*\d{4}-\d{2}-\d{2}T/);
+    expect(systemContent).toContain("Current system local datetime:");
+  });
+
+  it("includes the running agent's own MD files (SOUL, MEMORY, USER) in the system prompt", async () => {
     seedIdentityFiles(ctx.fs as FakeFs, "maia");
     (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
       "/api/embed",
@@ -199,16 +273,79 @@ describe("runAgent", () => {
 
     expect(systemContent).toContain("I am Maia, the orchestrator.");
     expect(systemContent).toContain("User prefers TDD.");
-    expect(systemContent).toContain("Coordinate agents");
     expect(systemContent).toContain("The user is a developer.");
     expect(systemContent).toContain("## Identity");
     expect(systemContent).toContain("## Memory");
-    expect(systemContent).toContain("## Goals");
     expect(systemContent).toContain("## User");
     // Tool usage guidance: prefer brave_answers, use web_search when needing links.
     expect(systemContent).toContain("Using web tools");
     expect(systemContent).toContain("brave_answers");
     expect(systemContent).toContain("web_search");
+  });
+
+  it("does not include How you function section when AGENTS.md is absent (agent dir and project root)", async () => {
+    seedIdentityFiles(ctx.fs as FakeFs, "maia");
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        const content = system && typeof system.content === "string" ? system.content : "";
+        if (content.includes("## Conversation history (compressed — previous turns only)"))
+          systemContent = content;
+        onToken("Hi");
+        return { content: "Hi", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
+    expect(systemContent).not.toContain("## How you function");
+    expect(systemContent).toContain("SECURITY NOTICE");
+    expect(systemContent).toContain("## Identity");
+    expect(systemContent).toContain("## Using your identity files");
+  });
+
+  it("includes AGENTS.md from agent dir as full system command when present", async () => {
+    const customInstruction = "Review GOALS every turn. Update MEMORY when you learn something important.";
+    seedIdentityFiles(ctx.fs as FakeFs, "maia", { agentsMd: customInstruction });
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        const content = system && typeof system.content === "string" ? system.content : "";
+        if (content.includes("## Conversation history (compressed — previous turns only)") && content.includes("## Identity"))
+          systemContent = content;
+        onToken("Hi");
+        return { content: "Hi", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
+    expect(systemContent).toContain(customInstruction);
+    const historyPos = systemContent.indexOf("## Conversation history (compressed — previous turns only)");
+    const customPos = systemContent.indexOf(customInstruction);
+    const identityPos = systemContent.indexOf("## Identity");
+    expect(historyPos).toBeGreaterThanOrEqual(0);
+    expect(customPos).toBeGreaterThan(historyPos);
+    expect(identityPos).toBeGreaterThan(customPos);
+  });
+
+  it("falls back to project root AGENTS.md when agent dir has no AGENTS.md", async () => {
+    seedIdentityFiles(ctx.fs as FakeFs, "maia");
+    const agentsMdPath = path.join(process.cwd(), "AGENTS.md");
+    const agentsContent = "Fallback content from project root.";
+    (ctx.fs as FakeFs).seed(agentsMdPath, agentsContent);
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        const content = system && typeof system.content === "string" ? system.content : "";
+        if (content.includes("## Conversation history (compressed — previous turns only)") && content.includes("## Identity"))
+          systemContent = content;
+        onToken("Hi");
+        return { content: "Hi", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
+    expect(systemContent).toContain(agentsContent);
+    expect(systemContent).toContain("## Identity");
   });
 
   it("emits tool_result with error when registered tool receives invalid args (parse throws)", async () => {

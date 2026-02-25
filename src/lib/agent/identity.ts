@@ -24,8 +24,8 @@ export function getAgentIdentity(ctx: AppContext, agentId: string): AgentWithIde
     updatedAt: row.updated_at as string,
     soul: read("SOUL.md"),
     memory: read("MEMORY.md"),
-    goals: read("GOALS.md"),
     user: read("USER.md"),
+    agentsMd: read("AGENTS.md"),
   };
 }
 
