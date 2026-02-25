@@ -113,6 +113,20 @@ export function initSchema(db: DbAdapter): void {
     );
     CREATE INDEX IF NOT EXISTS idx_history_vectors_session ON history_vectors(session_id);
 
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'todo',
+      created_by TEXT NOT NULL,
+      assigned_to TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      notes TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to);
+
     INSERT OR IGNORE INTO active_session (singleton, session_id) VALUES (1, NULL);
   `);
 

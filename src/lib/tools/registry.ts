@@ -10,6 +10,7 @@ import { knowledgeTools } from "./knowledge-tool";
 import { credentialTools } from "./credentials";
 import { agentManagementTools, agentIdentityTools } from "./agent-management";
 import { cronTools } from "./cron-tool";
+import { taskTrackerTools } from "./task-tracker";
 import type { Tool, ToolRegistration } from "./types";
 
 export const TOOL_REGISTRY: ToolRegistration[] = [
@@ -25,6 +26,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
   ...historyTools.map((tool) => ({ tool, maiaOnly: false })),
   ...knowledgeTools.map((tool) => ({ tool, maiaOnly: false })),
   ...credentialTools.map((tool) => ({ tool, maiaOnly: false })),
+  ...taskTrackerTools.map((tool) => ({ tool, maiaOnly: false })),
   ...agentManagementTools.map((tool) => ({ tool, maiaOnly: true })),
   ...agentIdentityTools.map((tool) => ({ tool, maiaOnly: false })),
   ...cronTools.map((tool) => ({ tool, maiaOnly: true })),

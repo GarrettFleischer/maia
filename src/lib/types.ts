@@ -69,6 +69,24 @@ export interface CronJob {
   createdAt: string;
 }
 
+export interface TaskNote {
+  agentId: string;
+  content: string;
+  timestamp: string;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  description: string;
+  status: "todo" | "in_progress" | "done";
+  createdBy: string;
+  assignedTo: string | null;
+  createdAt: string;
+  updatedAt: string;
+  notes: TaskNote[];
+}
+
 export interface SecurityEvent {
   id: string;
   agentId: string;
