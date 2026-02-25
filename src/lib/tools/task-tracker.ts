@@ -46,6 +46,7 @@ export const taskCreateTool = makeTool(
        VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, '[]')`
     ).run(id, title, description ?? "", ctx.agentId, assignedTo ?? null, now, now);
     const row = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Record<string, unknown>;
+    ctx.events.emit({ event: "tasks_changed", data: {} });
     return rowToTask(row);
   }
 );
@@ -82,15 +83,16 @@ export const taskUpdateTool = makeTool(
     ).run(newStatus, newAssignedTo, JSON.stringify(currentNotes), now, taskId);
 
     const updated = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown>;
+    ctx.events.emit({ event: "tasks_changed", data: {} });
     return rowToTask(updated);
   }
 );
 
 export const taskListTool = makeTool(
   "task_list",
-  "List tasks on the shared kanban board. Filter by status, assignedTo, or createdBy. Returns all tasks if no filters given.",
+  "List tasks on the shared kanban board. Filter by column (status: todo/in_progress/done) or agent id (assignedTo, createdBy). By default excludes completed (done) tasks unless you filter by status.",
   z.object({
-    status: z.enum(["todo", "in_progress", "done"]).optional().describe("Filter by status"),
+    status: z.enum(["todo", "in_progress", "done"]).optional().describe("Filter by column (status)"),
     assignedTo: z.string().optional().describe("Filter by assigned agent ID"),
     createdBy: z.string().optional().describe("Filter by creator agent ID"),
   }),
@@ -101,6 +103,8 @@ export const taskListTool = makeTool(
     if (status !== undefined) {
       conditions.push("status = ?");
       params.push(status);
+    } else {
+      conditions.push("status != 'done'");
     }
     if (assignedTo !== undefined) {
       conditions.push("assigned_to = ?");

@@ -38,12 +38,14 @@ interface TaskCardProps {
   task: Task;
   agents: AgentDefinition[];
   onUpdate: (id: string, patch: { status?: Task["status"]; note?: string; assignedTo?: string | null }) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
 }
 
-function TaskCard({ task, agents, onUpdate }: TaskCardProps) {
+function TaskCard({ task, agents, onUpdate, onDelete }: TaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [noteText, setNoteText] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const nextStatus = task.status === "todo" ? "in_progress" : task.status === "in_progress" ? "done" : null;
   const prevStatus = task.status === "done" ? "in_progress" : task.status === "in_progress" ? "todo" : null;
@@ -163,6 +165,23 @@ function TaskCard({ task, agents, onUpdate }: TaskCardProps) {
               Add
             </button>
           </div>
+
+          {/* Delete task */}
+          <div className="pt-2 border-t border-zinc-800">
+            <button
+              type="button"
+              onClick={async () => {
+                if (!window.confirm("Delete this task? This cannot be undone.")) return;
+                setDeleting(true);
+                await onDelete(task.id);
+                setDeleting(false);
+              }}
+              disabled={deleting}
+              className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-red-900/50 text-zinc-400 hover:text-red-300 transition-colors disabled:opacity-50"
+            >
+              {deleting ? "Deleting…" : "Delete task"}
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -195,6 +214,14 @@ export default function TasksPage() {
     }).finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    const es = new EventSource("/api/events");
+    es.addEventListener("tasks_changed", () => {
+      fetchTasks();
+    });
+    return () => es.close();
+  }, [fetchTasks]);
+
   const handleUpdate = useCallback(async (
     id: string,
     patch: { status?: Task["status"]; note?: string; assignedTo?: string | null }
@@ -205,6 +232,11 @@ export default function TasksPage() {
       body: JSON.stringify(patch),
     });
     await fetchTasks();
+  }, [fetchTasks]);
+
+  const handleDelete = useCallback(async (id: string) => {
+    const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+    if (res.ok) await fetchTasks();
   }, [fetchTasks]);
 
   async function handleCreate(e: React.FormEvent) {
@@ -318,6 +350,7 @@ export default function TasksPage() {
                         task={task}
                         agents={agents}
                         onUpdate={handleUpdate}
+                        onDelete={handleDelete}
                       />
                     ))}
                   </div>

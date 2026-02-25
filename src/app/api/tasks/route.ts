@@ -55,5 +55,6 @@ export async function POST(req: NextRequest) {
      VALUES (?, ?, ?, 'todo', 'user', ?, ?, ?, '[]')`
   ).run(id, body.title, body.description ?? "", body.assignedTo ?? null, now, now);
   const row = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Record<string, unknown>;
+  ctx.events.emit({ event: "tasks_changed", data: {} });
   return NextResponse.json({ task: rowToTask(row) }, { status: 201 });
 }

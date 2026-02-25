@@ -52,5 +52,24 @@ export async function PATCH(
   ).run(newStatus, newAssignedTo, JSON.stringify(notes), now, id);
 
   const updated = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Record<string, unknown>;
+  ctx.events.emit({ event: "tasks_changed", data: {} });
   return NextResponse.json({ task: rowToTask(updated) });
+}
+
+/**
+ * DELETE /api/tasks/[id] — remove a task. Emits tasks_changed. Returns 204 on success, 404 if not found.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const ctx = await ensureAppContext();
+  const { id } = await params;
+
+  const existing = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
+  if (!existing) return NextResponse.json({ error: "Task not found" }, { status: 404 });
+
+  ctx.db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+  ctx.events.emit({ event: "tasks_changed", data: {} });
+  return new NextResponse(null, { status: 204 });
 }
