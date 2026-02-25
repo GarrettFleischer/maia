@@ -1,0 +1,216 @@
+/**
+ * @fileoverview Tests for OpenRouter AI provider (SSE streaming, tool calls, auth).
+ * @module __tests__/lib/ai/openrouter.test
+ */
+import { describe, it, expect, beforeEach } from "bun:test";
+import { makeTestContext, FakeHttp } from "../../helpers/fakes";
+import type { HttpResponse } from "@/lib/context";
+import { OpenRouterProvider } from "@/lib/ai/openrouter";
+
+function streamBody(lines: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const line of lines) {
+        controller.enqueue(encoder.encode(line + "\n"));
+      }
+      controller.close();
+    },
+  });
+}
+
+function streamResponse(status: number, lines: string[]): HttpResponse {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    body: streamBody(lines),
+    async text() {
+      return lines.join("\n");
+    },
+    async json() {
+      return {};
+    },
+  };
+}
+
+describe("OpenRouterProvider", () => {
+  let ctx: ReturnType<typeof makeTestContext>;
+  let http: FakeHttp;
+
+  beforeEach(() => {
+    http = new FakeHttp();
+    ctx = makeTestContext({ http });
+  });
+
+  it("sends POST to openrouter.ai with Bearer auth and expected headers", async () => {
+    let capturedInit: RequestInit | undefined;
+    http.on("openrouter.ai", async (_url, init) => {
+      capturedInit = init;
+      return streamResponse(200, [
+        "data: " + JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+        "data: [DONE]",
+      ]);
+    });
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      "sk-secret",
+      ctx.http
+    );
+    await provider.complete(
+      [{ role: "user", content: "Hi" }],
+      [],
+      () => {}
+    );
+
+    expect(capturedInit?.headers).toBeDefined();
+    const headers = capturedInit?.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer sk-secret");
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["X-Title"]).toBe("Maia Agent System");
+  });
+
+  it("parses SSE data: lines and calls onToken", async () => {
+    const tokens: string[] = [];
+    http.on("openrouter.ai", async () =>
+      streamResponse(200, [
+        "data: " + JSON.stringify({
+          choices: [{ delta: { content: "Hello" } }],
+        }),
+        "data: " + JSON.stringify({
+          choices: [{ delta: { content: " world" } }],
+        }),
+        "data: [DONE]",
+      ])
+    );
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      "sk-key",
+      ctx.http
+    );
+    const result = await provider.complete(
+      [{ role: "user", content: "Say hi" }],
+      [],
+      (t) => tokens.push(t)
+    );
+
+    expect(tokens).toEqual(["Hello", " world"]);
+    expect(result.content).toBe("Hello world");
+    expect(result.stopped).toBe(true);
+  });
+
+  it("accumulates streaming tool call deltas", async () => {
+    http.on("openrouter.ai", async () =>
+      streamResponse(200, [
+        "data: " +
+          JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    { index: 0, id: "call-1", function: { name: "foo" } },
+                  ],
+                },
+              },
+            ],
+          }),
+        "data: " +
+          JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  tool_calls: [{ index: 0, function: { arguments: '{"x":1}' } }],
+                },
+              },
+            ],
+          }),
+        "data: [DONE]",
+      ])
+    );
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      "sk-key",
+      ctx.http
+    );
+    const result = await provider.complete(
+      [{ role: "user", content: "Use foo" }],
+      [],
+      () => {}
+    );
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].id).toBe("call-1");
+    expect(result.toolCalls[0].name).toBe("foo");
+    expect(result.toolCalls[0].args).toEqual({ x: 1 });
+  });
+
+  it("throws on HTTP error with status and body", async () => {
+    http.on("openrouter.ai", async () => ({
+      ok: false,
+      status: 401,
+      body: null,
+      async text() {
+        return "Invalid API key";
+      },
+      async json() {
+        return {};
+      },
+    }));
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      "sk-bad",
+      ctx.http
+    );
+
+    await expect(
+      provider.complete([{ role: "user", content: "Hi" }], [], () => {})
+    ).rejects.toThrow("OpenRouter error 401: Invalid API key");
+  });
+
+  it("strips openrouter/ prefix from model in request body", async () => {
+    let model = "";
+    http.on("openrouter.ai", async (_url, init) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      model = body.model ?? "";
+      return streamResponse(200, ["data: [DONE]"]);
+    });
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-sonnet-4-5",
+      "sk-key",
+      ctx.http
+    );
+    await provider.complete([{ role: "user", content: "x" }], [], () => {});
+
+    expect(model).toBe("anthropic/claude-sonnet-4-5");
+  });
+
+  it("maps agent role to assistant in messages", async () => {
+    let messages: unknown[] = [];
+    http.on("openrouter.ai", async (_url, init) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      messages = body.messages ?? [];
+      return streamResponse(200, ["data: [DONE]"]);
+    });
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      "sk-key",
+      ctx.http
+    );
+    await provider.complete(
+      [
+        { role: "agent", content: "Previous reply" },
+        { role: "user", content: "Next" },
+      ],
+      [],
+      () => {}
+    );
+
+    expect(messages).toContainEqual({ role: "assistant", content: "Previous reply" });
+    expect(messages).toContainEqual({ role: "user", content: "Next" });
+  });
+});

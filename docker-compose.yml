@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  maia-sandbox:
+    image: ubuntu:22.04
+    container_name: maia-sandbox
+    command: sleep infinity
+    network_mode: none
+    read_only: false
+    volumes:
+      - maia-workspace:/workspace
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  maia-workspace:
+    driver: local

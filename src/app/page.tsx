@@ -1,65 +1,264 @@
-import Image from "next/image";
+"use client";
+
+/**
+ * @fileoverview Home chat page: thread list sidebar, message list, input, send; subscribes to /api/events
+ * so server-driven (async) agent messages update the UI. Supports switching threads and starting new ones.
+ * @module app/page
+ */
+
+import { useState, useRef, useEffect, useCallback } from "react";
+import type { SSEEvent } from "@/lib/types";
+import type { HistoryEntry } from "@/lib/types";
+import AppHeader from "@/app/components/AppHeader";
+import ChatMessageList from "@/app/components/ChatMessageList";
+import type { ChatMessageListItem } from "@/app/components/ChatMessageList";
+import ChatInputBar from "@/app/components/ChatInputBar";
+import ThreadList from "@/app/components/ThreadList";
+
+/** Map HistoryEntry from server to ChatMessageListItem (including tool_call as standalone tool bubble). */
+function entryToItem(entry: HistoryEntry): ChatMessageListItem {
+  if (entry.role === "tool_call") {
+    return {
+      role: "tool",
+      tool: entry.toolName ?? "",
+      args: entry.toolArgs ?? {},
+      result: entry.content || undefined,
+    };
+  }
+  const role: "user" | "agent" | "system" =
+    entry.role === "user" ? "user" : entry.role === "agent" ? "agent" : "system";
+  return { role, content: entry.content };
+}
+
+type SessionType = "user" | "agents";
+
+interface ActiveSessionResponse {
+  sessionId?: string;
+  session?: {
+    original: HistoryEntry[];
+    type?: SessionType;
+  };
+}
 
 export default function Home() {
+  const [messages, setMessages] = useState<ChatMessageListItem[]>([]);
+  const [input, setInput] = useState("");
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionType, setSessionType] = useState<SessionType>("user");
+  const [loading, setLoading] = useState(false);
+  const [currentToken, setCurrentToken] = useState("");
+  const [threadListRefetch, setThreadListRefetch] = useState(0);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  sessionIdRef.current = sessionId;
+
+  /** Load a session by id into messages and set as active. */
+  const loadSession = useCallback(async (id: string) => {
+    const res = await fetch("/api/sessions/active", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: id }),
+    });
+    if (!res.ok) return;
+    const data = (await fetch("/api/sessions/active").then((r) => r.json())) as ActiveSessionResponse;
+    if (data.sessionId) setSessionId(data.sessionId);
+    if (data.session?.type) setSessionType(data.session.type);
+    const entries = data.session?.original ?? [];
+    const items = entries.map(entryToItem);
+    setMessages(items);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/sessions/active")
+      .then((r) => {
+        if (!r.ok) return null;
+        return r.json() as Promise<ActiveSessionResponse>;
+      })
+      .then((data) => {
+        if (!data) return;
+        if (data.sessionId) setSessionId(data.sessionId);
+        if (data.session?.type) setSessionType(data.session.type);
+        if (data.session?.original?.length) {
+          const loaded = data.session.original.map(entryToItem);
+          setMessages((prev) => {
+            if (prev.length > 0) return prev; // avoid overwriting streamed messages if fetch completes late
+            return loaded;
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const es = new EventSource("/api/events");
+    es.addEventListener("message", (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data) as { sessionId: string; entry: HistoryEntry; participants: string[] };
+        const current = sessionIdRef.current;
+        if (payload.sessionId && payload.entry && current && payload.sessionId === current) {
+          setMessages((prev) => [...prev, entryToItem(payload.entry)]);
+        }
+      } catch {
+        // ignore non-message or malformed
+      }
+    });
+    es.addEventListener("ping", () => {});
+    return () => es.close();
+  }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, currentToken]);
+
+  const sendMessage = useCallback(async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+
+    setInput("");
+    setLoading(true);
+    setCurrentToken("");
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+
+    try {
+      const resp = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, sessionId: sessionId ?? undefined }),
+      });
+
+      if (!resp.body) throw new Error("No response body");
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      let lineBuffer = "";
+
+      function processLine(line: string): void {
+        if (!line.startsWith("data: ")) return;
+        const data = line.slice(6);
+        let event: SSEEvent;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          return;
+        }
+
+        if (event.type === "token") {
+          accumulated += event.content;
+          setCurrentToken(accumulated);
+        } else if (event.type === "tool_call") {
+          setMessages((prev) => [...prev, { role: "tool" as const, tool: event.tool, args: event.args }]);
+        } else if (event.type === "tool_result") {
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.role === "tool" && (m as { result?: unknown }).result === undefined);
+            if (idx === -1) return prev;
+            const item = prev[idx];
+            if (item.role !== "tool") return prev;
+            return [...prev.slice(0, idx), { ...item, result: event.result }, ...prev.slice(idx + 1)];
+          });
+        } else if (event.type === "done") {
+          if (event.sessionId) setSessionId(event.sessionId);
+          setMessages((prev) => [...prev, { role: "agent", content: accumulated }]);
+          setCurrentToken("");
+          accumulated = "";
+          setThreadListRefetch((n) => n + 1);
+        } else if (event.type === "error") {
+          setMessages((prev) => [...prev, { role: "system", content: `Error: ${event.message}` }]);
+          setCurrentToken("");
+          accumulated = "";
+        }
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lineBuffer += decoder.decode(value, { stream: true });
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+        for (const line of lines) processLine(line);
+      }
+      if (lineBuffer.trim()) processLine(lineBuffer);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "system", content: `Connection error: ${err instanceof Error ? err.message : String(err)}` },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }, [input, loading, sessionId]);
+
+  const handleSelectSession = useCallback(
+    (id: string) => {
+      if (id === sessionId) return;
+      loadSession(id);
+    },
+    [sessionId, loadSession]
+  );
+
+  const handleNewThread = useCallback(async () => {
+    const res = await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participants: ["user", "maia"], type: "user" }),
+    });
+    if (!res.ok) return;
+    const body = (await res.json()) as { sessionId: string };
+    await loadSession(body.sessionId);
+    setSessionType("user");
+    setThreadListRefetch((n) => n + 1);
+  }, [loadSession]);
+
+  const handleThreadDeleted = useCallback((deletedId: string) => {
+    setThreadListRefetch((n) => n + 1);
+    if (deletedId === sessionId) {
+      setSessionId(null);
+      setMessages([]);
+    }
+  }, [sessionId]);
+
+  const isAgentOnlyThread = sessionType === "agents";
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
+      <AppHeader subtitle="AI Agent System" />
+
+      <div className="flex flex-1 min-h-0">
+        <ThreadList
+          activeSessionId={sessionId}
+          onSelectSession={handleSelectSession}
+          onNewThread={handleNewThread}
+          refetchTrigger={threadListRefetch}
+          onThreadDeleted={handleThreadDeleted}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+
+        <div className="flex flex-col flex-1 min-w-0">
+          <div className="chat-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+            <div className="px-4 py-6 space-y-4 max-w-3xl mx-auto w-full">
+              {isAgentOnlyThread && (
+                <div className="rounded-lg bg-zinc-800/80 border border-zinc-700 px-4 py-2 text-sm text-zinc-400">
+                  Agent-to-agent thread (read-only). Switch to a user thread to send messages.
+                </div>
+              )}
+              <ChatMessageList
+                messages={messages}
+                currentToken={currentToken}
+                loading={loading}
+                bottomRef={bottomRef}
+              />
+            </div>
+          </div>
+
+          {!isAgentOnlyThread && (
+            <ChatInputBar
+              value={input}
+              onChange={setInput}
+              onSubmit={sendMessage}
+              disabled={loading}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          )}
         </div>
-      </main>
+      </div>
     </div>
   );
 }

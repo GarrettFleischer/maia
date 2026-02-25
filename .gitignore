@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +40,19 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# next.js generated types (real versions live in .next/types/)
+/types/
+
+# npm lockfile (project uses bun)
+package-lock.json
+
+# runtime data (SQLite DB, agent workspaces)
+/data/*.db*
+/data/workspace/
+
+# Python virtual environments
+/venv/
+/.venv/
+
+/data/
