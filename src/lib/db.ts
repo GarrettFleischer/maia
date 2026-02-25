@@ -2,11 +2,12 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import type { DbAdapter } from "./context";
-import { getDataDir } from "./data-dir";
+import { getDataDir, getToolsDir } from "./data-dir";
 
 const DB_PATH = path.join(getDataDir(), "maia.db");
 
 fs.mkdirSync(getDataDir(), { recursive: true });
+fs.mkdirSync(getToolsDir(), { recursive: true });
 
 let _db: Database.Database | null = null;
 
@@ -126,6 +127,11 @@ export function initSchema(db: DbAdapter): void {
     );
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to);
+
+    CREATE TABLE IF NOT EXISTS approved_tools (
+      tool_slug TEXT PRIMARY KEY,
+      approved_at TEXT NOT NULL
+    );
 
     INSERT OR IGNORE INTO active_session (singleton, session_id) VALUES (1, NULL);
   `);

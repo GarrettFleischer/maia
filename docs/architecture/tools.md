@@ -45,11 +45,15 @@ const TOOL_REGISTRY: ToolRegistration[] = [
 ];
 
 function getToolsForAgent(agentId: string): Tool[] {
-  return TOOL_REGISTRY
+  const staticTools = TOOL_REGISTRY
     .filter(reg => !reg.maiaOnly || agentId === 'maia')
     .map(reg => reg.tool);
+  const customTools = getApprovedCustomTools();  // from data/tools approved manifests
+  return [...staticTools, ...customTools];
 }
 ```
+
+Approved custom tools (see **Custom agent tools** below) are loaded from `data/tools/<slug>/manifest.json` and merged in for all agents. Built-in tool names take precedence; a custom tool whose function name clashes with a built-in is skipped.
 
 ## Tool Definitions (LLM-facing)
 
@@ -87,7 +91,12 @@ Each tool's schema is converted to a JSON Schema for the AI provider:
 | `file_move` | `from: string, to: string` | `void` | Move/rename |
 | `file_exists` | `path: string` | `boolean` | Check existence |
 
-Paths are resolved against the volume root. In addition, paths starting with `knowledge/` (e.g. `knowledge/reports/summary.md`) resolve to the shared knowledge base at `data/knowledge/`, so agents can read and write reports there with the same file tools. Operations outside the volume or knowledge base throw.
+Paths are resolved against the volume root. In addition:
+
+- Paths starting with `knowledge/` (e.g. `knowledge/reports/summary.md`) resolve to the shared knowledge base at `data/knowledge/`, so agents can read and write reports there with the same file tools.
+- Paths starting with `tools/` (e.g. `tools/my-tool/manifest.json`) resolve to the custom tools directory at `data/tools/`. Agents can create and edit tool folders there. **Registered (approved) tools are read-only:** write operations (file_write, file_append, file_delete, file_move, directory_create) to a path under `data/tools/<slug>/` fail when that slug is in the approved list. Maia must use **tool_deregister** first to allow edits; after edits, the agent creates a new review task for Maia.
+
+Operations outside the volume, knowledge base, or tools directory throw.
 
 ### `terminal` — Shell Execution
 
@@ -252,6 +261,34 @@ On creation:
 Cron expressions follow standard 5-field format: `* * * * *` (minute, hour, day, month, weekday).
 
 The heartbeat is a built-in cron job (`*/30 * * * *`) that cannot be deleted.
+
+### Custom agent tools (data/tools)
+
+Agents can define new tools under `data/tools/`. Each tool is a folder `data/tools/<slug>/` with at least a `manifest.json`. Paths under `tools/` (e.g. `tools/my-tool/manifest.json`) are available via the file tools so agents can create and edit tool definitions.
+
+**Manifest schema** (`manifest.json`):
+
+- `name`: string (tool name)
+- `description`: string
+- `functions`: array of `{ name, description, parameters }` where `parameters` is JSON Schema (same shape as `ToolDefinition.parameters`). One manifest can expose multiple functions.
+
+**Proposal flow (task-based):**
+
+1. An agent creates the tool folder and `manifest.json` under `data/tools/<slug>/` using file tools (only allowed if that slug is not yet registered).
+2. The agent creates a **task** assigned to **Maia** with title e.g. `Review tool: <slug>` and description that can include the proposing agent (or Maia uses the task’s `created_by`).
+3. Maia sees the task, reads `tools/<slug>/manifest.json` (and any code in that folder) via **file_read**, and performs a security review: no hardcoded API keys; credentials must use the credential vault; the tool must not bypass oversight or security.
+4. **If Maia rejects:** She marks the review task done, creates a new task assigned to the proposing agent with a clear description of what to fix, and uses **message_send** to that agent with the same feedback.
+5. **If Maia approves:** She calls **approve_tool(slug)** to register the tool, then marks the review task done.
+6. The proposing agent (if rejected) fixes the tool, marks their task done, and creates a new "Review tool: <slug>" task for Maia.
+
+**Read-only registered tools:** Once a tool is approved, the folder `data/tools/<slug>/` becomes read-only for file writes. To edit a registered tool, Maia must call **tool_deregister(slug)** first; then the agent can edit and create a new review task for Maia.
+
+| Function | Args | Returns | Who |
+|----------|------|---------|-----|
+| `approve_tool` | `toolSlug: string` | `{ approved }` | Maia only |
+| `tool_deregister` | `toolSlug: string` | `{ deregistered }` | Maia only |
+
+**Execution:** Custom tools are loaded into the registry and appear in `getToolsForAgent` for all agents. Execution is currently a **stub**: when an agent calls a custom tool function, the result is a message that the tool is registered but execution is not yet implemented. A future phase may add script-based execution (e.g. `data/tools/<slug>/run.js`) with security constraints and Maia review criteria (vault for credentials, no key leakage).
 
 ## Tool Execution in Agentic Loop
 

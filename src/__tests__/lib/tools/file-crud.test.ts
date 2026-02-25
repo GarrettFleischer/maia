@@ -10,11 +10,12 @@ import {
   fileExistsTool,
   directoryCreateTool,
 } from "@/lib/tools/file-crud";
-import { getKnowledgeDir } from "@/lib/data-dir";
+import { getKnowledgeDir, getToolsDir } from "@/lib/data-dir";
 import { makeTestContext, FakeFs } from "../../helpers/fakes";
 import type { ToolContext } from "@/lib/tools/types";
 
 const KNOWLEDGE_DIR = getKnowledgeDir();
+const TOOLS_DIR = getToolsDir();
 
 // Use path.resolve so the volume root matches what validatePath produces on any OS
 const VOLUME = path.resolve("/workspace/agent-1");
@@ -57,6 +58,21 @@ describe("fileReadTool", () => {
     expect(result).toBe("Knowledge content");
   });
 
+  it("resolves tools/ prefix to data/tools/", async () => {
+    const fs = new FakeFs();
+    fs.seed(path.join(TOOLS_DIR, "my-tool", "manifest.json"), '{"name":"my_tool"}');
+    const ctx = makeToolCtx(fs);
+    const result = await fileReadTool.execute({ path: "tools/my-tool/manifest.json" }, ctx);
+    expect(result).toBe('{"name":"my_tool"}');
+  });
+
+  it("rejects path traversal under tools/", async () => {
+    const ctx = makeToolCtx();
+    await expect(
+      fileReadTool.execute({ path: "tools/../etc/passwd" }, ctx),
+    ).rejects.toThrow();
+  });
+
   it("truncates files over 50KB", async () => {
     const fs = new FakeFs();
     const bigContent = "x".repeat(51 * 1024);
@@ -95,6 +111,46 @@ describe("fileWriteTool", () => {
   it("prevents path traversal", async () => {
     const ctx = makeToolCtx();
     await expect(fileWriteTool.execute({ path: "../../../evil.txt", content: "evil" }, ctx)).rejects.toThrow();
+  });
+
+  it("writes to data/tools/ when path is tools/...", async () => {
+    const fs = new FakeFs();
+    const ctx = makeToolCtx(fs);
+    await fileWriteTool.execute({
+      path: "tools/my-tool/manifest.json",
+      content: '{"name":"my_tool","functions":[]}',
+    }, ctx);
+    const full = path.join(TOOLS_DIR, "my-tool", "manifest.json");
+    expect(fs.snapshot()[full]).toBe('{"name":"my_tool","functions":[]}');
+  });
+
+  it("throws when writing to a path under a registered tool (read-only)", async () => {
+    const baseCtx = makeTestContext();
+    baseCtx.db
+      .prepare("INSERT INTO approved_tools (tool_slug, approved_at) VALUES (?, ?)")
+      .run("my-tool", "2025-01-01T00:00:00.000Z");
+    const ctx = { ...baseCtx, agentId: "agent-1", sessionId: "s1", volumeRoot: VOLUME };
+    await expect(
+      fileWriteTool.execute({
+        path: "tools/my-tool/foo.txt",
+        content: "x",
+      }, ctx),
+    ).rejects.toThrow("Registered tools are read-only");
+  });
+
+  it("allows write to tools/ after slug is deregistered", async () => {
+    const baseCtx = makeTestContext();
+    baseCtx.db
+      .prepare("INSERT INTO approved_tools (tool_slug, approved_at) VALUES (?, ?)")
+      .run("my-tool", "2025-01-01T00:00:00.000Z");
+    const ctx = { ...baseCtx, agentId: "agent-1", sessionId: "s1", volumeRoot: VOLUME };
+    await expect(
+      fileWriteTool.execute({ path: "tools/my-tool/foo.txt", content: "x" }, ctx),
+    ).rejects.toThrow("Registered tools are read-only");
+    baseCtx.db.prepare("DELETE FROM approved_tools WHERE tool_slug = ?").run("my-tool");
+    await fileWriteTool.execute({ path: "tools/my-tool/foo.txt", content: "ok" }, ctx);
+    const full = path.join(TOOLS_DIR, "my-tool", "foo.txt");
+    expect((baseCtx.fs as FakeFs).snapshot()[full]).toBe("ok");
   });
 });
 

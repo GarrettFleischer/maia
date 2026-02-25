@@ -31,6 +31,11 @@ export function getKnowledgeDir(): string {
   return path.join(getDataDir(), "knowledge");
 }
 
+/** Custom agent tools (manifests): getDataDir()/tools */
+export function getToolsDir(): string {
+  return path.join(getDataDir(), "tools");
+}
+
 /**
  * Default agent template files. New agents get copies of these; user can edit to change templates.
  * Resolved from project root: <cwd>/defaults/agent (or MAIA_DATA_DIR when set does not affect this).

@@ -1,23 +1,32 @@
 /**
- * @fileoverview File CRUD tools for workspace and knowledge base.
+ * @fileoverview File CRUD tools for workspace, knowledge base, and custom tools.
  * @module lib/tools/file-crud
  *
- * Paths starting with "knowledge/" resolve to the shared knowledge base (data/knowledge/),
- * so agents can read/write reports there with the same file tools.
+ * Paths starting with "knowledge/" resolve to the shared knowledge base (data/knowledge/).
+ * Paths starting with "tools/" resolve to the custom tools directory (data/tools/).
+ * Otherwise paths are relative to the agent workspace volume.
  */
 import { z } from "zod";
 import path from "path";
 import { zodToJsonSchema } from "../zod-to-json";
 import type { Tool, ToolContext } from "./types";
 
-import { getKnowledgeDir } from "../data-dir";
+import { getKnowledgeDir, getToolsDir } from "../data-dir";
+import { isToolRegistered } from "./approved-tools";
 
 const KNOWLEDGE_DIR = getKnowledgeDir();
 const KNOWLEDGE_PREFIX = "knowledge/";
+const TOOLS_DIR = getToolsDir();
+const TOOLS_PREFIX = "tools/";
 
 /**
- * Resolve user path to a full path. If path is "knowledge" or "knowledge/...", resolve to data/knowledge/.
- * Otherwise resolve relative to volumeRoot and ensure it stays under volumeRoot.
+ * Resolve user path to a full path.
+ * - "knowledge" or "knowledge/..." -> data/knowledge/
+ * - "tools" or "tools/..." -> data/tools/
+ * - Otherwise resolve relative to volumeRoot and ensure it stays under volumeRoot.
+ * @param userPath - Path from the tool (relative to workspace, or knowledge/..., or tools/...)
+ * @param volumeRoot - Agent workspace root
+ * @returns Absolute path; throws if path escapes allowed roots
  */
 function resolvePath(userPath: string, volumeRoot: string): string {
   const normalized = userPath.replace(/\\/g, "/").trim();
@@ -28,11 +37,47 @@ function resolvePath(userPath: string, volumeRoot: string): string {
         : normalized.slice(KNOWLEDGE_PREFIX.length);
     return path.join(KNOWLEDGE_DIR, suffix);
   }
+  if (normalized === "tools" || normalized.startsWith(TOOLS_PREFIX)) {
+    const suffix =
+      normalized === "tools" ? "" : normalized.slice(TOOLS_PREFIX.length);
+    const resolved = path.join(TOOLS_DIR, suffix);
+    const toolsDirResolved = path.resolve(TOOLS_DIR);
+    if (!path.resolve(resolved).startsWith(toolsDirResolved)) {
+      throw new Error("Path escapes tools directory");
+    }
+    return path.resolve(resolved);
+  }
   const resolved = path.resolve(volumeRoot, userPath);
   if (!resolved.startsWith(path.resolve(volumeRoot))) {
     throw new Error("Path escapes workspace");
   }
   return resolved;
+}
+
+const TOOLS_DIR_RESOLVED = path.resolve(TOOLS_DIR);
+
+/**
+ * Throws if fullPath is under data/tools/<slug>/ and slug is a registered (approved) tool.
+ * Call this for write operations so registered tools stay read-only.
+ */
+function assertNotUnderRegisteredTool(
+  fullPath: string,
+  ctx: ToolContext,
+): void {
+  const resolvedPath = path.resolve(fullPath);
+  if (
+    resolvedPath === TOOLS_DIR_RESOLVED ||
+    !resolvedPath.startsWith(TOOLS_DIR_RESOLVED + path.sep)
+  ) {
+    return;
+  }
+  const relative = path.relative(TOOLS_DIR, resolvedPath);
+  const slug = relative.split(path.sep)[0];
+  if (slug && isToolRegistered(ctx.db, slug)) {
+    throw new Error(
+      "Registered tools are read-only; use tool_deregister first to allow edits.",
+    );
+  }
 }
 
 const MAX_OUTPUT = 50 * 1024; // 50KB
@@ -76,6 +121,7 @@ export const fileWriteTool = makeFileTool(
   }),
   async ({ path: p, content }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
+    assertNotUnderRegisteredTool(full, ctx);
     ctx.fs.mkdirp(path.dirname(full));
     ctx.fs.writeFile(full, content);
   },
@@ -90,6 +136,7 @@ export const fileAppendTool = makeFileTool(
   }),
   async ({ path: p, content }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
+    assertNotUnderRegisteredTool(full, ctx);
     ctx.fs.mkdirp(path.dirname(full));
     ctx.fs.appendFile(full, content);
   },
@@ -101,6 +148,7 @@ export const fileDeleteTool = makeFileTool(
   z.object({ path: z.string().describe("Path relative to workspace root") }),
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
+    assertNotUnderRegisteredTool(full, ctx);
     ctx.fs.deleteFile(full);
   },
 );
@@ -162,6 +210,8 @@ export const fileMoveTool = makeFileTool(
   async ({ from, to }, ctx) => {
     const fullFrom = resolvePath(from, ctx.volumeRoot);
     const fullTo = resolvePath(to, ctx.volumeRoot);
+    assertNotUnderRegisteredTool(fullFrom, ctx);
+    assertNotUnderRegisteredTool(fullTo, ctx);
     ctx.fs.mkdirp(path.dirname(fullTo));
     ctx.fs.rename(fullFrom, fullTo);
   },
@@ -193,6 +243,7 @@ export const directoryCreateTool = makeFileTool(
   }),
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
+    assertNotUnderRegisteredTool(full, ctx);
     ctx.fs.mkdirp(full);
     return { created: full };
   },
