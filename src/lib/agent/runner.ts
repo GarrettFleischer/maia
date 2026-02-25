@@ -317,6 +317,12 @@ async function _runLoop(
       content: response.content || agentResponseContent,
     });
     messages.push(...toolResults);
+    // Nudge models that tend to stop after one tool round: remind them they may call more tools.
+    messages.push({
+      role: "user",
+      content:
+        "[System reminder: If more steps are needed to complete the task, call tools again. Only reply with your final text when the task is complete.]",
+    });
     agentResponseContent = "";
     console.debug(
       `${DEBUG_SEP}\n  END OF TURN (tool calls applied; next request follows)\n${DEBUG_BLOCK}\n`,
@@ -476,9 +482,9 @@ function buildSystemPrompt(
 
 /**
  * Formats prior session turns into a single labeled text block for the system message.
- * @brief Ensures the model sees conversation history as past turns, not the current request. Uses compressed (condensed) history only, not the full verbose transcript.
+ * @brief Ensures the model sees conversation history as past turns, not the current request. Tool calls include both arguments and result so the model has full context.
  * @param entries - Compressed history entries (excluding the current user message)
- * @returns Section heading plus formatted lines (User / Assistant / Tool: name)
+ * @returns Section heading plus formatted lines (User / Assistant / Tool: name with Arguments and Result when present)
  */
 function formatConversationHistory(entries: HistoryEntry[]): string {
   const heading =
@@ -493,6 +499,9 @@ function formatConversationHistory(entries: HistoryEntry[]): string {
         : e.role === "agent"
           ? "**Assistant:**"
           : `**Tool (${e.toolName ?? "unknown"}):**`;
+    if (e.role === "tool_call" && e.toolArgs != null && Object.keys(e.toolArgs).length > 0) {
+      return `${label}\nArguments: ${JSON.stringify(e.toolArgs)}\nResult: ${e.content}`;
+    }
     return `${label}\n${e.content}`;
   });
   return heading + lines.join("\n\n");

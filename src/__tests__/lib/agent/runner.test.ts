@@ -303,6 +303,38 @@ describe("runAgent", () => {
     expect(systemContent).toContain("## Using your identity files");
   });
 
+  it("includes tool call arguments in conversation history context, not just result", async () => {
+    seedIdentityFiles(ctx.fs as FakeFs, "maia");
+    const now = new Date().toISOString();
+    appendEntry(ctx, sessionId, { role: "user", content: "Search for X", timestamp: now });
+    appendEntry(ctx, sessionId, { role: "agent", content: "I'll search.", timestamp: now });
+    appendEntry(ctx, sessionId, {
+      role: "tool_call",
+      content: "Found 3 results.",
+      toolName: "knowledge",
+      toolArgs: { query: "X", limit: 5 },
+      timestamp: now,
+    });
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        const content = system && typeof system.content === "string" ? system.content : "";
+        if (content.includes("## Conversation history (compressed — previous turns only)"))
+          systemContent = content;
+        onToken("Thanks");
+        return { content: "Thanks", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, makeProviderFactory(provider), "maia", sessionId, "What did you find?", () => {});
+    expect(systemContent).toContain("**Tool (knowledge):**");
+    expect(systemContent).toContain("Arguments:");
+    expect(systemContent).toContain('"query":"X"');
+    expect(systemContent).toContain('"limit":5');
+    expect(systemContent).toContain("Result:");
+    expect(systemContent).toContain("Found 3 results.");
+  });
+
   it("includes AGENTS.md from agent dir as full system command when present", async () => {
     const customInstruction = "Review GOALS every turn. Update MEMORY when you learn something important.";
     seedIdentityFiles(ctx.fs as FakeFs, "maia", { agentsMd: customInstruction });
