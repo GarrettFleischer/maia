@@ -34,10 +34,10 @@ interface BraveWebResult {
  * @note Brave Search API uses X-Subscription-Token header.
  */
 async function searchBrave(query: string, max: number, ctx: ToolContext): Promise<SearchResult[]> {
-  const key = getBraveSearchApiKey();
+  const key = getBraveSearchApiKey(ctx);
   if (!key) {
     throw new Error(
-      "Web search requires BRAVE_SEARCH_API_KEY. Set it in your environment (e.g. .env.local). Get a key at https://api.search.brave.com/.",
+      "Web search requires Brave Search API key. Set it in Settings or BRAVE_SEARCH_API_KEY in your environment. Get a key at https://api.search.brave.com/.",
     );
   }
 

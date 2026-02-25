@@ -1,12 +1,12 @@
 /**
  * @fileoverview Brave Answers API tool: AI-generated answers backed by real-time web search.
- * Uses the OpenAI-compatible chat/completions endpoint; same API key as web_search.
+ * Uses the OpenAI-compatible chat/completions endpoint and its own API key (separate billing from Brave Search).
  * @module lib/tools/brave-answers
  */
 import { z } from "zod";
 import { zodToJsonSchema } from "../zod-to-json";
 import { filterText } from "../security/injection-filter";
-import { getBraveSearchApiKey, BRAVE_ANSWERS_URL } from "./brave-api";
+import { getBraveAnswersApiKey, BRAVE_ANSWERS_URL } from "./brave-api";
 import type { Tool, ToolContext } from "./types";
 
 const schema = z.object({
@@ -33,18 +33,18 @@ export interface BraveAnswerResult {
  * @param ctx - Tool context providing HTTP client.
  * @param enableResearch - Whether to enable research mode (multi-search).
  * @returns Object with answer text and fetchedAt timestamp.
- * @throws Error if BRAVE_SEARCH_API_KEY is unset or request fails.
- * @note Uses same X-Subscription-Token as web search; response content is filtered for injection.
+ * @throws Error if Brave Answers API key is unset or request fails.
+ * @note Uses Brave Answers API key (separate billing from Search). Response content is filtered for injection.
  */
 async function getBraveAnswer(
   question: string,
   ctx: ToolContext,
   enableResearch: boolean
 ): Promise<BraveAnswerResult> {
-  const key = getBraveSearchApiKey();
+  const key = getBraveAnswersApiKey(ctx);
   if (!key) {
     throw new Error(
-      "Brave Answers requires BRAVE_SEARCH_API_KEY. Set it in your environment (e.g. .env.local). Get a key at https://api.search.brave.com/.",
+      "Brave Answers requires Brave Answers API key. Set it in Settings or BRAVE_ANSWERS_API_KEY in your environment. Get a key at https://api.search.brave.com/.",
     );
   }
 

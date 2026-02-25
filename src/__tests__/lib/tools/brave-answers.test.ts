@@ -9,28 +9,28 @@ function makeToolCtx(http: FakeHttp): ToolContext {
   return { ...ctx, agentId: "agent-1", sessionId: "session-1", volumeRoot: "/workspace" };
 }
 
-const BRAVE_API_KEY = "test-brave-key";
-let savedBraveKey: string | undefined;
+const BRAVE_ANSWERS_API_KEY = "test-brave-answers-key";
+let savedBraveAnswersKey: string | undefined;
 
 describe("braveAnswersTool", () => {
   let http: FakeHttp;
 
   beforeEach(() => {
     http = new FakeHttp();
-    savedBraveKey = process.env.BRAVE_SEARCH_API_KEY;
-    process.env.BRAVE_SEARCH_API_KEY = BRAVE_API_KEY;
+    savedBraveAnswersKey = process.env.BRAVE_ANSWERS_API_KEY;
+    process.env.BRAVE_ANSWERS_API_KEY = BRAVE_ANSWERS_API_KEY;
   });
 
   afterEach(() => {
-    if (savedBraveKey !== undefined) process.env.BRAVE_SEARCH_API_KEY = savedBraveKey;
-    else delete process.env.BRAVE_SEARCH_API_KEY;
+    if (savedBraveAnswersKey !== undefined) process.env.BRAVE_ANSWERS_API_KEY = savedBraveAnswersKey;
+    else delete process.env.BRAVE_ANSWERS_API_KEY;
   });
 
-  it("throws when BRAVE_SEARCH_API_KEY is not set", async () => {
-    delete process.env.BRAVE_SEARCH_API_KEY;
+  it("throws when Brave Answers API key is not set", async () => {
+    delete process.env.BRAVE_ANSWERS_API_KEY;
     const ctx = makeToolCtx(http);
     await expect(braveAnswersTool.execute({ question: "What is 2+2?" }, ctx)).rejects.toThrow(
-      "BRAVE_SEARCH_API_KEY",
+      "Brave Answers API key",
     );
   });
 
@@ -40,7 +40,7 @@ describe("braveAnswersTool", () => {
     };
     http.on("api.search.brave.com", async (_url, init) => {
       const headers = init?.headers instanceof Headers ? Object.fromEntries((init.headers as Headers).entries()) : (init?.headers as Record<string, string>) ?? {};
-      if (headers["X-Subscription-Token"] !== BRAVE_API_KEY) return new FakeResponse(401, "Unauthorized");
+      if (headers["X-Subscription-Token"] !== BRAVE_ANSWERS_API_KEY) return new FakeResponse(401, "Unauthorized");
       return new FakeResponse(200, JSON.stringify(apiResponse));
     });
     const ctx = makeToolCtx(http);
