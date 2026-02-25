@@ -1,11 +1,11 @@
 ---
 name: fix
-description: Verifies a fix by running typecheck, then build, then tests in order. Use when the user asks to verify a fix, run the fix workflow, or after making code changes to confirm nothing is broken (TDD: run tests as part of completing any implementation). When fixing unused variables or parameters, remove them or migrate usages—do not hide warnings with underscores.
+description: Verifies a fix by running typecheck, compile, unit tests, then e2e tests in order. Use when the user asks to verify a fix, run the fix workflow, or after making code changes to confirm nothing is broken (TDD: run tests as part of completing any implementation). When fixing unused variables or parameters, remove them or migrate usages—do not hide warnings with underscores.
 ---
 
 # Fix verification workflow
 
-Run these three steps **in order**. Run each command **by itself**—do not redirect output or pipe one command into another. Stop at the first failure and report the error.
+Run these four steps **in order**. Run each command **by itself**—do not redirect output or pipe one command into another. Stop at the first failure and report the error.
 
 ## Step 1: Typecheck
 
@@ -39,13 +39,21 @@ bun run compile
 
 If this fails, fix the build before proceeding.
 
-## Step 3: Tests
+## Step 3: Unit tests
 
 ```bash
 bun test
 ```
 
 If this fails, fix failing tests before proceeding.
+
+## Step 4: E2E tests
+
+```bash
+bun run test:e2e
+```
+
+If this fails, fix failing e2e tests before proceeding.
 
 ## Summary
 
@@ -54,5 +62,6 @@ If this fails, fix failing tests before proceeding.
 | 1      | `bun run typecheck`  | Yes             |
 | 2      | `bun run compile`    | Yes             |
 | 3      | `bun test`           | Yes             |
+| 4      | `bun run test:e2e`   | Yes             |
 
-Only report success when all three steps complete without errors.
+Only report success when all four steps complete without errors.

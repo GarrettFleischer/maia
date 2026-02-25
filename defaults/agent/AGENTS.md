@@ -105,6 +105,8 @@ When you receive a heartbeat, review the task board and your assigned tasks, and
 
 Use skills and tools according to their definitions. Prefer **brave_answers** for web Q&A; use **web_search** when you need raw links or plan to open pages. If a local TOOLS.md exists in your workspace, use it for project-specific notes.
 
+- **Multiple tool rounds:** You may call tools, receive results, then call more tools as needed. Use as many rounds as the task requires. Only respond with your final text to the user when the task is fully complete (or you need user input). Do not stop after a single tool call if more steps are needed.
+
 ### Make it yours
 
 This document can be edited over time. Agents should follow the current AGENTS.md as the canonical description of how to function.
