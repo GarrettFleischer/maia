@@ -39,6 +39,27 @@ export const sessionActiveWithMessages: {
     description: "",
     participants: ["user", "maia"],
     tags: [],
+    type: "user",
+    original: historyEntriesSample,
+    compressed: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+};
+
+/** GET /api/sessions/active with a session chatting with a non-maia agent (for targetAgent tests). */
+export const sessionActiveWithCustomAgent: {
+  sessionId: string;
+  session: Session;
+} = {
+  sessionId: "session-custom",
+  session: {
+    id: "session-custom",
+    name: "",
+    description: "",
+    participants: ["user", "custom-agent"],
+    tags: [],
+    type: "user",
     original: historyEntriesSample,
     compressed: [],
     createdAt: new Date().toISOString(),
@@ -54,9 +75,14 @@ export const settingsPublic: SettingsPublic = {
   ollamaBaseUrl: "http://localhost:11434",
   hasOllamaKey: false,
   hasOpenRouterKey: false,
+  hasBraveKey: false,
+  hasBraveAnswersKey: false,
   vllmBaseUrl: "http://localhost:8000/v1",
   dockerBaseUrl: "http://localhost:8000/v1",
   embeddingModel: "nomic-embed-text",
+  embedMaxContentLength: 4000,
+  recentFullCount: 10,
+  compressionBatchSize: 5,
 };
 
 /** GET /api/settings with OpenRouter key already configured. */
@@ -88,6 +114,52 @@ export const agentsList: { agents: AgentDefinition[] } = {
       status: "active",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+    },
+  ],
+};
+
+/** Dashboard response shape for GET /api/dashboard. */
+export interface DashboardFixture {
+  agents: AgentDefinition[];
+  taskCountsByStatus: { todo: number; in_progress: number; done: number };
+  taskCountsByAgent: Record<string, { todo: number; in_progress: number; done: number }>;
+  recentAgentSessions: { id: string; name: string; participants: string[]; updatedAt: string }[];
+  cronJobs: { id: string; expression: string; taskDescription: string; agentId: string; isBuiltIn: boolean; createdAt: string }[];
+}
+
+/** GET /api/dashboard — empty (no agents). */
+export const dashboardEmpty: DashboardFixture = {
+  agents: [],
+  taskCountsByStatus: { todo: 0, in_progress: 0, done: 0 },
+  taskCountsByAgent: {},
+  recentAgentSessions: [],
+  cronJobs: [],
+};
+
+/** GET /api/dashboard — with agents, task counts, recent sessions, cron. */
+export const dashboardWithData: DashboardFixture = {
+  agents: agentsList.agents,
+  taskCountsByStatus: { todo: 2, in_progress: 1, done: 3 },
+  taskCountsByAgent: {
+    maia: { todo: 0, in_progress: 1, done: 2 },
+    "agent-2": { todo: 1, in_progress: 0, done: 0 },
+  },
+  recentAgentSessions: [
+    {
+      id: "session-1",
+      name: "Agent run",
+      participants: ["maia", "agent-2"],
+      updatedAt: new Date().toISOString(),
+    },
+  ],
+  cronJobs: [
+    {
+      id: "builtin-heartbeat",
+      expression: "*/30 * * * *",
+      taskDescription: "Heartbeat",
+      agentId: "maia",
+      isBuiltIn: true,
+      createdAt: new Date().toISOString(),
     },
   ],
 };
