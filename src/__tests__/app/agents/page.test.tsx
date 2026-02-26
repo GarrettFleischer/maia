@@ -4,24 +4,40 @@
  */
 
 import { describe, it, expect, afterEach } from "bun:test";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import AgentsPage from "@/app/agents/page";
 import { installFetchMock, restoreFetch, jsonResponse } from "@/__tests__/helpers/fetch-mock";
 import { dashboardEmpty, dashboardWithData } from "@/__tests__/helpers/fixtures";
+
+/** Resolved promises so client pages don't suspend in tests (Next.js 15 passes these at runtime). */
+const TEST_PARAMS = Promise.resolve({} as Record<string, string | undefined>);
+const TEST_SEARCH_PARAMS = Promise.resolve({} as Record<string, string | string[] | undefined>);
+
+/** Renders AgentsPage and flushes React Suspense (use() with promises) so content appears. */
+async function renderAgentsPage() {
+  let result: ReturnType<typeof render>;
+  await act(async () => {
+    result = render(<AgentsPage params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />);
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return result!;
+}
 
 describe("Agents page (monitor dashboard)", () => {
   afterEach(() => {
     restoreFetch();
   });
 
-  it("shows loading state until dashboard is fetched", () => {
+  it("shows loading state until dashboard is fetched", async () => {
     installFetchMock([
       {
         url: "/api/dashboard",
         handler: () => new Promise(() => {}),
       },
     ]);
-    render(<AgentsPage />);
+    await renderAgentsPage();
     expect(screen.getByText("Loading...")).toBeInTheDocument();
   });
 
@@ -32,7 +48,7 @@ describe("Agents page (monitor dashboard)", () => {
         handler: () => jsonResponse(dashboardEmpty),
       },
     ]);
-    render(<AgentsPage />);
+    await renderAgentsPage();
     await waitFor(() => {
       expect(screen.getByText(/No agents yet/i)).toBeInTheDocument();
     });
@@ -45,9 +61,9 @@ describe("Agents page (monitor dashboard)", () => {
         handler: () => jsonResponse(dashboardWithData),
       },
     ]);
-    render(<AgentsPage />);
+    await renderAgentsPage();
     await waitFor(() => {
-      expect(screen.getByText("Maia")).toBeInTheDocument();
+      expect(screen.getAllByText("Maia").length).toBeGreaterThanOrEqual(1);
     });
     expect(screen.getByText("Helper")).toBeInTheDocument();
     expect(screen.getByText("orchestrator")).toBeInTheDocument();
@@ -60,9 +76,9 @@ describe("Agents page (monitor dashboard)", () => {
         handler: () => jsonResponse(dashboardWithData),
       },
     ]);
-    render(<AgentsPage />);
+    await renderAgentsPage();
     await waitFor(() => {
-      expect(screen.getByText("Maia")).toBeInTheDocument();
+      expect(screen.getAllByText("Maia").length).toBeGreaterThanOrEqual(1);
     });
     const summary = screen.getByRole("region", { name: "Summary" });
     expect(summary).toHaveTextContent("To do");
@@ -80,7 +96,7 @@ describe("Agents page (monitor dashboard)", () => {
         handler: () => jsonResponse(dashboardWithData),
       },
     ]);
-    render(<AgentsPage />);
+    await renderAgentsPage();
     await waitFor(() => {
       expect(screen.getByText(/Recent agent activity/i)).toBeInTheDocument();
     });
@@ -94,7 +110,7 @@ describe("Agents page (monitor dashboard)", () => {
         handler: () => jsonResponse(dashboardWithData),
       },
     ]);
-    render(<AgentsPage />);
+    await renderAgentsPage();
     await waitFor(() => {
       expect(screen.getByText(/Schedule/i)).toBeInTheDocument();
     });

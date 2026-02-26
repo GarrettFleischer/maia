@@ -4,24 +4,40 @@
  */
 
 import { describe, it, expect, afterEach } from "bun:test";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
 import SettingsPage from "@/app/settings/page";
 import { installFetchMock, restoreFetch, jsonResponse } from "@/__tests__/helpers/fetch-mock";
 import { settingsPublic, agentsList } from "@/__tests__/helpers/fixtures";
+
+/** Resolved promises so client pages don't suspend in tests (Next.js 15 passes these at runtime). */
+const TEST_PARAMS = Promise.resolve({} as Record<string, string | undefined>);
+const TEST_SEARCH_PARAMS = Promise.resolve({} as Record<string, string | string[] | undefined>);
+
+/** Renders SettingsPage and flushes React Suspense (use() with promises) so content appears. */
+async function renderSettingsPage() {
+  let result: ReturnType<typeof render>;
+  await act(async () => {
+    result = render(<SettingsPage params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />);
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return result!;
+}
 
 describe("Settings page", () => {
   afterEach(() => {
     restoreFetch();
   });
 
-  it("shows loading state until settings are fetched", () => {
+  it("shows loading state until settings are fetched", async () => {
     installFetchMock([
       { url: "/api/settings", handler: () => new Promise(() => {}), // never resolves
       },
       { url: "/api/agents", handler: () => new Promise(() => {}), // never resolves
       },
     ]);
-    render(<SettingsPage />);
+    await renderSettingsPage();
     expect(screen.getByText("Loading...")).toBeInTheDocument();
   });
 
@@ -30,7 +46,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
     ]);
-    render(<SettingsPage />);
+    await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByText("Ollama Base URL")).toBeInTheDocument();
     });
@@ -53,7 +69,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
     ]);
-    render(<SettingsPage />);
+    await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByDisplayValue(settingsPublic.ollamaBaseUrl)).toBeInTheDocument();
     });
@@ -80,7 +96,7 @@ describe("Settings page", () => {
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
     ]);
-    render(<SettingsPage />);
+    await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByLabelText("Compression model")).toHaveValue(settingsPublic.compressionModel);
     });
@@ -102,7 +118,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
     ]);
-    render(<SettingsPage />);
+    await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
@@ -139,7 +155,7 @@ describe("Settings page", () => {
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
     ]);
-    render(<SettingsPage />);
+    await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
@@ -166,7 +182,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
     ]);
-    render(<SettingsPage />);
+    await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByText(/Model assignment|Agents & models/i)).toBeInTheDocument();
     });
@@ -181,7 +197,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
     ]);
-    render(<SettingsPage />);
+    await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByText(/Model assignment/i)).toBeInTheDocument();
     });
@@ -219,7 +235,7 @@ describe("Settings page", () => {
       },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
     ]);
-    render(<SettingsPage />);
+    await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByText(/Model assignment/i)).toBeInTheDocument();
     });

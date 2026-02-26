@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import type { AgentDefinition, Task } from "@/lib/types";
 import AppHeader from "@/app/components/AppHeader";
 
@@ -33,6 +33,15 @@ function timeAgo(iso: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
 }
+
+/** Pre-resolved promise for tests when Next.js does not pass params/searchParams; avoids conditional use() call. */
+const RESOLVED_EMPTY = Promise.resolve({} as Record<string, string | string[] | undefined>);
+
+/** Props for tasks page; params/searchParams are Promises in Next.js 15 and must be unwrapped with use(). */
+type TasksPageProps = {
+  params?: Promise<Record<string, string | undefined>>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
 
 interface TaskCardProps {
   task: Task;
@@ -188,7 +197,9 @@ function TaskCard({ task, agents, onUpdate, onDelete }: TaskCardProps) {
   );
 }
 
-export default function TasksPage() {
+export default function TasksPage(props: TasksPageProps = {}) {
+  use(props.params ?? RESOLVED_EMPTY as Promise<Record<string, string | undefined>>);
+  use(props.searchParams ?? RESOLVED_EMPTY);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [loading, setLoading] = useState(true);

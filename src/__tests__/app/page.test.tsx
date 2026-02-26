@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, afterEach } from "bun:test";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import Home from "@/app/page";
 import { installFetchMock, restoreFetch, jsonResponse, streamResponse } from "@/__tests__/helpers/fetch-mock";
 import {
@@ -14,6 +14,22 @@ import {
   agentsEmpty,
   agentsList,
 } from "@/__tests__/helpers/fixtures";
+
+/** Resolved promises so client pages don't suspend in tests (Next.js 15 passes these at runtime). */
+const TEST_PARAMS = Promise.resolve({} as Record<string, string | undefined>);
+const TEST_SEARCH_PARAMS = Promise.resolve({} as Record<string, string | string[] | undefined>);
+
+/** Renders Home and flushes React Suspense (use() with promises) so content appears. */
+async function renderHome() {
+  let result: ReturnType<typeof render>;
+  await act(async () => {
+    result = render(<Home params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />);
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return result!;
+}
 
 describe("Home page", () => {
   afterEach(() => {
@@ -35,7 +51,7 @@ describe("Home page", () => {
         handler: () => jsonResponse(agentsEmpty),
       },
     ]);
-    render(<Home />);
+    await renderHome();
     await waitFor(() => {
       expect(screen.getByText(/Welcome to Maia/i)).toBeInTheDocument();
     });
@@ -57,7 +73,7 @@ describe("Home page", () => {
         handler: () => jsonResponse(agentsEmpty),
       },
     ]);
-    render(<Home />);
+    await renderHome();
     await waitFor(() => {
       expect(screen.getByText("Hello")).toBeInTheDocument();
     });
@@ -86,7 +102,7 @@ describe("Home page", () => {
           ]),
       },
     ]);
-    render(<Home />);
+    await renderHome();
     await waitFor(() => {
       expect(screen.getByText(/Welcome to Maia/i)).toBeInTheDocument();
     });
@@ -128,7 +144,7 @@ describe("Home page", () => {
         },
       },
     ]);
-    render(<Home />);
+    await renderHome();
     await waitFor(() => expect(screen.getByText("Hello")).toBeInTheDocument());
     const input = screen.getByPlaceholderText(/message/i);
     fireEvent.change(input, { target: { value: "Hi" } });
@@ -170,7 +186,7 @@ describe("Home page", () => {
           ]),
       },
     ]);
-    render(<Home />);
+    await renderHome();
     await waitFor(() => expect(screen.getByText(/Welcome to Maia/i)).toBeInTheDocument());
     screen.getByRole("button", { name: /new thread/i }).click();
     await waitFor(() => expect(screen.getByText("Helper")).toBeInTheDocument());

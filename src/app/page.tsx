@@ -6,7 +6,7 @@
  * @module app/page
  */
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { use, useState, useRef, useEffect, useCallback } from "react";
 import type { SSEEvent } from "@/lib/types";
 import type { HistoryEntry } from "@/lib/types";
 import AppHeader from "@/app/components/AppHeader";
@@ -48,7 +48,18 @@ function primaryAgentFromParticipants(participants: string[] | undefined, type: 
   return other ?? null;
 }
 
-export default function Home() {
+/** Pre-resolved promise for tests when Next.js does not pass params/searchParams; avoids conditional use() call. */
+const RESOLVED_EMPTY = Promise.resolve({} as Record<string, string | string[] | undefined>);
+
+/** Props for home page; params/searchParams are Promises in Next.js 15 and must be unwrapped with use(). */
+type HomePageProps = {
+  params?: Promise<Record<string, string | undefined>>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default function Home(props: HomePageProps = {}) {
+  use(props.params ?? RESOLVED_EMPTY as Promise<Record<string, string | undefined>>);
+  use(props.searchParams ?? RESOLVED_EMPTY);
   const [messages, setMessages] = useState<ChatMessageListItem[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);

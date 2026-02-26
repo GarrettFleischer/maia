@@ -13,8 +13,12 @@ test.describe("Agents", () => {
 
   test("shows either empty message or agent list", async ({ page }) => {
     await page.goto("/agents");
-    const emptyMessage = page.getByText(/No agents yet\. Maia will create agents/i);
-    const agentRow = page.locator("main").locator("div.space-y-3 >> div").first();
-    await expect(emptyMessage.or(agentRow).first()).toBeVisible({ timeout: 10_000 });
+    // Wait for dashboard to load (loading state clears and content appears)
+    await expect(page.getByText("Loading...")).toBeHidden({ timeout: 15_000 });
+    const statusSection = page.locator('section[aria-label="Agent status"]');
+    await expect(statusSection).toBeVisible({ timeout: 5_000 });
+    const emptyMessage = statusSection.getByText(/No agents yet\. Maia will create agents/i);
+    const firstAgentCard = statusSection.locator("div.grid > div").first();
+    await expect(emptyMessage.or(firstAgentCard)).toBeVisible({ timeout: 5_000 });
   });
 });

@@ -6,11 +6,22 @@
  * @module app/settings/page
  */
 
-import { useEffect, useState } from "react";
+import { use, useEffect, useState } from "react";
 import type { SettingsPublic, AgentDefinition } from "@/lib/types";
 import AppHeader from "@/app/components/AppHeader";
 
-export default function SettingsPage() {
+/** Pre-resolved promise for tests when Next.js does not pass params/searchParams; avoids conditional use() call. */
+const RESOLVED_EMPTY = Promise.resolve({} as Record<string, string | string[] | undefined>);
+
+/** Props for settings page; params/searchParams are Promises in Next.js 15 and must be unwrapped with use(). */
+type SettingsPageProps = {
+  params?: Promise<Record<string, string | undefined>>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default function SettingsPage(props: SettingsPageProps = {}) {
+  use(props.params ?? RESOLVED_EMPTY as Promise<Record<string, string | undefined>>);
+  use(props.searchParams ?? RESOLVED_EMPTY);
   const [settings, setSettings] = useState<SettingsPublic | null>(null);
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [saving, setSaving] = useState(false);

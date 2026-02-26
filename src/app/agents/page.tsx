@@ -8,7 +8,7 @@
  * for tasks_changed and agent_status to keep data fresh.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import type { AgentDefinition, CronJob } from "@/lib/types";
 import AppHeader from "@/app/components/AppHeader";
 
@@ -43,7 +43,18 @@ function formatCronLabel(expression: string): string {
   return expression;
 }
 
-export default function AgentsPage() {
+/** Pre-resolved promise for tests when Next.js does not pass params/searchParams; avoids conditional use() call. */
+const RESOLVED_EMPTY = Promise.resolve({} as Record<string, string | string[] | undefined>);
+
+/** Props for agents page; params/searchParams are Promises in Next.js 15 and must be unwrapped with use(). */
+type AgentsPageProps = {
+  params?: Promise<Record<string, string | undefined>>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default function AgentsPage(props: AgentsPageProps = {}) {
+  use(props.params ?? RESOLVED_EMPTY as Promise<Record<string, string | undefined>>);
+  use(props.searchParams ?? RESOLVED_EMPTY);
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +88,9 @@ export default function AgentsPage() {
     return () => es.close();
   }, [fetchDashboard]);
 
-  const activeCount = data?.agents.filter((a) => a.status === "active").length ?? 0;
+  /** Count agents that are on (not paused/deleted). DB may hold "active", "idle", or "running" from the runner. */
+  const activeCount =
+    data?.agents.filter((a) => a.status !== "paused" && a.status !== "deleted").length ?? 0;
   const counts = data?.taskCountsByStatus ?? { todo: 0, in_progress: 0, done: 0 };
   const byAgent = data?.taskCountsByAgent ?? {};
   const recentSessions = data?.recentAgentSessions ?? [];
