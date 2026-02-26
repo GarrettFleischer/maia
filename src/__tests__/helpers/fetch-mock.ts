@@ -39,12 +39,25 @@ const originalFetch = globalThis.fetch;
 export function installFetchMock(
   handlers: Array<{ url: string | RegExp; handler: FetchHandler }>
 ): void {
-  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
-    const urlStr = typeof url === "string" ? url : url.toString();
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    let urlStr: string;
+    let initPass: RequestInit | undefined;
+    if (url instanceof Request) {
+      urlStr = url.url;
+      try {
+        const body = await url.clone().text();
+        initPass = { method: url.method, headers: url.headers, body };
+      } catch {
+        initPass = { method: url.method, headers: url.headers };
+      }
+    } else {
+      urlStr = typeof url === "string" ? url : url.toString();
+      initPass = init;
+    }
     for (const { url: pattern, handler } of handlers) {
       const matches =
         typeof pattern === "string" ? urlStr.includes(pattern) : pattern.test(urlStr);
-      if (matches) return handler(urlStr, init);
+      if (matches) return handler(urlStr, initPass);
     }
     throw new Error(`fetch-mock: no handler for ${urlStr}`);
   }) as typeof fetch;
