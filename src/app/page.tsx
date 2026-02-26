@@ -71,8 +71,10 @@ export default function Home(props: HomePageProps = {}) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   const loadingRef = useRef(false);
+  const currentAgentIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
   loadingRef.current = loading;
+  currentAgentIdRef.current = currentAgentId;
 
   /** Load a session by id into messages and set as active. */
   const loadSession = useCallback(async (id: string) => {
@@ -106,6 +108,7 @@ export default function Home(props: HomePageProps = {}) {
         if (data.session?.type) setSessionType(type);
         const primary = primaryAgentFromParticipants(data.session?.participants, type);
         setCurrentAgentId(primary);
+        currentAgentIdRef.current = primary;
         if (data.session?.original?.length) {
           const loaded = data.session.original.map(entryToItem);
           setMessages((prev) => {
@@ -145,11 +148,13 @@ export default function Home(props: HomePageProps = {}) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, currentToken]);
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
+  /** Send a message. If overrideContent is provided, uses that instead of input and does not clear input (used by re-send). */
+  const sendMessage = useCallback(async (overrideContent?: string) => {
+    const raw = overrideContent ?? input;
+    const text = (typeof raw === "string" ? raw : "").trim();
     if (!text || loading) return;
 
-    setInput("");
+    if (!overrideContent) setInput("");
     setLoading(true);
     setCurrentToken("");
     setMessages((prev) => [...prev, { role: "user", content: text }]);
@@ -160,8 +165,8 @@ export default function Home(props: HomePageProps = {}) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: text,
-          sessionId: sessionId ?? undefined,
-          targetAgent: currentAgentId ?? "maia",
+          sessionId: sessionIdRef.current ?? undefined,
+          targetAgent: currentAgentIdRef.current ?? "maia",
         }),
       });
 
@@ -231,7 +236,25 @@ export default function Home(props: HomePageProps = {}) {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, sessionId, currentAgentId]);
+  }, [input, loading]);
+
+  /** Clear history after the given message index and re-post that message. */
+  const handleResendMessage = useCallback(
+    async (index: number, content: string) => {
+      if (loading) return;
+      if (sessionId) {
+        const res = await fetch(`/api/sessions/${sessionId}/history/truncate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ keepThroughIndex: index - 1 }),
+        });
+        if (!res.ok) return;
+      }
+      setMessages((prev) => prev.slice(0, index));
+      await sendMessage(content);
+    },
+    [loading, sessionId, sendMessage]
+  );
 
   const handleSelectSession = useCallback(
     (id: string) => {
@@ -295,6 +318,7 @@ export default function Home(props: HomePageProps = {}) {
                 currentToken={currentToken}
                 loading={loading}
                 bottomRef={bottomRef}
+                onResendMessage={!isAgentOnlyThread ? handleResendMessage : undefined}
               />
             </div>
           </div>

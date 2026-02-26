@@ -46,6 +46,8 @@ export interface ChatMessageListProps {
   loading: boolean;
   /** Ref for the scroll anchor at the bottom. */
   bottomRef?: React.RefObject<HTMLDivElement | null>;
+  /** When set, user messages show a re-send button; called with (index, content) to clear history after that message and re-post. */
+  onResendMessage?: (index: number, content: string) => void;
 }
 
 /** Single expandable tool-call bubble (args + optional result). */
@@ -94,6 +96,7 @@ export default function ChatMessageList({
   currentToken,
   loading,
   bottomRef,
+  onResendMessage,
 }: ChatMessageListProps) {
   return (
     <>
@@ -108,7 +111,7 @@ export default function ChatMessageList({
       {messages.map((msg, i) => (
         <div key={i} className="space-y-2">
           {msg.role === "user" || msg.role === "system" ? (
-            <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
               <div
                 className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                   msg.role === "user"
@@ -122,6 +125,17 @@ export default function ChatMessageList({
                   <MarkdownContent content={msg.content} className="text-red-200 [&_code]:bg-red-900/50 [&_pre]:bg-red-900/50" />
                 )}
               </div>
+              {msg.role === "user" && onResendMessage && (
+                <button
+                  type="button"
+                  onClick={() => onResendMessage(i, msg.content)}
+                  disabled={loading}
+                  className="mt-1 text-xs text-zinc-500 hover:text-violet-400 disabled:opacity-50"
+                  aria-label="Re-send this message"
+                >
+                  Re-send
+                </button>
+              )}
             </div>
           ) : msg.role === "tool" ? (
             <div className="flex justify-start">

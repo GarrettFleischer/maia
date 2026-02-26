@@ -11,6 +11,7 @@ import {
   setActiveSessionId,
   searchEntries,
   searchAcrossSessions,
+  truncateHistoryAfterIndex,
 } from "@/lib/history";
 import type { AppContext } from "@/lib/context";
 
@@ -339,6 +340,43 @@ describe("history", () => {
     it("returns empty array when no sessions match", () => {
       const results = searchAcrossSessions(ctx, "zzznomatch");
       expect(results).toEqual([]);
+    });
+  });
+
+  // ─── truncateHistoryAfterIndex ───────────────────────────────────────────────
+
+  describe("truncateHistoryAfterIndex", () => {
+    it("removes entries after the given index (keeps 0..keepThroughIndex inclusive)", () => {
+      const id = createSession(ctx);
+      appendEntry(ctx, id, { role: "user", content: "a", timestamp: new Date().toISOString() });
+      appendEntry(ctx, id, { role: "agent", content: "b", timestamp: new Date().toISOString() });
+      appendEntry(ctx, id, { role: "user", content: "c", timestamp: new Date().toISOString() });
+      truncateHistoryAfterIndex(ctx, id, 1);
+      const session = getSession(ctx, id);
+      expect(session?.original.length).toBe(2);
+      expect(session?.original[0].content).toBe("a");
+      expect(session?.original[1].content).toBe("b");
+    });
+
+    it("keeps all entries when keepThroughIndex is last index", () => {
+      const id = createSession(ctx);
+      appendEntry(ctx, id, { role: "user", content: "x", timestamp: new Date().toISOString() });
+      appendEntry(ctx, id, { role: "agent", content: "y", timestamp: new Date().toISOString() });
+      truncateHistoryAfterIndex(ctx, id, 1);
+      const session = getSession(ctx, id);
+      expect(session?.original.length).toBe(2);
+    });
+
+    it("clears all original entries when keepThroughIndex is -1", () => {
+      const id = createSession(ctx);
+      appendEntry(ctx, id, { role: "user", content: "only", timestamp: new Date().toISOString() });
+      truncateHistoryAfterIndex(ctx, id, -1);
+      const session = getSession(ctx, id);
+      expect(session?.original.length).toBe(0);
+    });
+
+    it("does nothing for non-existent session (no throw)", () => {
+      expect(() => truncateHistoryAfterIndex(ctx, "no-such-id", 0)).not.toThrow();
     });
   });
 });

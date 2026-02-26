@@ -171,6 +171,34 @@ export function setActiveSessionId(ctx: AppContext, sessionId: string): void {
     .run(sessionId);
 }
 
+/**
+ * Truncates session history so only the first (keepThroughIndex + 1) original (uncompressed)
+ * entries remain. Entries after that index are removed from history_entries and history_vectors.
+ * Used by re-send: keep history before the re-sent message, then post that message again.
+ * @param ctx - Application context
+ * @param sessionId - Session to truncate
+ * @param keepThroughIndex - 0-based index of the last entry to keep; -1 keeps none
+ */
+export function truncateHistoryAfterIndex(
+  ctx: AppContext,
+  sessionId: string,
+  keepThroughIndex: number
+): void {
+  const rows = ctx.db
+    .prepare(
+      "SELECT id FROM history_entries WHERE session_id = ? AND is_compressed = 0 ORDER BY timestamp ASC"
+    )
+    .all(sessionId) as { id: string }[];
+  const keepCount = Math.min(keepThroughIndex + 1, rows.length);
+  const toKeep = rows.slice(0, keepCount).map((r) => r.id);
+  const toDelete = rows.slice(keepCount).map((r) => r.id);
+  if (toDelete.length === 0) return;
+  const placeholders = toDelete.map(() => "?").join(",");
+  ctx.db.prepare(`DELETE FROM history_vectors WHERE session_id = ? AND entry_id IN (${placeholders})`).run(sessionId, ...toDelete);
+  ctx.db.prepare(`DELETE FROM history_entries WHERE session_id = ? AND id IN (${placeholders})`).run(sessionId, ...toDelete);
+  ctx.db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(new Date().toISOString(), sessionId);
+}
+
 // -- Fuzzy search --
 
 export function searchEntries(
