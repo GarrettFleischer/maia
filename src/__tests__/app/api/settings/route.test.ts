@@ -34,25 +34,12 @@ describe("PUT /api/settings", () => {
     const req = createNextRequest("http://localhost/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ compressionModel: "ollama/qwen2.5-coder" }),
+      body: JSON.stringify({ contextQueryModel: "ollama/llama3.2" }),
     });
     const res = await PUT(req);
     expect(res.status).toBe(200);
-    const body = await res.json() as { compressionModel: string };
-    expect(body.compressionModel).toBe("ollama/qwen2.5-coder");
-  });
-
-  it("updates recentFullCount and compressionBatchSize and returns them", async () => {
-    const req = createNextRequest("http://localhost/api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recentFullCount: 20, compressionBatchSize: 8 }),
-    });
-    const res = await PUT(req);
-    expect(res.status).toBe(200);
-    const body = await res.json() as { recentFullCount: number; compressionBatchSize: number };
-    expect(body.recentFullCount).toBe(20);
-    expect(body.compressionBatchSize).toBe(8);
+    const body = await res.json() as { contextQueryModel: string };
+    expect(body.contextQueryModel).toBe("ollama/llama3.2");
   });
 
   it("updates embedMaxContentLength and returns it", async () => {

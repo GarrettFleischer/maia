@@ -2,11 +2,12 @@
 
 /**
  * @fileoverview Settings page: AI providers, agent system, whitelist, embedding model,
- * and per-agent model assignment. Save persists settings; agent model changes PATCH immediately.
+ * and per-agent model assignment. All changes (including agent model) apply only on Save;
+ * whitelist is saved first, then agent model updates.
  * @module app/settings/page
  */
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import type { SettingsPublic, AgentDefinition } from "@/lib/types";
 import AppHeader from "@/app/components/AppHeader";
 
@@ -33,10 +34,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [ollamaApiKey, setOllamaApiKey] = useState("");
   const [vllmBaseUrl, setVllmBaseUrl] = useState("");
   const [dockerBaseUrl, setDockerBaseUrl] = useState("");
-  const [compressionModel, setCompressionModel] = useState("");
   const [heartbeatInterval, setHeartbeatInterval] = useState(30);
-  const [recentFullCount, setRecentFullCount] = useState(10);
-  const [compressionBatchSize, setCompressionBatchSize] = useState(5);
   const [contextQueryModel, setContextQueryModel] = useState("");
   const [contextSummaryModel, setContextSummaryModel] = useState("");
   const [contextRecentTurns, setContextRecentTurns] = useState(3);
@@ -46,7 +44,8 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [newModelInput, setNewModelInput] = useState("");
   const [editingModel, setEditingModel] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
-  const [agentSavingId, setAgentSavingId] = useState<string | null>(null);
+  /** Snapshot of agent models when last loaded or saved; used to PATCH only changed agents on Save. */
+  const initialAgentsRef = useRef<AgentDefinition[]>([]);
 
   useEffect(() => {
     Promise.all([
@@ -57,10 +56,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       setOllamaUrl(settingsData.ollamaBaseUrl);
       setVllmBaseUrl(settingsData.vllmBaseUrl);
       setDockerBaseUrl(settingsData.dockerBaseUrl);
-      setCompressionModel(settingsData.compressionModel);
       setHeartbeatInterval(settingsData.heartbeatIntervalMinutes);
-      setRecentFullCount(settingsData.recentFullCount);
-      setCompressionBatchSize(settingsData.compressionBatchSize);
       setContextQueryModel(settingsData.contextQueryModel);
       setContextSummaryModel(settingsData.contextSummaryModel);
       setContextRecentTurns(settingsData.contextRecentTurns);
@@ -68,6 +64,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       setEmbedMaxContentLength(settingsData.embedMaxContentLength);
       setWhitelistedModels(settingsData.whitelistedModels);
       setAgents(agentsList);
+      initialAgentsRef.current = agentsList;
     });
   }, []);
 
@@ -77,10 +74,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       ollamaBaseUrl: ollamaUrl,
       vllmBaseUrl,
       dockerBaseUrl,
-      compressionModel,
       heartbeatIntervalMinutes: heartbeatInterval,
-      recentFullCount,
-      compressionBatchSize,
       contextQueryModel,
       contextSummaryModel,
       contextRecentTurns,
@@ -100,6 +94,20 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     });
     const updated = (await res.json()) as SettingsPublic;
     setSettings(updated);
+
+    const initial = initialAgentsRef.current;
+    for (const agent of agents) {
+      const orig = initial.find((a) => a.id === agent.id);
+      if (orig && orig.model !== agent.model) {
+        await fetch(`/api/agents/${agent.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: agent.model }),
+        });
+      }
+    }
+    initialAgentsRef.current = agents;
+
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -147,22 +155,11 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     setEditValue("");
   };
 
-  const setAgentModel = async (agentId: string, model: string) => {
-    setAgentSavingId(agentId);
-    try {
-      const res = await fetch(`/api/agents/${agentId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model }),
-      });
-      if (res.ok) {
-        setAgents((prev) =>
-          prev.map((a) => (a.id === agentId ? { ...a, model } : a))
-        );
-      }
-    } finally {
-      setAgentSavingId(null);
-    }
+  /** Updates local agent model only; persisted when user clicks Save (whitelist is saved first). */
+  const setAgentModel = (agentId: string, model: string) => {
+    setAgents((prev) =>
+      prev.map((a) => (a.id === agentId ? { ...a, model } : a))
+    );
   };
 
   return (
@@ -276,55 +273,6 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
 
             <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
               <h2 className="font-medium text-sm text-zinc-300">Agent System</h2>
-
-              <div>
-                <label htmlFor="settings-compression-model" className="block text-xs text-zinc-500 mb-1">Compression Model</label>
-                <select
-                  id="settings-compression-model"
-                  value={compressionModel}
-                  onChange={(e) => setCompressionModel(e.target.value)}
-                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                  aria-label="Compression model"
-                >
-                  {(
-                    whitelistedModels.length > 0
-                      ? (whitelistedModels.includes(compressionModel) ? whitelistedModels : [compressionModel, ...whitelistedModels])
-                      : (compressionModel ? [compressionModel] : [])
-                  ).filter(Boolean).map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="settings-recent-full-count" className="block text-xs text-zinc-500 mb-1">Recent full messages (context)</label>
-                <input
-                  id="settings-recent-full-count"
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={recentFullCount}
-                  onChange={(e) => setRecentFullCount(Number(e.target.value))}
-                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                  aria-label="Number of most recent messages to keep as full text in context"
-                />
-                <p className="text-xs text-zinc-500 mt-0.5">Messages older than this use compressed history.</p>
-              </div>
-
-              <div>
-                <label htmlFor="settings-compression-batch-size" className="block text-xs text-zinc-500 mb-1">Compression batch size</label>
-                <input
-                  id="settings-compression-batch-size"
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={compressionBatchSize}
-                  onChange={(e) => setCompressionBatchSize(Number(e.target.value))}
-                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                  aria-label="Number of entries to compress per batch"
-                />
-                <p className="text-xs text-zinc-500 mt-0.5">How many older messages to compress each run.</p>
-              </div>
 
               <div>
                 <label htmlFor="settings-context-query-model" className="block text-xs text-zinc-500 mb-1">Smart context: query model</label>
@@ -498,7 +446,6 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                 <h2 className="font-medium text-sm text-zinc-300">Model assignment</h2>
                 {agents.map((agent) => {
                   const label = agent.id === "maia" ? "Maia (orchestrator)" : agent.name;
-                  const saving = agentSavingId === agent.id;
                   const modelOptions =
                     whitelistedModels.length > 0
                       ? (whitelistedModels.includes(agent.model) ? whitelistedModels : [agent.model, ...whitelistedModels])
@@ -521,7 +468,6 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                           <option key={m} value={m}>{m}</option>
                         ))}
                       </select>
-                      {saving && <span className="text-xs text-zinc-500">Saving…</span>}
                     </div>
                   );
                 })}

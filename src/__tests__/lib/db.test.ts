@@ -63,8 +63,8 @@ describe("db", () => {
       }[];
       const keys = rows.map((r) => r.key);
       expect(keys).toContain("whitelistedModels");
-      expect(keys).toContain("compressionModel");
       expect(keys).toContain("heartbeatIntervalMinutes");
+      expect(keys).toContain("contextQueryModel");
     });
 
     it("seeds built-in heartbeat cron job row", () => {

@@ -14,9 +14,6 @@ describe("settings", () => {
   describe("getSettings", () => {
     it("returns seeded default values", () => {
       const s = getSettings(ctx);
-      expect(s.compressionModel).toBe("ollama/llama3.2");
-      expect(s.recentFullCount).toBe(10);
-      expect(s.compressionBatchSize).toBe(5);
       expect(s.heartbeatIntervalMinutes).toBe(30);
       expect(s.ollamaBaseUrl).toBe("http://localhost:11434");
       expect(s.vllmBaseUrl).toBe("http://localhost:8000/v1");
@@ -24,6 +21,8 @@ describe("settings", () => {
       expect(s.whitelistedModels).toContain("ollama/llama3.2");
       expect(s.ollamaApiKey).toBeUndefined();
       expect(s.openRouterApiKey).toBeUndefined();
+      expect(s.contextQueryModel).toBe("");
+      expect(s.contextRecentTurns).toBe(3);
     });
 
     it("parses whitelistedModels as an array", () => {
@@ -107,11 +106,6 @@ describe("settings", () => {
   });
 
   describe("updateSettings", () => {
-    it("updates compressionModel", () => {
-      updateSettings(ctx, { compressionModel: "ollama/qwen2.5-coder" });
-      expect(getSettings(ctx).compressionModel).toBe("ollama/qwen2.5-coder");
-    });
-
     it("updates heartbeatIntervalMinutes", () => {
       updateSettings(ctx, { heartbeatIntervalMinutes: 60 });
       expect(getSettings(ctx).heartbeatIntervalMinutes).toBe(60);
@@ -129,8 +123,9 @@ describe("settings", () => {
 
     it("only updates keys that are provided", () => {
       const before = getSettings(ctx).ollamaBaseUrl;
-      updateSettings(ctx, { compressionModel: "ollama/qwen2.5-coder" });
+      updateSettings(ctx, { contextQueryModel: "ollama/llama3.2" });
       expect(getSettings(ctx).ollamaBaseUrl).toBe(before);
+      expect(getSettings(ctx).contextQueryModel).toBe("ollama/llama3.2");
     });
 
     it("stores and retrieves the ollamaApiKey internally", () => {
@@ -168,18 +163,6 @@ describe("settings", () => {
     it("updates dockerBaseUrl", () => {
       updateSettings(ctx, { dockerBaseUrl: "http://docker-host:8000/v1" });
       expect(getSettings(ctx).dockerBaseUrl).toBe("http://docker-host:8000/v1");
-    });
-
-    it("updates recentFullCount and persists", () => {
-      updateSettings(ctx, { recentFullCount: 20 });
-      expect(getSettings(ctx).recentFullCount).toBe(20);
-      expect(getSettingsPublic(ctx).recentFullCount).toBe(20);
-    });
-
-    it("updates compressionBatchSize and persists", () => {
-      updateSettings(ctx, { compressionBatchSize: 8 });
-      expect(getSettings(ctx).compressionBatchSize).toBe(8);
-      expect(getSettingsPublic(ctx).compressionBatchSize).toBe(8);
     });
 
     it("updates embedMaxContentLength and persists", () => {

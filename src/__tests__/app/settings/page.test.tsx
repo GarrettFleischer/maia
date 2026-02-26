@@ -57,9 +57,7 @@ describe("Settings page", () => {
     const dockerUrlInput = screen.getByLabelText("Docker Base URL");
     expect(dockerUrlInput).toBeInTheDocument();
     expect(dockerUrlInput).toHaveValue(settingsPublic.dockerBaseUrl);
-    const compressionSelect = screen.getByLabelText("Compression model");
-    expect(compressionSelect).toBeInTheDocument();
-    expect(compressionSelect).toHaveValue(settingsPublic.compressionModel);
+    expect(screen.getByLabelText("Smart context query model")).toBeInTheDocument();
     expect(screen.getByDisplayValue(String(settingsPublic.heartbeatIntervalMinutes))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save Settings/i })).toBeInTheDocument();
   });
@@ -98,9 +96,8 @@ describe("Settings page", () => {
     ]);
     await renderSettingsPage();
     await waitFor(() => {
-      expect(screen.getByLabelText("Compression model")).toHaveValue(settingsPublic.compressionModel);
+      expect(screen.getByLabelText(/Embedding model/i)).toBeInTheDocument();
     });
-    expect(screen.getByLabelText(/Embedding model/i)).toBeInTheDocument();
     expect(screen.getByDisplayValue(settingsPublic.embeddingModel)).toBeInTheDocument();
     const saveButton = screen.getByRole("button", { name: /Save Settings/i });
     fireEvent.click(saveButton);
@@ -218,17 +215,29 @@ describe("Settings page", () => {
     expect(maiaSelectAfter.value).toBe(agentsList.agents[0].model);
   });
 
-  it("PATCHes agent when Maia model dropdown is changed", async () => {
+  it("does not PATCH agent when model dropdown is changed; applies on Save after settings PUT", async () => {
+    const callOrder: string[] = [];
+    let putCalled = false;
     let patchUrl: string | null = null;
     let patchBody: Record<string, unknown> = {};
     installFetchMock([
-      { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
+      {
+        url: "/api/settings",
+        handler: (_url, init) => {
+          if (init?.method === "PUT") {
+            putCalled = true;
+            callOrder.push("PUT");
+          }
+          return jsonResponse(settingsPublic);
+        },
+      },
       {
         url: "/api/agents/maia",
         handler: (url, init) => {
           if (init?.method === "PATCH" && init.body) {
             patchUrl = url;
             patchBody = JSON.parse(init.body as string) as Record<string, unknown>;
+            callOrder.push("PATCH-maia");
           }
           return jsonResponse({ agent: { ...agentsList.agents[0], model: "ollama/qwen2.5-coder" } });
         },
@@ -242,10 +251,19 @@ describe("Settings page", () => {
     const maiaSelect = screen.getByRole("combobox", { name: /Model for Maia/i });
     fireEvent.change(maiaSelect, { target: { value: "ollama/qwen2.5-coder" } });
     await waitFor(() => {
-      expect(patchUrl).toContain("api/agents/maia");
-      expect(patchBody).toBeDefined();
-      expect(typeof patchBody).toBe("object");
-      expect((patchBody as { model?: string }).model).toBe("ollama/qwen2.5-coder");
+      expect(maiaSelect).toHaveValue("ollama/qwen2.5-coder");
     });
+    expect(callOrder).toEqual([]);
+    expect(patchUrl).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Save Settings/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Saved ✓/)).toBeInTheDocument();
+    });
+    expect(putCalled).toBe(true);
+    expect(patchUrl).toContain("api/agents/maia");
+    expect((patchBody as { model?: string }).model).toBe("ollama/qwen2.5-coder");
+    expect(callOrder.indexOf("PUT")).toBe(0);
+    expect(callOrder.indexOf("PATCH-maia")).toBeGreaterThan(0);
   });
 });

@@ -22,7 +22,6 @@ export function getSettings(ctx: AppContext): Settings {
 
   return {
     whitelistedModels: JSON.parse(map.whitelistedModels ?? "[]"),
-    compressionModel: map.compressionModel ?? "ollama/llama3.2",
     heartbeatIntervalMinutes: parseInt(map.heartbeatIntervalMinutes ?? "30"),
     ollamaBaseUrl: map.ollamaBaseUrl ?? "http://localhost:11434",
     ollamaApiKey: map.ollamaApiKey || undefined,
@@ -31,8 +30,6 @@ export function getSettings(ctx: AppContext): Settings {
     dockerBaseUrl: map.dockerBaseUrl ?? "http://localhost:8000/v1",
     embeddingModel: map.embeddingModel ?? "nomic-embed-text",
     embedMaxContentLength: Math.max(500, Math.min(32000, parseInt(map.embedMaxContentLength ?? "4000", 10) || 4000)),
-    recentFullCount: Math.max(1, parseInt(map.recentFullCount ?? "10", 10) || 10),
-    compressionBatchSize: Math.max(1, parseInt(map.compressionBatchSize ?? "5", 10) || 5),
     contextQueryModel: map.contextQueryModel ?? "",
     contextSummaryModel: map.contextSummaryModel ?? "",
     contextRecentTurns: Math.max(1, parseInt(map.contextRecentTurns ?? "3", 10) || 3),
@@ -46,7 +43,6 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
   const hasBraveAnswersKey = creds.includes(BRAVE_ANSWERS_CREDENTIAL_KEY);
   return {
     whitelistedModels: s.whitelistedModels,
-    compressionModel: s.compressionModel,
     heartbeatIntervalMinutes: s.heartbeatIntervalMinutes,
     ollamaBaseUrl: s.ollamaBaseUrl,
     hasOllamaKey: !!s.ollamaApiKey,
@@ -57,8 +53,6 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
     dockerBaseUrl: s.dockerBaseUrl,
     embeddingModel: s.embeddingModel,
     embedMaxContentLength: s.embedMaxContentLength,
-    recentFullCount: s.recentFullCount,
-    compressionBatchSize: s.compressionBatchSize,
     contextQueryModel: s.contextQueryModel,
     contextSummaryModel: s.contextSummaryModel,
     contextRecentTurns: s.contextRecentTurns,
@@ -82,9 +76,6 @@ export function updateSettings(
 
   if (partial.whitelistedModels !== undefined) {
     update.run("whitelistedModels", JSON.stringify(partial.whitelistedModels));
-  }
-  if (partial.compressionModel !== undefined) {
-    update.run("compressionModel", partial.compressionModel);
   }
   if (partial.heartbeatIntervalMinutes !== undefined) {
     const minutes = Math.max(1, Math.min(60, Math.floor(partial.heartbeatIntervalMinutes)));
@@ -115,12 +106,6 @@ export function updateSettings(
   if (partial.embedMaxContentLength !== undefined) {
     const val = Math.max(500, Math.min(32000, Math.floor(partial.embedMaxContentLength)));
     update.run("embedMaxContentLength", String(val));
-  }
-  if (partial.recentFullCount !== undefined) {
-    update.run("recentFullCount", String(partial.recentFullCount));
-  }
-  if (partial.compressionBatchSize !== undefined) {
-    update.run("compressionBatchSize", String(partial.compressionBatchSize));
   }
   if (partial.contextQueryModel !== undefined) {
     update.run("contextQueryModel", partial.contextQueryModel);

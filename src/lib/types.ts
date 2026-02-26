@@ -105,7 +105,6 @@ export interface SecurityEvent {
 
 export interface Settings {
   whitelistedModels: string[];
-  compressionModel: string;
   heartbeatIntervalMinutes: number;
   ollamaBaseUrl: string;
   /** Optional API key for Ollama Cloud (Bearer token). When set, sent as Authorization header. */
@@ -119,10 +118,6 @@ export interface Settings {
   embeddingModel: string;
   /** Max characters to send to the embedding model per chunk (avoids context-length 400). Default 4000. */
   embedMaxContentLength: number;
-  /** Number of most recent history entries to keep as full (uncompressed) in context. Default 10. */
-  recentFullCount: number;
-  /** Number of entries to compress per batch when running compression. Default 5. */
-  compressionBatchSize: number;
   /**
    * Model used to extract JSON search-query arrays for smart context (e.g. ollama/llama3.2).
    * When empty, smart context is disabled and only recent thread turns are used.
@@ -139,7 +134,6 @@ export interface Settings {
 
 export interface SettingsPublic {
   whitelistedModels: string[];
-  compressionModel: string;
   heartbeatIntervalMinutes: number;
   ollamaBaseUrl: string;
   hasOllamaKey: boolean;
@@ -150,8 +144,6 @@ export interface SettingsPublic {
   dockerBaseUrl: string;
   embeddingModel: string;
   embedMaxContentLength: number;
-  recentFullCount: number;
-  compressionBatchSize: number;
   /** @see Settings.contextQueryModel */
   contextQueryModel: string;
   /** @see Settings.contextSummaryModel */
