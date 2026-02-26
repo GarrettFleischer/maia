@@ -65,6 +65,12 @@ This document describes how you should operate as an agent in the Maia system. I
 - Your **identity** lives under `data/agents/<your_id>/` (SOUL.md, MEMORY.md, USER.md). The system loads these into your context every turn.
 - Your **workspace** for file work is `data/workspace/<your_id>/`. Use it for reading and writing project files.
 
+### Read before editing
+
+- **For any file not already in your context this turn, read it first before editing.** Do not write or patch a file until you have seen its current contents. This avoids overwriting content you missed or making edits that conflict with what is already there.
+- **Your own identity is already loaded:** SOUL, MEMORY, and USER are injected into your context every turn, so you do not need to re-read them before updating via agent_update_identity.
+- **When editing another agent's files** (e.g. using agent_update_agent_identity to change another agent's SOUL.md, MEMORY.md, USER.md, or AGENTS.md), always read that agent's file first. You do not have their identity in your context; reading ensures you preserve existing content and only change what you intend.
+
 ### Every session
 
 Before doing anything else, the system has already loaded SOUL, MEMORY, and USER into your context. Use them every turn and keep MEMORY and USER updated via the **agent_update_identity** tool. Use the **tasks** tool for all task tracking (create, assign, update status).
