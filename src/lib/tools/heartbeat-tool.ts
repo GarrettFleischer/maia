@@ -13,6 +13,7 @@ import type { Tool } from "./types";
 import { getAgentIdentity } from "../agent/identity";
 import { createSession } from "../history";
 import { runDataBackup } from "../data-backup";
+import { refreshEmbeddings } from "../knowledge/refresh-embeddings";
 
 /** Agent id for the orchestrator that receives the single heartbeat thread. */
 const MAIA_AGENT_ID = "maia";
@@ -96,6 +97,11 @@ export function createHeartbeatTool(runAgentFn: HeartbeatRunAgentFn): Tool {
       const timestamp = new Date().toISOString();
       console.debug("[Heartbeat] Tool executing", { timestamp });
       ctx.events.emit({ event: "heartbeat", data: { timestamp } });
+
+      // Refresh embeddings before waking agents so smart context search is current.
+      await refreshEmbeddings(ctx).catch((err) => {
+        console.error("Embedding refresh failed during heartbeat:", err);
+      });
 
       const maia = getAgentIdentity(ctx, MAIA_AGENT_ID);
       if (!maia || maia.status === "paused" || maia.status === "deleted") {

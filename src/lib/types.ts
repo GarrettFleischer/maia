@@ -1,4 +1,7 @@
-// Core types for the Maia agentic system
+/**
+ * @fileoverview Core types for the Maia agentic system.
+ * @module lib/types
+ */
 
 export interface HistoryEntry {
   id: string;
@@ -120,6 +123,18 @@ export interface Settings {
   recentFullCount: number;
   /** Number of entries to compress per batch when running compression. Default 5. */
   compressionBatchSize: number;
+  /**
+   * Model used to extract JSON search-query arrays for smart context (e.g. ollama/llama3.2).
+   * When empty, smart context is disabled and only recent thread turns are used.
+   */
+  contextQueryModel: string;
+  /**
+   * Model used to summarize raw retrieved context with citations (e.g. ollama/llama3.2).
+   * When empty, falls back to contextQueryModel; if both are empty smart context is disabled.
+   */
+  contextSummaryModel: string;
+  /** Number of most recent thread turns (user+agent/tool) to include verbatim in context. Default 3, min 1. */
+  contextRecentTurns: number;
 }
 
 export interface SettingsPublic {
@@ -137,6 +152,12 @@ export interface SettingsPublic {
   embedMaxContentLength: number;
   recentFullCount: number;
   compressionBatchSize: number;
+  /** @see Settings.contextQueryModel */
+  contextQueryModel: string;
+  /** @see Settings.contextSummaryModel */
+  contextSummaryModel: string;
+  /** @see Settings.contextRecentTurns */
+  contextRecentTurns: number;
 }
 
 export interface EncryptedValue {

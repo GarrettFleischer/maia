@@ -83,6 +83,9 @@ export const settingsPublic: SettingsPublic = {
   embedMaxContentLength: 4000,
   recentFullCount: 10,
   compressionBatchSize: 5,
+  contextQueryModel: "",
+  contextSummaryModel: "",
+  contextRecentTurns: 3,
 };
 
 /** GET /api/settings with OpenRouter key already configured. */

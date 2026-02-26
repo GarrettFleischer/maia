@@ -37,6 +37,9 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [heartbeatInterval, setHeartbeatInterval] = useState(30);
   const [recentFullCount, setRecentFullCount] = useState(10);
   const [compressionBatchSize, setCompressionBatchSize] = useState(5);
+  const [contextQueryModel, setContextQueryModel] = useState("");
+  const [contextSummaryModel, setContextSummaryModel] = useState("");
+  const [contextRecentTurns, setContextRecentTurns] = useState(3);
   const [embeddingModel, setEmbeddingModel] = useState("");
   const [embedMaxContentLength, setEmbedMaxContentLength] = useState(4000);
   const [whitelistedModels, setWhitelistedModels] = useState<string[]>([]);
@@ -58,6 +61,9 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       setHeartbeatInterval(settingsData.heartbeatIntervalMinutes);
       setRecentFullCount(settingsData.recentFullCount);
       setCompressionBatchSize(settingsData.compressionBatchSize);
+      setContextQueryModel(settingsData.contextQueryModel);
+      setContextSummaryModel(settingsData.contextSummaryModel);
+      setContextRecentTurns(settingsData.contextRecentTurns);
       setEmbeddingModel(settingsData.embeddingModel);
       setEmbedMaxContentLength(settingsData.embedMaxContentLength);
       setWhitelistedModels(settingsData.whitelistedModels);
@@ -75,6 +81,9 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       heartbeatIntervalMinutes: heartbeatInterval,
       recentFullCount,
       compressionBatchSize,
+      contextQueryModel,
+      contextSummaryModel,
+      contextRecentTurns,
       embeddingModel,
       embedMaxContentLength,
       whitelistedModels,
@@ -315,6 +324,55 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                   aria-label="Number of entries to compress per batch"
                 />
                 <p className="text-xs text-zinc-500 mt-0.5">How many older messages to compress each run.</p>
+              </div>
+
+              <div>
+                <label htmlFor="settings-context-query-model" className="block text-xs text-zinc-500 mb-1">Smart context: query model</label>
+                <select
+                  id="settings-context-query-model"
+                  value={contextQueryModel}
+                  onChange={(e) => setContextQueryModel(e.target.value)}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Smart context query model"
+                >
+                  <option value="">Disabled</option>
+                  {whitelistedModels.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-zinc-500 mt-0.5">Cheap model that generates JSON search queries from user messages. Leave blank to disable smart context.</p>
+              </div>
+
+              <div>
+                <label htmlFor="settings-context-summary-model" className="block text-xs text-zinc-500 mb-1">Smart context: summary model</label>
+                <select
+                  id="settings-context-summary-model"
+                  value={contextSummaryModel}
+                  onChange={(e) => setContextSummaryModel(e.target.value)}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Smart context summary model"
+                >
+                  <option value="">Same as query model</option>
+                  {whitelistedModels.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-zinc-500 mt-0.5">Model that summarizes retrieved context with citations. Defaults to query model when blank.</p>
+              </div>
+
+              <div>
+                <label htmlFor="settings-context-recent-turns" className="block text-xs text-zinc-500 mb-1">Recent thread turns in context</label>
+                <input
+                  id="settings-context-recent-turns"
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={contextRecentTurns}
+                  onChange={(e) => setContextRecentTurns(Number(e.target.value))}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Number of recent thread turns to include verbatim in context"
+                />
+                <p className="text-xs text-zinc-500 mt-0.5">How many recent user/agent turns (including tool calls) to include verbatim. Applied even when smart context is disabled.</p>
               </div>
 
               <div>

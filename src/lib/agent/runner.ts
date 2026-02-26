@@ -1,12 +1,23 @@
+/**
+ * @fileoverview Core agent runner loop: builds smart context via query extraction and semantic
+ * search, assembles the system prompt with recent thread turns, and drives the agentic tool loop.
+ * @module lib/agent/runner
+ */
+
 import path from "path";
 import { getSettings } from "../settings";
 import { getAgentIdentity, setAgentStatus } from "./identity";
 import { getSession, appendEntry, ensureSession } from "../history";
 import { getToolsForAgent } from "../tools/registry";
-import { compressEntry } from "./compression";
 import { indexHistoryEntry } from "../knowledge/history-index";
 import { SECURITY_PREAMBLE } from "../security/preamble";
 import { filterText } from "../security/injection-filter";
+import {
+  extractSearchQueries,
+  buildRawRetrievedContext,
+  summarizeRetrievedContext,
+  formatRecentThreadTurns,
+} from "./context-query";
 import type { AppContext } from "../context";
 import type { AIProvider } from "../ai/types";
 import type { HistoryEntry, SSEEvent } from "../types";
@@ -14,11 +25,6 @@ import type { Message } from "../ai/types";
 import type { ToolContext } from "../tools/types";
 import { getWorkspaceRoot } from "../data-dir";
 import { getCurrentSystemDateTime } from "../date-time";
-
-/**
- * @fileoverview Core agent runner loop, including history compression, system prompt construction, and tool execution.
- * @module lib/agent/runner
- */
 
 export type SSECallback = (event: SSEEvent) => void;
 export type ProviderFactory = (model: string, ctx: AppContext) => AIProvider;
@@ -185,36 +191,36 @@ async function _runLoop(
     }
   }
 
-  // Build context window: older entries use compressed when available, last recentFullCount use full (original).
-  // Separate compressed from full so the model can tell the difference and know it can retrieve full context via tools.
+  // Build context: recent thread turns (always included) + optional smart context via semantic search.
   const session = getSession(ctx, sessionId);
-  const original = session?.original ?? [];
-  const compressed = session?.compressed ?? [];
-  const recentFullCount = Math.max(1, settings.recentFullCount);
-  const N = original.length;
-  // Exclude current user message; when we have initialToolResult also exclude that tool entry from prior turns
-  const priorCount = initialToolResult ? N - 2 : N - 1;
-  const compressedSegment: { index: number; entry: HistoryEntry }[] = [];
-  const fullSegment: { index: number; entry: HistoryEntry }[] = [];
-  const compressedCutoff = Math.max(0, priorCount - recentFullCount);
-  for (let i = 0; i < priorCount; i++) {
-    const useCompressed =
-      i < compressedCutoff && compressed[i] !== undefined;
-    const entry = useCompressed ? compressed[i]! : original[i]!;
-    if (entry.content.trim() === "") continue;
-    if (useCompressed) {
-      compressedSegment.push({ index: i, entry });
-    } else {
-      fullSegment.push({ index: i, entry });
+  const sessionForContext = session ?? { original: [] as HistoryEntry[], compressed: [] as HistoryEntry[] };
+
+  // Number of prior entries to expose (exclude the current user message just appended, and any initialToolResult entry)
+  const priorEntriesCount = initialToolResult
+    ? sessionForContext.original.length - 2
+    : sessionForContext.original.length - 1;
+  const priorEntries = sessionForContext.original.slice(0, Math.max(0, priorEntriesCount));
+  const sessionForThread = { ...sessionForContext, original: priorEntries };
+
+  const recentTurns = Math.max(1, settings.contextRecentTurns);
+  const recentThreadBlock = formatRecentThreadTurns(sessionForThread as Parameters<typeof formatRecentThreadTurns>[0], recentTurns);
+
+  // Smart context: extract queries → search history+knowledge → summarize with citations
+  let smartContextBlock = "";
+  const queryModel = settings.contextQueryModel;
+  if (queryModel && settings.whitelistedModels.includes(queryModel)) {
+    try {
+      const queries = await extractSearchQueries(ctx, providerFactory, userMessage);
+      const { text: rawContext, sources } = await buildRawRetrievedContext(ctx, queries);
+      smartContextBlock = await summarizeRetrievedContext(ctx, providerFactory, rawContext, sources);
+    } catch (err) {
+      console.error("Smart context pipeline failed, skipping:", err);
     }
   }
-  const conversationHistoryBlock = formatConversationHistorySections(
-    compressedSegment,
-    fullSegment,
-  );
+
+  const contextBlocks = [recentThreadBlock, smartContextBlock].filter(Boolean).join("\n\n");
   const systemPromptContent = buildSystemPrompt(ctx, agent);
-  const combinedSystemContent =
-    conversationHistoryBlock + "\n\n---\n\n" + systemPromptContent;
+  const combinedSystemContent = contextBlocks + "\n\n---\n\n" + systemPromptContent;
 
   const messages: Message[] = [
     { role: "system", content: combinedSystemContent },
@@ -235,14 +241,6 @@ async function _runLoop(
     content: "",
     timestamp: new Date().toISOString(),
   };
-
-  // Compression provider: try to create one, null means fallback to as-is
-  let compressionProvider: AIProvider | null = null;
-  try {
-    compressionProvider = providerFactory(settings.compressionModel, ctx);
-  } catch {
-    /* model not whitelisted or not configured — compression disabled */
-  }
 
   // Agentic loop
   let loopCount = 0;
@@ -294,8 +292,7 @@ async function _runLoop(
         console.error("History index (agent entry) failed:", err),
       );
 
-      // Send "done" immediately so the stream closes and the UI never blocks. Run batch compression
-      // in the background (fire-and-forget) so the agent never waits on compression.
+      // Send "done" immediately so the stream closes and the UI never blocks.
       const finalContent = response.content || agentResponseContent;
       console.debug(`${DEBUG_SEP}\n  END OF TURN (done, no more tool calls)\n${DEBUG_BLOCK}\n`);
       onEvent({
@@ -304,13 +301,6 @@ async function _runLoop(
         compressed: storedEntry,
         original: storedEntry,
       });
-      runBackgroundCompression(
-        ctx,
-        sessionId,
-        compressionProvider,
-        settings.recentFullCount,
-        settings.compressionBatchSize,
-      );
       return finalContent;
     }
 
@@ -423,55 +413,6 @@ async function _runLoop(
   return "";
 }
 
-/**
- * Runs compression in the background for the next batch of entries that are outside the last recentFullCount.
- * Never blocks: called with void so the agent returns immediately.
- * @param ctx - App context
- * @param sessionId - Session id
- * @param compressionProvider - AI provider for compression, or null to store as-is
- * @param recentFullCount - Number of most recent entries to leave uncompressed
- * @param compressionBatchSize - Max entries to compress in this batch
- */
-function runBackgroundCompression(
-  ctx: AppContext,
-  sessionId: string,
-  compressionProvider: AIProvider | null,
-  recentFullCount: number,
-  compressionBatchSize: number,
-): void {
-  void (async () => {
-    try {
-      const session = getSession(ctx, sessionId);
-      if (!session) return;
-      const { original, compressed } = session;
-      const toCompress = original.length - recentFullCount - compressed.length;
-      if (toCompress < 1) return;
-      const start = compressed.length;
-      const end = Math.min(
-        compressed.length + compressionBatchSize,
-        original.length - recentFullCount,
-      );
-      const promises: Promise<HistoryEntry>[] = [];
-      for (let i = start; i < end; i++) {
-        const entry = original[i]!;
-        if (entry.role === "user" || entry.role === "agent") {
-          promises.push(compressEntry(ctx, compressionProvider, entry, sessionId));
-        } else {
-          // tool_call: store as-is with is_compressed=1 to keep 1:1 indices
-          promises.push(Promise.resolve(appendEntry(ctx, sessionId, entry, true)));
-        }
-      }
-      const results = await Promise.all(promises);
-      for (const appended of results) {
-        indexHistoryEntry(ctx, appended.id).catch((err) =>
-          console.error("History index (compressed entry) failed:", err),
-        );
-      }
-    } catch (err) {
-      console.error("Background compression failed:", err);
-    }
-  })();
-}
 
 /**
  * Fallback system instruction when AGENTS.md is missing or empty.
@@ -565,68 +506,3 @@ function buildSystemPrompt(
     .join("\n");
 }
 
-const COMPRESSED_RETRIEVAL_NOTE =
-  "You can retrieve the full (uncompressed) content for any of the above turns using the history_get_session tool with mode: 'original'. Pass indexes (e.g. [0, 2, 5]) or rangeStart and rangeEnd (inclusive) to fetch multiple turns in one call.";
-
-/**
- * Formats a single history entry for display (label + content, with tool args when present).
- * @param entry - History entry to format
- * @returns Formatted line (e.g. "**User:**\ncontent")
- */
-function formatHistoryEntry(entry: HistoryEntry): string {
-  const label =
-    entry.role === "user"
-      ? "**User:**"
-      : entry.role === "agent"
-        ? "**Assistant:**"
-        : `**Tool (${entry.toolName ?? "unknown"}):**`;
-  if (
-    entry.role === "tool_call" &&
-    entry.toolArgs != null &&
-    Object.keys(entry.toolArgs).length > 0
-  ) {
-    return `${label}\nArguments: ${JSON.stringify(entry.toolArgs)}\nResult: ${entry.content}`;
-  }
-  return `${label}\n${entry.content}`;
-}
-
-/**
- * Formats prior session turns into a labeled text block for the system message, with compressed and full context clearly separated so the model knows which is which and that it can retrieve full context via tools using the turn index.
- * @brief Both sections include turn indices so the model can request any turn by index via history_get_session (mode: 'original'). Tool calls include both arguments and result.
- * @param compressedSegment - Older turns (compressed), with their session index for retrieval
- * @param fullSegment - Recent turns (full/original content), with session index for retrieval
- * @returns Section headings plus formatted lines; includes note about history_get_session for compressed turns
- */
-function formatConversationHistorySections(
-  compressedSegment: { index: number; entry: HistoryEntry }[],
-  fullSegment: { index: number; entry: HistoryEntry }[],
-): string {
-  const top = "## Conversation history\n\n";
-  if (compressedSegment.length === 0 && fullSegment.length === 0) {
-    return top + "No prior messages in this session.";
-  }
-  const parts: string[] = [];
-  if (compressedSegment.length > 0) {
-    const compressedLines = compressedSegment.map(
-      ({ index, entry }) => `[Turn ${index}]\n${formatHistoryEntry(entry)}`,
-    );
-    parts.push(
-      "### Compressed context (older turns)\n\n" +
-        "These are summaries only. " +
-        COMPRESSED_RETRIEVAL_NOTE +
-        "\n\n" +
-        compressedLines.join("\n\n"),
-    );
-  }
-  if (fullSegment.length > 0) {
-    const fullLines = fullSegment.map(
-      ({ index, entry }) => `[Turn ${index}]\n${formatHistoryEntry(entry)}`,
-    );
-    parts.push(
-      "### Full context (recent turns)\n\n" +
-        "Use history_get_session with mode: 'original' and the turn index above to retrieve full content. Pass indexes (e.g. [0, 2, 5]) or rangeStart/rangeEnd to fetch multiple turns in one call.\n\n" +
-        fullLines.join("\n\n"),
-    );
-  }
-  return top + parts.join("\n\n");
-}

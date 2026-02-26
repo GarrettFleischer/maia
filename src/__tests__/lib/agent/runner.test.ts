@@ -156,17 +156,11 @@ describe("runAgent", () => {
     expect(toolEvents.some((e) => e.type === "tool_result")).toBe(true);
   });
 
-  it("excludes empty compressed entries from context (skipped turns)", async () => {
+  it("includes prior thread turns in the recent thread section of the system message", async () => {
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
-    const t3 = "2020-01-01T00:00:03.000Z";
-    // Seed originals (full text) and compressed (empty for skipped turn) so context uses compressed for older
-    appendEntry(ctx, sessionId, { role: "user", content: "prior data", timestamp: t1 }, false);
-    appendEntry(ctx, sessionId, { role: "agent", content: "", timestamp: t2 }, false);
-    appendEntry(ctx, sessionId, { role: "user", content: "second", timestamp: t3 }, false);
-    appendEntry(ctx, sessionId, { role: "user", content: "prior data", timestamp: t1 }, true);
-    appendEntry(ctx, sessionId, { role: "agent", content: "", timestamp: t2 }, true);
-    appendEntry(ctx, sessionId, { role: "user", content: "second", timestamp: t3 }, true);
+    appendEntry(ctx, sessionId, { role: "user", content: "prior user message", timestamp: t1 }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "prior agent reply", timestamp: t2 }, false);
     let capturedSystem = "";
     let capturedNonSystem: { role: string; content: string }[] = [];
     const provider: AIProvider = {
@@ -175,95 +169,107 @@ describe("runAgent", () => {
         const nonSystem = messages
           .filter((m) => m.role !== "system")
           .map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : String(m.content) }));
-        if (nonSystem.some((m) => m.content === "current") || (system && typeof system.content === "string" && system.content.includes("prior data"))) {
-          capturedSystem = system && typeof system.content === "string" ? system.content : "";
-          capturedNonSystem = nonSystem;
-        }
+        capturedSystem = system && typeof system.content === "string" ? system.content : "";
+        capturedNonSystem = nonSystem;
         onToken("ok");
         return { content: "ok", toolCalls: [], stopped: true };
       },
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "current", () => {});
-    // Conversation history is in the system message; empty compressed entry is excluded (filtered by content).
-    expect(capturedSystem).toContain("## Conversation history");
-    expect(capturedSystem).toContain("prior data");
-    // Only the current user message is a separate message; no duplicate history as user/assistant messages.
+    // Recent thread is in the system message
+    expect(capturedSystem).toContain("## Recent thread");
+    expect(capturedSystem).toContain("prior user message");
+    expect(capturedSystem).toContain("prior agent reply");
+    // Only the current user message is a separate message
     expect(capturedNonSystem).toHaveLength(1);
     expect(capturedNonSystem[0].content).toBe("current");
     expect(capturedNonSystem[0].role).toBe("user");
   });
 
-  it("separates compressed and full context and tells model it can retrieve full context via tools", async () => {
-    updateSettings(ctx, { recentFullCount: 2 });
+  it("respects contextRecentTurns setting, only including last N turns", async () => {
+    updateSettings(ctx, { contextRecentTurns: 2 });
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
     const t3 = "2020-01-01T00:00:03.000Z";
-    appendEntry(ctx, sessionId, { role: "user", content: "First user message", timestamp: t0 }, false);
-    appendEntry(ctx, sessionId, { role: "agent", content: "First agent reply", timestamp: t1 }, false);
-    appendEntry(ctx, sessionId, { role: "user", content: "Second user message", timestamp: t2 }, false);
-    appendEntry(ctx, sessionId, { role: "agent", content: "Second agent reply", timestamp: t3 }, false);
-    appendEntry(ctx, sessionId, { role: "user", content: "summary one", timestamp: t0 }, true);
-    appendEntry(ctx, sessionId, { role: "agent", content: "summary reply one", timestamp: t1 }, true);
-    appendEntry(ctx, sessionId, { role: "user", content: "Second user message", timestamp: t2 }, true);
-    appendEntry(ctx, sessionId, { role: "agent", content: "Second agent reply", timestamp: t3 }, true);
+    appendEntry(ctx, sessionId, { role: "user", content: "oldest message", timestamp: t0 }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "oldest reply", timestamp: t1 }, false);
+    appendEntry(ctx, sessionId, { role: "user", content: "recent message", timestamp: t2 }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "recent reply", timestamp: t3 }, false);
     let systemContent = "";
     const provider: AIProvider = {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
-        const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history")) systemContent = content;
+        systemContent = system && typeof system.content === "string" ? system.content : "";
         onToken("ok");
         return { content: "ok", toolCalls: [], stopped: true };
       },
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "current", () => {});
-    expect(systemContent).toContain("### Compressed context (older turns)");
-    expect(systemContent).toContain("### Full context (recent turns)");
-    expect(systemContent).toContain("history_get_session");
-    expect(systemContent).toContain("mode: 'original'");
-    expect(systemContent).toContain("[Turn 0]");
-    expect(systemContent).toContain("[Turn 1]");
-    expect(systemContent).toContain("summary one");
-    expect(systemContent).toContain("Second user message");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("recent message");
+    expect(systemContent).toContain("recent reply");
+    expect(systemContent).not.toContain("oldest message");
+    expect(systemContent).not.toContain("oldest reply");
   });
 
-  it("puts conversation history first in system message, then system prompt", async () => {
+  it("puts recent thread section first in system message, then system prompt", async () => {
     let systemContent = "";
     const provider: AIProvider = {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
-        const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history"))
-          systemContent = content;
+        systemContent = system && typeof system.content === "string" ? system.content : "";
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };
       },
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
-    const historyPos = systemContent.indexOf("## Conversation history");
+    const recentPos = systemContent.indexOf("## Recent thread");
     const securityPos = systemContent.indexOf("SECURITY NOTICE");
     const identityPos = systemContent.indexOf("## Identity");
-    expect(historyPos).toBeGreaterThanOrEqual(0);
-    expect(securityPos).toBeGreaterThan(historyPos);
+    expect(recentPos).toBeGreaterThanOrEqual(0);
+    expect(securityPos).toBeGreaterThan(recentPos);
     expect(identityPos).toBeGreaterThan(securityPos);
   });
 
-  it("shows No prior messages in system when session has no prior turns", async () => {
+  it("shows no-turns message in recent thread section when session has no prior turns", async () => {
     let systemContent = "";
     const provider: AIProvider = {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
-        const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history"))
-          systemContent = content;
+        systemContent = system && typeof system.content === "string" ? system.content : "";
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };
       },
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "First message", () => {});
-    expect(systemContent).toContain("## Conversation history");
-    expect(systemContent).toContain("No prior messages in this session.");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("No recent turns");
+  });
+
+  it("includes recent thread block in system message when contextQueryModel is configured", async () => {
+    updateSettings(ctx, { contextQueryModel: "ollama/llama3.2" });
+    const capturedSystems: string[] = [];
+    // A single provider handles all calls: query extraction, summarization, and main agent.
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const sys = messages.find((m) => m.role === "system");
+        if (sys && typeof sys.content === "string") capturedSystems.push(sys.content);
+        // Return JSON array for first call (query extraction), summary for second (summarization),
+        // and a normal response for the main agent call.
+        const idx = capturedSystems.length;
+        const content =
+          idx === 1 ? '["agent architecture"]' :
+          idx === 2 ? "## Smart context\nSummary of context." :
+          "Agent response";
+        onToken(content);
+        return { content, toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
+    // The main agent's system message (last captured) should contain the recent thread section
+    const mainAgentSystem = capturedSystems[capturedSystems.length - 1] ?? "";
+    expect(mainAgentSystem).toContain("## Recent thread");
   });
 
   it("includes the current system date and time section in the system prompt", async () => {
@@ -272,7 +278,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history")) {
+        if (content.includes("## Recent thread")) {
           systemContent = content;
         }
         onToken("Hi");
@@ -325,7 +331,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history"))
+        if (content.includes("## Recent thread"))
           systemContent = content;
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };
@@ -359,7 +365,7 @@ describe("runAgent", () => {
     expect(firstRequestMessages.some((m) => m.role === "tool" && m.toolName === "cron_echo" && m.content === "scheduled payload")).toBe(true);
   });
 
-  it("includes tool call arguments in conversation history context, not just result", async () => {
+  it("includes tool call arguments and results in the recent thread section", async () => {
     seedIdentityFiles(ctx.fs as FakeFs, "maia");
     const now = new Date().toISOString();
     appendEntry(ctx, sessionId, { role: "user", content: "Search for X", timestamp: now });
@@ -376,7 +382,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history"))
+        if (content.includes("## Recent thread"))
           systemContent = content;
         onToken("Thanks");
         return { content: "Thanks", toolCalls: [], stopped: true };
@@ -399,7 +405,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history") && content.includes("## Identity"))
+        if (content.includes("## Recent thread") && content.includes("## Identity"))
           systemContent = content;
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };
@@ -407,11 +413,11 @@ describe("runAgent", () => {
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
     expect(systemContent).toContain(customInstruction);
-    const historyPos = systemContent.indexOf("## Conversation history");
+    const recentPos = systemContent.indexOf("## Recent thread");
     const customPos = systemContent.indexOf(customInstruction);
     const identityPos = systemContent.indexOf("## Identity");
-    expect(historyPos).toBeGreaterThanOrEqual(0);
-    expect(customPos).toBeGreaterThan(historyPos);
+    expect(recentPos).toBeGreaterThanOrEqual(0);
+    expect(customPos).toBeGreaterThan(recentPos);
     expect(identityPos).toBeGreaterThan(customPos);
   });
 
@@ -425,7 +431,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history") && content.includes("## Identity"))
+        if (content.includes("## Recent thread") && content.includes("## Identity"))
           systemContent = content;
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };

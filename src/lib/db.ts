@@ -178,6 +178,9 @@ export function initSchema(db: DbAdapter): void {
     embedMaxContentLength: "4000",
     recentFullCount: "10",
     compressionBatchSize: "5",
+    contextQueryModel: "",
+    contextSummaryModel: "",
+    contextRecentTurns: "3",
   };
 
   const insert = db.prepare(

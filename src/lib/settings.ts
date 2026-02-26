@@ -33,6 +33,9 @@ export function getSettings(ctx: AppContext): Settings {
     embedMaxContentLength: Math.max(500, Math.min(32000, parseInt(map.embedMaxContentLength ?? "4000", 10) || 4000)),
     recentFullCount: Math.max(1, parseInt(map.recentFullCount ?? "10", 10) || 10),
     compressionBatchSize: Math.max(1, parseInt(map.compressionBatchSize ?? "5", 10) || 5),
+    contextQueryModel: map.contextQueryModel ?? "",
+    contextSummaryModel: map.contextSummaryModel ?? "",
+    contextRecentTurns: Math.max(1, parseInt(map.contextRecentTurns ?? "3", 10) || 3),
   };
 }
 
@@ -56,6 +59,9 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
     embedMaxContentLength: s.embedMaxContentLength,
     recentFullCount: s.recentFullCount,
     compressionBatchSize: s.compressionBatchSize,
+    contextQueryModel: s.contextQueryModel,
+    contextSummaryModel: s.contextSummaryModel,
+    contextRecentTurns: s.contextRecentTurns,
   };
 }
 
@@ -115,6 +121,15 @@ export function updateSettings(
   }
   if (partial.compressionBatchSize !== undefined) {
     update.run("compressionBatchSize", String(partial.compressionBatchSize));
+  }
+  if (partial.contextQueryModel !== undefined) {
+    update.run("contextQueryModel", partial.contextQueryModel);
+  }
+  if (partial.contextSummaryModel !== undefined) {
+    update.run("contextSummaryModel", partial.contextSummaryModel);
+  }
+  if (partial.contextRecentTurns !== undefined) {
+    update.run("contextRecentTurns", String(Math.max(1, Math.floor(partial.contextRecentTurns))));
   }
   if (partial.braveSearchApiKey !== undefined) {
     credentialCreate(ctx, BRAVE_SEARCH_CREDENTIAL_KEY, partial.braveSearchApiKey);
