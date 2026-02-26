@@ -27,6 +27,7 @@ export default function SettingsPage() {
   const [recentFullCount, setRecentFullCount] = useState(10);
   const [compressionBatchSize, setCompressionBatchSize] = useState(5);
   const [embeddingModel, setEmbeddingModel] = useState("");
+  const [embedMaxContentLength, setEmbedMaxContentLength] = useState(4000);
   const [whitelistedModels, setWhitelistedModels] = useState<string[]>([]);
   const [newModelInput, setNewModelInput] = useState("");
   const [editingModel, setEditingModel] = useState<string | null>(null);
@@ -47,6 +48,7 @@ export default function SettingsPage() {
       setRecentFullCount(settingsData.recentFullCount);
       setCompressionBatchSize(settingsData.compressionBatchSize);
       setEmbeddingModel(settingsData.embeddingModel);
+      setEmbedMaxContentLength(settingsData.embedMaxContentLength);
       setWhitelistedModels(settingsData.whitelistedModels);
       setAgents(agentsList);
     });
@@ -63,6 +65,7 @@ export default function SettingsPage() {
       recentFullCount,
       compressionBatchSize,
       embeddingModel,
+      embedMaxContentLength,
       whitelistedModels,
     };
     if (ollamaApiKey) body.ollamaApiKey = ollamaApiKey;
@@ -313,6 +316,21 @@ export default function SettingsPage() {
                   className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
                   aria-label="Embedding model"
                 />
+              </div>
+
+              <div>
+                <label htmlFor="settings-embed-max-content-length" className="block text-xs text-zinc-500 mb-1">Embed max content length (chars)</label>
+                <input
+                  id="settings-embed-max-content-length"
+                  type="number"
+                  min={500}
+                  max={32000}
+                  value={embedMaxContentLength}
+                  onChange={(e) => setEmbedMaxContentLength(Number(e.target.value))}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Max characters per embed chunk"
+                />
+                <p className="text-xs text-zinc-500 mt-0.5">Truncation limit to avoid Ollama context-length errors. 4000 is safe for 2048-token default.</p>
               </div>
 
               <div>

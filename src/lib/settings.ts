@@ -1,6 +1,7 @@
 import { credentialCreate, credentialList } from "./security/credential-vault";
 import type { AppContext } from "./context";
 import type { Settings, SettingsPublic } from "./types";
+import { BUILTIN_HEARTBEAT_JOB_ID, minutesToCronExpression } from "./cron/expression";
 
 /** Vault key used for Brave Search API key (encrypted). */
 export const BRAVE_SEARCH_CREDENTIAL_KEY = "BRAVE_SEARCH_API_KEY";
@@ -29,6 +30,7 @@ export function getSettings(ctx: AppContext): Settings {
     vllmBaseUrl: map.vllmBaseUrl ?? "http://localhost:8000/v1",
     dockerBaseUrl: map.dockerBaseUrl ?? "http://localhost:8000/v1",
     embeddingModel: map.embeddingModel ?? "nomic-embed-text",
+    embedMaxContentLength: Math.max(500, Math.min(32000, parseInt(map.embedMaxContentLength ?? "4000", 10) || 4000)),
     recentFullCount: Math.max(1, parseInt(map.recentFullCount ?? "10", 10) || 10),
     compressionBatchSize: Math.max(1, parseInt(map.compressionBatchSize ?? "5", 10) || 5),
   };
@@ -51,6 +53,7 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
     vllmBaseUrl: s.vllmBaseUrl,
     dockerBaseUrl: s.dockerBaseUrl,
     embeddingModel: s.embeddingModel,
+    embedMaxContentLength: s.embedMaxContentLength,
     recentFullCount: s.recentFullCount,
     compressionBatchSize: s.compressionBatchSize,
   };
@@ -78,7 +81,12 @@ export function updateSettings(
     update.run("compressionModel", partial.compressionModel);
   }
   if (partial.heartbeatIntervalMinutes !== undefined) {
-    update.run("heartbeatIntervalMinutes", String(partial.heartbeatIntervalMinutes));
+    const minutes = Math.max(1, Math.min(60, Math.floor(partial.heartbeatIntervalMinutes)));
+    update.run("heartbeatIntervalMinutes", String(minutes));
+    ctx.db.prepare("UPDATE cron_jobs SET expression = ? WHERE id = ?").run(
+      minutesToCronExpression(minutes),
+      BUILTIN_HEARTBEAT_JOB_ID
+    );
   }
   if (partial.ollamaBaseUrl !== undefined) {
     update.run("ollamaBaseUrl", partial.ollamaBaseUrl);
@@ -97,6 +105,10 @@ export function updateSettings(
   }
   if (partial.embeddingModel !== undefined) {
     update.run("embeddingModel", partial.embeddingModel);
+  }
+  if (partial.embedMaxContentLength !== undefined) {
+    const val = Math.max(500, Math.min(32000, Math.floor(partial.embedMaxContentLength)));
+    update.run("embedMaxContentLength", String(val));
   }
   if (partial.recentFullCount !== undefined) {
     update.run("recentFullCount", String(partial.recentFullCount));

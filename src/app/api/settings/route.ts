@@ -9,7 +9,11 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   const ctx = await ensureAppContext();
-  const body = await req.json();
+  const body = (await req.json()) as Record<string, unknown>;
   updateSettings(ctx, body);
+  if (body.heartbeatIntervalMinutes !== undefined) {
+    const { refreshHeartbeatJob } = await import("@/lib/cron/service");
+    refreshHeartbeatJob(ctx);
+  }
   return NextResponse.json(getSettingsPublic(ctx));
 }

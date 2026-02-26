@@ -54,4 +54,16 @@ describe("PUT /api/settings", () => {
     expect(body.recentFullCount).toBe(20);
     expect(body.compressionBatchSize).toBe(8);
   });
+
+  it("updates embedMaxContentLength and returns it", async () => {
+    const req = createNextRequest("http://localhost/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ embedMaxContentLength: 6000 }),
+    });
+    const res = await PUT(req);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { embedMaxContentLength: number };
+    expect(body.embedMaxContentLength).toBe(6000);
+  });
 });

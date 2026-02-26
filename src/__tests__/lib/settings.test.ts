@@ -36,6 +36,7 @@ describe("settings", () => {
       const s = getSettings(ctx);
       expect(s.openRouterApiKey).toBeUndefined();
       expect(s.embeddingModel).toBe("nomic-embed-text");
+      expect(s.embedMaxContentLength).toBe(4000);
     });
   });
 
@@ -179,6 +180,19 @@ describe("settings", () => {
       updateSettings(ctx, { compressionBatchSize: 8 });
       expect(getSettings(ctx).compressionBatchSize).toBe(8);
       expect(getSettingsPublic(ctx).compressionBatchSize).toBe(8);
+    });
+
+    it("updates embedMaxContentLength and persists", () => {
+      updateSettings(ctx, { embedMaxContentLength: 6000 });
+      expect(getSettings(ctx).embedMaxContentLength).toBe(6000);
+      expect(getSettingsPublic(ctx).embedMaxContentLength).toBe(6000);
+    });
+
+    it("clamps embedMaxContentLength to 500–32000", () => {
+      updateSettings(ctx, { embedMaxContentLength: 100 });
+      expect(getSettings(ctx).embedMaxContentLength).toBe(500);
+      updateSettings(ctx, { embedMaxContentLength: 50000 });
+      expect(getSettings(ctx).embedMaxContentLength).toBe(32000);
     });
   });
 });
