@@ -39,19 +39,72 @@ export const historySearchAllTool = makeTool(
   }
 );
 
+/**
+ * Resolves requested indices: from explicit list or inclusive range. Clamps to valid session indices.
+ * @param indexes - Optional list of turn indices
+ * @param rangeStart - Optional start of inclusive range
+ * @param rangeEnd - Optional end of inclusive range
+ * @param length - Session array length
+ * @returns Sorted, deduplicated list of indices in [0, length), or null if no selection (full session).
+ */
+function resolveRequestedIndices(
+  indexes: number[] | undefined,
+  rangeStart: number | undefined,
+  rangeEnd: number | undefined,
+  length: number
+): number[] | null {
+  if (length === 0) return null;
+  const maxIndex = length - 1;
+  if (indexes != null && indexes.length > 0) {
+    const set = new Set(
+      indexes
+        .filter((i) => Number.isInteger(i) && i >= 0 && i <= maxIndex)
+        .sort((a, b) => a - b)
+    );
+    return [...set];
+  }
+  if (rangeStart != null || rangeEnd != null) {
+    const start = Math.max(0, rangeStart ?? 0);
+    const end = Math.min(maxIndex, rangeEnd ?? maxIndex);
+    if (start > end) return [];
+    const out: number[] = [];
+    for (let i = start; i <= end; i++) out.push(i);
+    return out;
+  }
+  return null;
+}
+
 export const historyGetSessionTool = makeTool(
   "history_get_session",
-  "Get the full history of a specific session.",
+  "Get session history. By default returns the full session. Pass indexes (array of turn indices) or rangeStart/rangeEnd (inclusive) to return only those turns in one call.",
   z.object({
-    sessionId: z.string(),
-    mode: z.enum(["compressed", "original", "both"]).optional(),
+    sessionId: z.string().describe("Session ID"),
+    mode: z.enum(["compressed", "original", "both"]).optional().describe("Which layer: original (full), compressed (summaries), or both"),
+    indexes: z.array(z.number().int().min(0)).optional().describe("Specific turn indices to return (e.g. [0, 2, 5]). Use to fetch multiple turns in one call."),
+    rangeStart: z.number().int().min(0).optional().describe("Start of inclusive range (with rangeEnd) to return only those turns."),
+    rangeEnd: z.number().int().min(0).optional().describe("End of inclusive range (with rangeStart) to return only those turns."),
   }),
-  async ({ sessionId, mode }, ctx) => {
+  async ({ sessionId, mode, indexes, rangeStart, rangeEnd }, ctx) => {
     const session = getSession(ctx, sessionId);
     if (!session) return null;
-    if (mode === "compressed") return { ...session, original: [] };
-    if (mode === "original") return { ...session, compressed: [] };
-    return session;
+    const length = session.original.length;
+    const indices = resolveRequestedIndices(indexes, rangeStart, rangeEnd, length);
+    const includeOriginal = mode !== "compressed";
+    const includeCompressed = mode === "compressed" || mode === "both";
+
+    if (indices == null) {
+      if (mode === "compressed") return { ...session, original: [] };
+      if (mode === "original") return { ...session, compressed: [] };
+      return session;
+    }
+
+    const entries = indices.map((index) => {
+      const row: { index: number; original?: typeof session.original[0]; compressed?: typeof session.compressed[0] } = { index };
+      if (includeOriginal && session.original[index]) row.original = session.original[index];
+      if (includeCompressed && session.compressed[index]) row.compressed = session.compressed[index];
+      return row;
+    });
+    return { sessionId, mode: mode ?? "both", entries };
   }
 );
 

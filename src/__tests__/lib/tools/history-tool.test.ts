@@ -100,4 +100,39 @@ describe("historyGetSessionTool", () => {
     expect(result.original).toHaveLength(0);
     expect(result.compressed).toHaveLength(1);
   });
+
+  it("returns only requested indexes when indexes array is provided", async () => {
+    const ctx = makeTestContext();
+    const sessionId = createSession(ctx, ["user", "maia"]);
+    appendEntry(ctx, sessionId, { role: "user", content: "turn0", timestamp: new Date().toISOString() }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "turn1", timestamp: new Date().toISOString() }, false);
+    appendEntry(ctx, sessionId, { role: "user", content: "turn2", timestamp: new Date().toISOString() }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "turn3", timestamp: new Date().toISOString() }, false);
+    const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId, volumeRoot: "/w" };
+    const result = await historyGetSessionTool.execute(
+      { sessionId, mode: "original", indexes: [0, 2] },
+      toolCtx
+    ) as { sessionId: string; mode: string; entries: Array<{ index: number; original?: HistoryEntry }> };
+    expect(result.sessionId).toBe(sessionId);
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[0]).toMatchObject({ index: 0, original: expect.objectContaining({ content: "turn0" }) });
+    expect(result.entries[1]).toMatchObject({ index: 2, original: expect.objectContaining({ content: "turn2" }) });
+  });
+
+  it("returns only requested range when rangeStart and rangeEnd are provided", async () => {
+    const ctx = makeTestContext();
+    const sessionId = createSession(ctx, ["user", "maia"]);
+    appendEntry(ctx, sessionId, { role: "user", content: "a", timestamp: new Date().toISOString() }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "b", timestamp: new Date().toISOString() }, false);
+    appendEntry(ctx, sessionId, { role: "user", content: "c", timestamp: new Date().toISOString() }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "d", timestamp: new Date().toISOString() }, false);
+    const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId, volumeRoot: "/w" };
+    const result = await historyGetSessionTool.execute(
+      { sessionId, mode: "original", rangeStart: 1, rangeEnd: 2 },
+      toolCtx
+    ) as { sessionId: string; entries: Array<{ index: number; original?: HistoryEntry }> };
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[0]).toMatchObject({ index: 1, original: expect.objectContaining({ content: "b" }) });
+    expect(result.entries[1]).toMatchObject({ index: 2, original: expect.objectContaining({ content: "c" }) });
+  });
 });
