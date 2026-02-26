@@ -16,6 +16,7 @@ import { taskTrackerTools } from "./task-tracker";
 import { yahooMailTools } from "./yahoo-mail";
 import { dateTimeTools } from "./datetime";
 import { customToolManagementTools } from "./custom-tools";
+import { threadManagementTools } from "./thread-management";
 import type { Tool, ToolRegistration } from "./types";
 import type { DbAdapter } from "../context";
 import { getDb } from "../db";
@@ -48,6 +49,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
   ...agentIdentityTools.map((tool) => ({ tool, maiaOnly: false })),
   ...cronTools.map((tool) => ({ tool, maiaOnly: true })),
   ...customToolManagementTools.map((tool) => ({ tool, maiaOnly: true })),
+  ...threadManagementTools.map((tool) => ({ tool, maiaOnly: true })),
 ];
 
 const BUILT_IN_TOOL_NAMES = new Set(TOOL_REGISTRY.map((r) => r.tool.name));

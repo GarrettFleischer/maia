@@ -84,21 +84,34 @@ describe("ThreadListItem", () => {
     expect(screen.getByText("Chat with Maia")).toBeInTheDocument();
   });
 
-  it("shows delete button when onDelete provided and clicking it calls onDelete with session id", () => {
-    let deletedId: string | null = null;
-    const onDelete = (id: string) => {
-      deletedId = id;
-    };
+  it("delete button is hidden in default view and revealed after clicking rename", () => {
     render(
       <ThreadListItem
         session={session({ id: "thread-123", name: "My thread" })}
         isActive={false}
         onSelect={() => {}}
-        onDelete={onDelete}
+        onRename={() => {}}
+        onDelete={() => {}}
       />
     );
-    const deleteBtn = screen.getByRole("button", { name: /delete thread/i });
-    fireEvent.click(deleteBtn);
+    expect(screen.queryByRole("button", { name: /delete thread/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /rename|edit/i }));
+    expect(screen.getByRole("button", { name: /delete thread/i })).toBeInTheDocument();
+  });
+
+  it("delete button in edit mode calls onDelete with session id", () => {
+    let deletedId: string | null = null;
+    render(
+      <ThreadListItem
+        session={session({ id: "thread-123", name: "My thread" })}
+        isActive={false}
+        onSelect={() => {}}
+        onRename={() => {}}
+        onDelete={(id) => { deletedId = id; }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /rename|edit/i }));
+    fireEvent.mouseDown(screen.getByRole("button", { name: /delete thread/i }));
     expect(deletedId).toBe("thread-123");
   });
 

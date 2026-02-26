@@ -24,9 +24,9 @@ export interface ThreadListItemProps {
 }
 
 /**
- * Format session updatedAt as relative time (e.g. "2m ago", "1h ago").
+ * Format session updatedAt as relative time (e.g. "2m", "1h", "3d").
  * @param isoDate - ISO date string
- * @returns Human-readable relative time
+ * @returns Human-readable relative time without "ago" suffix
  */
 function formatRelativeTime(isoDate: string): string {
   const date = new Date(isoDate);
@@ -35,10 +35,10 @@ function formatRelativeTime(isoDate: string): string {
   const diffMins = Math.floor(diffMs / 60_000);
   const diffHours = Math.floor(diffMs / 3_600_000);
   const diffDays = Math.floor(diffMs / 86_400_000);
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffMins < 1) return "now";
+  if (diffMins < 60) return `${diffMins}m`;
+  if (diffHours < 24) return `${diffHours}h`;
+  if (diffDays < 7) return `${diffDays}d`;
   return date.toLocaleDateString();
 }
 
@@ -138,6 +138,19 @@ export default function ThreadListItem({ session, isActive, onSelect, agentNameM
             aria-label="Thread name"
             autoFocus
           />
+          {onDelete && (
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onDelete(session.id);
+              }}
+              className="shrink-0 p-1.5 rounded text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+              aria-label="Delete thread"
+            >
+              <TrashIcon />
+            </button>
+          )}
         </div>
       ) : (
         <button
@@ -161,23 +174,10 @@ export default function ThreadListItem({ session, isActive, onSelect, agentNameM
             e.stopPropagation();
             setIsEditing(true);
           }}
-          className="shrink-0 p-2 text-zinc-500 hover:text-violet-400 hover:bg-violet-500/10 transition-colors"
+          className="shrink-0 p-2 rounded-r-lg text-zinc-500 hover:text-violet-400 hover:bg-violet-500/10 transition-colors"
           aria-label="Rename thread"
         >
           <PencilIcon />
-        </button>
-      )}
-      {onDelete && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(session.id);
-          }}
-          className="shrink-0 p-2 rounded-r-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-          aria-label="Delete thread"
-        >
-          <TrashIcon />
         </button>
       )}
     </div>
