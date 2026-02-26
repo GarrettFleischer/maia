@@ -66,5 +66,18 @@ describe("db", () => {
       expect(keys).toContain("compressionModel");
       expect(keys).toContain("heartbeatIntervalMinutes");
     });
+
+    it("seeds built-in heartbeat cron job row", () => {
+      const db = makeTestDb();
+      const row = db.prepare(
+        "SELECT id, expression, task_description, agent_id, is_built_in FROM cron_jobs WHERE id = 'builtin-heartbeat'"
+      ).get() as { id: string; expression: string; task_description: string; agent_id: string; is_built_in: number } | undefined;
+      expect(row).toBeDefined();
+      expect(row!.id).toBe("builtin-heartbeat");
+      expect(row!.is_built_in).toBe(1);
+      expect(row!.expression).toBe("*/30 * * * *");
+      expect(row!.task_description).toBe("Heartbeat");
+      expect(row!.agent_id).toBe("maia");
+    });
   });
 });

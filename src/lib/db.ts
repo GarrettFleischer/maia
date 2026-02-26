@@ -77,7 +77,9 @@ export function initSchema(db: DbAdapter): void {
       task_description TEXT NOT NULL,
       agent_id TEXT NOT NULL,
       is_built_in INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      tool_name TEXT NOT NULL DEFAULT 'cron_echo',
+      tool_args TEXT NOT NULL DEFAULT '{}'
     );
 
     CREATE TABLE IF NOT EXISTS security_events (
@@ -136,6 +138,27 @@ export function initSchema(db: DbAdapter): void {
     INSERT OR IGNORE INTO active_session (singleton, session_id) VALUES (1, NULL);
   `);
 
+  // Migration: add tool_name / tool_args to cron_jobs if missing (e.g. existing DBs created before cron-tool change)
+  const tableInfo = db.prepare("PRAGMA table_info(cron_jobs)").all() as { name: string }[];
+  const hasToolName = tableInfo.some((c) => c.name === "tool_name");
+  const hasToolArgs = tableInfo.some((c) => c.name === "tool_args");
+  if (!hasToolName) {
+    db.exec("ALTER TABLE cron_jobs ADD COLUMN tool_name TEXT NOT NULL DEFAULT 'cron_echo'");
+  }
+  if (!hasToolArgs) {
+    db.exec("ALTER TABLE cron_jobs ADD COLUMN tool_args TEXT NOT NULL DEFAULT '{}'");
+    // Backfill legacy rows so they call cron_echo with task_description as message
+    db.exec(
+      "UPDATE cron_jobs SET tool_args = json_object('message', task_description) WHERE tool_args = '{}'"
+    );
+  }
+
+  // Seed built-in heartbeat cron job (after migration so tool_name/tool_args exist on older DBs)
+  db.prepare(
+    `INSERT OR IGNORE INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
+     VALUES ('builtin-heartbeat', '*/30 * * * *', 'Heartbeat', 'maia', 1, datetime('now'), 'cron_echo', '{}')`
+  ).run();
+
   // Seed default settings if not present
   const defaults: Record<string, string> = {
     whitelistedModels: JSON.stringify([
@@ -152,6 +175,7 @@ export function initSchema(db: DbAdapter): void {
     vllmBaseUrl: "http://localhost:8000/v1",
     dockerBaseUrl: "http://localhost:8000/v1",
     embeddingModel: "nomic-embed-text",
+    embedMaxContentLength: "4000",
     recentFullCount: "10",
     compressionBatchSize: "5",
   };

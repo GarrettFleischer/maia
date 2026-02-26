@@ -16,20 +16,34 @@ function makeTool<S extends z.ZodTypeAny>(
   };
 }
 
+/**
+ * Echo tool used when a cron job has no specific tool (e.g. legacy jobs with task_description only).
+ * Returns the message so the agent sees it as the cron payload.
+ */
+export const cronEchoTool = makeTool(
+  "cron_echo",
+  "Echo a message. Used by cron for legacy task_description-only jobs.",
+  z.object({ message: z.string().describe("Message to echo") }),
+  async ({ message }, _ctx) => message,
+);
+
 export const cronScheduleTool = makeTool(
   "cron_schedule",
-  "Schedule a recurring cron job for an agent task. Maia only.",
+  "Schedule a recurring cron job that invokes a tool (with args) on a schedule. Maia only.",
   z.object({
     expression: z.string().describe("5-field cron expression e.g. '0 9 * * 1'"),
-    taskDescription: z.string().describe("Human-readable description of what will happen"),
+    toolName: z.string().describe("Tool to call when the job fires e.g. cron_echo, web_search"),
+    toolArgs: z.record(z.string(), z.unknown()).describe("JSON object of arguments for the tool"),
+    taskDescription: z.string().optional().describe("Optional short label for listing (defaults to toolName + args)"),
   }),
-  async ({ expression, taskDescription }, ctx) => {
+  async ({ expression, toolName, toolArgs, taskDescription }, ctx) => {
     const id = uuidv4();
     const now = new Date().toISOString();
+    const label = taskDescription ?? `${toolName}(${JSON.stringify(toolArgs)})`;
     ctx.db.prepare(
-      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at)
-       VALUES (?, ?, ?, ?, 0, ?)`
-    ).run(id, expression, taskDescription, ctx.agentId, now);
+      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
+       VALUES (?, ?, ?, ?, 0, ?, ?, ?)`
+    ).run(id, expression, label, ctx.agentId, now, toolName, JSON.stringify(toolArgs));
     return id;
   }
 );
@@ -47,6 +61,8 @@ export const cronListTool = makeTool(
       agentId: r.agent_id as string,
       isBuiltIn: Boolean(r.is_built_in),
       createdAt: r.created_at as string,
+      toolName: (r.tool_name as string) ?? "cron_echo",
+      toolArgs: r.tool_args != null ? (JSON.parse(r.tool_args as string) as Record<string, unknown>) : {},
     }));
   }
 );
@@ -63,4 +79,4 @@ export const cronDeleteTool = makeTool(
   }
 );
 
-export const cronTools: Tool[] = [cronScheduleTool, cronListTool, cronDeleteTool];
+export const cronTools: Tool[] = [cronEchoTool, cronScheduleTool, cronListTool, cronDeleteTool];

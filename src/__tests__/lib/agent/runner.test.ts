@@ -185,12 +185,47 @@ describe("runAgent", () => {
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "current", () => {});
     // Conversation history is in the system message; empty compressed entry is excluded (filtered by content).
-    expect(capturedSystem).toContain("## Conversation history (compressed — previous turns only)");
+    expect(capturedSystem).toContain("## Conversation history");
     expect(capturedSystem).toContain("prior data");
     // Only the current user message is a separate message; no duplicate history as user/assistant messages.
     expect(capturedNonSystem).toHaveLength(1);
     expect(capturedNonSystem[0].content).toBe("current");
     expect(capturedNonSystem[0].role).toBe("user");
+  });
+
+  it("separates compressed and full context and tells model it can retrieve full context via tools", async () => {
+    updateSettings(ctx, { recentFullCount: 2 });
+    const t0 = "2020-01-01T00:00:00.000Z";
+    const t1 = "2020-01-01T00:00:01.000Z";
+    const t2 = "2020-01-01T00:00:02.000Z";
+    const t3 = "2020-01-01T00:00:03.000Z";
+    appendEntry(ctx, sessionId, { role: "user", content: "First user message", timestamp: t0 }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "First agent reply", timestamp: t1 }, false);
+    appendEntry(ctx, sessionId, { role: "user", content: "Second user message", timestamp: t2 }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "Second agent reply", timestamp: t3 }, false);
+    appendEntry(ctx, sessionId, { role: "user", content: "summary one", timestamp: t0 }, true);
+    appendEntry(ctx, sessionId, { role: "agent", content: "summary reply one", timestamp: t1 }, true);
+    appendEntry(ctx, sessionId, { role: "user", content: "Second user message", timestamp: t2 }, true);
+    appendEntry(ctx, sessionId, { role: "agent", content: "Second agent reply", timestamp: t3 }, true);
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        const content = system && typeof system.content === "string" ? system.content : "";
+        if (content.includes("## Conversation history")) systemContent = content;
+        onToken("ok");
+        return { content: "ok", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, () => provider, "maia", sessionId, "current", () => {});
+    expect(systemContent).toContain("### Compressed context (older turns)");
+    expect(systemContent).toContain("### Full context (recent turns)");
+    expect(systemContent).toContain("history_get_session");
+    expect(systemContent).toContain("mode: 'original'");
+    expect(systemContent).toContain("[Turn 0]");
+    expect(systemContent).toContain("[Turn 1]");
+    expect(systemContent).toContain("summary one");
+    expect(systemContent).toContain("Second user message");
   });
 
   it("puts conversation history first in system message, then system prompt", async () => {
@@ -199,14 +234,14 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history (compressed — previous turns only)"))
+        if (content.includes("## Conversation history"))
           systemContent = content;
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };
       },
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
-    const historyPos = systemContent.indexOf("## Conversation history (compressed — previous turns only)");
+    const historyPos = systemContent.indexOf("## Conversation history");
     const securityPos = systemContent.indexOf("SECURITY NOTICE");
     const identityPos = systemContent.indexOf("## Identity");
     expect(historyPos).toBeGreaterThanOrEqual(0);
@@ -220,14 +255,14 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history (compressed — previous turns only)"))
+        if (content.includes("## Conversation history"))
           systemContent = content;
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };
       },
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "First message", () => {});
-    expect(systemContent).toContain("## Conversation history (compressed — previous turns only)");
+    expect(systemContent).toContain("## Conversation history");
     expect(systemContent).toContain("No prior messages in this session.");
   });
 
@@ -237,7 +272,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history (compressed — previous turns only)")) {
+        if (content.includes("## Conversation history")) {
           systemContent = content;
         }
         onToken("Hi");
@@ -290,7 +325,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history (compressed — previous turns only)"))
+        if (content.includes("## Conversation history"))
           systemContent = content;
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };
@@ -301,6 +336,27 @@ describe("runAgent", () => {
     expect(systemContent).toContain("SECURITY NOTICE");
     expect(systemContent).toContain("## Identity");
     expect(systemContent).toContain("## Using your identity files");
+  });
+
+  it("when options.initialToolCall is set, executes that tool and sends result as first turn to the model", async () => {
+    seedIdentityFiles(ctx.fs as FakeFs, "maia");
+    let firstRequestMessages: { role: string; content?: string; toolName?: string }[] = [];
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        if (firstRequestMessages.length === 0) firstRequestMessages = messages.map((m) => ({
+          role: m.role,
+          content: typeof m.content === "string" ? m.content : undefined,
+          toolName: m.toolName,
+        }));
+        onToken("Acknowledged.");
+        return { content: "Acknowledged.", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, makeProviderFactory(provider), "maia", sessionId, "[CRON] Run cron_echo", () => {}, {
+      initialToolCall: { name: "cron_echo", args: { message: "scheduled payload" } },
+    });
+    expect(firstRequestMessages.some((m) => m.role === "user" && m.content?.includes("[CRON]"))).toBe(true);
+    expect(firstRequestMessages.some((m) => m.role === "tool" && m.toolName === "cron_echo" && m.content === "scheduled payload")).toBe(true);
   });
 
   it("includes tool call arguments in conversation history context, not just result", async () => {
@@ -320,7 +376,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history (compressed — previous turns only)"))
+        if (content.includes("## Conversation history"))
           systemContent = content;
         onToken("Thanks");
         return { content: "Thanks", toolCalls: [], stopped: true };
@@ -343,7 +399,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history (compressed — previous turns only)") && content.includes("## Identity"))
+        if (content.includes("## Conversation history") && content.includes("## Identity"))
           systemContent = content;
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };
@@ -351,7 +407,7 @@ describe("runAgent", () => {
     };
     await runAgent(ctx, () => provider, "maia", sessionId, "Hello", () => {});
     expect(systemContent).toContain(customInstruction);
-    const historyPos = systemContent.indexOf("## Conversation history (compressed — previous turns only)");
+    const historyPos = systemContent.indexOf("## Conversation history");
     const customPos = systemContent.indexOf(customInstruction);
     const identityPos = systemContent.indexOf("## Identity");
     expect(historyPos).toBeGreaterThanOrEqual(0);
@@ -369,7 +425,7 @@ describe("runAgent", () => {
       async complete(messages, _tools, onToken) {
         const system = messages.find((m) => m.role === "system");
         const content = system && typeof system.content === "string" ? system.content : "";
-        if (content.includes("## Conversation history (compressed — previous turns only)") && content.includes("## Identity"))
+        if (content.includes("## Conversation history") && content.includes("## Identity"))
           systemContent = content;
         onToken("Hi");
         return { content: "Hi", toolCalls: [], stopped: true };

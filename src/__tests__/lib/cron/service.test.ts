@@ -7,7 +7,9 @@ import {
   startCronScheduler,
   stopCronScheduler,
   isCronSchedulerRunning,
+  refreshHeartbeatJob,
 } from "@/lib/cron/service";
+import { updateSettings } from "@/lib/settings";
 import { makeTestContext, FakeEvents } from "../../helpers/fakes";
 import type { AppContext } from "@/lib/context";
 
@@ -19,20 +21,27 @@ function seedCronJob(
     taskDescription?: string;
     agentId?: string;
     isBuiltIn?: number;
+    toolName?: string;
+    toolArgs?: Record<string, unknown>;
   } = {}
 ) {
   const id = opts.id ?? `job-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const now = new Date().toISOString();
+  const taskDescription = opts.taskDescription ?? "Daily standup";
+  const toolName = opts.toolName ?? "cron_echo";
+  const toolArgs = opts.toolArgs ?? { message: taskDescription };
   ctx.db.prepare(
-    `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     opts.expression ?? "0 9 * * *",
-    opts.taskDescription ?? "Daily standup",
+    taskDescription,
     opts.agentId ?? "maia",
     opts.isBuiltIn ?? 0,
-    now
+    now,
+    toolName,
+    JSON.stringify(toolArgs),
   );
   return id;
 }
@@ -52,6 +61,7 @@ describe("CronService", () => {
 
   describe("startCronScheduler / stopCronScheduler / isCronSchedulerRunning", () => {
     it("does not throw when no cron jobs exist", () => {
+      ctx.db.prepare("DELETE FROM cron_jobs").run();
       expect(() =>
         startCronScheduler(ctx, async () => {}, { runOnInit: false })
       ).not.toThrow();
@@ -99,27 +109,37 @@ describe("CronService", () => {
   });
 
   describe("execution behavior (runOnInit)", () => {
-    it("invokes runAgentFn with correct agentId, sessionId, and [CRON] message when a job fires", async () => {
+    it("invokes runAgentFn with agentId, sessionId, message, and initialToolCall when a job fires", async () => {
       seedCronJob(ctx, {
         id: "job-1",
         expression: "0 9 * * *",
         taskDescription: "Review backlog",
         agentId: "maia",
+        toolName: "cron_echo",
+        toolArgs: { message: "Review backlog" },
       });
-      const runAgentCalls: { agentId: string; sessionId: string; message: string }[] = [];
-      startCronScheduler(ctx, async (_c, agentId, sessionId, message) => {
-        runAgentCalls.push({ agentId, sessionId, message });
+      const runAgentCalls: {
+        agentId: string;
+        sessionId: string;
+        message: string;
+        options?: { initialToolCall?: { name: string; args: Record<string, unknown> } };
+      }[] = [];
+      startCronScheduler(ctx, async (_c, agentId, sessionId, message, options) => {
+        runAgentCalls.push({ agentId, sessionId, message, options });
       }, { runOnInit: true });
 
       await new Promise((r) => setTimeout(r, 20)); // allow node-cron runOnInit callbacks to run
       expect(runAgentCalls.length).toBeGreaterThanOrEqual(1);
-      const call = runAgentCalls[0];
+      const call = runAgentCalls[0]!;
       expect(call.agentId).toBe("maia");
       expect(call.sessionId).toBeDefined();
       expect(call.sessionId.length).toBeGreaterThan(0);
       expect(call.message).toContain("[CRON]");
-      expect(call.message).toContain("Review backlog");
-      expect(call.message).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+      expect(call.message).toContain("Calling tool:");
+      expect(call.options?.initialToolCall).toEqual({
+        name: "cron_echo",
+        args: { message: "Review backlog" },
+      });
     });
 
     it("emits cron_fired event when a job runs", async () => {
@@ -133,9 +153,10 @@ describe("CronService", () => {
 
       await new Promise((r) => setTimeout(r, 20));
       const cronFired = events.emitted.filter((e) => e.event === "cron_fired");
-      expect(cronFired.length).toBeGreaterThanOrEqual(1);
-      expect((cronFired[0].data as { jobId: string; agentId: string; timestamp: string }).jobId).toBe("job-event");
-      expect((cronFired[0].data as { jobId: string; agentId: string; timestamp: string }).agentId).toBe("maia");
+      const jobEventFired = cronFired.find((e) => (e.data as { jobId: string }).jobId === "job-event");
+      expect(jobEventFired).toBeDefined();
+      expect((jobEventFired!.data as { jobId: string; agentId: string; timestamp: string }).jobId).toBe("job-event");
+      expect((jobEventFired!.data as { jobId: string; agentId: string; timestamp: string }).agentId).toBe("maia");
     });
 
     it("creates a session for the owning agent when job runs", async () => {
@@ -167,6 +188,42 @@ describe("CronService", () => {
       expect(runAgentCalls.length).toBe(2);
       const agentIds = runAgentCalls.map((c) => c.agentId).sort();
       expect(agentIds).toEqual(["agent-a", "agent-b"]);
+    });
+
+    it("when builtin-heartbeat job runs, emits heartbeat event and cron_fired", async () => {
+      startCronScheduler(ctx, async () => {}, { runOnInit: true });
+      await new Promise((r) => setTimeout(r, 20));
+      const heartbeatEvents = events.emitted.filter((e) => e.event === "heartbeat");
+      const cronFired = events.emitted.filter((e) => e.event === "cron_fired");
+      expect(heartbeatEvents.length).toBeGreaterThanOrEqual(1);
+      expect((heartbeatEvents[0].data as { timestamp: string }).timestamp).toBeDefined();
+      const heartbeatCronFired = cronFired.filter(
+        (e) => (e.data as { jobId: string }).jobId === "builtin-heartbeat"
+      );
+      expect(heartbeatCronFired.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe("refreshHeartbeatJob", () => {
+    it("updates heartbeat job expression and re-schedules when scheduler is running", () => {
+      updateSettings(ctx, { heartbeatIntervalMinutes: 30 });
+      startCronScheduler(ctx, async () => {}, { runOnInit: false });
+      updateSettings(ctx, { heartbeatIntervalMinutes: 15 });
+      expect(() => refreshHeartbeatJob(ctx)).not.toThrow();
+      const row = ctx.db
+        .prepare("SELECT expression FROM cron_jobs WHERE id = 'builtin-heartbeat'")
+        .get() as { expression: string } | undefined;
+      expect(row?.expression).toBe("*/15 * * * *");
+      stopCronScheduler();
+    });
+
+    it("is no-op when scheduler has not been started", () => {
+      updateSettings(ctx, { heartbeatIntervalMinutes: 5 });
+      expect(() => refreshHeartbeatJob(ctx)).not.toThrow();
+      const row = ctx.db
+        .prepare("SELECT expression FROM cron_jobs WHERE id = 'builtin-heartbeat'")
+        .get() as { expression: string } | undefined;
+      expect(row?.expression).toBe("*/5 * * * *");
     });
   });
 });

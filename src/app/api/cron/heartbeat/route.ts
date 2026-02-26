@@ -5,6 +5,9 @@ import { runAgent } from "@/lib/agent/runner";
 import { createProvider } from "@/lib/ai/factory";
 
 export async function POST() {
+  console.debug("[Heartbeat] Triggered via POST /api/cron/heartbeat", {
+    timestamp: new Date().toISOString(),
+  });
   const ctx = await ensureAppContext();
   const runAgentFn = async (
     c: typeof ctx,

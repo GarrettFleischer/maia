@@ -18,6 +18,38 @@ export function createSession(
   return id;
 }
 
+/**
+ * Ensures a session row exists with the given id. Inserts it if missing (e.g. when the session
+ * was created in another process or connection). Used by the runner to avoid FOREIGN KEY failures.
+ * @param ctx - Application context
+ * @param sessionId - Session id that must exist
+ * @param participants - Participants to use if we insert (default ["user", "maia"])
+ * @param type - Session type if we insert (default "agents")
+ */
+export function ensureSession(
+  ctx: AppContext,
+  sessionId: string,
+  participants: string[] = ["user", "maia"],
+  type: "user" | "agents" = "agents"
+): void {
+  const exists = ctx.db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(sessionId);
+  if (exists) return;
+  const now = new Date().toISOString();
+  ctx.db.prepare(
+    `INSERT INTO sessions (id, name, description, participants, tags, type, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    sessionId,
+    "",
+    "",
+    JSON.stringify(participants),
+    JSON.stringify([]),
+    type,
+    now,
+    now
+  );
+}
+
 export function listSessions(
   ctx: AppContext,
   type?: "user" | "agents" | "all"

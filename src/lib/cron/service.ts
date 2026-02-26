@@ -7,12 +7,17 @@ import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
 import type { AppContext } from "../context";
 import { createSession } from "../history";
+import type { RunAgentOptions } from "../agent/runner";
+import { fireHeartbeat } from "../heartbeat";
+import { getSettings } from "../settings";
+import { BUILTIN_HEARTBEAT_JOB_ID, minutesToCronExpression } from "./expression";
 
 export type RunAgentFn = (
   ctx: AppContext,
   agentId: string,
   sessionId: string,
-  message: string
+  message: string,
+  options?: RunAgentOptions
 ) => Promise<void>;
 
 export interface CronSchedulerOptions {
@@ -23,8 +28,10 @@ export interface CronSchedulerOptions {
   runOnInit?: boolean;
 }
 
-let _tasks: ScheduledTask[] = [];
+let _taskMap = new Map<string, ScheduledTask>();
 let _started = false;
+let _ctx: AppContext | null = null;
+let _runAgentFn: RunAgentFn | null = null;
 
 /**
  * Returns whether the cron scheduler is currently running.
@@ -41,6 +48,90 @@ export function isCronSchedulerRunning(): boolean {
  * @param runAgentFn - Called with (ctx, agentId, sessionId, message) when a job fires
  * @param options - Optional; use runOnInit: true in tests to fire handlers once immediately
  */
+/**
+ * Schedules a single job and adds it to _taskMap. Used by startCronScheduler and refreshHeartbeatJob.
+ * @param ctx - Application context
+ * @param runAgentFn - RunAgentFn to invoke when job fires
+ * @param row - cron_jobs row
+ * @param runOnInit - Whether to run the task once immediately
+ */
+function scheduleJob(
+  ctx: AppContext,
+  runAgentFn: RunAgentFn,
+  row: {
+    id: string;
+    expression: string;
+    task_description: string;
+    agent_id: string;
+    tool_name: string;
+    tool_args: string;
+  },
+  runOnInit: boolean
+): void {
+  const {
+    id: jobId,
+    expression,
+    task_description: taskDescription,
+    agent_id: agentId,
+    tool_name: toolName,
+    tool_args: toolArgsJson,
+  } = row;
+  if (!cron.validate(expression)) {
+    console.error(`CronService: invalid expression for job ${jobId}, skipping: ${expression}`);
+    return;
+  }
+  let toolArgs: Record<string, unknown> = {};
+  try {
+    toolArgs = toolArgsJson ? (JSON.parse(toolArgsJson) as Record<string, unknown>) : {};
+  } catch {
+    console.error(`CronService: invalid tool_args for job ${jobId}, using {}`);
+  }
+  const toolNameSafe = toolName || "cron_echo";
+
+  const isHeartbeat = jobId === BUILTIN_HEARTBEAT_JOB_ID;
+  let task: ScheduledTask;
+  try {
+    task = cron.schedule(
+      expression,
+      () => {
+        const timestamp = new Date().toISOString();
+        if (isHeartbeat) {
+          console.debug("[Heartbeat] Cron triggered", { jobId, timestamp });
+          ctx.events.emit({
+            event: "cron_fired",
+            data: { jobId, agentId, timestamp },
+          });
+          fireHeartbeat(ctx, runAgentFn).catch((err) => {
+            console.error(`Cron job ${jobId} (heartbeat) failed:`, err);
+          });
+        } else {
+          const message = `[CRON] Timestamp: ${timestamp}\n\nCalling tool: ${toolNameSafe} with args.`;
+          const sessionId = createSession(ctx, [agentId], "agents");
+          ctx.events.emit({
+            event: "cron_fired",
+            data: { jobId, agentId, timestamp },
+          });
+          runAgentFn(ctx, agentId, sessionId, message, {
+            initialToolCall: { name: toolNameSafe, args: toolArgs },
+          }).catch((err) => {
+            console.error(`Cron job ${jobId} failed for agent ${agentId}:`, err);
+          });
+        }
+      },
+      {}
+    );
+  } catch (err) {
+    console.error(`CronService: failed to schedule job ${jobId}:`, err);
+    return;
+  }
+  _taskMap.set(jobId, task);
+  if (runOnInit && typeof (task as { execute?: () => Promise<unknown> }).execute === "function") {
+    (task as { execute: () => Promise<unknown> })
+      .execute()
+      .catch((err: unknown) => console.error(`CronService: runOnInit failed for ${jobId}:`, err));
+  }
+}
+
 export function startCronScheduler(
   ctx: AppContext,
   runAgentFn: RunAgentFn,
@@ -48,46 +139,25 @@ export function startCronScheduler(
 ): void {
   if (_started) return;
   _started = true;
+  _ctx = ctx;
+  _runAgentFn = runAgentFn;
 
   const runOnInit = options.runOnInit ?? false;
   const rows = ctx.db
-    .prepare("SELECT id, expression, task_description, agent_id FROM cron_jobs ORDER BY created_at")
-    .all() as { id: string; expression: string; task_description: string; agent_id: string }[];
+    .prepare(
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs ORDER BY created_at"
+    )
+    .all() as {
+      id: string;
+      expression: string;
+      task_description: string;
+      agent_id: string;
+      tool_name: string;
+      tool_args: string;
+    }[];
 
   for (const row of rows) {
-    const { id: jobId, expression, task_description: taskDescription, agent_id: agentId } = row;
-    if (!cron.validate(expression)) {
-      console.error(`CronService: invalid expression for job ${jobId}, skipping: ${expression}`);
-      continue;
-    }
-    let task: ScheduledTask;
-    try {
-      task = cron.schedule(
-      expression,
-      () => {
-        const timestamp = new Date().toISOString();
-        const message = `[CRON] Timestamp: ${timestamp}\n\n${taskDescription}`;
-        const sessionId = createSession(ctx, [agentId], "agents");
-        ctx.events.emit({
-          event: "cron_fired",
-          data: { jobId, agentId, timestamp },
-        });
-        runAgentFn(ctx, agentId, sessionId, message).catch((err) => {
-          console.error(`Cron job ${jobId} failed for agent ${agentId}:`, err);
-        });
-      },
-      {}
-    );
-    } catch (err) {
-      console.error(`CronService: failed to schedule job ${jobId}:`, err);
-      continue;
-    }
-    _tasks.push(task);
-    if (runOnInit && typeof (task as { execute?: () => Promise<unknown> }).execute === "function") {
-      (task as { execute: () => Promise<unknown> })
-        .execute()
-        .catch((err: unknown) => console.error(`CronService: runOnInit failed for ${jobId}:`, err));
-    }
+    scheduleJob(ctx, runAgentFn, row, runOnInit);
   }
 
   if (rows.length > 0) {
@@ -100,9 +170,47 @@ export function startCronScheduler(
  * @note Safe to call when not running (no-op).
  */
 export function stopCronScheduler(): void {
-  for (const task of _tasks) {
+  for (const task of _taskMap.values()) {
     task.stop();
   }
-  _tasks = [];
+  _taskMap.clear();
   _started = false;
+  _ctx = null;
+  _runAgentFn = null;
+}
+
+/**
+ * Updates the built-in heartbeat cron job from settings and re-schedules it with node-cron.
+ * Call after changing heartbeatIntervalMinutes in settings so the in-process schedule reflects the new interval.
+ * No-op if the cron scheduler has not been started.
+ * @param ctx - Application context (used to read settings and update cron_jobs row)
+ */
+export function refreshHeartbeatJob(ctx: AppContext): void {
+  if (!_started || !_ctx || !_runAgentFn) return;
+
+  const minutes = getSettings(ctx).heartbeatIntervalMinutes;
+  const expression = minutesToCronExpression(minutes);
+  ctx.db.prepare("UPDATE cron_jobs SET expression = ? WHERE id = ?").run(expression, BUILTIN_HEARTBEAT_JOB_ID);
+
+  const existing = _taskMap.get(BUILTIN_HEARTBEAT_JOB_ID);
+  if (existing) {
+    existing.stop();
+    _taskMap.delete(BUILTIN_HEARTBEAT_JOB_ID);
+  }
+
+  const row = ctx.db
+    .prepare(
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id = ?"
+    )
+    .get(BUILTIN_HEARTBEAT_JOB_ID) as {
+      id: string;
+      expression: string;
+      task_description: string;
+      agent_id: string;
+      tool_name: string;
+      tool_args: string;
+    } | undefined;
+  if (row && cron.validate(row.expression)) {
+    scheduleJob(_ctx, _runAgentFn, row, false);
+  }
 }

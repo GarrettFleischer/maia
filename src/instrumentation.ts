@@ -62,18 +62,17 @@ export async function register() {
       return createEmbeddingAdapter(settings, _appCtx!.http);
     });
 
-    const { startHeartbeatScheduler } = await import("./lib/heartbeat");
     const { runAgent } = await import("./lib/agent/runner");
     const { createProvider } = await import("./lib/ai/factory");
     const runAgentFn = async (
       c: AppContext,
       agentId: string,
       sessionId: string,
-      message: string
+      message: string,
+      options?: { initialToolCall?: { name: string; args: Record<string, unknown> } }
     ): Promise<void> => {
-      await runAgent(c, createProvider, agentId, sessionId, message, () => {});
+      await runAgent(c, createProvider, agentId, sessionId, message, () => {}, options);
     };
-    startHeartbeatScheduler(_appCtx, runAgentFn);
 
     const { startCronScheduler } = await import("./lib/cron/service");
     startCronScheduler(_appCtx, runAgentFn);

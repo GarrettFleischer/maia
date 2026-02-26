@@ -254,13 +254,16 @@ On creation:
 
 | Function | Args | Returns |
 |----------|------|---------|
-| `cron_schedule` | `expression: string, taskDescription: string` | `string` (jobId) |
+| `cron_echo` | `message: string` | `string` (echoes message; used by legacy cron jobs) |
+| `cron_schedule` | `expression: string, toolName: string, toolArgs: object, taskDescription?: string` | `string` (jobId) |
 | `cron_list` | _(none)_ | `CronJob[]` |
 | `cron_delete` | `jobId: string` | `void` |
 
+When a cron job fires, the runner **calls the specified tool with the stored args** (instead of sending a free-form message). The agent sees the tool result as the first turn. Use `cron_echo` with `{ message: "..." }` for a simple reminder, or any other tool (e.g. `web_search`) with appropriate args.
+
 Cron expressions follow standard 5-field format: `* * * * *` (minute, hour, day, month, weekday).
 
-The heartbeat is a built-in cron job (`*/30 * * * *`) that cannot be deleted.
+The heartbeat is a separate in-process scheduler (not a row in `cron_jobs`) and runs on its own interval. When it fires, it invokes an internal **heartbeat tool** (not visible to agents) that wakes all active agents and prompts them to work on assigned tasks; agents with in_progress tasks are woken first.
 
 ### Custom agent tools (data/tools)
 

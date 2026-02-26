@@ -12,6 +12,8 @@ export async function GET() {
     agentId: r.agent_id as string,
     isBuiltIn: Boolean(r.is_built_in),
     createdAt: r.created_at as string,
+    toolName: (r.tool_name as string) ?? "cron_echo",
+    toolArgs: r.tool_args != null ? (JSON.parse(r.tool_args as string) as Record<string, unknown>) : {},
   }));
   return NextResponse.json({ jobs });
 }

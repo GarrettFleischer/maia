@@ -67,6 +67,10 @@ export interface CronJob {
   agentId: string;
   isBuiltIn: boolean;
   createdAt: string;
+  /** Tool to call when the job fires. */
+  toolName: string;
+  /** Arguments for the tool (JSON object). */
+  toolArgs: Record<string, unknown>;
 }
 
 export interface TaskNote {
@@ -110,6 +114,8 @@ export interface Settings {
   dockerBaseUrl: string;
   /** Embedding model for knowledge base and history semantic search (e.g. nomic-embed-text). */
   embeddingModel: string;
+  /** Max characters to send to the embedding model per chunk (avoids context-length 400). Default 4000. */
+  embedMaxContentLength: number;
   /** Number of most recent history entries to keep as full (uncompressed) in context. Default 10. */
   recentFullCount: number;
   /** Number of entries to compress per batch when running compression. Default 5. */
@@ -128,6 +134,7 @@ export interface SettingsPublic {
   vllmBaseUrl: string;
   dockerBaseUrl: string;
   embeddingModel: string;
+  embedMaxContentLength: number;
   recentFullCount: number;
   compressionBatchSize: number;
 }

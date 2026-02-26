@@ -1,7 +1,7 @@
 import path from "path";
 import { getSettings } from "../settings";
 import { getAgentIdentity, setAgentStatus } from "./identity";
-import { getSession, appendEntry } from "../history";
+import { getSession, appendEntry, ensureSession } from "../history";
 import { getToolsForAgent } from "../tools/registry";
 import { compressEntry } from "./compression";
 import { indexHistoryEntry } from "../knowledge/history-index";
@@ -26,6 +26,11 @@ export type ProviderFactory = (model: string, ctx: AppContext) => AIProvider;
 /** Options for runAgent (e.g. emit history entries for background runs so the client receives them via EventSource). */
 export interface RunAgentOptions {
   emitHistoryEntries?: boolean;
+  /**
+   * When set, the runner executes this tool first and feeds the result to the model as the first turn.
+   * Used by cron jobs so each job invokes a specific tool (with args) instead of a free-form message.
+   */
+  initialToolCall?: { name: string; args: Record<string, unknown> };
 }
 
 const WORKSPACE_ROOT = getWorkspaceRoot();
@@ -108,6 +113,9 @@ async function _runLoop(
     volumeRoot: path.join(WORKSPACE_ROOT, agent.id),
   };
 
+  // Ensure session exists in this db (avoids FOREIGN KEY failure when session was created in another connection/process)
+  ensureSession(ctx, sessionId, [agent.id], "agents");
+
   // Store user message (original)
   const userEntry = appendEntry(ctx, sessionId, {
     role: "user",
@@ -119,22 +127,91 @@ async function _runLoop(
     console.error("History index (user entry) failed:", err),
   );
 
-  // Build context window: older entries use compressed when available, last recentFullCount use full (original)
+  // When cron (or similar) provides initialToolCall: execute the tool and append result so the model sees it as first turn.
+  let initialToolResult: { toolName: string; content: string } | null = null;
+  if (options?.initialToolCall) {
+    const { name: toolName, args: toolArgs } = options.initialToolCall;
+    const tool = tools.find((t) => t.name === toolName);
+    if (tool) {
+      try {
+        const parsed = tool.schema.safeParse(toolArgs);
+        if (parsed.success) {
+          const result = await tool.execute(parsed.data, toolContext);
+          const resultStr =
+            typeof result === "string" ? result : JSON.stringify(result ?? null);
+          const filtered = filterText(resultStr, `tool:${toolName}`);
+          appendEntry(ctx, sessionId, {
+            role: "tool_call",
+            content: filtered.text,
+            toolName,
+            toolArgs,
+            timestamp: new Date().toISOString(),
+          });
+          initialToolResult = { toolName, content: filtered.text };
+        } else {
+          const errMsg = parsed.error.message;
+          const contentStr = JSON.stringify({ error: errMsg });
+          appendEntry(ctx, sessionId, {
+            role: "tool_call",
+            content: contentStr,
+            toolName,
+            toolArgs,
+            timestamp: new Date().toISOString(),
+          });
+          initialToolResult = { toolName, content: contentStr };
+        }
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const contentStr = JSON.stringify({ error: errMsg });
+        appendEntry(ctx, sessionId, {
+          role: "tool_call",
+          content: contentStr,
+          toolName,
+          toolArgs,
+          timestamp: new Date().toISOString(),
+        });
+        initialToolResult = { toolName, content: contentStr };
+      }
+    } else {
+      const contentStr = JSON.stringify({ error: `Unknown tool: ${toolName}` });
+      appendEntry(ctx, sessionId, {
+        role: "tool_call",
+        content: contentStr,
+        toolName,
+        toolArgs,
+        timestamp: new Date().toISOString(),
+      });
+      initialToolResult = { toolName, content: contentStr };
+    }
+  }
+
+  // Build context window: older entries use compressed when available, last recentFullCount use full (original).
+  // Separate compressed from full so the model can tell the difference and know it can retrieve full context via tools.
   const session = getSession(ctx, sessionId);
   const original = session?.original ?? [];
   const compressed = session?.compressed ?? [];
   const recentFullCount = Math.max(1, settings.recentFullCount);
   const N = original.length;
-  const priorCount = N - 1; // exclude current user message (last original)
-  const priorTurns: HistoryEntry[] = [];
+  // Exclude current user message; when we have initialToolResult also exclude that tool entry from prior turns
+  const priorCount = initialToolResult ? N - 2 : N - 1;
+  const compressedSegment: { index: number; entry: HistoryEntry }[] = [];
+  const fullSegment: { index: number; entry: HistoryEntry }[] = [];
+  const compressedCutoff = Math.max(0, priorCount - recentFullCount);
   for (let i = 0; i < priorCount; i++) {
     const useCompressed =
-      i < priorCount - recentFullCount && compressed[i] !== undefined;
+      i < compressedCutoff && compressed[i] !== undefined;
     const entry = useCompressed ? compressed[i]! : original[i]!;
-    priorTurns.push(entry);
+    if (entry.content.trim() === "") continue;
+    if (useCompressed) {
+      compressedSegment.push({ index: i, entry });
+    } else {
+      fullSegment.push({ index: i, entry });
+    }
   }
-  const historyWithContent = priorTurns.filter((e) => e.content.trim() !== "");
-  const conversationHistoryBlock = formatConversationHistory(historyWithContent);
+  const conversationHistoryBlock = formatConversationHistorySections(
+    compressedSegment,
+    fullSegment,
+  );
   const systemPromptContent = buildSystemPrompt(ctx, agent);
   const combinedSystemContent =
     conversationHistoryBlock + "\n\n---\n\n" + systemPromptContent;
@@ -143,6 +220,14 @@ async function _runLoop(
     { role: "system", content: combinedSystemContent },
     { role: "user", content: userMessage },
   ];
+  if (initialToolResult) {
+    messages.push({
+      role: "tool",
+      content: initialToolResult.content,
+      toolCallId: "cron-initial",
+      toolName: initialToolResult.toolName,
+    });
+  }
 
   let agentResponseContent = "";
   const agentEntry: Omit<HistoryEntry, "id"> = {
@@ -480,29 +565,68 @@ function buildSystemPrompt(
     .join("\n");
 }
 
+const COMPRESSED_RETRIEVAL_NOTE =
+  "You can retrieve the full (uncompressed) content for any of the above turns using the history_get_session tool with mode: 'original'. Pass indexes (e.g. [0, 2, 5]) or rangeStart and rangeEnd (inclusive) to fetch multiple turns in one call.";
+
 /**
- * Formats prior session turns into a single labeled text block for the system message.
- * @brief Ensures the model sees conversation history as past turns, not the current request. Tool calls include both arguments and result so the model has full context.
- * @param entries - Compressed history entries (excluding the current user message)
- * @returns Section heading plus formatted lines (User / Assistant / Tool: name with Arguments and Result when present)
+ * Formats a single history entry for display (label + content, with tool args when present).
+ * @param entry - History entry to format
+ * @returns Formatted line (e.g. "**User:**\ncontent")
  */
-function formatConversationHistory(entries: HistoryEntry[]): string {
-  const heading =
-    "## Conversation history (compressed — previous turns only)\n\n";
-  if (entries.length === 0) {
-    return heading + "No prior messages in this session.";
+function formatHistoryEntry(entry: HistoryEntry): string {
+  const label =
+    entry.role === "user"
+      ? "**User:**"
+      : entry.role === "agent"
+        ? "**Assistant:**"
+        : `**Tool (${entry.toolName ?? "unknown"}):**`;
+  if (
+    entry.role === "tool_call" &&
+    entry.toolArgs != null &&
+    Object.keys(entry.toolArgs).length > 0
+  ) {
+    return `${label}\nArguments: ${JSON.stringify(entry.toolArgs)}\nResult: ${entry.content}`;
   }
-  const lines = entries.map((e) => {
-    const label =
-      e.role === "user"
-        ? "**User:**"
-        : e.role === "agent"
-          ? "**Assistant:**"
-          : `**Tool (${e.toolName ?? "unknown"}):**`;
-    if (e.role === "tool_call" && e.toolArgs != null && Object.keys(e.toolArgs).length > 0) {
-      return `${label}\nArguments: ${JSON.stringify(e.toolArgs)}\nResult: ${e.content}`;
-    }
-    return `${label}\n${e.content}`;
-  });
-  return heading + lines.join("\n\n");
+  return `${label}\n${entry.content}`;
+}
+
+/**
+ * Formats prior session turns into a labeled text block for the system message, with compressed and full context clearly separated so the model knows which is which and that it can retrieve full context via tools using the turn index.
+ * @brief Both sections include turn indices so the model can request any turn by index via history_get_session (mode: 'original'). Tool calls include both arguments and result.
+ * @param compressedSegment - Older turns (compressed), with their session index for retrieval
+ * @param fullSegment - Recent turns (full/original content), with session index for retrieval
+ * @returns Section headings plus formatted lines; includes note about history_get_session for compressed turns
+ */
+function formatConversationHistorySections(
+  compressedSegment: { index: number; entry: HistoryEntry }[],
+  fullSegment: { index: number; entry: HistoryEntry }[],
+): string {
+  const top = "## Conversation history\n\n";
+  if (compressedSegment.length === 0 && fullSegment.length === 0) {
+    return top + "No prior messages in this session.";
+  }
+  const parts: string[] = [];
+  if (compressedSegment.length > 0) {
+    const compressedLines = compressedSegment.map(
+      ({ index, entry }) => `[Turn ${index}]\n${formatHistoryEntry(entry)}`,
+    );
+    parts.push(
+      "### Compressed context (older turns)\n\n" +
+        "These are summaries only. " +
+        COMPRESSED_RETRIEVAL_NOTE +
+        "\n\n" +
+        compressedLines.join("\n\n"),
+    );
+  }
+  if (fullSegment.length > 0) {
+    const fullLines = fullSegment.map(
+      ({ index, entry }) => `[Turn ${index}]\n${formatHistoryEntry(entry)}`,
+    );
+    parts.push(
+      "### Full context (recent turns)\n\n" +
+        "Use history_get_session with mode: 'original' and the turn index above to retrieve full content. Pass indexes (e.g. [0, 2, 5]) or rangeStart/rangeEnd to fetch multiple turns in one call.\n\n" +
+        fullLines.join("\n\n"),
+    );
+  }
+  return top + parts.join("\n\n");
 }

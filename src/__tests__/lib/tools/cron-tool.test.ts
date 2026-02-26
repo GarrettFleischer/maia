@@ -14,26 +14,43 @@ describe("cronScheduleTool", () => {
     const ctx = makeToolCtx();
     const id = await cronScheduleTool.execute({
       expression: "0 9 * * 1",
-      taskDescription: "Monday morning check-in",
+      toolName: "cron_echo",
+      toolArgs: { message: "Monday morning check-in" },
     }, ctx);
     expect(typeof id).toBe("string");
     expect((id as string).length).toBeGreaterThan(0);
   });
 
-  it("persists the job in the database", async () => {
+  it("persists the job in the database with tool_name and tool_args", async () => {
     const ctx = makeToolCtx();
-    await cronScheduleTool.execute({ expression: "*/5 * * * *", taskDescription: "Every 5 minutes" }, ctx);
-    const rows = ctx.db.prepare("SELECT * FROM cron_jobs").all() as Record<string, unknown>[];
+    ctx.db.prepare("DELETE FROM cron_jobs WHERE id != 'builtin-heartbeat'").run();
+    await cronScheduleTool.execute({
+      expression: "*/5 * * * *",
+      toolName: "web_search",
+      toolArgs: { query: "test" },
+      taskDescription: "Every 5 minutes",
+    }, ctx);
+    const rows = ctx.db.prepare("SELECT * FROM cron_jobs WHERE id != 'builtin-heartbeat'").all() as Record<string, unknown>[];
     expect(rows).toHaveLength(1);
     expect(rows[0].expression).toBe("*/5 * * * *");
     expect(rows[0].task_description).toBe("Every 5 minutes");
     expect(rows[0].agent_id).toBe("maia");
+    expect(rows[0].tool_name).toBe("web_search");
+    expect(JSON.parse(rows[0].tool_args as string)).toEqual({ query: "test" });
   });
 
   it("generates unique IDs for each job", async () => {
     const ctx = makeToolCtx();
-    const id1 = await cronScheduleTool.execute({ expression: "0 * * * *", taskDescription: "Hourly" }, ctx);
-    const id2 = await cronScheduleTool.execute({ expression: "0 * * * *", taskDescription: "Hourly 2" }, ctx);
+    const id1 = await cronScheduleTool.execute({
+      expression: "0 * * * *",
+      toolName: "cron_echo",
+      toolArgs: {},
+    }, ctx);
+    const id2 = await cronScheduleTool.execute({
+      expression: "0 * * * *",
+      toolName: "cron_echo",
+      toolArgs: {},
+    }, ctx);
     expect(id1).not.toBe(id2);
   });
 });
@@ -41,26 +58,46 @@ describe("cronScheduleTool", () => {
 describe("cronListTool", () => {
   it("returns empty list when no jobs", async () => {
     const ctx = makeToolCtx();
+    ctx.db.prepare("DELETE FROM cron_jobs").run();
     const result = await cronListTool.execute({}, ctx);
     expect(result).toEqual([]);
   });
 
-  it("returns all scheduled jobs", async () => {
+  it("returns all scheduled jobs with toolName and toolArgs", async () => {
     const ctx = makeToolCtx();
-    await cronScheduleTool.execute({ expression: "0 9 * * *", taskDescription: "Daily" }, ctx);
-    await cronScheduleTool.execute({ expression: "0 18 * * *", taskDescription: "Evening" }, ctx);
+    ctx.db.prepare("DELETE FROM cron_jobs WHERE id != 'builtin-heartbeat'").run();
+    await cronScheduleTool.execute({
+      expression: "0 9 * * *",
+      toolName: "cron_echo",
+      toolArgs: { message: "Daily" },
+    }, ctx);
+    await cronScheduleTool.execute({
+      expression: "0 18 * * *",
+      toolName: "cron_echo",
+      toolArgs: { message: "Evening" },
+    }, ctx);
     const result = await cronListTool.execute({}, ctx) as CronJob[];
-    expect(result).toHaveLength(2);
-    expect(result[0].expression).toBeDefined();
-    expect(result[0].taskDescription).toBeDefined();
-    expect(result[0].isBuiltIn).toBe(false);
+    expect(result.length).toBeGreaterThanOrEqual(2);
+    const userJobs = result.filter((j) => !j.isBuiltIn);
+    expect(userJobs).toHaveLength(2);
+    const daily = userJobs.find((j) => (j.toolArgs as { message?: string })?.message === "Daily");
+    expect(daily).toBeDefined();
+    expect(daily!.expression).toBeDefined();
+    expect(daily!.taskDescription).toBeDefined();
+    expect(daily!.toolName).toBe("cron_echo");
+    expect(daily!.toolArgs).toEqual({ message: "Daily" });
+    expect(daily!.isBuiltIn).toBe(false);
   });
 });
 
 describe("cronDeleteTool", () => {
   it("deletes a non-built-in job", async () => {
     const ctx = makeToolCtx();
-    const id = await cronScheduleTool.execute({ expression: "0 * * * *", taskDescription: "Delete me" }, ctx);
+    const id = await cronScheduleTool.execute({
+      expression: "0 * * * *",
+      toolName: "cron_echo",
+      toolArgs: { message: "Delete me" },
+    }, ctx);
     await cronDeleteTool.execute({ jobId: id as string }, ctx);
     const rows = ctx.db.prepare("SELECT * FROM cron_jobs WHERE id = ?").all(id) as Record<string, unknown>[];
     expect(rows).toHaveLength(0);
@@ -73,12 +110,6 @@ describe("cronDeleteTool", () => {
 
   it("throws when job is built-in", async () => {
     const ctx = makeToolCtx();
-    // Insert a built-in job
-    const id = "builtin-heartbeat";
-    const now = new Date().toISOString();
-    ctx.db.prepare(
-      "INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(id, "0 * * * *", "Heartbeat", "maia", 1, now);
-    await expect(cronDeleteTool.execute({ jobId: id }, ctx)).rejects.toThrow("Cannot delete built-in");
+    await expect(cronDeleteTool.execute({ jobId: "builtin-heartbeat" }, ctx)).rejects.toThrow("Cannot delete built-in");
   });
 });
