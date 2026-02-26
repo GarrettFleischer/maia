@@ -91,6 +91,38 @@ describe("refreshEmbeddings", () => {
     );
     await expect(refreshEmbeddings(failCtx)).resolves.toBeUndefined();
   });
+
+  it("chunks long content and stores multiple vectors per entry", async () => {
+    _clearOllamaEmbedContextLengthCacheForTests();
+    const chunkCtx = makeTestContext();
+    updateSettings(chunkCtx, { embeddingModel: "nomic-embed-text" });
+    (chunkCtx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
+      "/api/show",
+      async () =>
+        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 2" }))
+    );
+    let embedCallCount = 0;
+    (chunkCtx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
+      "/api/embed",
+      async () => {
+        embedCallCount++;
+        return new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }));
+      }
+    );
+    const sessionId = createSession(chunkCtx, ["user", "maia"]);
+    const longContent = "one two three four five six seven eight";
+    const entry = appendEntry(chunkCtx, sessionId, {
+      role: "user",
+      content: longContent,
+      timestamp: new Date().toISOString(),
+    });
+    await refreshEmbeddings(chunkCtx);
+    const vectorRows = chunkCtx.db
+      .prepare("SELECT id, entry_id, content FROM history_vectors WHERE entry_id = ?")
+      .all(entry.id) as { id: string; entry_id: string; content: string }[];
+    expect(vectorRows.length).toBeGreaterThan(1);
+    expect(embedCallCount).toBe(vectorRows.length);
+  });
 });
 
 describe("fireHeartbeat", () => {
@@ -178,8 +210,8 @@ describe("fireHeartbeat", () => {
           .get(entry.id) as { c: number }
       ).c;
     });
-    // The entry should already be indexed by the time the agent runs
-    expect(vectorCountWhenAgentRan).toBe(1);
+    // The entry should already be indexed by the time the agent runs (may be multiple vectors if chunked)
+    expect(vectorCountWhenAgentRan).toBeGreaterThanOrEqual(1);
   });
 
   it("passes task board section to maia when present", async () => {

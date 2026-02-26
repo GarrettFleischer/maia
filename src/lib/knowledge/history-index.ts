@@ -3,17 +3,22 @@
  * @module lib/knowledge/history-index
  *
  * Called fire-and-forget after appending entries (original and compressed).
+ * Long content is chunked using the model's context length; multiple vectors may be stored per entry.
  */
 
 import { v4 as uuidv4 } from "uuid";
-import { createEmbeddingAdapter } from "./embedding";
+import {
+  createEmbeddingAdapter,
+  getEffectiveEmbedMaxLength,
+  chunkContentForEmbedding,
+} from "./embedding";
 import { createVectorStore } from "./vector-store";
 import { getSettings } from "../settings";
 import type { AppContext } from "../context";
 
 /**
  * Load an entry from history_entries, embed its content, and insert into history_vectors.
- * Content is truncated to settings.embedMaxContentLength to avoid exceeding the model context.
+ * Uses effective max length (Ollama context when available) and chunks long content into multiple vectors per entry.
  * Safe to call fire-and-forget; logs errors and does not throw.
  */
 export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promise<void> {
@@ -36,25 +41,25 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
   if (row.content.trim() === "") return;
 
   const settings = getSettings(ctx);
-  const maxLen = settings.embedMaxContentLength;
-  const contentToEmbed =
-    row.content.length > maxLen ? row.content.slice(0, maxLen) : row.content;
 
   try {
+    const maxLen = await getEffectiveEmbedMaxLength(settings, ctx.http);
+    const chunks = chunkContentForEmbedding(row.content, maxLen);
     const embedder = createEmbeddingAdapter(settings, ctx.http);
-    const embedding = await embedder.embed(contentToEmbed);
     const store = createVectorStore(ctx.db);
-    const id = uuidv4();
     const now = new Date().toISOString();
-    store.insertHistory(
-      id,
-      row.session_id,
-      row.id,
-      row.content,
-      embedding,
-      row.is_compressed === 1,
-      now
-    );
+    for (const chunk of chunks) {
+      const embedding = await embedder.embed(chunk);
+      store.insertHistory(
+        uuidv4(),
+        row.session_id,
+        row.id,
+        chunk,
+        embedding,
+        row.is_compressed === 1,
+        now,
+      );
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : "";
@@ -67,7 +72,6 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
       msg.includes("ECONNREFUSED") ||
       cause.includes("ECONNREFUSED");
     const hint = isRefused ? " (embedding service not running?)" : "";
-    const settings = getSettings(ctx);
     const embedUrl = `${settings.ollamaBaseUrl.replace(/\/$/, "")}/api/embed`;
     console.error("History indexing skipped:", msg + hint, `(${embedUrl})`);
   }

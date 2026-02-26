@@ -6,22 +6,29 @@
  * @note Only history entries are refreshed here. Knowledge documents are indexed separately
  * (e.g. by the knowledge-index tool or manual trigger). This module is designed to be fast
  * and non-blocking: failures are logged and never propagate.
+ * Long entries are chunked using the model's context length so embedding never exceeds limits.
  */
 
 import { getSettings } from "../settings";
-import { createEmbeddingAdapter } from "./embedding";
+import {
+  createEmbeddingAdapter,
+  getEffectiveEmbedMaxLength,
+  chunkContentForEmbedding,
+} from "./embedding";
 import { createVectorStore } from "./vector-store";
 import type { AppContext } from "../context";
 
 /**
  * Finds all history entries that have no corresponding row in history_vectors and embeds them.
+ * Uses Ollama context length when available to avoid "input length exceeds context length" errors.
+ * Long content is chunked and stored as multiple vectors per entry.
  * Safe to call multiple times; already-indexed entries are skipped.
  * Logs errors and resolves (never rejects) so callers can fire-and-await safely.
  * @param ctx - Application context
  */
 export async function refreshEmbeddings(ctx: AppContext): Promise<void> {
   const settings = getSettings(ctx);
-  const maxLen = settings.embedMaxContentLength;
+  const maxLen = await getEffectiveEmbedMaxLength(settings, ctx.http);
 
   // Find history entries not yet in history_vectors
   const unindexed = ctx.db
@@ -42,18 +49,19 @@ export async function refreshEmbeddings(ctx: AppContext): Promise<void> {
 
   for (const row of unindexed) {
     try {
-      const contentToEmbed =
-        row.content.length > maxLen ? row.content.slice(0, maxLen) : row.content;
-      const embedding = await embedder.embed(contentToEmbed);
-      store.insertHistory(
-        uuidv4(),
-        row.session_id,
-        row.id,
-        row.content,
-        embedding,
-        row.is_compressed === 1,
-        now,
-      );
+      const chunks = chunkContentForEmbedding(row.content, maxLen);
+      for (const chunk of chunks) {
+        const embedding = await embedder.embed(chunk);
+        store.insertHistory(
+          uuidv4(),
+          row.session_id,
+          row.id,
+          chunk,
+          embedding,
+          row.is_compressed === 1,
+          now,
+        );
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[refreshEmbeddings] Failed to index entry ${row.id}:`, msg);

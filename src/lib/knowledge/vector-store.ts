@@ -126,7 +126,11 @@ export function createVectorStore(db: DbAdapter) {
       ).run(id, sessionId, entryId, content, JSON.stringify(embedding), isCompressed ? 1 : 0, createdAt);
     },
 
-    /** Semantic search over history. Returns top-k by cosine similarity. */
+    /**
+     * Semantic search over history. Returns top-k by cosine similarity.
+     * When an entry has multiple vector rows (chunks), returns at most one hit per entry_id
+     * (the chunk with the highest score for that entry).
+     */
     searchHistory(queryEmbedding: number[], limit: number): HistoryHit[] {
       const rows = db
         .prepare(
@@ -144,8 +148,20 @@ export function createVectorStore(db: DbAdapter) {
         ...r,
         score: cosineSimilarity(queryEmbedding, parseEmbedding(r.embedding_json)),
       }));
-      withScore.sort((a, b) => b.score - a.score);
-      return withScore.slice(0, limit).map((r) => ({
+      // Collapse by entry_id: keep the hit with max score per entry
+      const bestByEntry = new Map<
+        string,
+        { id: string; session_id: string; entry_id: string; content: string; is_compressed: number; score: number }
+      >();
+      for (const r of withScore) {
+        const existing = bestByEntry.get(r.entry_id);
+        if (!existing || r.score > existing.score) {
+          bestByEntry.set(r.entry_id, r);
+        }
+      }
+      const collapsed = Array.from(bestByEntry.values());
+      collapsed.sort((a, b) => b.score - a.score);
+      return collapsed.slice(0, limit).map((r) => ({
         id: r.id,
         sessionId: r.session_id,
         entryId: r.entry_id,
