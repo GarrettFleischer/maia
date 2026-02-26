@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import { fireHeartbeat } from "@/lib/heartbeat";
+import { fireHeartbeat, _resetHeartbeatIdempotencyForTests } from "@/lib/heartbeat";
 import { refreshEmbeddings } from "@/lib/knowledge/refresh-embeddings";
+import { _clearOllamaEmbedContextLengthCacheForTests } from "@/lib/knowledge/embedding";
 import { makeTestContext, FakeEvents, FakeResponse } from "../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
 import { appendEntry, createSession } from "@/lib/history";
@@ -97,6 +98,7 @@ describe("fireHeartbeat", () => {
   let events: FakeEvents;
 
   beforeEach(() => {
+    _resetHeartbeatIdempotencyForTests();
     events = new FakeEvents();
     ctx = makeTestContext({ events });
     (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
@@ -192,5 +194,18 @@ describe("fireHeartbeat", () => {
     });
     expect(messages[0]).toContain("Task Board");
     expect(messages[0]).toContain("Unassigned task");
+  });
+
+  it("skips running the heartbeat tool when called again within 60s (idempotency)", async () => {
+    seedAgent(ctx, "maia", "active");
+    const runAgentCalls: number[] = [];
+    const runAgentFn = async () => {
+      runAgentCalls.push(1);
+    };
+    await fireHeartbeat(ctx, runAgentFn);
+    expect(runAgentCalls).toHaveLength(1);
+    await fireHeartbeat(ctx, runAgentFn);
+    // Second call within 60s should skip the tool execution, so runAgentFn is not called again
+    expect(runAgentCalls).toHaveLength(1);
   });
 });

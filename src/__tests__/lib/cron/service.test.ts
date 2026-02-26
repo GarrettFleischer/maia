@@ -12,6 +12,7 @@ import {
 import { updateSettings } from "@/lib/settings";
 import { makeTestContext, FakeEvents } from "../../helpers/fakes";
 import type { AppContext } from "@/lib/context";
+import { _resetHeartbeatIdempotencyForTests } from "@/lib/heartbeat";
 
 function seedCronJob(
   ctx: AppContext,
@@ -191,6 +192,7 @@ describe("CronService", () => {
     });
 
     it("when builtin-heartbeat job runs, emits heartbeat event and cron_fired", async () => {
+      _resetHeartbeatIdempotencyForTests();
       startCronScheduler(ctx, async () => {}, { runOnInit: true });
       await new Promise((r) => setTimeout(r, 20));
       const heartbeatEvents = events.emitted.filter((e) => e.event === "heartbeat");
