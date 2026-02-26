@@ -82,6 +82,7 @@ export async function extractSearchQueries(
   const fallback = [userMessage.slice(0, 500)];
 
   if (!model || !settings.whitelistedModels.includes(model)) {
+    console.debug("[Smart context] extractSearchQueries: skipped (no model or not whitelisted), using fallback");
     return fallback;
   }
 
@@ -92,6 +93,7 @@ export async function extractSearchQueries(
       { role: "user", content: userMessage },
     ];
     const raw = await callCheapModel(provider, messages);
+    console.debug("[Smart context] extractSearchQueries: raw response length", raw.length);
 
     // Try to parse the whole response first (expected: a top-level JSON array).
     // If that fails, look for the first top-level array in the text (handles code fences etc.).
@@ -101,11 +103,17 @@ export async function extractSearchQueries(
       parsed = JSON.parse(trimmed);
     } catch {
       const jsonMatch = trimmed.match(/\[[\s\S]*?\]/);
-      if (!jsonMatch) return fallback;
+      if (!jsonMatch) {
+        console.debug("[Smart context] extractSearchQueries: no JSON array in response, using fallback");
+        return fallback;
+      }
       parsed = JSON.parse(jsonMatch[0]);
     }
 
-    if (!Array.isArray(parsed)) return fallback;
+    if (!Array.isArray(parsed)) {
+      console.debug("[Smart context] extractSearchQueries: response not an array, using fallback");
+      return fallback;
+    }
 
     const queries = [...new Set(
       (parsed as unknown[])
@@ -114,8 +122,14 @@ export async function extractSearchQueries(
         .filter((q) => q.length > 0)
     )];
 
-    return queries.length > 0 ? queries : fallback;
-  } catch {
+    if (queries.length === 0) {
+      console.debug("[Smart context] extractSearchQueries: empty queries after parse, using fallback");
+      return fallback;
+    }
+    return queries;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.debug("[Smart context] extractSearchQueries: error, using fallback", msg);
     return fallback;
   }
 }
@@ -145,11 +159,14 @@ export async function buildRawRetrievedContext(
   const knowledgeEntries: Array<{ path: string; content: string; score: number }> = [];
   const sources: ContextSource[] = [];
 
+  const debugPerQuery: Array<{ query: string; historyHits: number; knowledgeHits: number }> = [];
+
   for (const query of queries) {
     const [histHits, knowledgeHits] = await Promise.all([
       searchHistory(ctx, embedder, query, historyLimit),
       searchKnowledge(ctx, embedder, query, knowledgeLimit),
     ]);
+    debugPerQuery.push({ query, historyHits: histHits.length, knowledgeHits: knowledgeHits.length });
 
     for (const hit of histHits) {
       const key = `${hit.sessionId}/${hit.entryId}`;
@@ -168,6 +185,8 @@ export async function buildRawRetrievedContext(
       }
     }
   }
+
+  console.debug("[Smart context] buildRawRetrievedContext: per-query hits", debugPerQuery, "total history:", historyEntries.length, "total knowledge:", knowledgeEntries.length);
 
   if (historyEntries.length === 0 && knowledgeEntries.length === 0) {
     return { text: "No relevant prior context found.", sources: [] };
@@ -212,8 +231,11 @@ export async function summarizeRetrievedContext(
   const model = settings.contextSummaryModel || settings.contextQueryModel;
 
   if (!model || !settings.whitelistedModels.includes(model)) {
+    console.debug("[Smart context] summarizeRetrievedContext: no summary model, returning raw");
     return `## Smart context\n\n${rawText}`;
   }
+
+  console.debug("[Smart context] summarizeRetrievedContext: using model", model, "sources count", sources.length);
 
   const sourceList = sources.map((s) => `- ${s.id}`).join("\n");
   const systemContent = `${SUMMARIZE_PROMPT_PREFIX}\n${sourceList}`;
@@ -225,8 +247,12 @@ export async function summarizeRetrievedContext(
       { role: "user", content: rawText },
     ];
     const result = await callCheapModel(provider, messages);
-    return result.trim() || `## Smart context\n\n${rawText}`;
-  } catch {
+    const out = result.trim() || `## Smart context\n\n${rawText}`;
+    console.debug("[Smart context] summarizeRetrievedContext: result length", out.length);
+    return out;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.debug("[Smart context] summarizeRetrievedContext: error, returning raw", msg);
     return `## Smart context\n\n${rawText}`;
   }
 }

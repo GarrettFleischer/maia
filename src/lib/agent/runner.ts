@@ -37,6 +37,11 @@ export interface RunAgentOptions {
    * Used by cron jobs so each job invokes a specific tool (with args) instead of a free-form message.
    */
   initialToolCall?: { name: string; args: Record<string, unknown> };
+  /**
+   * When false, the smart context pipeline (query extraction + semantic search + summarization) is skipped.
+   * Default true. Set false for heartbeat and other system-originated runs that already have inline context.
+   */
+  enableSmartContext?: boolean;
 }
 
 const WORKSPACE_ROOT = getWorkspaceRoot();
@@ -205,16 +210,34 @@ async function _runLoop(
   const recentTurns = Math.max(1, settings.contextRecentTurns);
   const recentThreadBlock = formatRecentThreadTurns(sessionForThread as Parameters<typeof formatRecentThreadTurns>[0], recentTurns);
 
-  // Smart context: extract queries → search history+knowledge → summarize with citations
+  // Smart context: extract queries → search history+knowledge → summarize with citations (only when enabled by call site)
   let smartContextBlock = "";
   const queryModel = settings.contextQueryModel;
-  if (queryModel && settings.whitelistedModels.includes(queryModel)) {
+  const smartContextAllowed = options?.enableSmartContext !== false;
+  const smartContextEnabled = Boolean(
+    smartContextAllowed && queryModel && settings.whitelistedModels.includes(queryModel),
+  );
+  console.debug(
+    "[Smart context]",
+    smartContextEnabled
+      ? `enabled (query model: ${queryModel})`
+      : smartContextAllowed
+        ? "disabled (no query model or not whitelisted)"
+        : "disabled (call site set enableSmartContext: false)",
+  );
+
+  if (smartContextEnabled) {
     try {
       const queries = await extractSearchQueries(ctx, providerFactory, userMessage);
+      console.debug("[Smart context] extracted queries", { count: queries.length, queries });
       const { text: rawContext, sources } = await buildRawRetrievedContext(ctx, queries);
+      console.debug("[Smart context] retrieved context", { rawLength: rawContext.length, sourcesCount: sources.length, sourceIds: sources.map((s) => s.id) });
       smartContextBlock = await summarizeRetrievedContext(ctx, providerFactory, rawContext, sources);
+      console.debug("[Smart context] summary produced", { blockLength: smartContextBlock.length });
     } catch (err) {
-      console.error("Smart context pipeline failed, skipping:", err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errStack = err instanceof Error ? err.stack : undefined;
+      console.error("[Smart context] pipeline failed, skipping:", errMsg, errStack ?? "");
     }
   }
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ensureAppContext } from "@/instrumentation";
 import { fireHeartbeat } from "@/lib/heartbeat";
-import { runAgent } from "@/lib/agent/runner";
+import { runAgent, type RunAgentOptions } from "@/lib/agent/runner";
 import { createProvider } from "@/lib/ai/factory";
 
 export async function POST() {
@@ -13,9 +13,10 @@ export async function POST() {
     c: typeof ctx,
     agentId: string,
     sessionId: string,
-    message: string
+    message: string,
+    options?: RunAgentOptions,
   ): Promise<void> => {
-    await runAgent(c, createProvider, agentId, sessionId, message, () => {});
+    await runAgent(c, createProvider, agentId, sessionId, message, () => {}, options);
   };
   await fireHeartbeat(ctx, runAgentFn);
   return NextResponse.json({ ok: true, timestamp: new Date().toISOString() });

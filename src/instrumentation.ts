@@ -69,7 +69,7 @@ export async function register() {
       agentId: string,
       sessionId: string,
       message: string,
-      options?: { initialToolCall?: { name: string; args: Record<string, unknown> } }
+      options?: { initialToolCall?: { name: string; args: Record<string, unknown> }; enableSmartContext?: boolean },
     ): Promise<void> => {
       await runAgent(c, createProvider, agentId, sessionId, message, () => {}, options);
     };

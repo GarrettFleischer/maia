@@ -10,6 +10,7 @@ import { z } from "zod";
 import type { AppContext } from "../context";
 import type { ToolContext } from "./types";
 import type { Tool } from "./types";
+import type { RunAgentOptions } from "../agent/runner";
 import { getAgentIdentity } from "../agent/identity";
 import { createSession } from "../history";
 import { runDataBackup } from "../data-backup";
@@ -78,7 +79,7 @@ export type HeartbeatRunAgentFn = (
   agentId: string,
   sessionId: string,
   message: string,
-  options?: { initialToolCall?: { name: string; args: Record<string, unknown> } }
+  options?: RunAgentOptions,
 ) => Promise<void>;
 
 /**
@@ -116,7 +117,9 @@ export function createHeartbeatTool(runAgentFn: HeartbeatRunAgentFn): Tool {
 
       const message = buildHeartbeatMessage(ctx, timestamp);
       const sessionId = createSession(ctx, [MAIA_AGENT_ID], "agents");
-      await runAgentFn(ctx, MAIA_AGENT_ID, sessionId, message).catch((err) => {
+      await runAgentFn(ctx, MAIA_AGENT_ID, sessionId, message, {
+        enableSmartContext: false,
+      }).catch((err) => {
         console.error("Heartbeat failed for maia:", err);
       });
 

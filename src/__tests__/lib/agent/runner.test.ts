@@ -397,6 +397,42 @@ describe("runAgent", () => {
     expect(systemContent).toContain("Found 3 results.");
   });
 
+  it("does not run smart context pipeline when options.enableSmartContext is false", async () => {
+    updateSettings(ctx, { contextQueryModel: "ollama/llama3.2" });
+    let completeCallCount = 0;
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        completeCallCount++;
+        const content = "Reply";
+        onToken(content);
+        return { content, toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, makeProviderFactory(provider), "maia", sessionId, "Hello", () => {}, {
+      enableSmartContext: false,
+    });
+    // Smart context would call complete for query extraction; with enableSmartContext: false we only get the main turn
+    expect(completeCallCount).toBe(1);
+  });
+
+  it("runs smart context when options.enableSmartContext is true or omitted", async () => {
+    updateSettings(ctx, { contextQueryModel: "ollama/llama3.2" });
+    let completeCallCount = 0;
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        completeCallCount++;
+        const content =
+          completeCallCount === 1 ? '["query1"]' : "Reply";
+        onToken(content);
+        return { content, toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, makeProviderFactory(provider), "maia", sessionId, "Hello", () => {}, {
+      enableSmartContext: true,
+    });
+    expect(completeCallCount).toBeGreaterThanOrEqual(2);
+  });
+
   it("includes AGENTS.md from agent dir as full system command when present", async () => {
     const customInstruction = "Review GOALS every turn. Update MEMORY when you learn something important.";
     seedIdentityFiles(ctx.fs as FakeFs, "maia", { agentsMd: customInstruction });
