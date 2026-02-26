@@ -123,6 +123,47 @@ describe("refreshEmbeddings", () => {
     expect(vectorRows.length).toBeGreaterThan(1);
     expect(embedCallCount).toBe(vectorRows.length);
   });
+
+  it("retries with half-sized chunks when embed fails with context length error", async () => {
+    _clearOllamaEmbedContextLengthCacheForTests();
+    const retryCtx = makeTestContext();
+    updateSettings(retryCtx, { embeddingModel: "nomic-embed-text" });
+    (retryCtx.http as { on: (p: string, h: (url: string, init?: RequestInit) => Promise<FakeResponse>) => void }).on(
+      "/api/show",
+      async () =>
+        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 100" }))
+    );
+    let embedCallCount = 0;
+    (retryCtx.http as { on: (p: string, h: (url: string, init?: RequestInit) => Promise<FakeResponse>) => void }).on(
+      "/api/embed",
+      async (_url: string, init?: RequestInit) => {
+        embedCallCount++;
+        const body = init?.body as string | undefined;
+        const parsed = body ? (JSON.parse(body) as { input?: string }) : {};
+        const len = typeof parsed.input === "string" ? parsed.input.length : 0;
+        if (embedCallCount === 1 && len > 50) {
+          return new FakeResponse(
+            400,
+            JSON.stringify({ error: "the input length exceeds the context length" })
+          );
+        }
+        return new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }));
+      }
+    );
+    const sessionId = createSession(retryCtx, ["user", "maia"]);
+    const content = "a".repeat(120);
+    const entry = appendEntry(retryCtx, sessionId, {
+      role: "user",
+      content,
+      timestamp: new Date().toISOString(),
+    });
+    await refreshEmbeddings(retryCtx);
+    const vectorRows = retryCtx.db
+      .prepare("SELECT id, entry_id, content FROM history_vectors WHERE entry_id = ?")
+      .all(entry.id) as { id: string; entry_id: string; content: string }[];
+    expect(vectorRows.length).toBeGreaterThanOrEqual(1);
+    expect(embedCallCount).toBeGreaterThan(1);
+  });
 });
 
 describe("fireHeartbeat", () => {

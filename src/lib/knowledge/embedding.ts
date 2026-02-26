@@ -11,8 +11,10 @@ import type { Settings } from "../types";
 
 /** Fallback context length in tokens when /api/show fails or has no num_ctx. */
 const DEFAULT_CONTEXT_TOKENS = 2048;
-/** Approximate characters per token for a safe chunk size. */
-const CHARS_PER_TOKEN = 3;
+/** Conservative characters per token so chunks stay under token limit (dense text). */
+const CHARS_PER_TOKEN = 2;
+/** Hard cap on chunk size so we never exceed typical embed API limits (e.g. 2048 tokens). */
+const SAFE_EMBED_MAX_CHARS = DEFAULT_CONTEXT_TOKENS * CHARS_PER_TOKEN;
 
 const contextLengthCache = new Map<string, number>();
 
@@ -30,7 +32,7 @@ export function _clearOllamaEmbedContextLengthCacheForTests(): void {
  * @param model - Ollama model name (e.g. nomic-embed-text)
  * @param baseUrl - Ollama base URL (e.g. http://localhost:11434)
  * @param http - HTTP client
- * @returns Safe character budget per chunk (tokens * CHARS_PER_TOKEN), or fallback 2048*3 on error
+ * @returns Safe character budget per chunk (tokens * CHARS_PER_TOKEN), or fallback 2048*2 on error
  */
 export async function getOllamaEmbedContextLength(
   model: string,
@@ -95,7 +97,7 @@ export function createOllamaEmbeddingAdapter(
       const res = await http.fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, input: text }),
+        body: JSON.stringify({ model, input: text, truncate: true }),
       });
       if (!res.ok) {
         const body = await res.text();
@@ -122,8 +124,8 @@ export function createOllamaEmbeddingAdapter(
 
 /**
  * Returns the effective maximum character length for a single embed chunk: the minimum of
- * settings.embedMaxContentLength and the model's context length from Ollama /api/show.
- * Use this when chunking long content to avoid "input length exceeds context length" errors.
+ * settings.embedMaxContentLength, the model's context length from Ollama /api/show, and a
+ * safe hard cap so we never exceed typical embed API limits.
  * @param settings - App settings (embeddingModel, ollamaBaseUrl, embedMaxContentLength)
  * @param http - HTTP client
  * @returns Safe character limit per chunk
@@ -134,7 +136,8 @@ export async function getEffectiveEmbedMaxLength(
 ): Promise<number> {
   const model = (settings.embeddingModel ?? "nomic-embed-text").replace(/^ollama\//, "");
   const ollamaMax = await getOllamaEmbedContextLength(model, settings.ollamaBaseUrl, http);
-  return Math.min(settings.embedMaxContentLength, ollamaMax);
+  const effective = Math.min(settings.embedMaxContentLength, ollamaMax);
+  return Math.min(effective, SAFE_EMBED_MAX_CHARS);
 }
 
 /**

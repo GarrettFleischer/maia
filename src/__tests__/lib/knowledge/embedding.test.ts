@@ -8,8 +8,10 @@ import { FakeHttp, FakeResponse } from "../../helpers/fakes";
 import {
   createOllamaEmbeddingAdapter,
   getOllamaEmbedContextLength,
+  getEffectiveEmbedMaxLength,
   _clearOllamaEmbedContextLengthCacheForTests,
 } from "@/lib/knowledge/embedding";
+import type { Settings } from "@/lib/types";
 
 describe("embedding", () => {
   describe("createOllamaEmbeddingAdapter", () => {
@@ -71,18 +73,18 @@ describe("embedding", () => {
       http = new FakeHttp();
     });
 
-    it("returns character budget from num_ctx in parameters (tokens * 3)", async () => {
+    it("returns character budget from num_ctx in parameters (tokens * 2)", async () => {
       http.on("/api/show", async () =>
         new FakeResponse(200, JSON.stringify({ parameters: "temperature 0.1\nnum_ctx 2048\n" }))
       );
       const chars = await getOllamaEmbedContextLength("nomic-embed-text", "http://localhost:11434", http);
-      expect(chars).toBe(2048 * 3);
+      expect(chars).toBe(2048 * 2);
     });
 
     it("uses fallback when POST /api/show fails", async () => {
       http.on("/api/show", async () => new FakeResponse(500, "error"));
       const chars = await getOllamaEmbedContextLength("nomic-embed-text", "http://localhost:11434", http);
-      expect(chars).toBe(6144); // 2048 tokens * 3 default
+      expect(chars).toBe(4096); // 2048 tokens * 2 default
     });
 
     it("uses fallback when parameters has no num_ctx", async () => {
@@ -90,7 +92,7 @@ describe("embedding", () => {
         new FakeResponse(200, JSON.stringify({ parameters: "temperature 0.7" }))
       );
       const chars = await getOllamaEmbedContextLength("nomic-embed-text", "http://localhost:11434", http);
-      expect(chars).toBe(6144);
+      expect(chars).toBe(4096);
     });
 
     it("caches result per model so show is not called twice", async () => {
@@ -101,9 +103,58 @@ describe("embedding", () => {
       });
       const a = await getOllamaEmbedContextLength("nomic-embed-text", "http://localhost:11434", http);
       const b = await getOllamaEmbedContextLength("nomic-embed-text", "http://localhost:11434", http);
-      expect(a).toBe(4096 * 3);
+      expect(a).toBe(4096 * 2);
       expect(b).toBe(a);
       expect(showCalls).toBe(1);
+    });
+  });
+
+  describe("getEffectiveEmbedMaxLength", () => {
+    let http: FakeHttp;
+
+    beforeEach(() => {
+      _clearOllamaEmbedContextLengthCacheForTests();
+      http = new FakeHttp();
+    });
+
+    it("returns effective max capped by safe upper bound even when Ollama reports large context", async () => {
+      http.on("/api/show", async () =>
+        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 32768" }))
+      );
+      const settings: Settings = {
+        whitelistedModels: [],
+        heartbeatIntervalMinutes: 30,
+        ollamaBaseUrl: "http://localhost:11434",
+        vllmBaseUrl: "",
+        dockerBaseUrl: "",
+        embeddingModel: "nomic-embed-text",
+        embedMaxContentLength: 32000,
+        contextQueryModel: "",
+        contextSummaryModel: "",
+        contextRecentTurns: 3,
+      };
+      const maxLen = await getEffectiveEmbedMaxLength(settings, http);
+      expect(maxLen).toBe(4096);
+    });
+
+    it("returns min of settings and ollama when both below safe cap", async () => {
+      http.on("/api/show", async () =>
+        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 2048" }))
+      );
+      const settings: Settings = {
+        whitelistedModels: [],
+        heartbeatIntervalMinutes: 30,
+        ollamaBaseUrl: "http://localhost:11434",
+        vllmBaseUrl: "",
+        dockerBaseUrl: "",
+        embeddingModel: "nomic-embed-text",
+        embedMaxContentLength: 4000,
+        contextQueryModel: "",
+        contextSummaryModel: "",
+        contextRecentTurns: 3,
+      };
+      const maxLen = await getEffectiveEmbedMaxLength(settings, http);
+      expect(maxLen).toBe(4000);
     });
   });
 });

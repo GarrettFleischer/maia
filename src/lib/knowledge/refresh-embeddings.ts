@@ -51,20 +51,69 @@ export async function refreshEmbeddings(ctx: AppContext): Promise<void> {
     try {
       const chunks = chunkContentForEmbedding(row.content, maxLen);
       for (const chunk of chunks) {
-        const embedding = await embedder.embed(chunk);
-        store.insertHistory(
-          uuidv4(),
+        await embedOneChunk(
+          embedder,
+          store,
+          chunk,
+          maxLen,
           row.session_id,
           row.id,
-          chunk,
-          embedding,
           row.is_compressed === 1,
           now,
+          uuidv4,
         );
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[refreshEmbeddings] Failed to index entry ${row.id}:`, msg);
+    }
+  }
+}
+
+/**
+ * Embeds one chunk and inserts into the store. On "context length" error, retries once
+ * with half-sized sub-chunks so we stay under the embed API limit.
+ * @param embedder - Embedding adapter
+ * @param store - Vector store
+ * @param chunk - Text to embed
+ * @param maxLen - Current max character length per chunk
+ * @param sessionId - Session ID for the entry
+ * @param entryId - Entry ID
+ * @param isCompressed - Whether the entry is compressed
+ * @param now - Timestamp string
+ * @param uuidv4 - UUID v4 function
+ */
+async function embedOneChunk(
+  embedder: ReturnType<typeof createEmbeddingAdapter>,
+  store: ReturnType<typeof createVectorStore>,
+  chunk: string,
+  maxLen: number,
+  sessionId: string,
+  entryId: string,
+  isCompressed: boolean,
+  now: string,
+  uuidv4: () => string,
+): Promise<void> {
+  try {
+    const embedding = await embedder.embed(chunk);
+    store.insertHistory(uuidv4(), sessionId, entryId, chunk, embedding, isCompressed, now);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isContextLengthError = /context length|exceeds the context length/i.test(msg);
+    const smallerMax = Math.floor(maxLen / 2);
+    if (isContextLengthError && smallerMax >= 1) {
+      const subChunks = chunkContentForEmbedding(chunk, smallerMax);
+      for (const sub of subChunks) {
+        try {
+          const embedding = await embedder.embed(sub);
+          store.insertHistory(uuidv4(), sessionId, entryId, sub, embedding, isCompressed, now);
+        } catch (subErr) {
+          const subMsg = subErr instanceof Error ? subErr.message : String(subErr);
+          console.error(`[refreshEmbeddings] Failed to index entry ${entryId} (sub-chunk):`, subMsg);
+        }
+      }
+    } else {
+      console.error(`[refreshEmbeddings] Failed to index entry ${entryId}:`, msg);
     }
   }
 }
