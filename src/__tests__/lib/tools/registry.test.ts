@@ -24,8 +24,10 @@ describe("tool registry", () => {
 
       expect(maiaTools.length).toBeGreaterThan(otherTools.length);
       expect(maiaNames.has("agent_create")).toBe(true);
+      expect(maiaNames.has("settings_list_whitelisted_models")).toBe(true);
       expect(maiaNames.has("cron_schedule")).toBe(true);
       expect(otherNames.has("agent_create")).toBe(false);
+      expect(otherNames.has("settings_list_whitelisted_models")).toBe(false);
       expect(otherNames.has("cron_schedule")).toBe(false);
       expect(maiaNames.has("approve_tool")).toBe(true);
       expect(maiaNames.has("tool_deregister")).toBe(true);

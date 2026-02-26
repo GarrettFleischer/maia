@@ -18,7 +18,7 @@ export function initMaiaAgent(ctx: AppContext): void {
 
   const maiaDir = path.join(getAgentsDir(), "maia");
   if (!ctx.fs.exists(maiaDir)) {
-    copyDefaultAgentFiles(ctx, maiaDir, "Maia");
+    copyDefaultAgentFiles(ctx, maiaDir, "Maia", "maia");
   }
 
   console.log("Maia agent initialized");

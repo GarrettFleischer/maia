@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "bun:test";
+import path from "path";
 import {
   agentCreateTool,
   agentDeleteTool,
@@ -6,7 +7,10 @@ import {
   agentGetTool,
   agentUpdateIdentityTool,
   agentUpdateAgentIdentityTool,
+  settingsListWhitelistedModelsTool,
+  copyDefaultAgentFiles,
 } from "@/lib/tools/agent-management";
+import { getAgentsDir, getDefaultAgentDir, getDefaultMaiaDir } from "@/lib/data-dir";
 import { makeTestContext, FakeFs } from "../../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
 import type { ToolContext } from "@/lib/tools/types";
@@ -19,6 +23,54 @@ function makeToolCtx(fs?: FakeFs): ToolContext {
   updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"] });
   return { ...ctx, agentId: "maia", sessionId: "session-1", volumeRoot: "/workspace" };
 }
+
+describe("settingsListWhitelistedModelsTool", () => {
+  it("returns whitelisted models from settings", async () => {
+    const ctx = makeToolCtx();
+    const result = await settingsListWhitelistedModelsTool.execute({}, ctx) as { whitelistedModels: string[] };
+    expect(result.whitelistedModels).toEqual(["ollama/llama3.2"]);
+  });
+
+  it("returns empty array when whitelist is empty", async () => {
+    const ctx = makeToolCtx();
+    updateSettings(ctx, { whitelistedModels: [] });
+    const result = await settingsListWhitelistedModelsTool.execute({}, ctx) as { whitelistedModels: string[] };
+    expect(result.whitelistedModels).toEqual([]);
+  });
+
+  it("returns multiple models when configured", async () => {
+    const ctx = makeToolCtx();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2", "openrouter/anthropic/claude-3.5-sonnet"] });
+    const result = await settingsListWhitelistedModelsTool.execute({}, ctx) as { whitelistedModels: string[] };
+    expect(result.whitelistedModels).toEqual(["ollama/llama3.2", "openrouter/anthropic/claude-3.5-sonnet"]);
+  });
+});
+
+describe("copyDefaultAgentFiles", () => {
+  it("uses defaults/maia/AGENTS.md for Maia when present", () => {
+    const fs = new FakeFs();
+    const maiaAgentsPath = path.join(getDefaultMaiaDir(), "AGENTS.md");
+    const maiaContent = "# Maia only\n\n## Creating agents (Maia)\nUse settings_list_whitelisted_models.";
+    fs.seed(maiaAgentsPath, maiaContent);
+    const ctx = makeTestContext({ fs });
+    const agentDir = path.join(getAgentsDir(), "maia");
+    copyDefaultAgentFiles(ctx, agentDir, "Maia", "maia");
+    const written = fs.snapshot()[path.join(agentDir, "AGENTS.md")];
+    expect(written).toBe(maiaContent);
+  });
+
+  it("falls back to defaults/agent AGENTS.md for Maia when defaults/maia/AGENTS.md is missing", () => {
+    const fs = new FakeFs();
+    const agentAgentsPath = path.join(getDefaultAgentDir(), "AGENTS.md");
+    const agentContent = "# Other agents\nNo Maia-only sections.";
+    fs.seed(agentAgentsPath, agentContent);
+    const ctx = makeTestContext({ fs });
+    const agentDir = path.join(getAgentsDir(), "maia");
+    copyDefaultAgentFiles(ctx, agentDir, "Maia", "maia");
+    const written = fs.snapshot()[path.join(agentDir, "AGENTS.md")];
+    expect(written).toBe(agentContent);
+  });
+});
 
 describe("agentCreateTool", () => {
   it("creates an agent and returns its ID", async () => {

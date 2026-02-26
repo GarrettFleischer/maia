@@ -37,10 +37,19 @@ export function getToolsDir(): string {
 }
 
 /**
- * Default agent template files. New agents get copies of these; user can edit to change templates.
- * Resolved from project root: <cwd>/defaults/agent (or MAIA_DATA_DIR when set does not affect this).
+ * Default agent template files. New agents (non-Maia) get copies of these; user can edit to change templates.
+ * Resolved from project root: <cwd>/defaults/agent (MAIA_DATA_DIR does not affect this).
  * @returns Absolute path to defaults/agent directory
  */
 export function getDefaultAgentDir(): string {
   return path.resolve(process.cwd(), "defaults", "agent");
+}
+
+/**
+ * Default template files for the Maia agent. Used when seeding Maia's directory on first run.
+ * Resolved from project root: <cwd>/defaults/maia. Maia gets AGENTS.md from here (privileged instructions).
+ * @returns Absolute path to defaults/maia directory
+ */
+export function getDefaultMaiaDir(): string {
+  return path.resolve(process.cwd(), "defaults", "maia");
 }
