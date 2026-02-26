@@ -17,20 +17,6 @@ import type { AppContext } from "../context";
  * Safe to call fire-and-forget; logs errors and does not throw.
  */
 export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promise<void> {
-  // #region agent log
-  fetch("http://127.0.0.1:7245/ingest/13540c59-9d40-405a-a4df-e70acbf0e8f0", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "73f7a4" },
-    body: JSON.stringify({
-      sessionId: "73f7a4",
-      location: "history-index.ts:entry",
-      message: "indexHistoryEntry called",
-      data: { entryId },
-      timestamp: Date.now(),
-      hypothesisId: "H4",
-    }),
-  }).catch(() => {});
-  // #endregion
   const row = ctx.db
     .prepare(
       "SELECT id, session_id, role, content, tool_name, tool_args, timestamp, is_compressed FROM history_entries WHERE id = ?"
@@ -83,20 +69,6 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
     const hint = isRefused ? " (embedding service not running?)" : "";
     const settings = getSettings(ctx);
     const embedUrl = `${settings.ollamaBaseUrl.replace(/\/$/, "")}/api/embed`;
-    // #region agent log
-    fetch("http://127.0.0.1:7245/ingest/13540c59-9d40-405a-a4df-e70acbf0e8f0", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "73f7a4" },
-      body: JSON.stringify({
-        sessionId: "73f7a4",
-        location: "history-index.ts:catch",
-        message: "History indexing skip",
-        data: { entryId, msg, cause, causeCode, hint, embedUrl },
-        timestamp: Date.now(),
-        hypothesisId: "H1-H5",
-      }),
-    }).catch(() => {});
-    // #endregion
     console.error("History indexing skipped:", msg + hint, `(${embedUrl})`);
   }
 }

@@ -28,20 +28,6 @@ export function createOllamaEmbeddingAdapter(
 
   return {
     async embed(text: string): Promise<number[]> {
-      // #region agent log
-      fetch("http://127.0.0.1:7245/ingest/13540c59-9d40-405a-a4df-e70acbf0e8f0", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "73f7a4" },
-        body: JSON.stringify({
-          sessionId: "73f7a4",
-          location: "embedding.ts:embed",
-          message: "Embed fetch attempt",
-          data: { url, model, baseUrl },
-          timestamp: Date.now(),
-          hypothesisId: "H2",
-        }),
-      }).catch(() => {});
-      // #endregion
       const res = await http.fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
