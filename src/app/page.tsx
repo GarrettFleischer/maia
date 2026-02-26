@@ -37,7 +37,15 @@ interface ActiveSessionResponse {
   session?: {
     original: HistoryEntry[];
     type?: SessionType;
+    participants?: string[];
   };
+}
+
+/** Primary agent id for the current user thread (non-user participant); null when none or agent-only thread. */
+function primaryAgentFromParticipants(participants: string[] | undefined, type: SessionType): string | null {
+  if (type !== "user" || !participants?.length) return null;
+  const other = participants.filter((p) => p !== "user")[0];
+  return other ?? null;
 }
 
 export default function Home() {
@@ -45,6 +53,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionType, setSessionType] = useState<SessionType>("user");
+  const [currentAgentId, setCurrentAgentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [currentToken, setCurrentToken] = useState("");
   const [threadListRefetch, setThreadListRefetch] = useState(0);
@@ -64,7 +73,10 @@ export default function Home() {
     if (!res.ok) return;
     const data = (await fetch("/api/sessions/active").then((r) => r.json())) as ActiveSessionResponse;
     if (data.sessionId) setSessionId(data.sessionId);
-    if (data.session?.type) setSessionType(data.session.type);
+    const type = data.session?.type ?? "user";
+    if (data.session?.type) setSessionType(type);
+    const primary = primaryAgentFromParticipants(data.session?.participants, type);
+    setCurrentAgentId(primary);
     const entries = data.session?.original ?? [];
     const items = entries.map(entryToItem);
     setMessages(items);
@@ -79,7 +91,10 @@ export default function Home() {
       .then((data) => {
         if (!data) return;
         if (data.sessionId) setSessionId(data.sessionId);
-        if (data.session?.type) setSessionType(data.session.type);
+        const type = data.session?.type ?? "user";
+        if (data.session?.type) setSessionType(type);
+        const primary = primaryAgentFromParticipants(data.session?.participants, type);
+        setCurrentAgentId(primary);
         if (data.session?.original?.length) {
           const loaded = data.session.original.map(entryToItem);
           setMessages((prev) => {
@@ -132,7 +147,11 @@ export default function Home() {
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, sessionId: sessionId ?? undefined }),
+        body: JSON.stringify({
+          message: text,
+          sessionId: sessionId ?? undefined,
+          targetAgent: currentAgentId ?? "maia",
+        }),
       });
 
       if (!resp.body) throw new Error("No response body");
@@ -201,7 +220,7 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, sessionId]);
+  }, [input, loading, sessionId, currentAgentId]);
 
   const handleSelectSession = useCallback(
     (id: string) => {
@@ -211,24 +230,29 @@ export default function Home() {
     [sessionId, loadSession]
   );
 
-  const handleNewThread = useCallback(async () => {
-    const res = await fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ participants: ["user", "maia"], type: "user" }),
-    });
-    if (!res.ok) return;
-    const body = (await res.json()) as { sessionId: string };
-    await loadSession(body.sessionId);
-    setSessionType("user");
-    setThreadListRefetch((n) => n + 1);
-  }, [loadSession]);
+  const handleNewThreadWithAgent = useCallback(
+    async (agentId: string) => {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participants: ["user", agentId], type: "user" }),
+      });
+      if (!res.ok) return;
+      const body = (await res.json()) as { sessionId: string };
+      setCurrentAgentId(agentId);
+      await loadSession(body.sessionId);
+      setSessionType("user");
+      setThreadListRefetch((n) => n + 1);
+    },
+    [loadSession]
+  );
 
   const handleThreadDeleted = useCallback((deletedId: string) => {
     setThreadListRefetch((n) => n + 1);
     if (deletedId === sessionId) {
       setSessionId(null);
       setMessages([]);
+      setCurrentAgentId(null);
     }
   }, [sessionId]);
 
@@ -242,7 +266,7 @@ export default function Home() {
         <ThreadList
           activeSessionId={sessionId}
           onSelectSession={handleSelectSession}
-          onNewThread={handleNewThread}
+          onNewThreadWithAgent={handleNewThreadWithAgent}
           refetchTrigger={threadListRefetch}
           onThreadDeleted={handleThreadDeleted}
         />
