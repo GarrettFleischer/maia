@@ -13,11 +13,9 @@ import type { AppContext } from "../context";
 import type { EmbeddingAdapter } from "./embedding";
 import { createVectorStore } from "./vector-store";
 import { getKnowledgeDir } from "../data-dir";
+import { getSettings } from "../settings";
 
 const KNOWLEDGE_DIR = getKnowledgeDir();
-
-/** Max characters to send to the embedding model (avoids context-length 400 from Ollama). */
-const MAX_EMBED_CONTENT_LENGTH = 6000;
 
 function listMarkdownFiles(fs: AppContext["fs"], dir: string, baseDir: string): string[] {
   const out: string[] = [];
@@ -85,10 +83,9 @@ export async function runKnowledgeIndex(
     if (existingHash === contentHash) continue;
 
     if (!embedder) continue;
+    const maxLen = getSettings(ctx).embedMaxContentLength;
     const contentToEmbed =
-      content.length > MAX_EMBED_CONTENT_LENGTH
-        ? content.slice(0, MAX_EMBED_CONTENT_LENGTH)
-        : content;
+      content.length > maxLen ? content.slice(0, maxLen) : content;
     try {
       const embedding = await embedder.embed(contentToEmbed);
       const id = uuidv4();
