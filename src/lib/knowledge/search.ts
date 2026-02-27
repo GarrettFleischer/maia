@@ -35,9 +35,18 @@ export async function searchKnowledge(
   limit = 5
 ): Promise<KnowledgeSearchResult[]> {
   const store = createVectorStore(ctx.db);
-  const queryEmbedding = await embedder.embed(query);
-  const hits = store.searchKnowledge(queryEmbedding, limit);
-  return hits.map((h) => ({ path: h.path, content: h.content, score: h.score }));
+  try {
+    const queryEmbedding = await embedder.embed(query);
+    const hits = store.searchKnowledge(queryEmbedding, limit);
+    return hits.map((h) => ({ path: h.path, content: h.content, score: h.score }));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      "[Knowledge search] searchKnowledge: embedding or vector search failed, returning empty results:",
+      msg,
+    );
+    return [];
+  }
 }
 
 /**
@@ -50,13 +59,22 @@ export async function searchHistory(
   limit = 5
 ): Promise<HistorySearchResult[]> {
   const store = createVectorStore(ctx.db);
-  const queryEmbedding = await embedder.embed(query);
-  const hits = store.searchHistory(queryEmbedding, limit);
-  return hits.map((h) => ({
-    sessionId: h.sessionId,
-    entryId: h.entryId,
-    content: h.content,
-    isCompressed: h.isCompressed,
-    score: h.score,
-  }));
+  try {
+    const queryEmbedding = await embedder.embed(query);
+    const hits = store.searchHistory(queryEmbedding, limit);
+    return hits.map((h) => ({
+      sessionId: h.sessionId,
+      entryId: h.entryId,
+      content: h.content,
+      isCompressed: h.isCompressed,
+      score: h.score,
+    }));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      "[Knowledge search] searchHistory: embedding or vector search failed, returning empty results:",
+      msg,
+    );
+    return [];
+  }
 }
