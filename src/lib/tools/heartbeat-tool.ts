@@ -10,7 +10,7 @@ import { z } from "zod";
 import type { AppContext } from "../context";
 import type { ToolContext } from "./types";
 import type { Tool } from "./types";
-import type { RunAgentOptions } from "../agent/runner";
+import type { RunAgentFn } from "../agent/runner";
 import { getAgentIdentity } from "../agent/identity";
 import { createSession } from "../history";
 import { runDataBackup } from "../data-backup";
@@ -21,9 +21,8 @@ const MAIA_AGENT_ID = "maia";
 
 const HEARTBEAT_BASE_MAIA = `[HEARTBEAT] Timestamp: {{TIMESTAMP}}
 
-Review the task board below. Assign unassigned tasks to agents using task_update with assignedTo.
-Message agents (using the messaging tool) to nudge them on in-progress tasks or to pick up new work.
-Check your MEMORY.md for relevant context. Update your identity files with any new information.
+Check the task board and the cron job list below. Assign unassigned tasks to agents using task_update with assignedTo.
+Ensure each active agent (except yourself) has a cron job at a staggered time so they run on a consistent schedule without overlapping; create or update cron jobs as needed. Message agents if you need to nudge them.
 Take meaningful action or report any blockers.`;
 
 /**
@@ -68,19 +67,54 @@ function buildTaskBoardSection(ctx: AppContext): string {
   }
 }
 
-function buildHeartbeatMessage(ctx: AppContext, timestamp: string): string {
-  const base = HEARTBEAT_BASE_MAIA.replace("{{TIMESTAMP}}", timestamp);
-  return base + buildTaskBoardSection(ctx);
+/**
+ * Builds the cron job list section for Maia (all cron jobs).
+ * @param ctx - Application context
+ * @returns Cron jobs markdown or empty string if none
+ */
+function buildCronListSection(ctx: AppContext): string {
+  try {
+    const rows = ctx.db
+      .prepare("SELECT id, expression, task_description, agent_id, is_built_in, tool_name FROM cron_jobs ORDER BY created_at")
+      .all() as { id: string; expression: string; task_description: string; agent_id: string; is_built_in: number; tool_name: string }[];
+    if (rows.length === 0) return "";
+    const lines = ["\n\n## Cron Jobs", "| ID | Expression | Description | Agent | Built-in | Tool |"];
+    lines.push("| --- | --- | --- | --- | --- | --- |");
+    for (const r of rows) {
+      lines.push(`| ${r.id} | ${r.expression} | ${r.task_description} | ${r.agent_id} | ${r.is_built_in ? "yes" : "no"} | ${r.tool_name ?? "cron_echo"} |`);
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
 }
 
-/** RunAgentFn type for the heartbeat tool (same as cron service). */
-export type HeartbeatRunAgentFn = (
-  ctx: AppContext,
-  agentId: string,
-  sessionId: string,
-  message: string,
-  options?: RunAgentOptions,
-) => Promise<void>;
+/**
+ * Builds the active agents section for Maia (non-deleted agents with status).
+ * @param ctx - Application context
+ * @returns Active agents markdown
+ */
+function buildActiveAgentsSection(ctx: AppContext): string {
+  try {
+    const rows = ctx.db
+      .prepare("SELECT id, name, status FROM agents WHERE status != 'deleted' ORDER BY id")
+      .all() as { id: string; name: string; status: string }[];
+    if (rows.length === 0) return "";
+    const lines = ["\n\n## Agents", "| ID | Name | Status |"];
+    lines.push("| --- | --- | --- |");
+    for (const r of rows) {
+      lines.push(`| ${r.id} | ${r.name} | ${r.status} |`);
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function buildHeartbeatMessage(ctx: AppContext, timestamp: string): string {
+  const base = HEARTBEAT_BASE_MAIA.replace("{{TIMESTAMP}}", timestamp);
+  return base + buildTaskBoardSection(ctx) + buildCronListSection(ctx) + buildActiveAgentsSection(ctx);
+}
 
 /**
  * Creates the internal heartbeat tool. Not registered for agents; invoked by the heartbeat scheduler.
@@ -88,7 +122,7 @@ export type HeartbeatRunAgentFn = (
  * @param runAgentFn - Used to run Maia with the heartbeat message (single thread).
  * @returns Tool instance (do not add to TOOL_REGISTRY).
  */
-export function createHeartbeatTool(runAgentFn: HeartbeatRunAgentFn): Tool {
+export function createHeartbeatTool(runAgentFn: RunAgentFn): Tool {
   return {
     name: "heartbeat",
     description: "Internal: wake Maia so she can review the task board and message agents.",
@@ -116,7 +150,7 @@ export function createHeartbeatTool(runAgentFn: HeartbeatRunAgentFn): Tool {
       }
 
       const message = buildHeartbeatMessage(ctx, timestamp);
-      const sessionId = createSession(ctx, [MAIA_AGENT_ID], "agents");
+      const sessionId = createSession(ctx, [MAIA_AGENT_ID], "agents", "Heartbeat");
       await runAgentFn(ctx, MAIA_AGENT_ID, sessionId, message, {
         enableSmartContext: false,
       }).catch((err) => {

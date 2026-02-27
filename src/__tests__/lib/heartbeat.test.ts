@@ -212,18 +212,19 @@ describe("fireHeartbeat", () => {
     expect(triggered).toHaveLength(0);
   });
 
-  it("creates a single session for maia", async () => {
+  it("creates a single session for maia with name Heartbeat", async () => {
     seedAgent(ctx, "maia", "active");
     await fireHeartbeat(ctx, async () => {});
     const sessions = ctx.db
       .prepare("SELECT * FROM sessions WHERE type = 'agents'")
       .all() as Record<string, unknown>[];
     expect(sessions).toHaveLength(1);
+    expect(sessions[0].name).toBe("Heartbeat");
     const parts = JSON.parse(sessions[0].participants as string);
     expect(parts).toContain("maia");
   });
 
-  it("passes the heartbeat message containing HEARTBEAT and timestamp to maia", async () => {
+  it("passes the heartbeat message containing HEARTBEAT, timestamp, and check tasks/cron instructions", async () => {
     seedAgent(ctx, "maia", "active");
     const messages: string[] = [];
     await fireHeartbeat(ctx, async (_c, _agentId, _sessionId, message) => {
@@ -232,6 +233,8 @@ describe("fireHeartbeat", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("[HEARTBEAT]");
     expect(messages[0]).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    expect(messages[0]).toContain("task board");
+    expect(messages[0]).toContain("cron job");
   });
 
   it("runs embedding refresh before waking agents (vectors available when runAgentFn is called)", async () => {
@@ -267,6 +270,34 @@ describe("fireHeartbeat", () => {
     });
     expect(messages[0]).toContain("Task Board");
     expect(messages[0]).toContain("Unassigned task");
+  });
+
+  it("passes cron jobs section to maia when cron jobs exist", async () => {
+    seedAgent(ctx, "maia", "active");
+    const now = new Date().toISOString();
+    ctx.db.prepare(
+      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("job-1", "0 9 * * *", "Daily", "maia", 0, now, "cron_echo", "{}");
+    const messages: string[] = [];
+    await fireHeartbeat(ctx, async (_c, _agentId, _sessionId, message) => {
+      messages.push(message);
+    });
+    expect(messages[0]).toContain("Cron Jobs");
+    expect(messages[0]).toContain("job-1");
+    expect(messages[0]).toContain("0 9 * * *");
+  });
+
+  it("passes agents section to maia when agents exist", async () => {
+    seedAgent(ctx, "maia", "active");
+    seedAgent(ctx, "worker-1", "active");
+    const messages: string[] = [];
+    await fireHeartbeat(ctx, async (_c, _agentId, _sessionId, message) => {
+      messages.push(message);
+    });
+    expect(messages[0]).toContain("Agents");
+    expect(messages[0]).toContain("maia");
+    expect(messages[0]).toContain("worker-1");
   });
 
   it("skips running the heartbeat tool when called again within 60s (idempotency)", async () => {
