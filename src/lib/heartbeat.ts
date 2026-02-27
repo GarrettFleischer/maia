@@ -10,7 +10,7 @@ import path from "path";
 import type { AppContext } from "./context";
 import { getWorkspaceRoot } from "./data-dir";
 import { createHeartbeatTool } from "./tools/heartbeat-tool";
-import type { HeartbeatRunAgentFn } from "./tools/heartbeat-tool";
+import type { RunAgentFn } from "./agent/runner";
 
 /** Idempotency window: skip firing again if last run was within this many ms. */
 const HEARTBEAT_MIN_INTERVAL_MS = 60_000;
@@ -31,11 +31,11 @@ export function _resetHeartbeatIdempotencyForTests(): void {
  * to work on tasks, and runs data backup. Used by the built-in cron job and by POST /api/cron/heartbeat.
  * A second call within HEARTBEAT_MIN_INTERVAL_MS is skipped to avoid duplicate cron fires.
  * @param ctx - Application context
- * @param runAgentFn - Used to run each woken agent (same signature as cron RunAgentFn)
+ * @param runAgentFn - Used to run each woken agent
  */
 export async function fireHeartbeat(
   ctx: AppContext,
-  runAgentFn: HeartbeatRunAgentFn
+  runAgentFn: RunAgentFn
 ): Promise<void> {
   const now = Date.now();
   if (now - lastHeartbeatAt < HEARTBEAT_MIN_INTERVAL_MS) {

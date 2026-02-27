@@ -64,15 +64,11 @@ export async function register() {
 
     const { runAgent } = await import("./lib/agent/runner");
     const { createProvider } = await import("./lib/ai/factory");
-    const runAgentFn = async (
-      c: AppContext,
-      agentId: string,
-      sessionId: string,
-      message: string,
-      options?: { initialToolCall?: { name: string; args: Record<string, unknown> }; enableSmartContext?: boolean },
-    ): Promise<void> => {
-      await runAgent(c, createProvider, agentId, sessionId, message, () => {}, options);
-    };
+    const { initMessagingService } = await import("./lib/messaging-service");
+    const runAgentFn = (c: AppContext, agentId: string, sessionId: string, message: string, options?: import("./lib/agent/runner").RunAgentOptions) =>
+      runAgent(c, createProvider, agentId, sessionId, message, () => {}, options);
+
+    initMessagingService(_appCtx, runAgentFn);
 
     const { startCronScheduler } = await import("./lib/cron/service");
     startCronScheduler(_appCtx, runAgentFn);

@@ -4,9 +4,10 @@
  * @module lib/messaging-service
  */
 import type { AppContext } from "./context";
-import { appendEntry, createSession, getActiveSessionId, listSessions } from "./history";
+import { appendEntry, createSession, listSessions } from "./history";
 import { registerMessagingImpls } from "./tools/messaging";
 import { getAgentIdentity } from "./agent/identity";
+import type { RunAgentFn } from "./agent/runner";
 
 /**
  * Formats the user message passed to the recipient agent: sender name/id and content only.
@@ -20,9 +21,6 @@ function formatMessageToRecipient(senderName: string, senderId: string, content:
   return `Message from **${senderName}** (agent id: \`${senderId}\`):\n\n${content}`;
 }
 
-/** Options for runAgentFn (e.g. emit history entries so the client receives them via EventSource). */
-export type RunAgentFnOptions = { emitHistoryEntries?: boolean };
-
 /**
  * Registers implementations for message_to_user and message_send with the tool layer.
  * @param ctx Application context
@@ -30,13 +28,7 @@ export type RunAgentFnOptions = { emitHistoryEntries?: boolean };
  */
 export function initMessagingService(
   ctx: AppContext,
-  runAgentFn: (
-    ctx: AppContext,
-    agentId: string,
-    sessionId: string,
-    message: string,
-    options?: RunAgentFnOptions,
-  ) => Promise<string>,
+  runAgentFn: RunAgentFn,
 ): void {
   registerMessagingImpls(
     // message_to_user
@@ -90,7 +82,9 @@ export function initMessagingService(
       if (existingSession) {
         sessionId = existingSession.id;
       } else {
-        sessionId = createSession(ctx, [fromAgentId, toAgentId], "agents");
+        const fromName = getAgentIdentity(ctx, fromAgentId)?.name ?? fromAgentId;
+        const toName = getAgentIdentity(ctx, toAgentId)?.name ?? toAgentId;
+        sessionId = createSession(ctx, [fromAgentId, toAgentId], "agents", `${fromName} ↔ ${toName}`);
       }
 
       const entry = appendEntry(ctx, sessionId, {

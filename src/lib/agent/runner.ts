@@ -29,6 +29,23 @@ import { getCurrentSystemDateTime } from "../date-time";
 export type SSECallback = (event: SSEEvent) => void;
 export type ProviderFactory = (model: string, ctx: AppContext) => AIProvider;
 
+/**
+ * Canonical type for functions that run an agent with a message and return the reply.
+ * @param ctx - Application context
+ * @param agentId - ID of the agent to run
+ * @param sessionId - Session to run in
+ * @param message - User message to send
+ * @param options - Optional run configuration
+ * @returns The agent's final reply text, or empty string if no reply was produced
+ */
+export type RunAgentFn = (
+  ctx: AppContext,
+  agentId: string,
+  sessionId: string,
+  message: string,
+  options?: RunAgentOptions,
+) => Promise<string>;
+
 /** Options for runAgent (e.g. emit history entries for background runs so the client receives them via EventSource). */
 export interface RunAgentOptions {
   emitHistoryEntries?: boolean;
