@@ -141,7 +141,7 @@ export default function ThreadList({
   );
 
   return (
-    <aside className="w-72 shrink-0 flex flex-col border-r border-zinc-800 bg-zinc-900/50">
+    <aside className="w-[28rem] shrink-0 flex flex-col border-r border-zinc-800 bg-zinc-900/50">
       <div className="p-2 border-b border-zinc-800 relative" ref={pickerRef}>
         <button
           type="button"
