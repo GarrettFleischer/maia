@@ -3,7 +3,7 @@
  * @module lib/heartbeat
  *
  * The heartbeat tool (not visible to agents) wakes only Maia in a single thread. Maia reviews the
- * task board and messages other agents as needed. Scheduling is done by the cron service
+ * task board and manages cron jobs; she does not message agents. Scheduling is done by the cron service
  * (builtin-heartbeat job in cron_jobs).
  */
 import path from "path";
@@ -27,15 +27,15 @@ export function _resetHeartbeatIdempotencyForTests(): void {
 }
 
 /**
- * Invokes the internal heartbeat tool: wakes all active agents (in_progress first), prompts them
- * to work on tasks, and runs data backup. Used by the built-in cron job and by POST /api/cron/heartbeat.
+ * Invokes the internal heartbeat tool: wakes Maia to review tasks and manage cron jobs, then runs
+ * data backup. Used by the built-in cron job and by POST /api/cron/heartbeat.
  * A second call within HEARTBEAT_MIN_INTERVAL_MS is skipped to avoid duplicate cron fires.
  * @param ctx - Application context
  * @param runAgentFn - Used to run each woken agent
  */
 export async function fireHeartbeat(
   ctx: AppContext,
-  runAgentFn: RunAgentFn
+  runAgentFn: RunAgentFn,
 ): Promise<void> {
   const now = Date.now();
   if (now - lastHeartbeatAt < HEARTBEAT_MIN_INTERVAL_MS) {

@@ -148,7 +148,7 @@ The user prefixes their message with `@agent_name`. The system:
 
 Every N minutes (configurable via `heartbeatIntervalMinutes`), a **heartbeat** runs that wakes **only Maia**. She receives:
 
-- A prompt to **check the task board and the cron job list**, assign unassigned tasks, ensure each active agent has a staggered cron job, and message agents as needed.
+- A prompt to **check the task board and the cron job list**, assign unassigned tasks, and ensure each active agent has a staggered cron job. She does not message agents—they run on their own cron schedule.
 - The current task board (unassigned and in-progress tasks), cron jobs table, and agents list.
 
 Maia does not wake other agents directly via the heartbeat. Instead, the system assigns **one cron job per active agent** (except Maia). Those jobs run at **staggered times** within the interval so agents do not overlap (e.g. at :05, :15, :25 for a 30-minute interval). When an agent’s cron fires, that agent is run with a reminder to review GOALS and assigned tasks, check MEMORY, and take action. The heartbeat thus coordinates via tasks and cron; agents run on their own schedule.
