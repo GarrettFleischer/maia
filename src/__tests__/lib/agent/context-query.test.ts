@@ -1,11 +1,17 @@
 /**
- * @fileoverview Tests for context-query helpers: extractSearchQueries, buildRawRetrievedContext, summarizeRetrievedContext, formatRecentThreadTurns.
+ * @fileoverview Tests for context-query helpers: extractSearchQueries, buildRawRetrievedContext,
+ * filterRelevantSources, extractRelevantQuotes, cleanupQuotes, summarizeRetrievedContext, formatRecentThreadTurns.
  * @module __tests__/lib/agent/context-query
  */
 import { describe, it, expect, beforeEach } from "bun:test";
 import {
   extractSearchQueries,
+  extractSearchQueriesFromContextAndCommand,
   buildRawRetrievedContext,
+  filterRelevantSources,
+  buildRawTextFromChunks,
+  extractRelevantQuotes,
+  cleanupQuotes,
   summarizeRetrievedContext,
   formatRecentThreadTurns,
 } from "@/lib/agent/context-query";
@@ -167,6 +173,47 @@ describe("extractSearchQueries", () => {
   });
 });
 
+// ─── extractSearchQueriesFromContextAndCommand ─────────────────────────────────
+
+describe("extractSearchQueriesFromContextAndCommand", () => {
+  it("returns fallback when providerFactory is undefined", async () => {
+    const ctx = makeTestContext();
+    const queries = await extractSearchQueriesFromContextAndCommand(
+      ctx,
+      undefined,
+      "user asked about dashboard",
+      "find past discussions",
+    );
+    expect(queries).toEqual(["find past discussions", "user asked about dashboard"]);
+  });
+
+  it("parses valid JSON array from model", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    const provider = makeProvider('["dashboard setup", "authentication flow"]');
+    const queries = await extractSearchQueriesFromContextAndCommand(
+      ctx,
+      () => provider,
+      "user asked about dashboard setup",
+      "find relevant past discussions",
+    );
+    expect(queries).toEqual(["dashboard setup", "authentication flow"]);
+  });
+
+  it("returns fallback when model returns invalid JSON", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    const provider = makeProvider("I cannot help with that.");
+    const queries = await extractSearchQueriesFromContextAndCommand(
+      ctx,
+      () => provider,
+      "context here",
+      "command here",
+    );
+    expect(queries).toEqual(["command here", "context here"]);
+  });
+});
+
 // ─── buildRawRetrievedContext ─────────────────────────────────────────────────
 
 describe("buildRawRetrievedContext", () => {
@@ -189,7 +236,7 @@ describe("buildRawRetrievedContext", () => {
     store.insertHistory("hv1", "sess-1", "entry-1", "past conversation about GDPR", [0.9, 0.1], false, new Date().toISOString());
     store.upsertKnowledge("kv1", "knowledge/law.md", "GDPR regulation content", "h1", [0.9, 0.1], new Date().toISOString());
 
-    const { text, sources } = await buildRawRetrievedContext(ctx, ["GDPR law"]);
+    const { text, sources, contents } = await buildRawRetrievedContext(ctx, ["GDPR law"]);
 
     expect(text).toContain("## History results");
     expect(text).toContain("past conversation about GDPR");
@@ -197,34 +244,42 @@ describe("buildRawRetrievedContext", () => {
     expect(text).toContain("GDPR regulation content");
     expect(sources.some((s) => s.type === "history")).toBe(true);
     expect(sources.some((s) => s.type === "knowledge")).toBe(true);
+    expect(contents).toHaveLength(sources.length);
+    expect(contents.some((c) => c.includes("past conversation about GDPR"))).toBe(true);
+    expect(contents.some((c) => c.includes("GDPR regulation content"))).toBe(true);
+    const rebuilt = buildRawTextFromChunks(sources, contents);
+    expect(rebuilt).toBe(text);
   });
 
   it("deduplicates history results across multiple queries", async () => {
     const store = createVectorStore(ctx.db);
     store.insertHistory("hv1", "sess-1", "entry-1", "unique content", [0.9, 0.1], false, new Date().toISOString());
 
-    const { sources } = await buildRawRetrievedContext(ctx, ["query one", "query two"]);
+    const { sources, contents } = await buildRawRetrievedContext(ctx, ["query one", "query two"]);
 
     const histSources = sources.filter((s) => s.type === "history");
     const ids = histSources.map((s) => s.id);
     expect(ids).toHaveLength(new Set(ids).size);
+    expect(contents).toHaveLength(sources.length);
   });
 
   it("deduplicates knowledge results across multiple queries", async () => {
     const store = createVectorStore(ctx.db);
     store.upsertKnowledge("kv1", "docs/report.md", "report content", "h1", [0.9, 0.1], new Date().toISOString());
 
-    const { sources } = await buildRawRetrievedContext(ctx, ["query a", "query b"]);
+    const { sources, contents } = await buildRawRetrievedContext(ctx, ["query a", "query b"]);
 
     const knowledgeSources = sources.filter((s) => s.type === "knowledge");
     const ids = knowledgeSources.map((s) => s.id);
     expect(ids).toHaveLength(new Set(ids).size);
+    expect(contents).toHaveLength(sources.length);
   });
 
   it("returns no-results message when both searches return empty", async () => {
-    const { text, sources } = await buildRawRetrievedContext(ctx, ["unknown query"]);
+    const { text, sources, contents } = await buildRawRetrievedContext(ctx, ["unknown query"]);
     expect(text).toContain("No relevant prior context found");
     expect(sources).toHaveLength(0);
+    expect(contents).toHaveLength(0);
   });
 
   it("source ids follow the expected format", async () => {
@@ -232,19 +287,220 @@ describe("buildRawRetrievedContext", () => {
     store.insertHistory("hv1", "sess-1", "entry-1", "content", [0.9, 0.1], false, new Date().toISOString());
     store.upsertKnowledge("kv1", "docs/file.md", "knowledge", "h1", [0.9, 0.1], new Date().toISOString());
 
-    const { sources } = await buildRawRetrievedContext(ctx, ["test"]);
+    const { sources, contents } = await buildRawRetrievedContext(ctx, ["test"]);
 
     const histSrc = sources.find((s) => s.type === "history");
     const knowledgeSrc = sources.find((s) => s.type === "knowledge");
     expect(histSrc?.id).toMatch(/^history:/);
     expect(knowledgeSrc?.id).toMatch(/^knowledge:/);
+    expect(contents).toHaveLength(sources.length);
+  });
+});
+
+// ─── filterRelevantSources ─────────────────────────────────────────────────────
+
+describe("filterRelevantSources", () => {
+  it("keeps only the sources whose ids are returned by the model", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    const sources = [
+      { type: "history" as const, id: "history:s1/e1" },
+      { type: "knowledge" as const, id: "knowledge:doc1.md" },
+    ];
+    const contents = ["important history content", "unrelated knowledge content"];
+    const provider = makeProvider('["history:s1/e1"]');
+
+    const { sources: filteredSources, contents: filteredContents } = await filterRelevantSources(
+      ctx,
+      () => provider,
+      "question about prior conversation",
+      sources,
+      contents,
+    );
+
+    expect(filteredSources).toHaveLength(1);
+    expect(filteredContents).toHaveLength(1);
+    expect(filteredSources[0]?.id).toBe("history:s1/e1");
+    expect(filteredContents[0]).toContain("important history content");
+  });
+
+  it("returns all sources unchanged when there is no query model configured", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "" });
+    const sources = [
+      { type: "history" as const, id: "history:s1/e1" },
+      { type: "knowledge" as const, id: "knowledge:doc1.md" },
+    ];
+    const contents = ["content one", "content two"];
+    const provider = makeErrorProvider();
+
+    const { sources: filteredSources, contents: filteredContents } = await filterRelevantSources(
+      ctx,
+      () => provider,
+      "any question",
+      sources,
+      contents,
+    );
+
+    expect(filteredSources).toEqual(sources);
+    expect(filteredContents).toEqual(contents);
+  });
+
+  it("returns all sources unchanged when the model response cannot be parsed as a JSON array", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    const sources = [
+      { type: "history" as const, id: "history:s1/e1" },
+      { type: "knowledge" as const, id: "knowledge:doc1.md" },
+    ];
+    const contents = ["first content", "second content"];
+    const provider = makeProvider("this is not json");
+
+    const { sources: filteredSources, contents: filteredContents } = await filterRelevantSources(
+      ctx,
+      () => provider,
+      "question text",
+      sources,
+      contents,
+    );
+
+    expect(filteredSources).toEqual(sources);
+    expect(filteredContents).toEqual(contents);
+  });
+
+  it("returns no sources when the model returns an empty array", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    const sources = [
+      { type: "history" as const, id: "history:s1/e1" },
+      { type: "knowledge" as const, id: "knowledge:doc1.md" },
+    ];
+    const contents = ["first content", "second content"];
+    const provider = makeProvider("[]");
+
+    const { sources: filteredSources, contents: filteredContents } = await filterRelevantSources(
+      ctx,
+      () => provider,
+      "question text",
+      sources,
+      contents,
+    );
+
+    expect(filteredSources).toHaveLength(0);
+    expect(filteredContents).toHaveLength(0);
+  });
+
+  it("retries on 429 and uses the ids from the successful retry", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    const sources = [
+      { type: "history" as const, id: "history:s1/e1" },
+      { type: "knowledge" as const, id: "knowledge:doc1.md" },
+    ];
+    const contents = ["first content", "second content"];
+    let attempt = 0;
+    const provider: AIProvider = {
+      async complete(_messages, _tools, onToken) {
+        attempt++;
+        if (attempt === 1) {
+          throw new Error('OpenRouter error 429: {"error":{"message":"Provider returned error","code":429}}');
+        }
+        const content = '["knowledge:doc1.md"]';
+        onToken(content);
+        return { content, toolCalls: [], stopped: true } satisfies AIResponse;
+      },
+    };
+
+    const { sources: filteredSources, contents: filteredContents } = await filterRelevantSources(
+      ctx,
+      () => provider,
+      "question text",
+      sources,
+      contents,
+      { delayMs: 0 },
+    );
+
+    expect(attempt).toBe(2);
+    expect(filteredSources).toHaveLength(1);
+    expect(filteredSources[0]?.id).toBe("knowledge:doc1.md");
+    expect(filteredContents).toHaveLength(1);
+    expect(filteredContents[0]).toContain("second content");
+  });
+});
+
+// ─── cleanupQuotes ────────────────────────────────────────────────────────────
+
+describe("cleanupQuotes", () => {
+  it("deduplicates when one snippet is substring of another", () => {
+    const quotes = [
+      { sourceId: "history:s1/e1", text: "short" },
+      { sourceId: "history:s1/e1", text: "short and longer context" },
+    ];
+    const content = "Before. short and longer context. After.";
+    const map = new Map<string, string>([["history:s1/e1", content]]);
+    const result = cleanupQuotes(quotes, map);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toContain("short and longer context");
+  });
+
+  it("extends snippet to sentence boundary when found in source", () => {
+    const content = "First sentence. Relevant part here. Last sentence.";
+    const quotes = [{ sourceId: "knowledge:doc.md", text: "Relevant part here" }];
+    const map = new Map<string, string>([["knowledge:doc.md", content]]);
+    const result = cleanupQuotes(quotes, map);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toContain("Relevant part here");
+    expect(result[0]?.text).toMatch(/\.\s/);
+  });
+
+  it("leaves snippet as-is when not found in source", () => {
+    const quotes = [{ sourceId: "history:s1/e1", text: "not in source" }];
+    const map = new Map<string, string>([["history:s1/e1", "different content"]]);
+    const result = cleanupQuotes(quotes, map);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe("not in source");
+  });
+});
+
+// ─── extractRelevantQuotes ────────────────────────────────────────────────────
+
+describe("extractRelevantQuotes", () => {
+  it("returns quotes with sourceId from model JSON array of text", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextSummaryModel: "ollama/llama3.2" });
+    const provider = makeProvider('[{"text": "verbatim snippet one"}, {"text": "snippet two"}]');
+    const sources = [{ type: "history" as const, id: "history:s1/e1" }];
+    const contents = ["full content with verbatim snippet one and snippet two"];
+    const quotes = await extractRelevantQuotes(ctx, () => provider, "user query", sources, contents);
+    expect(quotes).toHaveLength(2);
+    expect(quotes[0]).toEqual({ sourceId: "history:s1/e1", text: "verbatim snippet one" });
+    expect(quotes[1]).toEqual({ sourceId: "history:s1/e1", text: "snippet two" });
+  });
+
+  it("returns empty array when no model configured and falls back to no quotes", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextSummaryModel: "", contextQueryModel: "" });
+    const sources = [{ type: "history" as const, id: "history:s1/e1" }];
+    const contents = ["content"];
+    const quotes = await extractRelevantQuotes(ctx, () => makeErrorProvider(), "query", sources, contents);
+    expect(quotes).toHaveLength(0);
+  });
+
+  it("falls back to empty when model returns invalid JSON", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextSummaryModel: "ollama/llama3.2" });
+    const provider = makeProvider("not json");
+    const sources = [{ type: "knowledge" as const, id: "knowledge:doc.md" }];
+    const contents = ["doc content"];
+    const quotes = await extractRelevantQuotes(ctx, () => provider, "query", sources, contents);
+    expect(quotes).toHaveLength(0);
   });
 });
 
 // ─── summarizeRetrievedContext ────────────────────────────────────────────────
 
 describe("summarizeRetrievedContext", () => {
-  it("returns the model output as the summary", async () => {
+  it("returns the model output as the summary when contents not provided", async () => {
     const ctx = makeTestContext();
     updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
     const provider = makeProvider("## Smart context\nSummary with [history:sess/entry] and [knowledge:law.md].");
@@ -253,8 +509,9 @@ describe("summarizeRetrievedContext", () => {
       { type: "knowledge" as const, id: "knowledge:law.md" },
     ];
     const result = await summarizeRetrievedContext(ctx, () => provider, "raw context text", sources);
-    expect(result).toContain("## Smart context");
-    expect(result).toContain("[history:sess/entry]");
+    const block = typeof result === "string" ? result : result.block;
+    expect(block).toContain("## Smart context");
+    expect(block).toContain("[history:sess/entry]");
   });
 
   it("passes tools:[] to provider", async () => {
@@ -276,7 +533,8 @@ describe("summarizeRetrievedContext", () => {
     const ctx = makeTestContext();
     updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
     const result = await summarizeRetrievedContext(ctx, () => makeErrorProvider(), "the raw context", []);
-    expect(result).toContain("the raw context");
+    const block = typeof result === "string" ? result : result.block;
+    expect(block).toContain("the raw context");
   });
 
   it("retries on 429 and returns summary when second call succeeds", async () => {
@@ -293,8 +551,11 @@ describe("summarizeRetrievedContext", () => {
         return { content: "## Smart context\nSummarized.", toolCalls: [], stopped: true } satisfies AIResponse;
       },
     };
-    const result = await summarizeRetrievedContext(ctx, () => provider, "the raw context", [], { delayMs: 0 });
-    expect(result).toContain("Summarized.");
+    const result = await summarizeRetrievedContext(ctx, () => provider, "the raw context", [], {
+      retryOptions: { delayMs: 0 },
+    });
+    const block = typeof result === "string" ? result : result.block;
+    expect(block).toContain("Summarized.");
     expect(attempt).toBe(2);
   });
 
@@ -306,8 +567,11 @@ describe("summarizeRetrievedContext", () => {
         throw new Error('OpenRouter error 429: {"error":{"message":"Provider returned error","code":429}}');
       },
     };
-    const result = await summarizeRetrievedContext(ctx, () => rateLimitProvider, "the raw context", [], { delayMs: 0 });
-    expect(result).toContain("the raw context");
+    const result = await summarizeRetrievedContext(ctx, () => rateLimitProvider, "the raw context", [], {
+      retryOptions: { delayMs: 0 },
+    });
+    const block = typeof result === "string" ? result : result.block;
+    expect(block).toContain("the raw context");
   });
 
   it("uses contextSummaryModel when set, contextQueryModel as fallback", async () => {
@@ -340,6 +604,23 @@ describe("summarizeRetrievedContext", () => {
     };
     await summarizeRetrievedContext(ctx, providerFactory, "raw", []);
     expect(calledModels[0]).toBe("ollama/llama3.2");
+  });
+
+  it("when contents provided returns focused-quote block and quotes array", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextSummaryModel: "ollama/llama3.2" });
+    const provider = makeProvider('[{"text": "exact quote from source"}]');
+    const sources = [{ type: "knowledge" as const, id: "knowledge:doc.md" }];
+    const contents = ["exact quote from source"];
+    const result = await summarizeRetrievedContext(ctx, () => provider, "raw", sources, { contents });
+    expect(typeof result).toBe("object");
+    expect("block" in result && "quotes" in result).toBe(true);
+    const { block, quotes } = result as { block: string; quotes: Array<{ sourceId: string; text: string }> };
+    expect(block).toContain("## Smart context");
+    expect(block).toContain("exact quote from source");
+    expect(block).toContain("### Quoted sources");
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0]).toEqual({ sourceId: "knowledge:doc.md", text: expect.stringContaining("exact quote") });
   });
 });
 

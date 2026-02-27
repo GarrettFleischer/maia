@@ -15,19 +15,24 @@ import { filterText } from "../security/injection-filter";
 import {
   extractSearchQueries,
   buildRawRetrievedContext,
+  filterRelevantSources,
+  buildRawTextFromChunks,
   summarizeRetrievedContext,
   formatRecentThreadTurns,
 } from "./context-query";
 import type { AppContext } from "../context";
+import type { CreateProviderOptions } from "../ai/factory";
 import type { AIProvider } from "../ai/types";
 import type { HistoryEntry, SSEEvent } from "../types";
 import type { Message } from "../ai/types";
 import type { ToolContext } from "../tools/types";
 import { getWorkspaceRoot } from "../data-dir";
 import { getCurrentSystemDateTime } from "../date-time";
+import { completeOllamaJob, registerOllamaJob } from "../ollama/jobs";
+import { runWithAgentContext, agentDebug, agentError } from "./agent-logger";
 
 export type SSECallback = (event: SSEEvent) => void;
-export type ProviderFactory = (model: string, ctx: AppContext) => AIProvider;
+export type ProviderFactory = (model: string, ctx: AppContext, options?: CreateProviderOptions) => AIProvider;
 
 /**
  * Canonical type for functions that run an agent with a message and return the reply.
@@ -89,15 +94,19 @@ export async function runAgent(
   setAgentStatus(ctx, agentId, "running");
 
   try {
-    return await _runLoop(
-      ctx,
-      providerFactory,
-      agent,
-      sessionId,
-      userMessage,
-      onEvent,
-      settings,
-      options,
+    return await runWithAgentContext(
+      { id: agent.id, name: agent.name },
+      () =>
+        _runLoop(
+          ctx,
+          providerFactory,
+          agent,
+          sessionId,
+          userMessage,
+          onEvent,
+          settings,
+          options,
+        ),
     );
   } finally {
     setAgentStatus(ctx, agentId, "idle");
@@ -130,7 +139,7 @@ async function _runLoop(
     }
   }
 
-  const provider = providerFactory(agent.model, ctx);
+  const provider = providerFactory(agent.model, ctx, { reasoningEffort: agent.reasoningEffort });
   const tools = getToolsForAgent(agent.id);
   const toolDefs = tools.map((t) => t.toDefinition());
 
@@ -139,6 +148,7 @@ async function _runLoop(
     agentId: agent.id,
     sessionId,
     volumeRoot: path.join(WORKSPACE_ROOT, agent.id),
+    providerFactory,
   };
 
   // Ensure session exists in this db (avoids FOREIGN KEY failure when session was created in another connection/process)
@@ -152,7 +162,7 @@ async function _runLoop(
   });
   emitEntryIfRequested(userEntry);
   indexHistoryEntry(ctx, userEntry.id).catch((err) =>
-    console.error("History index (user entry) failed:", err),
+    agentError("History index (user entry) failed:", err),
   );
 
   // When cron (or similar) provides initialToolCall: execute the tool and append result so the model sees it as first turn.
@@ -234,7 +244,7 @@ async function _runLoop(
   const smartContextEnabled = Boolean(
     smartContextAllowed && queryModel && settings.whitelistedModels.includes(queryModel),
   );
-  console.debug(
+  agentDebug(
     "[Smart context]",
     smartContextEnabled
       ? `enabled (query model: ${queryModel})`
@@ -244,20 +254,94 @@ async function _runLoop(
   );
 
   if (smartContextEnabled) {
+    const contextProviderFactory = (model: string, ctx: AppContext) =>
+      providerFactory(model, ctx, { reasoningEffort: settings.contextReasoningEffort });
     try {
-      const queries = await extractSearchQueries(ctx, providerFactory, userMessage, recentThreadBlock);
-      console.debug("[Smart context] extracted queries", { count: queries.length, queries });
-      console.debug("[Smart context] building raw context for", queries.length, "queries");
-      const { text: rawContext, sources } = await buildRawRetrievedContext(ctx, queries);
-      console.debug("[Smart context] buildRawRetrievedContext done", { rawLength: rawContext.length, sourcesCount: sources.length });
-      console.debug("[Smart context] retrieved context", { rawLength: rawContext.length, sourcesCount: sources.length, sourceIds: sources.map((s) => s.id) });
-      console.debug("[Smart context] sources found (before summarizer)", sources);
-      smartContextBlock = await summarizeRetrievedContext(ctx, providerFactory, rawContext, sources);
-      console.debug("[Smart context] summary produced", { blockLength: smartContextBlock.length });
+      const queries = await extractSearchQueries(ctx, contextProviderFactory, userMessage, recentThreadBlock);
+      agentDebug("[Smart context] extracted queries", { count: queries.length, queries });
+      agentDebug("[Smart context] building raw context for", queries.length, "queries");
+      const { text: rawContext, sources, contents } = await buildRawRetrievedContext(ctx, queries);
+      agentDebug("[Smart context] buildRawRetrievedContext done", {
+        rawLength: rawContext.length,
+        sourcesCount: sources.length,
+      });
+      agentDebug("[Smart context] retrieved context", {
+        rawLength: rawContext.length,
+        sourcesCount: sources.length,
+        sourceIds: sources.map((s) => s.id),
+      });
+      agentDebug("[Smart context] sources found (before relevance filter)", sources);
+
+      const allRetrievedSourceIds = sources.map((s) => s.id);
+      let smartContextQuotes: Array<{ sourceId: string; text: string }> = [];
+
+      if (sources.length === 0) {
+        agentDebug("[Smart context] no retrieved sources; skipping relevance filter and summarizer");
+        smartContextBlock = "## Smart context\n\nNo relevant prior context found.";
+      } else {
+        const { sources: filteredSources, contents: filteredContents } = await filterRelevantSources(
+          ctx,
+          contextProviderFactory,
+          userMessage,
+          sources,
+          contents,
+        );
+        agentDebug("[Smart context] sources after relevance filter", {
+          before: sources.length,
+          after: filteredSources.length,
+          keptIds: filteredSources.map((s) => s.id),
+        });
+
+        if (filteredSources.length === 0) {
+          agentDebug("[Smart context] relevance filter kept no sources; skipping summarizer");
+          smartContextBlock = "## Smart context\n\nNo relevant prior context found.";
+        } else {
+          const filteredRawContext = buildRawTextFromChunks(filteredSources, filteredContents);
+          const summarizeResult = await summarizeRetrievedContext(
+            ctx,
+            contextProviderFactory,
+            filteredRawContext,
+            filteredSources,
+            {
+              contents: filteredContents,
+              userMessage,
+              allRetrievedSourceIds,
+              retryOptions: undefined,
+            },
+          );
+          if (typeof summarizeResult === "string") {
+            smartContextBlock = summarizeResult;
+          } else {
+            smartContextBlock = summarizeResult.block;
+            smartContextQuotes = summarizeResult.quotes;
+          }
+          agentDebug("[Smart context] summary produced", {
+            blockLength: smartContextBlock.length,
+            quotesCount: smartContextQuotes.length,
+          });
+        }
+      }
+
+      const quotedSourceIds = [...new Set(smartContextQuotes.map((q) => q.sourceId))];
+      const additionalSourceIds = allRetrievedSourceIds.filter((id) => !quotedSourceIds.includes(id));
+      const quotedSourcesForHistory = quotedSourceIds.map((sourceId) => ({
+        sourceId,
+        snippets: smartContextQuotes.filter((q) => q.sourceId === sourceId).map((q) => q.text),
+      }));
+      appendEntry(ctx, sessionId, {
+        role: "tool_call",
+        content: JSON.stringify({ quotedSources: quotedSourcesForHistory, additionalSources: additionalSourceIds }),
+        toolName: "smart_context",
+        toolArgs: { queries },
+        timestamp: new Date().toISOString(),
+      });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const errStack = err instanceof Error ? err.stack : undefined;
-      console.error("[Smart context] pipeline failed, skipping:", errMsg, errStack ?? "");
+      agentError("[Smart context] pipeline failed:", errMsg, errStack ?? "");
+      // Surface smart context failures (for example, when the embedding service is unavailable)
+      // so the agent run fails fast instead of silently skipping semantic context.
+      throw err;
     }
   }
 
@@ -289,19 +373,36 @@ async function _runLoop(
   let loopCount = 0;
   const MAX_LOOPS = 10;
 
+  /** For Ollama agents: track current AbortController so cancel can abort the in-flight request. */
+  const controllerRef: { current: AbortController | null } = { current: null };
+  let ollamaJobId: string | null = null;
+  if (agent.model.startsWith("ollama/")) {
+    ollamaJobId = crypto.randomUUID();
+    registerOllamaJob({
+      id: ollamaJobId,
+      model: agent.model,
+      type: "chat",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      canStop: true,
+      cancel: () => controllerRef.current?.abort(),
+    });
+  }
+
   const DEBUG_SEP = "────────────────────────────────────────────────────────";
   const DEBUG_BLOCK = "════════════════════════════════════════════════════════";
   /** Max chars to log per message so SYSTEM/CONTEXT/QUERY are readable with real line breaks. */
   const DEBUG_MESSAGE_MAX_LEN = 2000;
 
-  while (loopCount < MAX_LOOPS) {
-    loopCount++;
+  try {
+    while (loopCount < MAX_LOOPS) {
+      loopCount++;
 
     /** @note Debug: log prompt with clear SYSTEM / CONTEXT / QUERY separation; content with real newlines. */
-    console.debug(`\n${DEBUG_BLOCK}\n  REQUEST START (loop ${loopCount})\n${DEBUG_BLOCK}`);
+    agentDebug(`\n${DEBUG_BLOCK}\n  REQUEST START (loop ${loopCount})\n${DEBUG_BLOCK}`);
     const roles = messages.map((m) => m.role).join(", ");
     const lengths = messages.map((m) => (typeof m.content === "string" ? m.content.length : 0));
-    console.debug("[LLM request] Roles: [%s]. Content lengths: [%s]", roles, lengths.join(", "));
+    agentDebug("[LLM request] Roles: [%s]. Content lengths: [%s]", roles, lengths.join(", "));
     messages.forEach((m, i) => {
       const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
       const label =
@@ -317,21 +418,25 @@ async function _runLoop(
             content.length +
             " chars]"
           : content;
-      console.debug("\n--- MESSAGE " + (i + 1) + ": " + label + " ---\n" + truncated);
+      agentDebug("\n--- MESSAGE " + (i + 1) + ": " + label + " ---\n" + truncated);
     });
 
-    const response = await provider.complete(messages, toolDefs, (token) => {
-      agentResponseContent += token;
-      onEvent({ type: "token", content: token });
-    });
+      const controller = new AbortController();
+      controllerRef.current = controller;
+      const completeOptions = ollamaJobId ? { signal: controller.signal } : undefined;
 
-    console.debug(`\n${DEBUG_SEP}\n  LLM RESPONSE\n${DEBUG_SEP}`);
-    console.debug("stopped:", response.stopped, "toolCalls:", response.toolCalls?.length ?? 0);
+      const response = await provider.complete(messages, toolDefs, (token) => {
+        agentResponseContent += token;
+        onEvent({ type: "token", content: token });
+      }, completeOptions);
+
+    agentDebug(`\n${DEBUG_SEP}\n  LLM RESPONSE\n${DEBUG_SEP}`);
+    agentDebug("stopped:", response.stopped, "toolCalls:", response.toolCalls?.length ?? 0);
     if (response.content) {
-      console.debug("\n--- RESPONSE CONTENT ---\n" + response.content);
+      agentDebug("\n--- RESPONSE CONTENT ---\n" + response.content);
     }
     if (response.toolCalls?.length) {
-      console.debug("\n--- TOOL CALLS ---", JSON.stringify(response.toolCalls, null, 2));
+      agentDebug("\n--- TOOL CALLS ---", JSON.stringify(response.toolCalls, null, 2));
     }
 
     // If there are no tool calls, this is the final response
@@ -341,12 +446,12 @@ async function _runLoop(
       const storedEntry = appendEntry(ctx, sessionId, agentEntry);
       emitEntryIfRequested(storedEntry);
       indexHistoryEntry(ctx, storedEntry.id).catch((err) =>
-        console.error("History index (agent entry) failed:", err),
+        agentError("History index (agent entry) failed:", err),
       );
 
       // Send "done" immediately so the stream closes and the UI never blocks.
       const finalContent = response.content || agentResponseContent;
-      console.debug(`${DEBUG_SEP}\n  END OF TURN (done, no more tool calls)\n${DEBUG_BLOCK}\n`);
+      agentDebug(`${DEBUG_SEP}\n  END OF TURN (done, no more tool calls)\n${DEBUG_BLOCK}\n`);
       onEvent({
         type: "done",
         sessionId,
@@ -451,7 +556,7 @@ async function _runLoop(
         "[System reminder: If more steps are needed to complete the task, call tools again. Only reply with your final text when the task is complete.]",
     });
     agentResponseContent = "";
-    console.debug(
+    agentDebug(
       `${DEBUG_SEP}\n  END OF TURN (tool calls applied; next request follows)\n${DEBUG_BLOCK}\n`,
     );
   }
@@ -463,6 +568,9 @@ async function _runLoop(
     });
   }
   return "";
+  } finally {
+    if (ollamaJobId) completeOllamaJob(ollamaJobId);
+  }
 }
 
 
@@ -480,8 +588,8 @@ const FALLBACK_SYSTEM_INSTRUCTIONS = [
   "Update these files as often as relevant—do not wait for the user to ask. This keeps your context accurate across sessions.",
   "",
   "## Using web tools",
-  "- For questions that can be answered from the web, prefer **brave_answers** to get an AI-generated answer grounded in current web search.",
-  "- Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools.",
+  "- For questions that can be answered from the web, prefer **web_answer** to get an AI-generated answer grounded in current web search.",
+  "- Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools (for example, when you need to inspect a specific page).",
   "- Avoid calling both tools for the same simple factual question unless you need to verify sources or inspect pages directly.",
 ].join("\n");
 

@@ -5,7 +5,7 @@
 import path from "path";
 import { describe, it, expect, beforeEach } from "bun:test";
 import { runAgent } from "@/lib/agent/runner";
-import { makeTestContext, FakeEvents, FakeResponse, FakeFs } from "../../helpers/fakes";
+import { makeTestContext, FakeEvents, FakeResponse, FakeFs, FakeHttp } from "../../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
 import { createSession, appendEntry } from "@/lib/history";
 import { getAgentsDir } from "@/lib/data-dir";
@@ -186,8 +186,8 @@ describe("runAgent", () => {
     expect(capturedNonSystem[0].role).toBe("user");
   });
 
-  it("respects contextRecentTurns setting, only including last N turns", async () => {
-    updateSettings(ctx, { contextRecentTurns: 2 });
+  it("respects contextRecentTurns setting as user rounds", async () => {
+    updateSettings(ctx, { contextRecentTurns: 1 });
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
@@ -211,6 +211,97 @@ describe("runAgent", () => {
     expect(systemContent).toContain("recent reply");
     expect(systemContent).not.toContain("oldest message");
     expect(systemContent).not.toContain("oldest reply");
+  });
+
+  it("includes all entries from the last N user rounds, including tool calls between users", async () => {
+    updateSettings(ctx, { contextRecentTurns: 2 });
+    const t0 = "2020-01-01T00:00:00.000Z";
+    const t1 = "2020-01-01T00:00:01.000Z";
+    const t2 = "2020-01-01T00:00:02.000Z";
+    const t3 = "2020-01-01T00:00:03.000Z";
+    const t4 = "2020-01-01T00:00:04.000Z";
+    const t5 = "2020-01-01T00:00:05.000Z";
+
+    appendEntry(ctx, sessionId, { role: "user", content: "first user", timestamp: t0 }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "first reply", timestamp: t1 }, false);
+    appendEntry(
+      ctx,
+      sessionId,
+      {
+        role: "tool_call",
+        content: "tool result between users",
+        toolName: "between_tool",
+        toolArgs: { foo: "bar" },
+        timestamp: t2,
+      },
+      false,
+    );
+    appendEntry(ctx, sessionId, { role: "agent", content: "follow-up reply", timestamp: t3 }, false);
+    appendEntry(ctx, sessionId, { role: "user", content: "second user", timestamp: t4 }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "second reply", timestamp: t5 }, false);
+
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        systemContent = system && typeof system.content === "string" ? system.content : "";
+        onToken("ok");
+        return { content: "ok", toolCalls: [], stopped: true };
+      },
+    };
+
+    await runAgent(ctx, () => provider, "maia", sessionId, "current", () => {});
+
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("first user");
+    expect(systemContent).toContain("first reply");
+    expect(systemContent).toContain("**Tool (between_tool):**");
+    expect(systemContent).toContain("tool result between users");
+    expect(systemContent).toContain("second user");
+    expect(systemContent).toContain("second reply");
+  });
+
+  it("includes entire history when there are fewer user rounds than contextRecentTurns", async () => {
+    updateSettings(ctx, { contextRecentTurns: 5 });
+    const t0 = "2020-01-01T00:00:00.000Z";
+    const t1 = "2020-01-01T00:00:01.000Z";
+    const t2 = "2020-01-01T00:00:02.000Z";
+    const t3 = "2020-01-01T00:00:03.000Z";
+
+    appendEntry(ctx, sessionId, { role: "user", content: "only user", timestamp: t0 }, false);
+    appendEntry(ctx, sessionId, { role: "agent", content: "only reply", timestamp: t1 }, false);
+    appendEntry(
+      ctx,
+      sessionId,
+      {
+        role: "tool_call",
+        content: "only tool",
+        toolName: "single_tool",
+        toolArgs: { value: 1 },
+        timestamp: t2,
+      },
+      false,
+    );
+    appendEntry(ctx, sessionId, { role: "agent", content: "follow-up after tool", timestamp: t3 }, false);
+
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        systemContent = system && typeof system.content === "string" ? system.content : "";
+        onToken("ok");
+        return { content: "ok", toolCalls: [], stopped: true };
+      },
+    };
+
+    await runAgent(ctx, () => provider, "maia", sessionId, "current", () => {});
+
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("only user");
+    expect(systemContent).toContain("only reply");
+    expect(systemContent).toContain("**Tool (single_tool):**");
+    expect(systemContent).toContain("only tool");
+    expect(systemContent).toContain("follow-up after tool");
   });
 
   it("puts recent thread section first in system message, then system prompt", async () => {
@@ -318,9 +409,9 @@ describe("runAgent", () => {
     expect(systemContent).toContain("## Identity");
     expect(systemContent).toContain("## Memory");
     expect(systemContent).toContain("## User");
-    // Tool usage guidance: prefer brave_answers, use web_search when needing links.
+    // Tool usage guidance: prefer web_answer, use web_search when needing links.
     expect(systemContent).toContain("Using web tools");
-    expect(systemContent).toContain("brave_answers");
+    expect(systemContent).toContain("web_answer");
     expect(systemContent).toContain("web_search");
   });
 
@@ -430,7 +521,64 @@ describe("runAgent", () => {
     await runAgent(ctx, makeProviderFactory(provider), "maia", sessionId, "Hello", () => {}, {
       enableSmartContext: true,
     });
-    expect(completeCallCount).toBeGreaterThanOrEqual(2);
+    // Smart context uses a cheap model for query extraction, relevance filtering, and summarization,
+    // plus the main agent call.
+    expect(completeCallCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it("appends smart_context tool_call history entry when smart context runs with sources", async () => {
+    updateSettings(ctx, { contextQueryModel: "ollama/llama3.2" });
+    const { createVectorStore } = await import("@/lib/knowledge/vector-store");
+    const store = createVectorStore(ctx.db);
+    store.insertHistory("hv1", sessionId, "entry-1", "past content about X", [0.9, 0.1], false, new Date().toISOString());
+    store.upsertKnowledge("kv1", "docs/x.md", "doc content about X", "h1", [0.9, 0.1], new Date().toISOString());
+    let callIndex = 0;
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        callIndex++;
+        const system = messages.find((m) => m.role === "system");
+        const sysContent = system && typeof system.content === "string" ? system.content : "";
+        const isQuery = sysContent.includes("search query extraction");
+        const isFilter = sysContent.includes("source relevance filtering");
+        const isExtract = sysContent.includes("quote extraction");
+        const content =
+          isQuery ? '["X"]' :
+          isFilter ? '["history:' + sessionId + '/entry-1", "knowledge:docs/x.md"]' :
+          isExtract ? '[{"text": "past content about X"}]' :
+          "Reply";
+        onToken(content);
+        return { content, toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(ctx, makeProviderFactory(provider), "maia", sessionId, "What do you know about X?", () => {});
+    const rows = ctx.db.prepare("SELECT role, tool_name, content FROM history_entries WHERE session_id = ? ORDER BY timestamp ASC").all(sessionId) as Array<{ role: string; tool_name: string | null; content: string }>;
+    const smartContextEntry = rows.find((r) => r.role === "tool_call" && r.tool_name === "smart_context");
+    expect(smartContextEntry).toBeDefined();
+    const payload = JSON.parse(smartContextEntry!.content) as { quotedSources?: unknown[]; additionalSources?: string[] };
+    expect(payload.quotedSources).toBeDefined();
+    expect(Array.isArray(payload.additionalSources)).toBe(true);
+  });
+
+  it("degrades gracefully when smart context retrieval fails (e.g. embeddings unavailable)", async () => {
+    updateSettings(ctx, { contextQueryModel: "ollama/llama3.2" });
+    // Replace http client so there is no /api/embed handler; embedding calls will fail.
+    ctx.http = new FakeHttp();
+
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        // Allow query-extraction call to succeed with a simple single-query array.
+        const system = messages.find((m) => m.role === "system");
+        const isQueryExtraction =
+          system && typeof system.content === "string" && system.content.includes("search query extraction assistant");
+        const content = isQueryExtraction ? '["query1"]' : "Reply";
+        onToken(content);
+        return { content, toolCalls: [], stopped: true };
+      },
+    };
+
+    await expect(
+      runAgent(ctx, makeProviderFactory(provider), "maia", sessionId, "Hello", () => {}),
+    ).resolves.toBeDefined();
   });
 
   it("includes AGENTS.md from agent dir as full system command when present", async () => {
