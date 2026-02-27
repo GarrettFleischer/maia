@@ -26,4 +26,11 @@ describe("AppHeader", () => {
     const logo = screen.getByRole("link", { name: "M" });
     expect(logo).toHaveAttribute("href", "/");
   });
+
+  it("renders Ollama performance monitor button", () => {
+    render(<AppHeader />);
+    expect(
+      screen.getByRole("button", { name: /ollama metrics/i }),
+    ).toBeInTheDocument();
+  });
 });
