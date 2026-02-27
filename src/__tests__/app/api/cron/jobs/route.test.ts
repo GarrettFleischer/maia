@@ -39,4 +39,22 @@ describe("GET /api/cron/jobs", () => {
     expect(job.isBuiltIn).toBe(true);
     expect(job.createdAt).toBe(now);
   });
+
+  it("returns scheduleDescription and nextRunAt for each job", async () => {
+    const ctx = makeTestContext();
+    const now = new Date().toISOString();
+    ctx.db.prepare(
+      "INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("job-desc", "*/15 * * * *", "Every 15 min", "maia", 0, now, "cron_echo", "{}");
+    _setTestContext(ctx);
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const body = await res.json() as { jobs: Array<{ id: string; scheduleDescription?: string; nextRunAt?: string }> };
+    const job = body.jobs.find((j) => j.id === "job-desc");
+    expect(job).toBeDefined();
+    expect(job!.scheduleDescription).toBeDefined();
+    expect(job!.scheduleDescription).toMatch(/15 minutes/i);
+    expect(job!.nextRunAt).toBeDefined();
+    expect(() => new Date(job!.nextRunAt!).toISOString()).not.toThrow();
+  });
 });

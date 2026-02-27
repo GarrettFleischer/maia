@@ -112,7 +112,7 @@ describe("Agents page (monitor dashboard)", () => {
     ]);
     await renderAgentsPage();
     await waitFor(() => {
-      expect(screen.getByText(/Schedule/i)).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /Schedule/i })).toBeInTheDocument();
     });
     expect(screen.getByText("Heartbeat")).toBeInTheDocument();
   });

@@ -231,16 +231,21 @@ export default function AgentsPage(props: AgentsPageProps = {}) {
             {/* Cron / schedule */}
             {cronJobs.length > 0 && (
               <section className="mb-8" aria-label="Schedule">
-                <h2 className="text-sm font-medium text-zinc-400 mb-3">Schedule</h2>
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <h2 className="text-sm font-medium text-zinc-400">Schedule</h2>
+                  <a href="/cron" className="text-xs text-violet-400 hover:text-violet-300">
+                    View & edit →
+                  </a>
+                </div>
                 <ul className="space-y-2">
                   {cronJobs.map((job) => {
                     const agent = agents.find((a) => a.id === job.agentId);
                     return (
-                      <li
-                        key={job.id}
-                        className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 flex items-center justify-between gap-2 flex-wrap"
-                      >
-                        <div>
+                      <li key={job.id}>
+                        <a
+                          href="/cron"
+                          className="block bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 hover:bg-zinc-800/50 transition-colors"
+                        >
                           <span className="font-medium text-sm">
                             {job.taskDescription}
                             {job.isBuiltIn && (
@@ -248,9 +253,14 @@ export default function AgentsPage(props: AgentsPageProps = {}) {
                             )}
                           </span>
                           <div className="text-xs text-zinc-500 mt-0.5">
-                            {formatCronLabel(job.expression)} · {agent?.name ?? job.agentId}
+                            {job.scheduleDescription ?? formatCronLabel(job.expression)} · {agent?.name ?? job.agentId}
                           </div>
-                        </div>
+                          {job.nextRunAt && (
+                            <div className="text-xs text-zinc-600 mt-1">
+                              Next run: {new Date(job.nextRunAt).toLocaleString()}
+                            </div>
+                          )}
+                        </a>
                       </li>
                     );
                   })}

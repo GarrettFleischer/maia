@@ -74,6 +74,10 @@ export interface CronJob {
   toolName: string;
   /** Arguments for the tool (JSON object). */
   toolArgs: Record<string, unknown>;
+  /** Human-readable schedule (e.g. "Every 30 minutes"). Set by API when listing jobs. */
+  scheduleDescription?: string;
+  /** Next run time in ISO format. Set by API when listing jobs. */
+  nextRunAt?: string;
 }
 
 export interface TaskNote {

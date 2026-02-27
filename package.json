@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
+    "cron-parser": "^5.5.0",
+    "cronstrue": "^3.13.0",
     "drizzle-orm": "^0.45.1",
     "imapflow": "^1.2.10",
     "mailparser": "^3.9.3",

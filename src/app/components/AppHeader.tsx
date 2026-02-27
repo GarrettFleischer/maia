@@ -33,6 +33,9 @@ export default function AppHeader({ subtitle }: AppHeaderProps) {
         <a href="/tasks" className="hover:text-zinc-100 transition-colors">
           Tasks
         </a>
+        <a href="/cron" className="hover:text-zinc-100 transition-colors">
+          Schedule
+        </a>
         <a href="/settings" className="hover:text-zinc-100 transition-colors">
           Settings
         </a>
