@@ -144,21 +144,14 @@ The user prefixes their message with `@agent_name`. The system:
 3. Routes the message to that agent's execution loop.
 4. The agent responds within the user session.
 
-## Heartbeat
+## Heartbeat and per-agent cron
 
-Every 30 minutes, all `active` agents receive a heartbeat trigger:
+Every N minutes (configurable via `heartbeatIntervalMinutes`), a **heartbeat** runs that wakes **only Maia**. She receives:
 
-```
-[HEARTBEAT] Timestamp: 2025-01-15T14:30:00Z
+- A prompt to **check the task board and the cron job list**, assign unassigned tasks, ensure each active agent has a staggered cron job, and message agents as needed.
+- The current task board (unassigned and in-progress tasks), cron jobs table, and agents list.
 
-Review your GOALS.md. Identify any tasks you can make progress on right now.
-Check your MEMORY.md for relevant context.
-If you need to collaborate with another agent, use the messaging tool.
-Update your identity files with any new information.
-Take meaningful action or report any blockers.
-```
-
-Agents may respond by making tool calls, sending messages, or simply confirming no action is needed.
+Maia does not wake other agents directly via the heartbeat. Instead, the system assigns **one cron job per active agent** (except Maia). Those jobs run at **staggered times** within the interval so agents do not overlap (e.g. at :05, :15, :25 for a 30-minute interval). When an agent’s cron fires, that agent is run with a reminder to review GOALS and assigned tasks, check MEMORY, and take action. The heartbeat thus coordinates via tasks and cron; agents run on their own schedule.
 
 ## Maia — The Orchestrator
 
@@ -172,7 +165,7 @@ Maia's responsibility is to:
 1. Understand the user's high-level goals.
 2. Break them into discrete, assignable tasks.
 3. Create specialized agents for those tasks.
-4. Monitor agent progress via heartbeats.
+4. Monitor the task board and cron jobs on each heartbeat; ensure each agent has a staggered cron run.
 5. Synthesize agent outputs for the user.
 
 Maia should NOT directly implement features or run commands when she can delegate. Her value is in coordination and synthesis.

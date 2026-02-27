@@ -263,7 +263,7 @@ When a cron job fires, the runner **calls the specified tool with the stored arg
 
 Cron expressions follow standard 5-field format: `* * * * *` (minute, hour, day, month, weekday).
 
-The heartbeat is a separate in-process scheduler (not a row in `cron_jobs`) and runs on its own interval. When it fires, it invokes an internal **heartbeat tool** (not visible to agents) that wakes all active agents and prompts them to work on assigned tasks; agents with in_progress tasks are woken first.
+The heartbeat is implemented as the built-in cron job `builtin-heartbeat` in `cron_jobs`. When it fires, it invokes an internal **heartbeat tool** (not visible to agents) that wakes **only Maia** so she can check the task board and cron job list, assign tasks, and ensure each active agent has a staggered cron job. The system also maintains **per-agent run jobs** (`agent-run-<agent_id>`): one cron job per active agent (except Maia), at staggered minutes, so agents run on a tight schedule without overlapping.
 
 ### Custom agent tools (data/tools)
 
