@@ -15,12 +15,47 @@ import type { AIProvider } from "../ai/types";
 import type { Message } from "../ai/types";
 import type { Session } from "../types";
 
-/** Maximum ms to wait for a cheap-model call before giving up. */
-const CHEAP_MODEL_TIMEOUT_MS = 15_000;
-
 /** Per-query result limits used when building raw context. */
 const HISTORY_LIMIT_PER_QUERY = 5;
 const KNOWLEDGE_LIMIT_PER_QUERY = 5;
+
+/** Max characters of raw response to log when falling back (avoids huge logs). */
+const FALLBACK_RAW_LOG_MAX_LEN = 500;
+
+/** Max characters per section when logging SYSTEM/CONTEXT/QUERY (readable, line-wrapped). */
+const DEBUG_SECTION_MAX_LEN = 1200;
+
+/**
+ * Logs a clearly labeled section with real line breaks (no literal \n). Truncates long body.
+ * @param title - Section label (e.g. "SYSTEM", "CONTEXT", "USER / QUERY")
+ * @param body - Content to log (newlines render as actual line breaks)
+ * @param maxLen - Truncate body to this length (default DEBUG_SECTION_MAX_LEN)
+ */
+function logDebugSection(title: string, body: string, maxLen = DEBUG_SECTION_MAX_LEN): void {
+  const truncated =
+    body.length > maxLen
+      ? body.slice(0, maxLen) + "\n\n... [truncated, total " + body.length + " chars]"
+      : body;
+  console.debug("\n--- " + title + " ---\n" + truncated);
+}
+
+/** Default retries on 429 (e.g. 2 = try up to 3 times total). */
+const DEFAULT_RATE_LIMIT_RETRIES = 2;
+
+/** Default delay in ms before retrying after 429. */
+const DEFAULT_RATE_LIMIT_DELAY_MS = 2000;
+
+/** True if the error is a 429 / rate-limit from the provider (avoids noisy stack traces in logs). */
+function isRateLimitError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /429|rate-limit|rate limit/i.test(msg);
+}
+
+/** Options for 429 retry behavior. Used by callCheapModelWithRetry; tests can pass rateLimitDelayMs: 0. */
+export interface RateLimitRetryOptions {
+  maxRetries?: number;
+  delayMs?: number;
+}
 
 /** Factory type matching runner.ts ProviderFactory. */
 export type ProviderFactory = (model: string, ctx: AppContext) => AIProvider;
@@ -33,7 +68,7 @@ export interface ContextSource {
 }
 
 const QUERY_EXTRACTION_PROMPT = `You are a search query extraction assistant.
-Given the user message below, output ONLY a JSON array of short search query strings (no prose, no code fences, no markdown).
+You may be given recent conversation context and the current user message. Output ONLY a JSON array of short search query strings (no prose, no code fences, no markdown).
 Each query should target a different relevant topic so that semantic search over past conversations and a knowledge base returns the most relevant results for the user.
 Example output: ["topic one", "topic two"]`;
 
@@ -46,35 +81,65 @@ Output ONLY the markdown section — no preamble, no postamble.
 Sources available:`;
 
 /**
- * Calls the given provider with no tools and a timeout, accumulating response content.
+ * Calls the given provider with no tools, accumulating response content.
  * @param provider - AI provider to call
  * @param messages - Messages to send
- * @returns Response content string, or throws on timeout/error
+ * @returns Response content string, or throws on error
  */
 async function callCheapModel(provider: AIProvider, messages: Message[]): Promise<string> {
   let raw = "";
-  const result = await Promise.race([
-    provider.complete(messages, [], (token) => { raw += token; }),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Cheap model timeout")), CHEAP_MODEL_TIMEOUT_MS)
-    ),
-  ]);
+  const result = await provider.complete(messages, [], (token) => { raw += token; });
   return result.content || raw;
 }
 
 /**
- * Sends the user message to the contextQueryModel and returns a deduplicated array of
- * search query strings. Falls back to [userMessage] if the model returns invalid JSON,
- * an empty array, or throws.
+ * Calls the cheap model with retry on 429: sleeps then retries up to maxRetries times.
+ * Non-429 errors are thrown immediately. After all retries exhausted on 429, throws the last error.
+ * @param provider - AI provider to call
+ * @param messages - Messages to send
+ * @param options - maxRetries (default 2), delayMs (default 2000)
+ * @returns Response content string
+ */
+async function callCheapModelWithRetry(
+  provider: AIProvider,
+  messages: Message[],
+  options?: RateLimitRetryOptions,
+): Promise<string> {
+  const maxRetries = options?.maxRetries ?? DEFAULT_RATE_LIMIT_RETRIES;
+  const delayMs = options?.delayMs ?? DEFAULT_RATE_LIMIT_DELAY_MS;
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await callCheapModel(provider, messages);
+    } catch (e) {
+      lastError = e;
+      if (!isRateLimitError(e) || attempt === maxRetries) {
+        throw e;
+      }
+      console.debug(`[Smart context] rate limit (429), sleeping ${delayMs}ms then retry (attempt ${attempt + 1}/${maxRetries + 1})`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Sends the user message (and optional recent conversation) to the contextQueryModel and returns
+ * a deduplicated array of search query strings. Falls back to [userMessage] if the model returns
+ * invalid JSON, an empty array, or throws.
  * @param ctx - Application context
  * @param providerFactory - Factory to create an AI provider for a given model
  * @param userMessage - The current user message
+ * @param recentConversation - Optional formatted recent thread turns (e.g. last 3 rounds) for context
+ * @param retryOptions - Optional 429 retry config (tests can pass rateLimitDelayMs: 0)
  * @returns Non-empty deduplicated array of search query strings
  */
 export async function extractSearchQueries(
   ctx: AppContext,
   providerFactory: ProviderFactory,
   userMessage: string,
+  recentConversation?: string,
+  retryOptions?: RateLimitRetryOptions,
 ): Promise<string[]> {
   const settings = getSettings(ctx);
   const model = settings.contextQueryModel;
@@ -86,13 +151,21 @@ export async function extractSearchQueries(
     return fallback;
   }
 
+  const userContent =
+    recentConversation && recentConversation.trim().length > 0
+      ? `Recent conversation:\n\n${recentConversation.trim()}\n\nCurrent user message:\n${userMessage}`
+      : userMessage;
+
   try {
     const provider = providerFactory(model, ctx);
+    console.debug("[Smart context] extractSearchQueries: sending to model");
+    logDebugSection("SYSTEM PROMPT", QUERY_EXTRACTION_PROMPT);
+    logDebugSection("USER / QUERY (context + current message)", userContent);
     const messages: Message[] = [
       { role: "system", content: QUERY_EXTRACTION_PROMPT },
-      { role: "user", content: userMessage },
+      { role: "user", content: userContent },
     ];
-    const raw = await callCheapModel(provider, messages);
+    const raw = await callCheapModelWithRetry(provider, messages, retryOptions);
     console.debug("[Smart context] extractSearchQueries: raw response length", raw.length);
 
     // Try to parse the whole response first (expected: a top-level JSON array).
@@ -104,14 +177,16 @@ export async function extractSearchQueries(
     } catch {
       const jsonMatch = trimmed.match(/\[[\s\S]*?\]/);
       if (!jsonMatch) {
-        console.debug("[Smart context] extractSearchQueries: no JSON array in response, using fallback");
+        const rawSnippet = raw.length > FALLBACK_RAW_LOG_MAX_LEN ? raw.slice(0, FALLBACK_RAW_LOG_MAX_LEN) + " [truncated]" : raw;
+        console.debug("[Smart context] extractSearchQueries: no JSON array in response, using fallback. raw length:", raw.length, "snippet:", rawSnippet);
         return fallback;
       }
       parsed = JSON.parse(jsonMatch[0]);
     }
 
     if (!Array.isArray(parsed)) {
-      console.debug("[Smart context] extractSearchQueries: response not an array, using fallback");
+      const rawSnippet = raw.length > FALLBACK_RAW_LOG_MAX_LEN ? raw.slice(0, FALLBACK_RAW_LOG_MAX_LEN) + " [truncated]" : raw;
+      console.debug("[Smart context] extractSearchQueries: response not an array, using fallback. raw length:", raw.length, "snippet:", rawSnippet);
       return fallback;
     }
 
@@ -123,13 +198,18 @@ export async function extractSearchQueries(
     )];
 
     if (queries.length === 0) {
-      console.debug("[Smart context] extractSearchQueries: empty queries after parse, using fallback");
+      const rawSnippet = raw.length > FALLBACK_RAW_LOG_MAX_LEN ? raw.slice(0, FALLBACK_RAW_LOG_MAX_LEN) + " [truncated]" : raw;
+      console.debug("[Smart context] extractSearchQueries: empty queries after parse, using fallback. raw length:", raw.length, "snippet:", rawSnippet);
       return fallback;
     }
     return queries;
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.debug("[Smart context] extractSearchQueries: error, using fallback", msg);
+    if (isRateLimitError(e)) {
+      console.debug("[Smart context] extractSearchQueries: rate limit (429) after retries, using fallback");
+    } else {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.debug("[Smart context] extractSearchQueries: error, using fallback", msg);
+    }
     return fallback;
   }
 }
@@ -161,7 +241,9 @@ export async function buildRawRetrievedContext(
 
   const debugPerQuery: Array<{ query: string; historyHits: number; knowledgeHits: number }> = [];
 
-  for (const query of queries) {
+  for (let i = 0; i < queries.length; i++) {
+    const query = queries[i];
+    console.debug("[Smart context] buildRawRetrievedContext: searching query", i + 1, "of", queries.length, query);
     const [histHits, knowledgeHits] = await Promise.all([
       searchHistory(ctx, embedder, query, historyLimit),
       searchKnowledge(ctx, embedder, query, knowledgeLimit),
@@ -219,6 +301,7 @@ export async function buildRawRetrievedContext(
  * @param providerFactory - Factory to create an AI provider for a given model
  * @param rawText - The raw context block returned by buildRawRetrievedContext
  * @param sources - Source list for the summarizer to cite
+ * @param retryOptions - Optional 429 retry config (tests can pass rateLimitDelayMs: 0)
  * @returns Summarized markdown section with citations
  */
 export async function summarizeRetrievedContext(
@@ -226,6 +309,7 @@ export async function summarizeRetrievedContext(
   providerFactory: ProviderFactory,
   rawText: string,
   sources: ContextSource[],
+  retryOptions?: RateLimitRetryOptions,
 ): Promise<string> {
   const settings = getSettings(ctx);
   const model = settings.contextSummaryModel || settings.contextQueryModel;
@@ -236,9 +320,11 @@ export async function summarizeRetrievedContext(
   }
 
   console.debug("[Smart context] summarizeRetrievedContext: using model", model, "sources count", sources.length);
-
   const sourceList = sources.map((s) => `- ${s.id}`).join("\n");
   const systemContent = `${SUMMARIZE_PROMPT_PREFIX}\n${sourceList}`;
+  console.debug("[Smart context] Summarizer: sending", rawText.length, "chars of retrieved content in user message");
+  logDebugSection("SYSTEM (instructions + source IDs for citations)", systemContent);
+  logDebugSection("USER MESSAGE (retrieved content to summarize)", rawText);
 
   try {
     const provider = providerFactory(model, ctx);
@@ -246,13 +332,18 @@ export async function summarizeRetrievedContext(
       { role: "system", content: systemContent },
       { role: "user", content: rawText },
     ];
-    const result = await callCheapModel(provider, messages);
+    const result = await callCheapModelWithRetry(provider, messages, retryOptions);
     const out = result.trim() || `## Smart context\n\n${rawText}`;
     console.debug("[Smart context] summarizeRetrievedContext: result length", out.length);
+    logDebugSection("RESULT (summary)", out);
     return out;
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.debug("[Smart context] summarizeRetrievedContext: error, returning raw", msg);
+    if (isRateLimitError(e)) {
+      console.debug("[Smart context] summarizeRetrievedContext: rate limit (429) after retries, returning raw context");
+    } else {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.debug("[Smart context] summarizeRetrievedContext: error, returning raw", msg);
+    }
     return `## Smart context\n\n${rawText}`;
   }
 }

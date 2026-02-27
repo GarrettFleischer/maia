@@ -245,10 +245,13 @@ async function _runLoop(
 
   if (smartContextEnabled) {
     try {
-      const queries = await extractSearchQueries(ctx, providerFactory, userMessage);
+      const queries = await extractSearchQueries(ctx, providerFactory, userMessage, recentThreadBlock);
       console.debug("[Smart context] extracted queries", { count: queries.length, queries });
+      console.debug("[Smart context] building raw context for", queries.length, "queries");
       const { text: rawContext, sources } = await buildRawRetrievedContext(ctx, queries);
+      console.debug("[Smart context] buildRawRetrievedContext done", { rawLength: rawContext.length, sourcesCount: sources.length });
       console.debug("[Smart context] retrieved context", { rawLength: rawContext.length, sourcesCount: sources.length, sourceIds: sources.map((s) => s.id) });
+      console.debug("[Smart context] sources found (before summarizer)", sources);
       smartContextBlock = await summarizeRetrievedContext(ctx, providerFactory, rawContext, sources);
       console.debug("[Smart context] summary produced", { blockLength: smartContextBlock.length });
     } catch (err) {
@@ -288,39 +291,48 @@ async function _runLoop(
 
   const DEBUG_SEP = "────────────────────────────────────────────────────────";
   const DEBUG_BLOCK = "════════════════════════════════════════════════════════";
+  /** Max chars to log per message so SYSTEM/CONTEXT/QUERY are readable with real line breaks. */
+  const DEBUG_MESSAGE_MAX_LEN = 2000;
 
   while (loopCount < MAX_LOOPS) {
     loopCount++;
 
-    /** @note Debug: we send exactly `messages` to the provider (one system, one user, then assistant/tool turns). Log summary + full payload so it's clear nothing is duplicated. */
-    console.debug(`${DEBUG_BLOCK}\n  REQUEST START (loop ${loopCount})\n${DEBUG_BLOCK}`);
+    /** @note Debug: log prompt with clear SYSTEM / CONTEXT / QUERY separation; content with real newlines. */
+    console.debug(`\n${DEBUG_BLOCK}\n  REQUEST START (loop ${loopCount})\n${DEBUG_BLOCK}`);
     const roles = messages.map((m) => m.role).join(", ");
     const lengths = messages.map((m) => (typeof m.content === "string" ? m.content.length : 0));
-    console.debug(
-      "[LLM request] Sending exactly this messages array (no duplication). Roles: [%s]. Content lengths: [%s]",
-      roles,
-      lengths.join(", "),
-    );
-    console.debug("[LLM request payload]", JSON.stringify({ messages }, null, 2));
+    console.debug("[LLM request] Roles: [%s]. Content lengths: [%s]", roles, lengths.join(", "));
+    messages.forEach((m, i) => {
+      const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      const label =
+        m.role === "system"
+          ? "SYSTEM (context + instructions)"
+          : m.role === "user"
+            ? "USER (query)"
+            : String(m.role).toUpperCase();
+      const truncated =
+        content.length > DEBUG_MESSAGE_MAX_LEN
+          ? content.slice(0, DEBUG_MESSAGE_MAX_LEN) +
+            "\n\n... [truncated, total " +
+            content.length +
+            " chars]"
+          : content;
+      console.debug("\n--- MESSAGE " + (i + 1) + ": " + label + " ---\n" + truncated);
+    });
 
     const response = await provider.complete(messages, toolDefs, (token) => {
       agentResponseContent += token;
       onEvent({ type: "token", content: token });
     });
 
-    console.debug(`${DEBUG_SEP}\n  LLM RESPONSE\n${DEBUG_SEP}`);
-    console.debug(
-      "[LLM response]",
-      JSON.stringify(
-        {
-          content: response.content,
-          toolCalls: response.toolCalls,
-          stopped: response.stopped,
-        },
-        null,
-        2,
-      ),
-    );
+    console.debug(`\n${DEBUG_SEP}\n  LLM RESPONSE\n${DEBUG_SEP}`);
+    console.debug("stopped:", response.stopped, "toolCalls:", response.toolCalls?.length ?? 0);
+    if (response.content) {
+      console.debug("\n--- RESPONSE CONTENT ---\n" + response.content);
+    }
+    if (response.toolCalls?.length) {
+      console.debug("\n--- TOOL CALLS ---", JSON.stringify(response.toolCalls, null, 2));
+    }
 
     // If there are no tool calls, this is the final response
     if (response.toolCalls.length === 0) {

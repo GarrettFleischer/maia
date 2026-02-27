@@ -92,6 +92,37 @@ describe("extractSearchQueries", () => {
     expect(queries).toEqual(["user input"]);
   });
 
+  it("retries on 429 and returns model result when second call succeeds", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    let attempt = 0;
+    const provider: AIProvider = {
+      async complete(_messages, _tools, onToken) {
+        attempt++;
+        if (attempt === 1) {
+          throw new Error('OpenRouter error 429: {"error":{"message":"Provider returned error","code":429}}');
+        }
+        onToken('["retried query"]');
+        return { content: '["retried query"]', toolCalls: [], stopped: true } satisfies AIResponse;
+      },
+    };
+    const queries = await extractSearchQueries(ctx, () => provider, "user input", undefined, { delayMs: 0 });
+    expect(queries).toEqual(["retried query"]);
+    expect(attempt).toBe(2);
+  });
+
+  it("returns [userMessage] fallback when provider returns 429 on all retries", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    const rateLimitProvider: AIProvider = {
+      async complete() {
+        throw new Error('OpenRouter error 429: {"error":{"message":"Provider returned error","code":429}}');
+      },
+    };
+    const queries = await extractSearchQueries(ctx, () => rateLimitProvider, "user input", undefined, { delayMs: 0 });
+    expect(queries).toEqual(["user input"]);
+  });
+
   it("filters out empty strings from parsed array and falls back if all are empty", async () => {
     const ctx = makeTestContext();
     updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
@@ -113,6 +144,26 @@ describe("extractSearchQueries", () => {
     };
     await extractSearchQueries(ctx, () => provider, "test");
     expect(capturedTools).toEqual([]);
+  });
+
+  it("includes recent conversation in user message when recentConversation is provided", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    let capturedUserContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const userMsg = messages.find((m) => m.role === "user");
+        capturedUserContent = userMsg?.content ?? "";
+        onToken('["topic a"]');
+        return { content: '["topic a"]', toolCalls: [], stopped: true };
+      },
+    };
+    await extractSearchQueries(ctx, () => provider, "current message", "**User:**\nprior turn\n\n**Assistant:**\nprior reply");
+    expect(capturedUserContent).toContain("Recent conversation:");
+    expect(capturedUserContent).toContain("prior turn");
+    expect(capturedUserContent).toContain("prior reply");
+    expect(capturedUserContent).toContain("Current user message:");
+    expect(capturedUserContent).toContain("current message");
   });
 });
 
@@ -225,6 +276,37 @@ describe("summarizeRetrievedContext", () => {
     const ctx = makeTestContext();
     updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
     const result = await summarizeRetrievedContext(ctx, () => makeErrorProvider(), "the raw context", []);
+    expect(result).toContain("the raw context");
+  });
+
+  it("retries on 429 and returns summary when second call succeeds", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    let attempt = 0;
+    const provider: AIProvider = {
+      async complete(_messages, _tools, onToken) {
+        attempt++;
+        if (attempt === 1) {
+          throw new Error('OpenRouter error 429: {"error":{"message":"Provider returned error","code":429}}');
+        }
+        onToken("## Smart context\nSummarized.");
+        return { content: "## Smart context\nSummarized.", toolCalls: [], stopped: true } satisfies AIResponse;
+      },
+    };
+    const result = await summarizeRetrievedContext(ctx, () => provider, "the raw context", [], { delayMs: 0 });
+    expect(result).toContain("Summarized.");
+    expect(attempt).toBe(2);
+  });
+
+  it("falls back to raw context when provider returns 429 on all retries", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextQueryModel: "ollama/llama3.2" });
+    const rateLimitProvider: AIProvider = {
+      async complete() {
+        throw new Error('OpenRouter error 429: {"error":{"message":"Provider returned error","code":429}}');
+      },
+    };
+    const result = await summarizeRetrievedContext(ctx, () => rateLimitProvider, "the raw context", [], { delayMs: 0 });
     expect(result).toContain("the raw context");
   });
 
