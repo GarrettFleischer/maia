@@ -52,7 +52,6 @@ async function getBraveAnswer(
     stream: false,
     model: "brave",
     messages: [{ role: "user" as const, content: question }],
-    ...(enableResearch ? { enable_research: true } : {}),
   };
 
   const resp = await ctx.http.fetch(BRAVE_ANSWERS_URL, {
@@ -73,7 +72,8 @@ async function getBraveAnswer(
 
   const data = (await resp.json()) as BraveAnswersResponse;
   const rawContent = data?.choices?.[0]?.message?.content ?? "";
-  const filtered = filterText(rawContent, "brave_answers");
+  const filterSource = enableResearch ? "web_answer:research" : "web_answer";
+  const filtered = filterText(rawContent, filterSource);
 
   return {
     answer: filtered.text,
@@ -82,9 +82,9 @@ async function getBraveAnswer(
 }
 
 export const braveAnswersTool: Tool<z.infer<typeof schema>, BraveAnswerResult> = {
-  name: "brave_answers",
+  name: "web_answer",
   description:
-    "Get an AI-generated answer backed by real-time web search (Brave Answers). Use for questions that need current, cited information. Same API key as web_search. Optionally enable research mode for deeper answers.",
+    "Get an AI-generated answer backed by real-time web search (Brave Answers). Prefer this tool for web-grounded Q&A; use web_search when you need raw links or plan to fetch a specific page. Same API key as web_search. Optionally enable research mode for deeper answers.",
   schema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(schema) };

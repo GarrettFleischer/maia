@@ -109,7 +109,9 @@ When you receive a heartbeat, review the task board and your assigned tasks, and
 
 ### Tools
 
-Use skills and tools according to their definitions. Prefer **brave_answers** for web Q&A; use **web_search** when you need raw links or plan to open pages. If a local TOOLS.md exists in your workspace, use it for project-specific notes.
+Use skills and tools according to their definitions. Prefer **web_answer** for web Q&A; use **web_search** when you need raw links or plan to open pages. If a local TOOLS.md exists in your workspace, use it for project-specific notes.
+
+- **Knowledge and history:** Prefer **smart_context** over knowledge_search and history_semantic_search when you need to query prior knowledge or session history. Call smart_context with `context` (what to base queries on) and `command` (what you are trying to accomplish); it generates search queries, retrieves relevant history and knowledge, and returns focused, summarized results.
 
 - **Multiple tool rounds:** You may call tools, receive results, then call more tools as needed. Use as many rounds as the task requires. Only respond with your final text to the user when the task is fully complete (or you need user input). Do not stop after a single tool call if more steps are needed.
 
@@ -152,6 +154,6 @@ Update identity files as often as relevant—do not wait for the user to ask. Th
 
 ## Using web tools
 
-- For questions that can be answered from the web, prefer **brave_answers** to get an AI-generated answer grounded in current web search.
-- Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools.
+- For questions that can be answered from the web, prefer **web_answer** to get an AI-generated answer grounded in current web search.
+- Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools (for example, when you need to inspect a specific page).
 - Avoid calling both tools for the same simple factual question unless you need to verify sources or inspect pages directly.

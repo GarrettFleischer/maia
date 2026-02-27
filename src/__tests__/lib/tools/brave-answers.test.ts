@@ -68,7 +68,7 @@ describe("braveAnswersTool", () => {
     expect((capturedBody.messages?.[0] as { role: string; content: string })?.content).toBe("What is the answer?");
   });
 
-  it("sends enable_research when enableResearch is true", async () => {
+  it("accepts enableResearch flag without sending enable_research (non-streaming mode)", async () => {
     let capturedBody: { enable_research?: boolean } = {};
     http.on("api.search.brave.com", async (_url, init) => {
       const body = init?.body;
@@ -77,7 +77,7 @@ describe("braveAnswersTool", () => {
     });
     const ctx = makeToolCtx(http);
     await braveAnswersTool.execute({ question: "Research this", enableResearch: true }, ctx);
-    expect(capturedBody.enable_research).toBe(true);
+    expect(capturedBody.enable_research).toBeUndefined();
   });
 
   it("throws when response is not ok", async () => {
@@ -88,7 +88,7 @@ describe("braveAnswersTool", () => {
 
   it("has correct tool definition", () => {
     const def = braveAnswersTool.toDefinition();
-    expect(def.name).toBe("brave_answers");
+    expect(def.name).toBe("web_answer");
     expect(typeof def.description).toBe("string");
     expect(def.description).toContain("web search");
     expect(typeof def.parameters).toBe("object");

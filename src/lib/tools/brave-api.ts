@@ -34,7 +34,7 @@ export function getBraveSearchApiKey(ctx: AppContext): string {
  * @brief Read Brave Answers API key from encrypted vault (when set in Settings) or environment.
  * @param ctx - App context (for vault access).
  * @returns API key or empty string if unset in both vault and env.
- * @note Separate product/billing from Brave Search. Used by brave_answers. Prefer vault over env.
+ * @note Separate product/billing from Brave Search. Used by the web_answer tool (formerly brave_answers). Prefer vault over env.
  */
 export function getBraveAnswersApiKey(ctx: AppContext): string {
   try {

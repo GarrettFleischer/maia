@@ -76,7 +76,7 @@ async function searchBrave(query: string, max: number, ctx: ToolContext): Promis
 export const webSearchTool: Tool<z.infer<typeof schema>, SearchResult[]> = {
   name: "web_search",
   description:
-    "Search the web using Brave Search API. Returns a list of results (title, url, snippet). Requires BRAVE_SEARCH_API_KEY to be set.",
+    "Search the web using Brave Search API. Returns a list of results (title, url, snippet). Requires BRAVE_SEARCH_API_KEY to be set. Prefer web_answer for web-grounded Q&A; use web_search when you specifically need raw links or plan to fetch a specific page (for example with fetch_web_page).",
   schema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(schema) };
