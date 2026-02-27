@@ -8,11 +8,21 @@ import {
   stopCronScheduler,
   isCronSchedulerRunning,
   refreshHeartbeatJob,
+  syncAgentRunJobs,
+  reconcileAgentRunTasks,
 } from "@/lib/cron/service";
+import { AGENT_RUN_JOB_ID_PREFIX } from "@/lib/cron/expression";
 import { updateSettings } from "@/lib/settings";
 import { makeTestContext, FakeEvents } from "../../helpers/fakes";
 import type { AppContext } from "@/lib/context";
 import { _resetHeartbeatIdempotencyForTests } from "@/lib/heartbeat";
+
+function seedAgent(ctx: AppContext, id: string, status = "active") {
+  const now = new Date().toISOString();
+  ctx.db.prepare(
+    "INSERT OR REPLACE INTO agents (id, name, model, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(id, id, "ollama/llama3.2", status, now, now);
+}
 
 function seedCronJob(
   ctx: AppContext,
@@ -226,6 +236,73 @@ describe("CronService", () => {
         .prepare("SELECT expression FROM cron_jobs WHERE id = 'builtin-heartbeat'")
         .get() as { expression: string } | undefined;
       expect(row?.expression).toBe("*/5 * * * *");
+    });
+  });
+
+  describe("syncAgentRunJobs", () => {
+    it("creates agent-run job for each active agent except maia with staggered expressions", () => {
+      updateSettings(ctx, { heartbeatIntervalMinutes: 30 });
+      seedAgent(ctx, "maia", "active");
+      seedAgent(ctx, "worker-a", "active");
+      seedAgent(ctx, "worker-b", "active");
+      syncAgentRunJobs(ctx);
+      const rows = ctx.db
+        .prepare("SELECT id, expression, agent_id FROM cron_jobs WHERE id LIKE ? ORDER BY id")
+        .all(AGENT_RUN_JOB_ID_PREFIX + "%") as { id: string; expression: string; agent_id: string }[];
+      expect(rows).toHaveLength(2);
+      expect(rows.map((r) => r.agent_id).sort()).toEqual(["worker-a", "worker-b"]);
+      expect(rows[0]!.expression).toBe("0,30 * * * *");
+      expect(rows[1]!.expression).toBe("15,45 * * * *");
+    });
+
+    it("does not create agent-run job for maia or paused agents", () => {
+      updateSettings(ctx, { heartbeatIntervalMinutes: 30 });
+      seedAgent(ctx, "maia", "active");
+      seedAgent(ctx, "worker-a", "paused");
+      syncAgentRunJobs(ctx);
+      const rows = ctx.db
+        .prepare("SELECT id FROM cron_jobs WHERE id LIKE ?")
+        .all(AGENT_RUN_JOB_ID_PREFIX + "%") as { id: string }[];
+      expect(rows).toHaveLength(0);
+    });
+
+    it("removes agent-run jobs when agents are no longer active", () => {
+      updateSettings(ctx, { heartbeatIntervalMinutes: 30 });
+      seedAgent(ctx, "maia", "active");
+      seedAgent(ctx, "worker-a", "active");
+      syncAgentRunJobs(ctx);
+      let rows = ctx.db.prepare("SELECT id FROM cron_jobs WHERE id LIKE ?").all(AGENT_RUN_JOB_ID_PREFIX + "%") as { id: string }[];
+      expect(rows).toHaveLength(1);
+      ctx.db.prepare("UPDATE agents SET status = ? WHERE id = ?").run("paused", "worker-a");
+      syncAgentRunJobs(ctx);
+      rows = ctx.db.prepare("SELECT id FROM cron_jobs WHERE id LIKE ?").all(AGENT_RUN_JOB_ID_PREFIX + "%") as { id: string }[];
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  describe("reconcileAgentRunTasks", () => {
+    it("does not throw when scheduler is running and agent-run jobs exist", () => {
+      updateSettings(ctx, { heartbeatIntervalMinutes: 30 });
+      seedAgent(ctx, "maia", "active");
+      seedAgent(ctx, "worker-a", "active");
+      startCronScheduler(ctx, async () => {}, { runOnInit: false });
+      expect(() => reconcileAgentRunTasks(ctx)).not.toThrow();
+      stopCronScheduler();
+    });
+  });
+
+  describe("startCronScheduler sync", () => {
+    it("runs syncAgentRunJobs so agent-run jobs exist for active agents on start", () => {
+      updateSettings(ctx, { heartbeatIntervalMinutes: 30 });
+      seedAgent(ctx, "maia", "active");
+      seedAgent(ctx, "worker-a", "active");
+      startCronScheduler(ctx, async () => {}, { runOnInit: false });
+      const rows = ctx.db
+        .prepare("SELECT id, expression FROM cron_jobs WHERE id LIKE ?")
+        .all(AGENT_RUN_JOB_ID_PREFIX + "%") as { id: string; expression: string }[];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.id).toBe(AGENT_RUN_JOB_ID_PREFIX + "worker-a");
+      stopCronScheduler();
     });
   });
 });

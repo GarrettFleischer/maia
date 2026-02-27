@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ensureAppContext } from "@/instrumentation";
 import { getAgentIdentity, updateAgent } from "@/lib/agent/identity";
 import { getSettings } from "@/lib/settings";
+import { syncAgentRunJobs, reconcileAgentRunTasks } from "@/lib/cron/service";
 
 export async function GET(
   _req: NextRequest,
@@ -59,5 +60,7 @@ export async function DELETE(
     new Date().toISOString(),
     id
   );
+  syncAgentRunJobs(ctx);
+  reconcileAgentRunTasks(ctx);
   return NextResponse.json({ ok: true });
 }

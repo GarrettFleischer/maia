@@ -1,24 +1,23 @@
 /**
  * @fileoverview In-process cron job scheduler: loads jobs from cron_jobs table,
  * registers them with node-cron, and runs agent messages when they fire.
+ * Syncs per-agent run jobs so each active agent (except Maia) has a staggered cron job.
  * @module lib/cron/service
  */
 import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
 import type { AppContext } from "../context";
 import { createSession } from "../history";
-import type { RunAgentOptions } from "../agent/runner";
+import type { RunAgentFn } from "../agent/runner";
 import { fireHeartbeat } from "../heartbeat";
 import { getSettings } from "../settings";
-import { BUILTIN_HEARTBEAT_JOB_ID, minutesToCronExpression } from "./expression";
-
-export type RunAgentFn = (
-  ctx: AppContext,
-  agentId: string,
-  sessionId: string,
-  message: string,
-  options?: RunAgentOptions
-) => Promise<void>;
+import { listAgents } from "../agent/identity";
+import {
+  BUILTIN_HEARTBEAT_JOB_ID,
+  AGENT_RUN_JOB_ID_PREFIX,
+  minutesToCronExpression,
+  staggeredAgentRunCronExpression,
+} from "./expression";
 
 export interface CronSchedulerOptions {
   /**
@@ -106,7 +105,8 @@ function scheduleJob(
           });
         } else {
           const message = `[CRON] Timestamp: ${timestamp}\n\nCalling tool: ${toolNameSafe} with args.`;
-          const sessionId = createSession(ctx, [agentId], "agents");
+          const sessionName = taskDescription.trim() || `Cron: ${jobId}`;
+          const sessionId = createSession(ctx, [agentId], "agents", sessionName);
           ctx.events.emit({
             event: "cron_fired",
             data: { jobId, agentId, timestamp },
@@ -132,6 +132,70 @@ function scheduleJob(
   }
 }
 
+/** Default message for per-agent cron runs (cron_echo). */
+const AGENT_RUN_CRON_MESSAGE =
+  "Review your GOALS and assigned tasks. Check MEMORY. Take action or report blockers.";
+
+/**
+ * Syncs agent-run cron jobs with active agents: one staggered job per active agent (except Maia).
+ * Removes agent-run jobs for inactive/deleted agents and adds/updates for active agents.
+ * @param ctx - Application context
+ */
+export function syncAgentRunJobs(ctx: AppContext): void {
+  const agents = listAgents(ctx).filter((a) => a.status === "active" && a.id !== "maia");
+  const interval = getSettings(ctx).heartbeatIntervalMinutes;
+
+  ctx.db.prepare("DELETE FROM cron_jobs WHERE id LIKE ?").run(AGENT_RUN_JOB_ID_PREFIX + "%");
+
+  const now = new Date().toISOString();
+  for (let i = 0; i < agents.length; i++) {
+    const agent = agents[i]!;
+    const jobId = AGENT_RUN_JOB_ID_PREFIX + agent.id;
+    const expression = staggeredAgentRunCronExpression(interval, i, agents.length);
+    const toolArgs = JSON.stringify({ message: AGENT_RUN_CRON_MESSAGE });
+    ctx.db.prepare(
+      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
+       VALUES (?, ?, ?, ?, 1, ?, 'cron_echo', ?)`
+    ).run(jobId, expression, "Scheduled run", agent.id, now, toolArgs);
+  }
+}
+
+/**
+ * Reconciles in-memory scheduled tasks with cron_jobs: schedules any new agent-run jobs
+ * and stops any agent-run jobs that no longer exist in the DB.
+ * No-op if the cron scheduler has not been started.
+ * @param ctx - Application context
+ */
+export function reconcileAgentRunTasks(ctx: AppContext): void {
+  if (!_started || !_ctx || !_runAgentFn) return;
+
+  const rows = ctx.db
+    .prepare(
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id LIKE ?"
+    )
+    .all(AGENT_RUN_JOB_ID_PREFIX + "%") as {
+      id: string;
+      expression: string;
+      task_description: string;
+      agent_id: string;
+      tool_name: string;
+      tool_args: string;
+    }[];
+
+  for (const row of rows) {
+    if (!_taskMap.has(row.id)) {
+      scheduleJob(_ctx, _runAgentFn, row, false);
+    }
+  }
+
+  for (const [jobId, task] of _taskMap.entries()) {
+    if (jobId.startsWith(AGENT_RUN_JOB_ID_PREFIX) && !rows.some((r) => r.id === jobId)) {
+      task.stop();
+      _taskMap.delete(jobId);
+    }
+  }
+}
+
 export function startCronScheduler(
   ctx: AppContext,
   runAgentFn: RunAgentFn,
@@ -141,6 +205,8 @@ export function startCronScheduler(
   _started = true;
   _ctx = ctx;
   _runAgentFn = runAgentFn;
+
+  syncAgentRunJobs(ctx);
 
   const runOnInit = options.runOnInit ?? false;
   const rows = ctx.db
@@ -211,6 +277,39 @@ export function refreshHeartbeatJob(ctx: AppContext): void {
       tool_args: string;
     } | undefined;
   if (row && cron.validate(row.expression)) {
+    scheduleJob(_ctx, _runAgentFn, row, false);
+  }
+}
+
+/**
+ * Re-loads a single cron job from the DB and re-registers it with the scheduler.
+ * Call after updating a job in the DB (e.g. via PATCH) so the in-process schedule reflects the change.
+ * No-op if the scheduler is not started or the job is not found.
+ * @param jobId - Cron job id (must exist in cron_jobs)
+ */
+export function refreshCronJob(jobId: string): void {
+  if (!_started || !_ctx || !_runAgentFn) return;
+
+  const row = _ctx.db
+    .prepare(
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id = ?"
+    )
+    .get(jobId) as {
+      id: string;
+      expression: string;
+      task_description: string;
+      agent_id: string;
+      tool_name: string;
+      tool_args: string;
+    } | undefined;
+  if (!row) return;
+
+  const existing = _taskMap.get(jobId);
+  if (existing) {
+    existing.stop();
+    _taskMap.delete(jobId);
+  }
+  if (cron.validate(row.expression)) {
     scheduleJob(_ctx, _runAgentFn, row, false);
   }
 }

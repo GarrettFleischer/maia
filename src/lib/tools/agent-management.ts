@@ -4,6 +4,7 @@ import path from "path";
 import { zodToJsonSchema } from "../zod-to-json";
 import { getSettings } from "../settings";
 import { getAgentsDir, getDefaultAgentDir, getDefaultMaiaDir } from "../data-dir";
+import { syncAgentRunJobs, reconcileAgentRunTasks } from "../cron/service";
 import type { Tool, ToolContext } from "./types";
 import type { AgentDefinition } from "../types";
 import type { AppContext } from "../context";
@@ -134,6 +135,8 @@ export const agentCreateTool = makeTool(
     if (args.memory !== undefined) ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), args.memory);
     if (args.user !== undefined) ctx.fs.writeFile(path.join(agentDir, "USER.md"), args.user);
 
+    syncAgentRunJobs(ctx);
+    reconcileAgentRunTasks(ctx);
     return id;
   }
 );
@@ -145,6 +148,8 @@ export const agentDeleteTool = makeTool(
   async ({ agentId }, ctx) => {
     ctx.db.prepare("UPDATE agents SET status = 'deleted', updated_at = ? WHERE id = ?")
       .run(new Date().toISOString(), agentId);
+    syncAgentRunJobs(ctx);
+    reconcileAgentRunTasks(ctx);
   }
 );
 
