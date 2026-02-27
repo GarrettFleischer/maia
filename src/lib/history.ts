@@ -5,6 +5,35 @@ import type { HistoryEntry, Session, SessionMeta } from "./types";
 // -- Session CRUD --
 
 /**
+ * Gets an existing session or creates a new one when none matches type, name, and participants.
+ * Used by heartbeat and cron to reuse threads instead of creating new ones on each run.
+ * @param ctx - Application context
+ * @param participants - Participant ids (e.g. ["maia"] or ["agent-id"])
+ * @param type - "user" or "agents"
+ * @param name - Display name for the thread (must match exactly for reuse)
+ * @returns Session id (existing or newly created)
+ */
+export function getOrCreateSession(
+  ctx: AppContext,
+  participants: string[],
+  type: "user" | "agents",
+  name: string
+): string {
+  const participantsJson = JSON.stringify(participants);
+  const existing = ctx.db
+    .prepare(
+      "SELECT id FROM sessions WHERE type = ? AND name = ? AND participants = ? ORDER BY created_at ASC LIMIT 1"
+    )
+    .get(type, name, participantsJson) as { id: string } | undefined;
+
+  if (existing?.id) {
+    return existing.id;
+  }
+
+  return createSession(ctx, participants, type, name);
+}
+
+/**
  * Creates a new session (thread) and returns its id.
  * @param ctx - Application context
  * @param participants - Participant ids (default ["user", "maia"])

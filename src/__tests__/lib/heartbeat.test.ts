@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import { fireHeartbeat, _resetHeartbeatIdempotencyForTests } from "@/lib/heartbeat";
+import {
+  fireHeartbeat,
+  _resetHeartbeatIdempotencyForTests,
+} from "@/lib/heartbeat";
 import { refreshEmbeddings } from "@/lib/knowledge/refresh-embeddings";
 import { _clearOllamaEmbedContextLengthCacheForTests } from "@/lib/knowledge/embedding";
 import { makeTestContext, FakeEvents, FakeResponse } from "../helpers/fakes";
@@ -10,9 +13,11 @@ import type { AppContext } from "@/lib/context";
 
 function seedAgent(ctx: AppContext, id: string, status = "active") {
   const now = new Date().toISOString();
-  ctx.db.prepare(
-    "INSERT INTO agents (id, name, model, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(id, id, "ollama/llama3.2", status, now, now);
+  ctx.db
+    .prepare(
+      "INSERT INTO agents (id, name, model, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .run(id, id, "ollama/llama3.2", status, now, now);
 }
 
 describe("refreshEmbeddings", () => {
@@ -21,41 +26,73 @@ describe("refreshEmbeddings", () => {
   beforeEach(() => {
     ctx = makeTestContext();
     updateSettings(ctx, { embeddingModel: "nomic-embed-text" });
-    (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
+    (
+      ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
+    ).on(
       "/api/embed",
-      async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }))
+      async () =>
+        new FakeResponse(
+          200,
+          JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }),
+        ),
     );
   });
 
   it("indexes history entries that have no vector yet", async () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
-    const entry = appendEntry(ctx, sessionId, { role: "user", content: "unindexed message", timestamp: new Date().toISOString() });
+    const entry = appendEntry(ctx, sessionId, {
+      role: "user",
+      content: "unindexed message",
+      timestamp: new Date().toISOString(),
+    });
 
     const store = createVectorStore(ctx.db);
-    const beforeCount = (ctx.db.prepare("SELECT COUNT(*) as c FROM history_vectors").get() as { c: number }).c;
+    const beforeCount = (
+      ctx.db.prepare("SELECT COUNT(*) as c FROM history_vectors").get() as {
+        c: number;
+      }
+    ).c;
     expect(beforeCount).toBe(0);
 
     await refreshEmbeddings(ctx);
 
-    const afterCount = (ctx.db.prepare("SELECT COUNT(*) as c FROM history_vectors WHERE entry_id = ?").get(entry.id) as { c: number }).c;
+    const afterCount = (
+      ctx.db
+        .prepare("SELECT COUNT(*) as c FROM history_vectors WHERE entry_id = ?")
+        .get(entry.id) as { c: number }
+    ).c;
     expect(afterCount).toBe(1);
   });
 
   it("does not re-index history entries that already have a vector", async () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
-    const entry = appendEntry(ctx, sessionId, { role: "user", content: "already indexed", timestamp: new Date().toISOString() });
+    const entry = appendEntry(ctx, sessionId, {
+      role: "user",
+      content: "already indexed",
+      timestamp: new Date().toISOString(),
+    });
     // Manually insert a vector for this entry
     const store = createVectorStore(ctx.db);
-    store.insertHistory("vec-1", sessionId, entry.id, "already indexed", [0.1, 0.2], false, new Date().toISOString());
+    store.insertHistory(
+      "vec-1",
+      sessionId,
+      entry.id,
+      "already indexed",
+      [0.1, 0.2],
+      false,
+      new Date().toISOString(),
+    );
 
     let embedCallCount = 0;
-    (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
-      "/api/embed",
-      async () => {
-        embedCallCount++;
-        return new FakeResponse(200, JSON.stringify({ embeddings: [[0.5, 0.5]] }));
-      }
-    );
+    (
+      ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
+    ).on("/api/embed", async () => {
+      embedCallCount++;
+      return new FakeResponse(
+        200,
+        JSON.stringify({ embeddings: [[0.5, 0.5]] }),
+      );
+    });
 
     await refreshEmbeddings(ctx);
 
@@ -65,16 +102,21 @@ describe("refreshEmbeddings", () => {
 
   it("skips entries with empty content", async () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
-    appendEntry(ctx, sessionId, { role: "agent", content: "", timestamp: new Date().toISOString() });
+    appendEntry(ctx, sessionId, {
+      role: "agent",
+      content: "",
+      timestamp: new Date().toISOString(),
+    });
 
     let embedCallCount = 0;
-    (ctx.http as { on: (p: string | RegExp, h: () => Promise<FakeResponse>) => void }).on(
-      /api\/embed/,
-      async () => {
-        embedCallCount++;
-        return new FakeResponse(200, JSON.stringify({ embeddings: [[0.1]] }));
+    (
+      ctx.http as {
+        on: (p: string | RegExp, h: () => Promise<FakeResponse>) => void;
       }
-    );
+    ).on(/api\/embed/, async () => {
+      embedCallCount++;
+      return new FakeResponse(200, JSON.stringify({ embeddings: [[0.1]] }));
+    });
 
     await refreshEmbeddings(ctx);
     expect(embedCallCount).toBe(0);
@@ -82,13 +124,18 @@ describe("refreshEmbeddings", () => {
 
   it("does not throw when embed service fails; logs and continues", async () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
-    appendEntry(ctx, sessionId, { role: "user", content: "some message", timestamp: new Date().toISOString() });
+    appendEntry(ctx, sessionId, {
+      role: "user",
+      content: "some message",
+      timestamp: new Date().toISOString(),
+    });
     // Override http to fail
     const failCtx = makeTestContext({ db: ctx.db, events: ctx.events });
-    (failCtx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
-      "/api/embed",
-      async () => new FakeResponse(500, "error")
-    );
+    (
+      failCtx.http as {
+        on: (p: string, h: () => Promise<FakeResponse>) => void;
+      }
+    ).on("/api/embed", async () => new FakeResponse(500, "error"));
     await expect(refreshEmbeddings(failCtx)).resolves.toBeUndefined();
   });
 
@@ -96,19 +143,27 @@ describe("refreshEmbeddings", () => {
     _clearOllamaEmbedContextLengthCacheForTests();
     const chunkCtx = makeTestContext();
     updateSettings(chunkCtx, { embeddingModel: "nomic-embed-text" });
-    (chunkCtx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
+    (
+      chunkCtx.http as {
+        on: (p: string, h: () => Promise<FakeResponse>) => void;
+      }
+    ).on(
       "/api/show",
       async () =>
-        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 2" }))
+        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 2" })),
     );
     let embedCallCount = 0;
-    (chunkCtx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
-      "/api/embed",
-      async () => {
-        embedCallCount++;
-        return new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }));
+    (
+      chunkCtx.http as {
+        on: (p: string, h: () => Promise<FakeResponse>) => void;
       }
-    );
+    ).on("/api/embed", async () => {
+      embedCallCount++;
+      return new FakeResponse(
+        200,
+        JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }),
+      );
+    });
     const sessionId = createSession(chunkCtx, ["user", "maia"]);
     const longContent = "one two three four five six seven eight";
     const entry = appendEntry(chunkCtx, sessionId, {
@@ -118,7 +173,9 @@ describe("refreshEmbeddings", () => {
     });
     await refreshEmbeddings(chunkCtx);
     const vectorRows = chunkCtx.db
-      .prepare("SELECT id, entry_id, content FROM history_vectors WHERE entry_id = ?")
+      .prepare(
+        "SELECT id, entry_id, content FROM history_vectors WHERE entry_id = ?",
+      )
       .all(entry.id) as { id: string; entry_id: string; content: string }[];
     expect(vectorRows.length).toBeGreaterThan(1);
     expect(embedCallCount).toBe(vectorRows.length);
@@ -128,28 +185,44 @@ describe("refreshEmbeddings", () => {
     _clearOllamaEmbedContextLengthCacheForTests();
     const retryCtx = makeTestContext();
     updateSettings(retryCtx, { embeddingModel: "nomic-embed-text" });
-    (retryCtx.http as { on: (p: string, h: (url: string, init?: RequestInit) => Promise<FakeResponse>) => void }).on(
+    (
+      retryCtx.http as {
+        on: (
+          p: string,
+          h: (url: string, init?: RequestInit) => Promise<FakeResponse>,
+        ) => void;
+      }
+    ).on(
       "/api/show",
       async () =>
-        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 100" }))
+        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 100" })),
     );
     let embedCallCount = 0;
-    (retryCtx.http as { on: (p: string, h: (url: string, init?: RequestInit) => Promise<FakeResponse>) => void }).on(
-      "/api/embed",
-      async (_url: string, init?: RequestInit) => {
-        embedCallCount++;
-        const body = init?.body as string | undefined;
-        const parsed = body ? (JSON.parse(body) as { input?: string }) : {};
-        const len = typeof parsed.input === "string" ? parsed.input.length : 0;
-        if (embedCallCount === 1 && len > 50) {
-          return new FakeResponse(
-            400,
-            JSON.stringify({ error: "the input length exceeds the context length" })
-          );
-        }
-        return new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }));
+    (
+      retryCtx.http as {
+        on: (
+          p: string,
+          h: (url: string, init?: RequestInit) => Promise<FakeResponse>,
+        ) => void;
       }
-    );
+    ).on("/api/embed", async (_url: string, init?: RequestInit) => {
+      embedCallCount++;
+      const body = init?.body as string | undefined;
+      const parsed = body ? (JSON.parse(body) as { input?: string }) : {};
+      const len = typeof parsed.input === "string" ? parsed.input.length : 0;
+      if (embedCallCount === 1 && len > 50) {
+        return new FakeResponse(
+          400,
+          JSON.stringify({
+            error: "the input length exceeds the context length",
+          }),
+        );
+      }
+      return new FakeResponse(
+        200,
+        JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }),
+      );
+    });
     const sessionId = createSession(retryCtx, ["user", "maia"]);
     const content = "a".repeat(120);
     const entry = appendEntry(retryCtx, sessionId, {
@@ -159,7 +232,9 @@ describe("refreshEmbeddings", () => {
     });
     await refreshEmbeddings(retryCtx);
     const vectorRows = retryCtx.db
-      .prepare("SELECT id, entry_id, content FROM history_vectors WHERE entry_id = ?")
+      .prepare(
+        "SELECT id, entry_id, content FROM history_vectors WHERE entry_id = ?",
+      )
       .all(entry.id) as { id: string; entry_id: string; content: string }[];
     expect(vectorRows.length).toBeGreaterThanOrEqual(1);
     expect(embedCallCount).toBeGreaterThan(1);
@@ -174,9 +249,12 @@ describe("fireHeartbeat", () => {
     _resetHeartbeatIdempotencyForTests();
     events = new FakeEvents();
     ctx = makeTestContext({ events });
-    (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
+    (
+      ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
+    ).on(
       "/api/embed",
-      async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] }))
+      async () =>
+        new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] })),
     );
   });
 
@@ -185,7 +263,9 @@ describe("fireHeartbeat", () => {
     await fireHeartbeat(ctx, runAgentFn);
     const heartbeats = events.emitted.filter((e) => e.event === "heartbeat");
     expect(heartbeats).toHaveLength(1);
-    expect((heartbeats[0].data as { timestamp: string }).timestamp).toBeDefined();
+    expect(
+      (heartbeats[0].data as { timestamp: string }).timestamp,
+    ).toBeDefined();
   });
 
   it("triggers runAgentFn only for maia", async () => {
@@ -193,7 +273,9 @@ describe("fireHeartbeat", () => {
     seedAgent(ctx, "agent-1", "active");
     seedAgent(ctx, "agent-2", "paused");
     const triggered: string[] = [];
-    await fireHeartbeat(ctx, async (_c, agentId) => { triggered.push(agentId); });
+    await fireHeartbeat(ctx, async (_c, agentId) => {
+      triggered.push(agentId);
+    });
     expect(triggered).toHaveLength(1);
     expect(triggered[0]).toBe("maia");
   });
@@ -201,14 +283,18 @@ describe("fireHeartbeat", () => {
   it("does not trigger runAgentFn when maia does not exist", async () => {
     seedAgent(ctx, "agent-1", "active");
     const triggered: string[] = [];
-    await fireHeartbeat(ctx, async (_c, agentId) => { triggered.push(agentId); });
+    await fireHeartbeat(ctx, async (_c, agentId) => {
+      triggered.push(agentId);
+    });
     expect(triggered).toHaveLength(0);
   });
 
   it("does not trigger runAgentFn when maia is paused", async () => {
     seedAgent(ctx, "maia", "paused");
     const triggered: string[] = [];
-    await fireHeartbeat(ctx, async (_c, agentId) => { triggered.push(agentId); });
+    await fireHeartbeat(ctx, async (_c, agentId) => {
+      triggered.push(agentId);
+    });
     expect(triggered).toHaveLength(0);
   });
 
@@ -250,7 +336,9 @@ describe("fireHeartbeat", () => {
     await fireHeartbeat(ctx, async () => {
       vectorCountWhenAgentRan = (
         ctx.db
-          .prepare("SELECT COUNT(*) as c FROM history_vectors WHERE entry_id = ?")
+          .prepare(
+            "SELECT COUNT(*) as c FROM history_vectors WHERE entry_id = ?",
+          )
           .get(entry.id) as { c: number }
       ).c;
     });
@@ -261,9 +349,21 @@ describe("fireHeartbeat", () => {
   it("passes task board section to maia when present", async () => {
     seedAgent(ctx, "maia", "active");
     const now = new Date().toISOString();
-    ctx.db.prepare(
-      "INSERT INTO tasks (id, title, description, status, created_by, assigned_to, created_at, updated_at, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run("task-1", "Unassigned task", "", "todo", "maia", null, now, now, "[]");
+    ctx.db
+      .prepare(
+        "INSERT INTO tasks (id, title, description, status, created_by, assigned_to, created_at, updated_at, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "task-1",
+        "Unassigned task",
+        "",
+        "todo",
+        "maia",
+        null,
+        now,
+        now,
+        "[]",
+      );
     const messages: string[] = [];
     await fireHeartbeat(ctx, async (_c, _agentId, _sessionId, message) => {
       messages.push(message);
@@ -275,10 +375,12 @@ describe("fireHeartbeat", () => {
   it("passes cron jobs section to maia when cron jobs exist", async () => {
     seedAgent(ctx, "maia", "active");
     const now = new Date().toISOString();
-    ctx.db.prepare(
-      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run("job-1", "0 9 * * *", "Daily", "maia", 0, now, "cron_echo", "{}");
+    ctx.db
+      .prepare(
+        `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("job-1", "0 9 * * *", "Daily", "maia", 0, now, "cron_echo", "{}");
     const messages: string[] = [];
     await fireHeartbeat(ctx, async (_c, _agentId, _sessionId, message) => {
       messages.push(message);
@@ -311,5 +413,44 @@ describe("fireHeartbeat", () => {
     await fireHeartbeat(ctx, runAgentFn);
     // Second call within 60s should skip the tool execution, so runAgentFn is not called again
     expect(runAgentCalls).toHaveLength(1);
+  });
+
+  it("reuses the same Heartbeat session across multiple runs", async () => {
+    seedAgent(ctx, "maia", "active");
+    const runAgentFn = async () => {};
+
+    await fireHeartbeat(ctx, runAgentFn);
+    const firstSessions = ctx.db
+      .prepare(
+        "SELECT id FROM sessions WHERE type = 'agents' AND name = 'Heartbeat'",
+      )
+      .all() as { id: string }[];
+    expect(firstSessions).toHaveLength(1);
+
+    const firstId = firstSessions[0]?.id;
+    expect(firstId).toBeDefined();
+
+    _resetHeartbeatIdempotencyForTests();
+    await fireHeartbeat(ctx, runAgentFn);
+    const secondSessions = ctx.db
+      .prepare(
+        "SELECT id FROM sessions WHERE type = 'agents' AND name = 'Heartbeat'",
+      )
+      .all() as { id: string }[];
+
+    expect(secondSessions).toHaveLength(1);
+    expect(secondSessions[0].id).toBe(firstId);
+  });
+
+  it("does not throw when the underlying agent run (e.g. Ollama chat) fails", async () => {
+    seedAgent(ctx, "maia", "active");
+    const erroringRunAgentFn = async (): Promise<string> => {
+      throw new Error("simulated /api/chat failure");
+    };
+
+    // fireHeartbeat should swallow the error from the heartbeat tool and only log it.
+    await expect(
+      fireHeartbeat(ctx, erroringRunAgentFn),
+    ).resolves.toBeUndefined();
   });
 });

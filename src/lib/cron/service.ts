@@ -7,7 +7,7 @@
 import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
 import type { AppContext } from "../context";
-import { createSession } from "../history";
+import { getOrCreateSession } from "../history";
 import type { RunAgentFn } from "../agent/runner";
 import { fireHeartbeat } from "../heartbeat";
 import { getSettings } from "../settings";
@@ -65,7 +65,7 @@ function scheduleJob(
     tool_name: string;
     tool_args: string;
   },
-  runOnInit: boolean
+  runOnInit: boolean,
 ): void {
   const {
     id: jobId,
@@ -76,12 +76,16 @@ function scheduleJob(
     tool_args: toolArgsJson,
   } = row;
   if (!cron.validate(expression)) {
-    console.error(`CronService: invalid expression for job ${jobId}, skipping: ${expression}`);
+    console.error(
+      `CronService: invalid expression for job ${jobId}, skipping: ${expression}`,
+    );
     return;
   }
   let toolArgs: Record<string, unknown> = {};
   try {
-    toolArgs = toolArgsJson ? (JSON.parse(toolArgsJson) as Record<string, unknown>) : {};
+    toolArgs = toolArgsJson
+      ? (JSON.parse(toolArgsJson) as Record<string, unknown>)
+      : {};
   } catch {
     console.error(`CronService: invalid tool_args for job ${jobId}, using {}`);
   }
@@ -106,29 +110,44 @@ function scheduleJob(
         } else {
           const message = `[CRON] Timestamp: ${timestamp}\n\nCalling tool: ${toolNameSafe} with args.`;
           const sessionName = taskDescription.trim() || `Cron: ${jobId}`;
-          const sessionId = createSession(ctx, [agentId], "agents", sessionName);
+          const sessionId = getOrCreateSession(
+            ctx,
+            [agentId],
+            "agents",
+            sessionName,
+          );
           ctx.events.emit({
             event: "cron_fired",
             data: { jobId, agentId, timestamp },
           });
           runAgentFn(ctx, agentId, sessionId, message, {
             initialToolCall: { name: toolNameSafe, args: toolArgs },
+            // System-generated cron messages already include all necessary context, so skip smart context.
+            enableSmartContext: false,
           }).catch((err) => {
-            console.error(`Cron job ${jobId} failed for agent ${agentId}:`, err);
+            console.error(
+              `Cron job ${jobId} failed for agent ${agentId}:`,
+              err,
+            );
           });
         }
       },
-      {}
+      {},
     );
   } catch (err) {
     console.error(`CronService: failed to schedule job ${jobId}:`, err);
     return;
   }
   _taskMap.set(jobId, task);
-  if (runOnInit && typeof (task as { execute?: () => Promise<unknown> }).execute === "function") {
+  if (
+    runOnInit &&
+    typeof (task as { execute?: () => Promise<unknown> }).execute === "function"
+  ) {
     (task as { execute: () => Promise<unknown> })
       .execute()
-      .catch((err: unknown) => console.error(`CronService: runOnInit failed for ${jobId}:`, err));
+      .catch((err: unknown) =>
+        console.error(`CronService: runOnInit failed for ${jobId}:`, err),
+      );
   }
 }
 
@@ -142,21 +161,31 @@ const AGENT_RUN_CRON_MESSAGE =
  * @param ctx - Application context
  */
 export function syncAgentRunJobs(ctx: AppContext): void {
-  const agents = listAgents(ctx).filter((a) => a.status === "active" && a.id !== "maia");
+  const agents = listAgents(ctx).filter(
+    (a) => a.status === "active" && a.id !== "maia",
+  );
   const interval = getSettings(ctx).heartbeatIntervalMinutes;
 
-  ctx.db.prepare("DELETE FROM cron_jobs WHERE id LIKE ?").run(AGENT_RUN_JOB_ID_PREFIX + "%");
+  ctx.db
+    .prepare("DELETE FROM cron_jobs WHERE id LIKE ?")
+    .run(AGENT_RUN_JOB_ID_PREFIX + "%");
 
   const now = new Date().toISOString();
   for (let i = 0; i < agents.length; i++) {
     const agent = agents[i]!;
     const jobId = AGENT_RUN_JOB_ID_PREFIX + agent.id;
-    const expression = staggeredAgentRunCronExpression(interval, i, agents.length);
+    const expression = staggeredAgentRunCronExpression(
+      interval,
+      i,
+      agents.length,
+    );
     const toolArgs = JSON.stringify({ message: AGENT_RUN_CRON_MESSAGE });
-    ctx.db.prepare(
-      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
-       VALUES (?, ?, ?, ?, 1, ?, 'cron_echo', ?)`
-    ).run(jobId, expression, "Scheduled run", agent.id, now, toolArgs);
+    ctx.db
+      .prepare(
+        `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
+       VALUES (?, ?, ?, ?, 1, ?, 'cron_echo', ?)`,
+      )
+      .run(jobId, expression, "Scheduled run", agent.id, now, toolArgs);
   }
 }
 
@@ -171,16 +200,16 @@ export function reconcileAgentRunTasks(ctx: AppContext): void {
 
   const rows = ctx.db
     .prepare(
-      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id LIKE ?"
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id LIKE ?",
     )
     .all(AGENT_RUN_JOB_ID_PREFIX + "%") as {
-      id: string;
-      expression: string;
-      task_description: string;
-      agent_id: string;
-      tool_name: string;
-      tool_args: string;
-    }[];
+    id: string;
+    expression: string;
+    task_description: string;
+    agent_id: string;
+    tool_name: string;
+    tool_args: string;
+  }[];
 
   for (const row of rows) {
     if (!_taskMap.has(row.id)) {
@@ -189,7 +218,10 @@ export function reconcileAgentRunTasks(ctx: AppContext): void {
   }
 
   for (const [jobId, task] of _taskMap.entries()) {
-    if (jobId.startsWith(AGENT_RUN_JOB_ID_PREFIX) && !rows.some((r) => r.id === jobId)) {
+    if (
+      jobId.startsWith(AGENT_RUN_JOB_ID_PREFIX) &&
+      !rows.some((r) => r.id === jobId)
+    ) {
       task.stop();
       _taskMap.delete(jobId);
     }
@@ -199,7 +231,7 @@ export function reconcileAgentRunTasks(ctx: AppContext): void {
 export function startCronScheduler(
   ctx: AppContext,
   runAgentFn: RunAgentFn,
-  options: CronSchedulerOptions = {}
+  options: CronSchedulerOptions = {},
 ): void {
   if (_started) return;
   _started = true;
@@ -211,16 +243,16 @@ export function startCronScheduler(
   const runOnInit = options.runOnInit ?? false;
   const rows = ctx.db
     .prepare(
-      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs ORDER BY created_at"
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs ORDER BY created_at",
     )
     .all() as {
-      id: string;
-      expression: string;
-      task_description: string;
-      agent_id: string;
-      tool_name: string;
-      tool_args: string;
-    }[];
+    id: string;
+    expression: string;
+    task_description: string;
+    agent_id: string;
+    tool_name: string;
+    tool_args: string;
+  }[];
 
   for (const row of rows) {
     scheduleJob(ctx, runAgentFn, row, runOnInit);
@@ -256,7 +288,9 @@ export function refreshHeartbeatJob(ctx: AppContext): void {
 
   const minutes = getSettings(ctx).heartbeatIntervalMinutes;
   const expression = minutesToCronExpression(minutes);
-  ctx.db.prepare("UPDATE cron_jobs SET expression = ? WHERE id = ?").run(expression, BUILTIN_HEARTBEAT_JOB_ID);
+  ctx.db
+    .prepare("UPDATE cron_jobs SET expression = ? WHERE id = ?")
+    .run(expression, BUILTIN_HEARTBEAT_JOB_ID);
 
   const existing = _taskMap.get(BUILTIN_HEARTBEAT_JOB_ID);
   if (existing) {
@@ -266,16 +300,18 @@ export function refreshHeartbeatJob(ctx: AppContext): void {
 
   const row = ctx.db
     .prepare(
-      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id = ?"
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id = ?",
     )
-    .get(BUILTIN_HEARTBEAT_JOB_ID) as {
-      id: string;
-      expression: string;
-      task_description: string;
-      agent_id: string;
-      tool_name: string;
-      tool_args: string;
-    } | undefined;
+    .get(BUILTIN_HEARTBEAT_JOB_ID) as
+    | {
+        id: string;
+        expression: string;
+        task_description: string;
+        agent_id: string;
+        tool_name: string;
+        tool_args: string;
+      }
+    | undefined;
   if (row && cron.validate(row.expression)) {
     scheduleJob(_ctx, _runAgentFn, row, false);
   }
@@ -292,16 +328,18 @@ export function refreshCronJob(jobId: string): void {
 
   const row = _ctx.db
     .prepare(
-      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id = ?"
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id = ?",
     )
-    .get(jobId) as {
-      id: string;
-      expression: string;
-      task_description: string;
-      agent_id: string;
-      tool_name: string;
-      tool_args: string;
-    } | undefined;
+    .get(jobId) as
+    | {
+        id: string;
+        expression: string;
+        task_description: string;
+        agent_id: string;
+        tool_name: string;
+        tool_args: string;
+      }
+    | undefined;
   if (!row) return;
 
   const existing = _taskMap.get(jobId);

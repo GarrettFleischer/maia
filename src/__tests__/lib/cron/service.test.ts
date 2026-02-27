@@ -201,6 +201,30 @@ describe("CronService", () => {
       expect(agentIds).toEqual(["agent-a", "agent-b"]);
     });
 
+    it("reuses same session when multiple jobs share agent and task description", async () => {
+      ctx.db.prepare("DELETE FROM cron_jobs WHERE id = 'builtin-heartbeat'").run();
+      seedCronJob(ctx, {
+        id: "job-1",
+        agentId: "worker-a",
+        taskDescription: "Hourly heartbeat",
+        expression: "0 * * * *",
+      });
+      seedCronJob(ctx, {
+        id: "job-2",
+        agentId: "worker-a",
+        taskDescription: "Hourly heartbeat",
+        expression: "30 * * * *",
+      });
+      const runAgentCalls: { sessionId: string }[] = [];
+      startCronScheduler(ctx, async (_c, _agentId, sessionId) => {
+        runAgentCalls.push({ sessionId });
+      }, { runOnInit: true });
+
+      await new Promise((r) => setTimeout(r, 20));
+      expect(runAgentCalls.length).toBe(2);
+      expect(runAgentCalls[0]!.sessionId).toBe(runAgentCalls[1]!.sessionId);
+    });
+
     it("when builtin-heartbeat job runs, emits heartbeat event and cron_fired", async () => {
       _resetHeartbeatIdempotencyForTests();
       startCronScheduler(ctx, async () => {}, { runOnInit: true });

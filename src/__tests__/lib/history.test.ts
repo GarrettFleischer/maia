@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "bun:test";
 import { makeTestContext } from "../helpers/fakes";
 import {
   createSession,
+  getOrCreateSession,
   listSessions,
   getSession,
   appendEntry,
@@ -67,6 +68,47 @@ describe("history", () => {
       const id = createSession(ctx, ["user", "maia"], "user", "My thread");
       const session = getSession(ctx, id);
       expect(session?.name).toBe("My thread");
+    });
+  });
+
+  // ─── getOrCreateSession ─────────────────────────────────────────────────────
+
+  describe("getOrCreateSession", () => {
+    it("returns existing session when type, name, and participants match", () => {
+      const id1 = createSession(ctx, ["maia"], "agents", "Heartbeat");
+      const id2 = getOrCreateSession(ctx, ["maia"], "agents", "Heartbeat");
+      expect(id2).toBe(id1);
+    });
+
+    it("creates new session when no matching session exists", () => {
+      const id = getOrCreateSession(ctx, ["agent-a"], "agents", "Scheduled run");
+      const session = getSession(ctx, id);
+      expect(session).not.toBeNull();
+      expect(session?.participants).toEqual(["agent-a"]);
+      expect(session?.name).toBe("Scheduled run");
+      expect(session?.type).toBe("agents");
+    });
+
+    it("creates new session when participants differ", () => {
+      createSession(ctx, ["agent-a"], "agents", "Scheduled run");
+      const id2 = getOrCreateSession(ctx, ["agent-b"], "agents", "Scheduled run");
+      const session = getSession(ctx, id2);
+      expect(session?.participants).toEqual(["agent-b"]);
+    });
+
+    it("creates new session when name differs", () => {
+      createSession(ctx, ["agent-a"], "agents", "Task A");
+      const id2 = getOrCreateSession(ctx, ["agent-a"], "agents", "Task B");
+      const session = getSession(ctx, id2);
+      expect(session?.name).toBe("Task B");
+    });
+
+    it("reuses session on repeated calls for same type, name, participants", () => {
+      const id1 = getOrCreateSession(ctx, ["worker-a"], "agents", "Hourly heartbeat");
+      const id2 = getOrCreateSession(ctx, ["worker-a"], "agents", "Hourly heartbeat");
+      const id3 = getOrCreateSession(ctx, ["worker-a"], "agents", "Hourly heartbeat");
+      expect(id1).toBe(id2);
+      expect(id2).toBe(id3);
     });
   });
 
