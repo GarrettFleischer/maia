@@ -4,17 +4,26 @@ import type { HistoryEntry, Session, SessionMeta } from "./types";
 
 // -- Session CRUD --
 
+/**
+ * Creates a new session (thread) and returns its id.
+ * @param ctx - Application context
+ * @param participants - Participant ids (default ["user", "maia"])
+ * @param type - "user" or "agents" (default "user")
+ * @param name - Optional display name for the thread (default "")
+ * @returns The new session id
+ */
 export function createSession(
   ctx: AppContext,
   participants: string[] = ["user", "maia"],
-  type: "user" | "agents" = "user"
+  type: "user" | "agents" = "user",
+  name = ""
 ): string {
   const id = uuidv4();
   const now = new Date().toISOString();
   ctx.db.prepare(
     `INSERT INTO sessions (id, name, description, participants, tags, type, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, "", "", JSON.stringify(participants), JSON.stringify([]), type, now, now);
+  ).run(id, name, "", JSON.stringify(participants), JSON.stringify([]), type, now, now);
   return id;
 }
 

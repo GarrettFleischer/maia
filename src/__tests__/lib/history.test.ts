@@ -62,6 +62,12 @@ describe("history", () => {
       expect(session?.name).toBe("");
       expect(session?.description).toBe("");
     });
+
+    it("creates a session with optional name when provided", () => {
+      const id = createSession(ctx, ["user", "maia"], "user", "My thread");
+      const session = getSession(ctx, id);
+      expect(session?.name).toBe("My thread");
+    });
   });
 
   // ─── listSessions ───────────────────────────────────────────────────────────
