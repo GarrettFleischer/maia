@@ -83,6 +83,7 @@ export async function runKnowledgeIndex(
     if (existingHash === contentHash) continue;
 
     if (!embedder) continue;
+    console.info(`[Embedding] Indexing knowledge file: ${relPath}`);
     const maxLen = getSettings(ctx).embedMaxContentLength;
     const contentToEmbed =
       content.length > maxLen ? content.slice(0, maxLen) : content;

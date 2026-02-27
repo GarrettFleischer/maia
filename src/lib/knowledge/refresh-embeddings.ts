@@ -47,10 +47,22 @@ export async function refreshEmbeddings(ctx: AppContext): Promise<void> {
   const { v4: uuidv4 } = await import("uuid");
   const now = new Date().toISOString();
 
-  for (const row of unindexed) {
+  const totalEntries = unindexed.length;
+  console.info(`[Embedding] Indexing ${totalEntries} history entries...`);
+
+  for (let i = 0; i < unindexed.length; i++) {
+    const row = unindexed[i];
+    const entryNum = i + 1;
     try {
       const chunks = chunkContentForEmbedding(row.content, maxLen);
-      for (const chunk of chunks) {
+      if (chunks.length > 1) {
+        console.info(`[Embedding] Entry ${entryNum}/${totalEntries} (${row.id}): ${chunks.length} chunks`);
+      }
+      for (let c = 0; c < chunks.length; c++) {
+        const chunk = chunks[c];
+        if (chunks.length > 1) {
+          console.info(`[Embedding] Entry ${entryNum}/${totalEntries}, chunk ${c + 1}/${chunks.length}`);
+        }
         await embedOneChunk(
           embedder,
           store,
@@ -62,6 +74,9 @@ export async function refreshEmbeddings(ctx: AppContext): Promise<void> {
           now,
           uuidv4,
         );
+      }
+      if (entryNum % 10 === 0 || entryNum === totalEntries) {
+        console.info(`[Embedding] Progress: ${entryNum}/${totalEntries} entries indexed`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

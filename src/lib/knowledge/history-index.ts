@@ -48,7 +48,14 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
     const embedder = createEmbeddingAdapter(settings, ctx.http);
     const store = createVectorStore(ctx.db);
     const now = new Date().toISOString();
-    for (const chunk of chunks) {
+    if (chunks.length > 1) {
+      console.info(`[Embedding] Indexing entry ${row.id}: ${chunks.length} chunks`);
+    }
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (chunks.length > 1) {
+        console.info(`[Embedding] Entry ${row.id}: chunk ${i + 1}/${chunks.length}`);
+      }
       const embedding = await embedder.embed(chunk);
       store.insertHistory(
         uuidv4(),
@@ -59,6 +66,9 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
         row.is_compressed === 1,
         now,
       );
+    }
+    if (chunks.length > 1) {
+      console.info(`[Embedding] Indexed entry ${row.id}: ${chunks.length} chunks`);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
