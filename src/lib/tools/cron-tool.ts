@@ -29,7 +29,7 @@ export const cronEchoTool = makeTool(
 
 export const cronScheduleTool = makeTool(
   "cron_schedule",
-  "Schedule a recurring cron job that invokes a tool (with args) on a schedule. Maia only.",
+  "Schedule a recurring cron job that invokes a tool (with args) on a schedule. Use cron_list first to see existing jobs and avoid duplicates. Maia only.",
   z.object({
     expression: z.string().describe("5-field cron expression e.g. '0 9 * * 1'"),
     toolName: z.string().describe("Tool to call when the job fires e.g. cron_echo, web_search"),
@@ -69,7 +69,7 @@ export const cronListTool = makeTool(
 
 export const cronDeleteTool = makeTool(
   "cron_delete",
-  "Delete a cron job by ID. Cannot delete built-in jobs. Maia only.",
+  "Delete a cron job by ID. Use cron_list first to find the job ID. Cannot delete built-in jobs. Maia only.",
   z.object({ jobId: z.string() }),
   async ({ jobId }, ctx) => {
     const row = ctx.db.prepare("SELECT is_built_in FROM cron_jobs WHERE id = ?").get(jobId) as { is_built_in: number } | undefined;

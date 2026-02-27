@@ -32,7 +32,7 @@ function rowToTask(r: Record<string, unknown>): Task {
 
 export const taskCreateTool = makeTool(
   "task_create",
-  "Create a new task on the shared kanban board. Use small, granular tasks. All agents can create tasks. Status starts as 'todo'.",
+  "Create a new task on the shared kanban board. Use task_list first to see existing tasks and avoid duplicates. Use small, granular tasks. All agents can create tasks. Status starts as 'todo'.",
   z.object({
     title: z.string().describe("Short, actionable task title"),
     description: z.string().optional().describe("Detailed description of the task"),
@@ -53,7 +53,7 @@ export const taskCreateTool = makeTool(
 
 export const taskUpdateTool = makeTool(
   "task_update",
-  "Update a task's status, add a note, or reassign it. At least one of status, note, or assignedTo must be provided. All agents can update tasks.",
+  "Update a task's status, add a note, or reassign it. Use task_list first to find the task ID. At least one of status, note, or assignedTo must be provided. All agents can update tasks.",
   z.object({
     taskId: z.string().describe("The task ID to update"),
     status: z.enum(["todo", "in_progress", "done"]).optional().describe("New status for the task"),

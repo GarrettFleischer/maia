@@ -250,7 +250,7 @@ export const emailSearchTool = makeTool(
 
 export const emailMoveTool = makeTool(
   "email_move",
-  "Move an email from one folder to another. Use email_list_folders to see available folder paths.",
+  "Move an email from one folder to another. Use email_list or email_search first to get the email UID, and email_list_folders to see available folder paths.",
   z.object({
     uid: z.number().describe("Email UID to move"),
     toFolder: z.string().describe("Destination folder path (e.g. 'Archive', 'Bulk Mail')"),
@@ -275,7 +275,7 @@ export const emailMoveTool = makeTool(
 
 export const emailMarkTool = makeTool(
   "email_mark",
-  "Mark an email as read, unread, starred, or unstarred.",
+  "Mark an email as read, unread, starred, or unstarred. Use email_list or email_search first to get the email UID.",
   z.object({
     uid: z.number().describe("Email UID to mark"),
     mark: z.enum(["read", "unread", "starred", "unstarred"]).describe("Action to apply"),
@@ -309,7 +309,7 @@ export const emailMarkTool = makeTool(
 
 export const emailDeleteTool = makeTool(
   "email_delete",
-  "Move an email to the Trash folder (reversible). The email is not permanently deleted.",
+  "Move an email to the Trash folder (reversible). Use email_list or email_search first to get the email UID. The email is not permanently deleted.",
   z.object({
     uid: z.number().describe("Email UID to delete (move to Trash)"),
     folder: z.string().optional().describe("Source folder (default: INBOX)"),

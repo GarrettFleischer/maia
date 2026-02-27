@@ -114,7 +114,7 @@ export const fileReadTool = makeFileTool(
 
 export const fileWriteTool = makeFileTool(
   "file_write",
-  "Write content to a file within the workspace volume. Creates or overwrites.",
+  "Write content to a file within the workspace volume. Creates or overwrites. Use file_list first to inspect the workspace and verify paths.",
   z.object({
     path: z.string().describe("Path relative to workspace root"),
     content: z.string().describe("Content to write"),
@@ -129,7 +129,7 @@ export const fileWriteTool = makeFileTool(
 
 export const fileAppendTool = makeFileTool(
   "file_append",
-  "Append content to a file within the workspace volume.",
+  "Append content to a file within the workspace volume. Use file_list first to inspect the workspace and verify the file exists.",
   z.object({
     path: z.string().describe("Path relative to workspace root"),
     content: z.string().describe("Content to append"),
@@ -144,7 +144,7 @@ export const fileAppendTool = makeFileTool(
 
 export const fileDeleteTool = makeFileTool(
   "file_delete",
-  "Delete a file or empty directory within the workspace volume.",
+  "Delete a file or empty directory within the workspace volume. Use file_list first to inspect the workspace and verify the path before deleting.",
   z.object({ path: z.string().describe("Path relative to workspace root") }),
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
@@ -202,7 +202,7 @@ export const fileListTool = makeFileTool(
 
 export const fileMoveTool = makeFileTool(
   "file_move",
-  "Move or rename a file within the workspace volume.",
+  "Move or rename a file within the workspace volume. Use file_list first to inspect the workspace and verify source/destination paths.",
   z.object({
     from: z.string().describe("Source path relative to workspace root"),
     to: z.string().describe("Destination path relative to workspace root"),
@@ -233,7 +233,7 @@ export const fileExistsTool = makeFileTool(
  */
 export const directoryCreateTool = makeFileTool(
   "directory_create",
-  "Create a directory within the workspace or knowledge base. Creates parent directories as needed. Use this instead of terminal_exec for mkdir.",
+  "Create a directory within the workspace or knowledge base. Creates parent directories as needed. Use file_list first to inspect the workspace and verify the parent path. Use this instead of terminal_exec for mkdir.",
   z.object({
     path: z
       .string()

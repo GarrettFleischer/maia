@@ -8,6 +8,7 @@ import { syncAgentRunJobs, reconcileAgentRunTasks } from "../cron/service";
 import type { Tool, ToolContext } from "./types";
 import type { AgentDefinition } from "../types";
 import type { AppContext } from "../context";
+import { normalizeReasoningEffort } from "../agent/identity";
 
 function makeTool<S extends z.ZodTypeAny>(
   name: string,
@@ -113,7 +114,7 @@ export function copyDefaultAgentFiles(
 
 export const agentCreateTool = makeTool(
   "agent_create",
-  "Create a new agent. Before calling, use settings_list_whitelisted_models to get the allowed models and set the model parameter to one of those; otherwise creation fails. Maia only.",
+  "Create a new agent. Use agent_list first to see existing agents and avoid duplicates. Before calling, use settings_list_whitelisted_models to get the allowed models and set the model parameter to one of those; otherwise creation fails. Maia only.",
   agentCreateSchema,
   async (args, ctx) => {
     const settings = getSettings(ctx);
@@ -143,7 +144,7 @@ export const agentCreateTool = makeTool(
 
 export const agentDeleteTool = makeTool(
   "agent_delete",
-  "Delete an agent by ID. Maia only.",
+  "Delete an agent by ID. Use agent_list first to find the agent ID. Maia only.",
   z.object({ agentId: z.string() }),
   async ({ agentId }, ctx) => {
     ctx.db.prepare("UPDATE agents SET status = 'deleted', updated_at = ? WHERE id = ?")
@@ -190,7 +191,7 @@ const IDENTITY_FILE_MAP: Record<string, string> = {
  */
 export const agentUpdateIdentityTool = makeTool(
   "agent_update_identity",
-  "Update your own identity file: memory, soul, user, or agents (AGENTS.md). Use this to keep MEMORY.md and USER.md up to date as you learn new things. Use the tasks tool for all task tracking.",
+  "Update your own identity file: memory, soul, user, or agents (AGENTS.md). Use agent_get first to read the current content before updating. Use this to keep MEMORY.md and USER.md up to date as you learn new things. Use the tasks tool for all task tracking.",
   z.object({
     file: z.enum(["soul", "memory", "user", "agents"]).describe("Which identity file to update"),
     content: z.string().describe("Full new content for the file (replaces entire file)"),
@@ -216,7 +217,7 @@ const agentUpdateAgentIdentitySchema = z.object({
  */
 export const agentUpdateAgentIdentityTool = makeTool(
   "agent_update_agent_identity",
-  "Update an agent's identity file (soul, memory, user, or agents). Maia only. Use to maintain another agent's SOUL.md, MEMORY.md, USER.md, or AGENTS.md.",
+  "Update an agent's identity file (soul, memory, user, or agents). Use agent_list first to find the agent ID. Maia only. Use to maintain another agent's SOUL.md, MEMORY.md, USER.md, or AGENTS.md.",
   agentUpdateAgentIdentitySchema,
   async ({ agentId, file, content }, ctx) => {
     const row = ctx.db
@@ -238,6 +239,7 @@ function rowToAgent(r: Record<string, unknown>): AgentDefinition {
     id: r.id as string,
     name: r.name as string,
     model: r.model as string,
+    reasoningEffort: normalizeReasoningEffort(r.reasoning_effort),
     status: r.status as AgentDefinition["status"],
     systemPromptExtra: r.system_prompt_extra as string | undefined,
     createdAt: r.created_at as string,

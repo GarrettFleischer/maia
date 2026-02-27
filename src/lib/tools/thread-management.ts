@@ -53,7 +53,7 @@ export const threadListTool = makeTool(
  */
 export const threadCreateTool = makeTool(
   "thread_create",
-  "Create a new thread (session). Optionally set participants and type (user or agents).",
+  "Create a new thread (session). Use thread_list first to see existing threads. Optionally set participants and type (user or agents).",
   z.object({
     participants: z.array(z.string()).optional().describe("Participant IDs; default [\"user\", \"maia\"]"),
     type: z.enum(["user", "agents"]).optional().describe("Session type; default user"),
@@ -75,7 +75,7 @@ export const threadCreateTool = makeTool(
  */
 export const threadUpdateTool = makeTool(
   "thread_update",
-  "Update a thread's metadata: name, description, or tags.",
+  "Update a thread's metadata: name, description, or tags. Use thread_list first to find the session ID.",
   z.object({
     sessionId: z.string().describe("ID of the session to update"),
     name: z.string().optional().describe("New display name"),
@@ -98,7 +98,7 @@ export const threadUpdateTool = makeTool(
  */
 export const threadDeleteTool = makeTool(
   "thread_delete",
-  "Delete a thread (session) and all its messages. Clears active session if it was active.",
+  "Delete a thread (session) and all its messages. Use thread_list first to find the session ID. Clears active session if it was active.",
   z.object({
     sessionId: z.string().describe("ID of the session to delete"),
   }),
@@ -122,7 +122,7 @@ export const threadGetActiveTool = makeTool(
  */
 export const threadSetActiveTool = makeTool(
   "thread_set_active",
-  "Set the currently active thread (session) by ID.",
+  "Set the currently active thread (session) by ID. Use thread_list first to find the session ID.",
   z.object({
     sessionId: z.string().describe("ID of the session to make active"),
   }),
