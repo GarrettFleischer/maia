@@ -2,8 +2,8 @@
  * @fileoverview Wall-clock scheduling: delay until next boundary for interval-based jobs.
  * @module lib/schedule-boundary
  *
- * Used so cron-style jobs (heartbeat, knowledge index) fire on system time (e.g. 3:30, 4:00)
- * rather than "every N minutes since process start".
+ * Used so cron-style jobs fire on system time (e.g. 3:30, 4:00) rather than
+ * "every N minutes since process start".
  */
 
 const HOUR_MS = 60 * 60 * 1000;

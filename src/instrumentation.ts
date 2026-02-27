@@ -54,14 +54,6 @@ export async function register() {
 
     initMaiaAgent(_appCtx);
 
-    const { startKnowledgeScheduler } = await import("./lib/knowledge/scheduler");
-    const { createEmbeddingAdapter } = await import("./lib/knowledge/embedding");
-    const { getSettings } = await import("./lib/settings");
-    startKnowledgeScheduler(_appCtx, () => {
-      const settings = getSettings(_appCtx!);
-      return createEmbeddingAdapter(settings, _appCtx!.http);
-    });
-
     const { runAgent } = await import("./lib/agent/runner");
     const { createProvider } = await import("./lib/ai/factory");
     const { initMessagingService } = await import("./lib/messaging-service");
