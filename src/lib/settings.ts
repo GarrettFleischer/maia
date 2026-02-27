@@ -1,6 +1,6 @@
 import { credentialCreate, credentialList } from "./security/credential-vault";
 import type { AppContext } from "./context";
-import type { Settings, SettingsPublic } from "./types";
+import type { ReasoningEffort, Settings, SettingsPublic } from "./types";
 import { BUILTIN_HEARTBEAT_JOB_ID, minutesToCronExpression } from "./cron/expression";
 
 /** Vault key used for Brave Search API key (encrypted). */
@@ -8,6 +8,14 @@ export const BRAVE_SEARCH_CREDENTIAL_KEY = "BRAVE_SEARCH_API_KEY";
 
 /** Vault key used for Brave Answers API key (encrypted; separate product/billing). */
 export const BRAVE_ANSWERS_CREDENTIAL_KEY = "BRAVE_ANSWERS_API_KEY";
+
+const CONTEXT_EFFORT_VALUES: ReasoningEffort[] = ["off", "low", "medium", "high"];
+function normalizeContextReasoningEffort(value: unknown): ReasoningEffort {
+  if (typeof value === "string" && CONTEXT_EFFORT_VALUES.includes(value as ReasoningEffort)) {
+    return value as ReasoningEffort;
+  }
+  return "medium";
+}
 
 export function getSettings(ctx: AppContext): Settings {
   const rows = ctx.db.prepare("SELECT key, value FROM settings").all() as {
@@ -33,6 +41,7 @@ export function getSettings(ctx: AppContext): Settings {
     contextQueryModel: map.contextQueryModel ?? "",
     contextSummaryModel: map.contextSummaryModel ?? "",
     contextRecentTurns: Math.max(1, parseInt(map.contextRecentTurns ?? "3", 10) || 3),
+    contextReasoningEffort: normalizeContextReasoningEffort(map.contextReasoningEffort),
   };
 }
 
@@ -56,6 +65,7 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
     contextQueryModel: s.contextQueryModel,
     contextSummaryModel: s.contextSummaryModel,
     contextRecentTurns: s.contextRecentTurns,
+    contextReasoningEffort: s.contextReasoningEffort,
   };
 }
 
@@ -115,6 +125,12 @@ export function updateSettings(
   }
   if (partial.contextRecentTurns !== undefined) {
     update.run("contextRecentTurns", String(Math.max(1, Math.floor(partial.contextRecentTurns))));
+  }
+  if (partial.contextReasoningEffort !== undefined) {
+    const value = CONTEXT_EFFORT_VALUES.includes(partial.contextReasoningEffort)
+      ? partial.contextReasoningEffort
+      : "medium";
+    update.run("contextReasoningEffort", value);
   }
   if (partial.braveSearchApiKey !== undefined) {
     credentialCreate(ctx, BRAVE_SEARCH_CREDENTIAL_KEY, partial.braveSearchApiKey);

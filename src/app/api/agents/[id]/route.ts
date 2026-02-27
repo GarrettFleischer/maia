@@ -28,7 +28,7 @@ export async function PATCH(
   const { id } = await params;
   const data = getAgentIdentity(ctx, id);
   if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  let body: { model?: string; name?: string };
+  let body: { model?: string; name?: string; reasoningEffort?: "off" | "low" | "medium" | "high" };
   try {
     body = await req.json();
   } catch {
@@ -43,7 +43,11 @@ export async function PATCH(
       );
     }
   }
-  const updated = updateAgent(ctx, id, { model: body.model, name: body.name });
+  const updated = updateAgent(ctx, id, {
+    model: body.model,
+    name: body.name,
+    reasoningEffort: body.reasoningEffort,
+  });
   if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const updatedData = getAgentIdentity(ctx, id);
   const { soul, memory, user, agentsMd, ...agent } = updatedData!;

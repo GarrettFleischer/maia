@@ -8,7 +8,7 @@
  */
 
 import { use, useEffect, useRef, useState } from "react";
-import type { SettingsPublic, AgentDefinition } from "@/lib/types";
+import type { SettingsPublic, AgentDefinition, ReasoningEffort, ModelCapabilities } from "@/lib/types";
 import AppHeader from "@/app/components/AppHeader";
 
 /** Pre-resolved promise for tests when Next.js does not pass params/searchParams; avoids conditional use() call. */
@@ -38,12 +38,14 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [contextQueryModel, setContextQueryModel] = useState("");
   const [contextSummaryModel, setContextSummaryModel] = useState("");
   const [contextRecentTurns, setContextRecentTurns] = useState(3);
+  const [contextReasoningEffort, setContextReasoningEffort] = useState<ReasoningEffort>("medium");
   const [embeddingModel, setEmbeddingModel] = useState("");
   const [embedMaxContentLength, setEmbedMaxContentLength] = useState(4000);
   const [whitelistedModels, setWhitelistedModels] = useState<string[]>([]);
   const [newModelInput, setNewModelInput] = useState("");
   const [editingModel, setEditingModel] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [modelCapabilities, setModelCapabilities] = useState<Record<string, ModelCapabilities>>({});
   /** Snapshot of agent models when last loaded or saved; used to PATCH only changed agents on Save. */
   const initialAgentsRef = useRef<AgentDefinition[]>([]);
 
@@ -51,7 +53,11 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     Promise.all([
       fetch("/api/settings").then((r) => r.json()) as Promise<SettingsPublic>,
       fetch("/api/agents").then((r) => r.json()).then((d: { agents: AgentDefinition[] }) => d.agents ?? []),
-    ]).then(([settingsData, agentsList]) => {
+      fetch("/api/model-capabilities")
+        .then((r) => r.json())
+        .then((d: { modelCapabilities: Record<string, ModelCapabilities> }) => d.modelCapabilities)
+        .catch(() => ({} as Record<string, ModelCapabilities>)),
+    ]).then(([settingsData, agentsList, capabilities]) => {
       setSettings(settingsData);
       setOllamaUrl(settingsData.ollamaBaseUrl);
       setVllmBaseUrl(settingsData.vllmBaseUrl);
@@ -60,10 +66,12 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       setContextQueryModel(settingsData.contextQueryModel);
       setContextSummaryModel(settingsData.contextSummaryModel);
       setContextRecentTurns(settingsData.contextRecentTurns);
+      setContextReasoningEffort(settingsData.contextReasoningEffort);
       setEmbeddingModel(settingsData.embeddingModel);
       setEmbedMaxContentLength(settingsData.embedMaxContentLength);
       setWhitelistedModels(settingsData.whitelistedModels);
       setAgents(agentsList);
+      setModelCapabilities(capabilities);
       initialAgentsRef.current = agentsList;
     });
   }, []);
@@ -78,6 +86,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       contextQueryModel,
       contextSummaryModel,
       contextRecentTurns,
+      contextReasoningEffort,
       embeddingModel,
       embedMaxContentLength,
       whitelistedModels,
@@ -98,11 +107,16 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     const initial = initialAgentsRef.current;
     for (const agent of agents) {
       const orig = initial.find((a) => a.id === agent.id);
-      if (orig && orig.model !== agent.model) {
+      const modelChanged = orig && orig.model !== agent.model;
+      const reasoningChanged = orig && orig.reasoningEffort !== agent.reasoningEffort;
+      if (modelChanged || reasoningChanged) {
         await fetch(`/api/agents/${agent.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: agent.model }),
+          body: JSON.stringify({
+            model: agent.model,
+            reasoningEffort: agent.reasoningEffort,
+          }),
         });
       }
     }
@@ -159,6 +173,16 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const setAgentModel = (agentId: string, model: string) => {
     setAgents((prev) =>
       prev.map((a) => (a.id === agentId ? { ...a, model } : a))
+    );
+  };
+
+  /** Updates local agent reasoning effort only; persisted when user clicks Save. */
+  const setAgentReasoningEffort = (
+    agentId: string,
+    reasoningEffort: AgentDefinition["reasoningEffort"],
+  ) => {
+    setAgents((prev) =>
+      prev.map((a) => (a.id === agentId ? { ...a, reasoningEffort } : a))
     );
   };
 
@@ -274,6 +298,10 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
             <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
               <h2 className="font-medium text-sm text-zinc-300">Agent System</h2>
 
+              <p className="text-xs text-zinc-500">
+                Smart context: extract search queries → retrieve from history &amp; knowledge → filter relevant sources → extract verbatim quotes. Results appear as focused context in the system prompt and as a <code className="bg-zinc-800 px-1 rounded">smart_context</code> tool call in the conversation.
+              </p>
+
               <div>
                 <label htmlFor="settings-context-query-model" className="block text-xs text-zinc-500 mb-1">Smart context: query model</label>
                 <select
@@ -288,28 +316,28 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
-                <p className="text-xs text-zinc-500 mt-0.5">Cheap model that generates JSON search queries from user messages. Leave blank to disable smart context.</p>
+                <p className="text-xs text-zinc-500 mt-0.5">Model that generates JSON search queries from user messages (first step). Leave blank to disable smart context.</p>
               </div>
 
               <div>
-                <label htmlFor="settings-context-summary-model" className="block text-xs text-zinc-500 mb-1">Smart context: summary model</label>
+                <label htmlFor="settings-context-summary-model" className="block text-xs text-zinc-500 mb-1">Smart context: quote extraction model</label>
                 <select
                   id="settings-context-summary-model"
                   value={contextSummaryModel}
                   onChange={(e) => setContextSummaryModel(e.target.value)}
                   className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                  aria-label="Smart context summary model"
+                  aria-label="Smart context quote extraction model"
                 >
                   <option value="">Same as query model</option>
                   {whitelistedModels.map((m) => (
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
-                <p className="text-xs text-zinc-500 mt-0.5">Model that summarizes retrieved context with citations. Defaults to query model when blank.</p>
+                <p className="text-xs text-zinc-500 mt-0.5">Model used for relevance filtering and for extracting verbatim quotes from retrieved sources (per source/chunk). Defaults to query model when blank.</p>
               </div>
 
               <div>
-                <label htmlFor="settings-context-recent-turns" className="block text-xs text-zinc-500 mb-1">Recent thread turns in context</label>
+                <label htmlFor="settings-context-recent-turns" className="block text-xs text-zinc-500 mb-1">Recent thread rounds in context</label>
                 <input
                   id="settings-context-recent-turns"
                   type="number"
@@ -318,9 +346,29 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                   value={contextRecentTurns}
                   onChange={(e) => setContextRecentTurns(Number(e.target.value))}
                   className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                  aria-label="Number of recent thread turns to include verbatim in context"
+                  aria-label="Number of recent user rounds to include verbatim in context"
                 />
-                <p className="text-xs text-zinc-500 mt-0.5">How many recent user/agent turns (including tool calls) to include verbatim. Applied even when smart context is disabled.</p>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  How many recent user rounds to include verbatim. Each round is one user message plus all assistant/tool
+                  messages until the next user message. Applied even when smart context is disabled.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="settings-context-reasoning-effort" className="block text-xs text-zinc-500 mb-1">Smart context reasoning effort</label>
+                <select
+                  id="settings-context-reasoning-effort"
+                  value={contextReasoningEffort}
+                  onChange={(e) => setContextReasoningEffort(e.target.value as ReasoningEffort)}
+                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                  aria-label="Smart context reasoning effort"
+                >
+                  <option value="off">Off</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+                <p className="text-xs text-zinc-500 mt-0.5">Reasoning effort for the query, relevance filter, and quote extraction models (Ollama think / OpenRouter reasoning).</p>
               </div>
 
               <div>
@@ -444,14 +492,20 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
             {agents.length > 0 && (
               <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
                 <h2 className="font-medium text-sm text-zinc-300">Model assignment</h2>
+                <p className="text-xs text-zinc-500 -mt-2">
+                  Reasoning effort is applied via the correct API for each model (Ollama think / OpenRouter reasoning.effort).
+                </p>
                 {agents.map((agent) => {
                   const label = agent.id === "maia" ? "Maia (orchestrator)" : agent.name;
                   const modelOptions =
                     whitelistedModels.length > 0
                       ? (whitelistedModels.includes(agent.model) ? whitelistedModels : [agent.model, ...whitelistedModels])
                       : [agent.model];
+                  const effortOptions = ["off", "low", "medium", "high"] as const;
+                  const capabilities = modelCapabilities[agent.model];
+                  const reasoningDisabled = capabilities && capabilities.supportsReasoning === false;
                   return (
-                    <div key={agent.id} className="flex items-center gap-3">
+                    <div key={agent.id} className="flex items-center gap-3 flex-wrap">
                       <label htmlFor={`agent-model-${agent.id}`} className="text-sm text-zinc-300 w-40 shrink-0">
                         {label}
                       </label>
@@ -460,12 +514,28 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                         value={agent.model}
                         onChange={(e) => setAgentModel(agent.id, e.target.value)}
                         disabled={saving}
-                        className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                        className="flex-1 min-w-0 bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
                         aria-label={`Model for ${label}`}
                         role="combobox"
                       >
                         {modelOptions.map((m) => (
                           <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                      <select
+                        id={`agent-reasoning-${agent.id}`}
+                        value={agent.reasoningEffort}
+                        onChange={(e) =>
+                          setAgentReasoningEffort(agent.id, e.target.value as AgentDefinition["reasoningEffort"])
+                        }
+                        disabled={saving || reasoningDisabled}
+                        className="w-28 shrink-0 bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                        aria-label={`Reasoning effort for ${label}`}
+                      >
+                        {effortOptions.map((eff) => (
+                          <option key={eff} value={eff}>
+                            {eff === "off" ? "Off" : eff.charAt(0).toUpperCase() + eff.slice(1)}
+                          </option>
                         ))}
                       </select>
                     </div>

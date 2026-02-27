@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach } from "bun:test";
 import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
 import SettingsPage from "@/app/settings/page";
 import { installFetchMock, restoreFetch, jsonResponse } from "@/__tests__/helpers/fetch-mock";
-import { settingsPublic, agentsList } from "@/__tests__/helpers/fixtures";
+import { settingsPublic, agentsList, modelCapabilitiesFixture } from "@/__tests__/helpers/fixtures";
 
 /** Resolved promises so client pages don't suspend in tests (Next.js 15 passes these at runtime). */
 const TEST_PARAMS = Promise.resolve({} as Record<string, string | undefined>);
@@ -36,6 +36,8 @@ describe("Settings page", () => {
       },
       { url: "/api/agents", handler: () => new Promise(() => {}), // never resolves
       },
+      { url: "/api/model-capabilities", handler: () => new Promise(() => {}), // never resolves
+      },
     ]);
     await renderSettingsPage();
     expect(screen.getByText("Loading...")).toBeInTheDocument();
@@ -45,6 +47,7 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -58,6 +61,7 @@ describe("Settings page", () => {
     expect(dockerUrlInput).toBeInTheDocument();
     expect(dockerUrlInput).toHaveValue(settingsPublic.dockerBaseUrl);
     expect(screen.getByLabelText("Smart context query model")).toBeInTheDocument();
+    expect(screen.getByLabelText("Smart context reasoning effort")).toBeInTheDocument();
     expect(screen.getByDisplayValue(String(settingsPublic.heartbeatIntervalMinutes))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save Settings/i })).toBeInTheDocument();
   });
@@ -66,6 +70,7 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -93,6 +98,7 @@ describe("Settings page", () => {
         },
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -108,12 +114,14 @@ describe("Settings page", () => {
     expect(putBody.embeddingModel).toBe(settingsPublic.embeddingModel);
     expect(putBody.vllmBaseUrl).toBe(settingsPublic.vllmBaseUrl);
     expect(putBody.dockerBaseUrl).toBe(settingsPublic.dockerBaseUrl);
+    expect(putBody.contextReasoningEffort).toBe(settingsPublic.contextReasoningEffort);
   });
 
   it("allows editing a whitelisted model in place", async () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -151,6 +159,7 @@ describe("Settings page", () => {
         },
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -174,10 +183,11 @@ describe("Settings page", () => {
     expect(list).not.toContain(settingsPublic.whitelistedModels[0]);
   });
 
-  it("shows model assignment section and Maia model dropdown when agents loaded", async () => {
+  it("shows model assignment section with model and reasoning effort dropdowns when agents loaded", async () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -185,14 +195,16 @@ describe("Settings page", () => {
     });
     const maiaRow = screen.getByText("Maia (orchestrator)").closest("div");
     expect(maiaRow).toBeInTheDocument();
+    expect(screen.getByLabelText(/Reasoning effort for Maia/i)).toBeInTheDocument();
     const selects = screen.getAllByRole("combobox");
-    expect(selects.length).toBeGreaterThanOrEqual(1);
+    expect(selects.length).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps model assignment selection when whitelist is edited", async () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -243,6 +255,7 @@ describe("Settings page", () => {
         },
       },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -263,7 +276,36 @@ describe("Settings page", () => {
     expect(putCalled).toBe(true);
     expect(patchUrl).toContain("api/agents/maia");
     expect((patchBody as { model?: string }).model).toBe("ollama/qwen2.5-coder");
+    expect((patchBody as { reasoningEffort?: string }).reasoningEffort).toBe(agentsList.agents[0].reasoningEffort);
     expect(callOrder.indexOf("PUT")).toBe(0);
     expect(callOrder.indexOf("PATCH-maia")).toBeGreaterThan(0);
+  });
+
+  it("disables reasoning effort dropdown when model does not support reasoning", async () => {
+    const overriddenCapabilities = {
+      modelCapabilities: {
+        ...modelCapabilitiesFixture.modelCapabilities,
+        "ollama/qwen2.5-coder": {
+          provider: "ollama",
+          supportsReasoning: false,
+        },
+      },
+    };
+
+    installFetchMock([
+      { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
+      { url: "/api/agents", handler: () => jsonResponse(agentsList) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(overriddenCapabilities) },
+    ]);
+
+    await renderSettingsPage();
+    await waitFor(() => {
+      expect(screen.getByText(/Model assignment|Agents & models/i)).toBeInTheDocument();
+    });
+
+    const helperRow = screen.getByText("Helper").closest("div");
+    expect(helperRow).toBeInTheDocument();
+    const helperReasoningSelect = within(helperRow!).getByLabelText(/Reasoning effort for Helper/i) as HTMLSelectElement;
+    expect(helperReasoningSelect.disabled).toBe(true);
   });
 });

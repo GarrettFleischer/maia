@@ -23,6 +23,11 @@ export interface AIResponse {
   stopped: boolean;
 }
 
+/** Optional parameters for AIProvider.complete (e.g. AbortSignal for cancellation). */
+export interface CompleteOptions {
+  signal?: AbortSignal;
+}
+
 export interface StreamChunk {
   type: "token" | "tool_call" | "done";
   content?: string;
@@ -33,6 +38,7 @@ export interface AIProvider {
   complete(
     messages: Message[],
     tools: ToolDefinition[],
-    onToken: (token: string) => void
+    onToken: (token: string) => void,
+    options?: CompleteOptions,
   ): Promise<AIResponse>;
 }

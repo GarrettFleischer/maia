@@ -67,6 +67,7 @@ describe("OllamaProvider", () => {
       model: "llama3.2",
       messages: [{ role: "user", content: "Hello" }],
       stream: true,
+      think: true,
     });
   });
 
@@ -244,5 +245,68 @@ describe("OllamaProvider", () => {
     await provider.complete([{ role: "user", content: "Hello" }], [], () => {});
 
     expect(capturedHeaders["Authorization"]).toBeUndefined();
+  });
+
+  it("includes think: true for non-gpt-oss models when thinking level is set", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    http.on(/\/api\/chat/, async (_url, init) => {
+      capturedBody = init?.body ? JSON.parse(init.body as string) as Record<string, unknown> : {};
+      return streamResponse(200, [
+        JSON.stringify({ message: { content: "" }, done: true }),
+      ]);
+    });
+
+    const provider = new OllamaProvider(
+      "ollama/llama3.2",
+      "http://localhost:11434",
+      ctx.http,
+      undefined,
+      "medium"
+    );
+    await provider.complete([{ role: "user", content: "Hi" }], [], () => {});
+
+    expect(capturedBody.think).toBe(true);
+  });
+
+  it("includes string think level for gpt-oss model", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    http.on(/\/api\/chat/, async (_url, init) => {
+      capturedBody = init?.body ? JSON.parse(init.body as string) as Record<string, unknown> : {};
+      return streamResponse(200, [
+        JSON.stringify({ message: { content: "" }, done: true }),
+      ]);
+    });
+
+    const provider = new OllamaProvider(
+      "ollama/gpt-oss",
+      "http://localhost:11434",
+      ctx.http,
+      undefined,
+      "high"
+    );
+    await provider.complete([{ role: "user", content: "Hi" }], [], () => {});
+
+    expect(capturedBody.think).toBe("high");
+  });
+
+  it("sends think: false when reasoning effort is off", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    http.on(/\/api\/chat/, async (_url, init) => {
+      capturedBody = init?.body ? JSON.parse(init.body as string) as Record<string, unknown> : {};
+      return streamResponse(200, [
+        JSON.stringify({ message: { content: "" }, done: true }),
+      ]);
+    });
+
+    const provider = new OllamaProvider(
+      "ollama/llama3.2",
+      "http://localhost:11434",
+      ctx.http,
+      undefined,
+      "off"
+    );
+    await provider.complete([{ role: "user", content: "Hi" }], [], () => {});
+
+    expect(capturedBody.think).toBe(false);
   });
 });

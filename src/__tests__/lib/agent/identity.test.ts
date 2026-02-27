@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import { getAgentIdentity, listAgents, setAgentStatus } from "@/lib/agent/identity";
+import { getAgentIdentity, listAgents, setAgentStatus, updateAgent } from "@/lib/agent/identity";
 import { getAgentsDir } from "@/lib/data-dir";
 import { makeTestContext } from "../../helpers/fakes";
 import { FakeFs } from "../../helpers/fakes";
@@ -68,9 +68,26 @@ describe("getAgentIdentity", () => {
     seedAgent(ctx, "agent-3");
     const result = getAgentIdentity(ctx, "agent-3");
     expect(result!.model).toBe("ollama/llama3.2");
+    expect(result!.reasoningEffort).toBe("medium");
     expect(result!.status).toBe("active");
     expect(result!.createdAt).toBeDefined();
     expect(result!.updatedAt).toBeDefined();
+  });
+});
+
+describe("updateAgent", () => {
+  let ctx: AppContext;
+
+  beforeEach(() => {
+    ctx = makeTestContext();
+  });
+
+  it("updates reasoningEffort", () => {
+    seedAgent(ctx, "agent-1");
+    const updated = updateAgent(ctx, "agent-1", { reasoningEffort: "medium" });
+    expect(updated).toBe(true);
+    const result = getAgentIdentity(ctx, "agent-1");
+    expect(result!.reasoningEffort).toBe("medium");
   });
 });
 

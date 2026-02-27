@@ -16,6 +16,7 @@ describe("settings", () => {
       const s = getSettings(ctx);
       expect(s.heartbeatIntervalMinutes).toBe(30);
       expect(s.ollamaBaseUrl).toBe("http://localhost:11434");
+      expect(s.contextReasoningEffort).toBe("medium");
       expect(s.vllmBaseUrl).toBe("http://localhost:8000/v1");
       expect(s.dockerBaseUrl).toBe("http://localhost:8000/v1");
       expect(s.whitelistedModels).toContain("ollama/llama3.2");
@@ -103,6 +104,11 @@ describe("settings", () => {
       const pub = getSettingsPublic(ctx);
       expect(pub.dockerBaseUrl).toBe("http://localhost:8000/v1");
     });
+
+    it("includes contextReasoningEffort in public settings", () => {
+      const pub = getSettingsPublic(ctx);
+      expect(pub.contextReasoningEffort).toBe("medium");
+    });
   });
 
   describe("updateSettings", () => {
@@ -176,6 +182,12 @@ describe("settings", () => {
       expect(getSettings(ctx).embedMaxContentLength).toBe(500);
       updateSettings(ctx, { embedMaxContentLength: 50000 });
       expect(getSettings(ctx).embedMaxContentLength).toBe(32000);
+    });
+
+    it("updates contextReasoningEffort", () => {
+      updateSettings(ctx, { contextReasoningEffort: "high" });
+      expect(getSettings(ctx).contextReasoningEffort).toBe("high");
+      expect(getSettingsPublic(ctx).contextReasoningEffort).toBe("high");
     });
   });
 });

@@ -36,10 +36,30 @@ export interface SessionMeta {
   updatedAt: string;
 }
 
+/** Reasoning effort applied when using this agent's model (Ollama think / OpenRouter reasoning.effort). */
+export type ReasoningEffort = "off" | "low" | "medium" | "high";
+
+/** Provider identifier for AI models used in Maia. */
+export type ModelProviderId = "ollama" | "openrouter" | "vllm" | "docker";
+
+/** Capabilities for a single model (used by /api/model-capabilities and settings UI). */
+export interface ModelCapabilities {
+  /** Provider inferred from the model id prefix (e.g. ollama/, openrouter/). */
+  provider: ModelProviderId;
+  /**
+   * Whether the model supports structured reasoning / "thinking" parameters.
+   * When false, reasoning effort dropdowns should be disabled and providers
+   * should avoid sending think/reasoning parameters.
+   */
+  supportsReasoning: boolean;
+}
+
 export interface AgentDefinition {
   id: string;
   name: string;
   model: string;
+  /** Reasoning effort for this agent; applied via the correct API for the model's provider. */
+  reasoningEffort: ReasoningEffort;
   status: "active" | "paused" | "deleted";
   systemPromptExtra?: string;
   createdAt: string;
@@ -57,6 +77,7 @@ export interface AgentWithIdentity extends AgentDefinition {
 export interface AgentCreateConfig {
   name: string;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   soul?: string;
   memory?: string;
   user?: string;
@@ -123,17 +144,24 @@ export interface Settings {
   /** Max characters to send to the embedding model per chunk (avoids context-length 400). Default 4000. */
   embedMaxContentLength: number;
   /**
-   * Model used to extract JSON search-query arrays for smart context (e.g. ollama/llama3.2).
+   * Model used to extract JSON search-query arrays from user messages (first step of smart context).
    * When empty, smart context is disabled and only recent thread turns are used.
    */
   contextQueryModel: string;
   /**
-   * Model used to summarize raw retrieved context with citations (e.g. ollama/llama3.2).
+   * Model used for relevance filtering and verbatim quote extraction from retrieved sources.
+   * Filters which retrieved sources are relevant, then extracts focused quotes per source (with cleanup).
    * When empty, falls back to contextQueryModel; if both are empty smart context is disabled.
    */
   contextSummaryModel: string;
-  /** Number of most recent thread turns (user+agent/tool) to include verbatim in context. Default 3, min 1. */
+  /**
+   * Number of most recent user rounds to include verbatim in context.
+   * A round is one user message plus all assistant/tool entries until the next user message.
+   * Default 3, min 1.
+   */
   contextRecentTurns: number;
+  /** Reasoning effort for smart context (query, relevance filter, and quote extraction models). Same API as per-agent effort. */
+  contextReasoningEffort: ReasoningEffort;
 }
 
 export interface SettingsPublic {
@@ -152,8 +180,14 @@ export interface SettingsPublic {
   contextQueryModel: string;
   /** @see Settings.contextSummaryModel */
   contextSummaryModel: string;
-  /** @see Settings.contextRecentTurns */
+  /**
+   * Number of most recent user rounds to include verbatim in context.
+   * A round is one user message plus all assistant/tool entries until the next user message.
+   * @see Settings.contextRecentTurns
+   */
   contextRecentTurns: number;
+  /** @see Settings.contextReasoningEffort */
+  contextReasoningEffort: ReasoningEffort;
 }
 
 export interface EncryptedValue {

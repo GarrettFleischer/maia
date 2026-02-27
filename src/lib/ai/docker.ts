@@ -38,7 +38,8 @@ export class DockerProvider implements AIProvider {
   async complete(
     messages: Message[],
     tools: ToolDefinition[],
-    onToken: (token: string) => void
+    onToken: (token: string) => void,
+    options?: import("./types").CompleteOptions,
   ): Promise<AIResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -64,6 +65,7 @@ export class DockerProvider implements AIProvider {
     const url = `${this.baseUrl}/chat/completions`;
     const resp = await this.http.fetch(url, {
       method: "POST",
+      signal: options?.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });

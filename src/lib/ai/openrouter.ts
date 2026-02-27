@@ -1,22 +1,31 @@
 import type { AIProvider, AIResponse, Message, ToolCall, ToolDefinition } from "./types";
 import type { HttpClient } from "../context";
+import type { ReasoningEffort } from "../types";
 
 export class OpenRouterProvider implements AIProvider {
   private model: string;
   private apiKey: string;
   private http: HttpClient;
+  private reasoningEffort: ReasoningEffort;
 
-  constructor(model: string, apiKey: string, http: HttpClient) {
+  constructor(
+    model: string,
+    apiKey: string,
+    http: HttpClient,
+    reasoningEffort: ReasoningEffort = "medium",
+  ) {
     // strip "openrouter/" prefix
     this.model = model.replace(/^openrouter\//, "");
     this.apiKey = apiKey;
     this.http = http;
+    this.reasoningEffort = reasoningEffort;
   }
 
   async complete(
     messages: Message[],
     tools: ToolDefinition[],
-    onToken: (token: string) => void
+    onToken: (token: string) => void,
+    options?: import("./types").CompleteOptions,
   ): Promise<AIResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -26,6 +35,10 @@ export class OpenRouterProvider implements AIProvider {
       })),
       stream: true,
     };
+
+    if (this.reasoningEffort !== "off") {
+      body.reasoning = { effort: this.reasoningEffort };
+    }
 
     if (tools.length > 0) {
       body.tools = tools.map((t) => ({
@@ -41,6 +54,7 @@ export class OpenRouterProvider implements AIProvider {
 
     const resp = await this.http.fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
+      signal: options?.signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`,

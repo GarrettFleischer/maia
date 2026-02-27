@@ -83,6 +83,18 @@ export const settingsPublic: SettingsPublic = {
   contextQueryModel: "",
   contextSummaryModel: "",
   contextRecentTurns: 3,
+  contextReasoningEffort: "medium",
+};
+
+/** GET /api/model-capabilities — capabilities for whitelisted models. */
+export const modelCapabilitiesFixture: {
+  modelCapabilities: Record<string, { provider: string; supportsReasoning: boolean }>;
+} = {
+  modelCapabilities: {
+    "ollama/llama3.2": { provider: "ollama", supportsReasoning: true },
+    "ollama/qwen2.5-coder": { provider: "ollama", supportsReasoning: true },
+    "openrouter/anthropic/claude-3.5-sonnet": { provider: "openrouter", supportsReasoning: true },
+  },
 };
 
 /** GET /api/settings with OpenRouter key already configured. */
@@ -103,6 +115,7 @@ export const agentsList: { agents: AgentDefinition[] } = {
       id: "maia",
       name: "Maia",
       model: "ollama/llama3.2",
+      reasoningEffort: "medium",
       status: "active",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -111,6 +124,7 @@ export const agentsList: { agents: AgentDefinition[] } = {
       id: "agent-2",
       name: "Helper",
       model: "ollama/qwen2.5-coder",
+      reasoningEffort: "medium",
       status: "active",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

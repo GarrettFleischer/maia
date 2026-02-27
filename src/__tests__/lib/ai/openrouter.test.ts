@@ -213,4 +213,29 @@ describe("OpenRouterProvider", () => {
     expect(messages).toContainEqual({ role: "assistant", content: "Previous reply" });
     expect(messages).toContainEqual({ role: "user", content: "Next" });
   });
+
+  it("includes reasoning.effort when configured", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    http.on("openrouter.ai", async (_url, init) => {
+      capturedBody = init?.body ? JSON.parse(init.body as string) as Record<string, unknown> : {};
+      return streamResponse(200, [
+        "data: " + JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+        "data: [DONE]",
+      ]);
+    });
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      "sk-secret",
+      ctx.http,
+      "medium"
+    );
+    await provider.complete(
+      [{ role: "user", content: "Hi" }],
+      [],
+      () => {}
+    );
+
+    expect(capturedBody.reasoning).toEqual({ effort: "medium" });
+  });
 });

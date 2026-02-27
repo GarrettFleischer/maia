@@ -1,34 +1,46 @@
 /**
- * @fileoverview Ollama AI provider for local Ollama or Ollama Cloud. Supports optional API key for Cloud.
+ * @fileoverview Ollama AI provider for local Ollama or Ollama Cloud. Supports optional API key for Cloud
+ * and optional reasoning effort (maps to Ollama think parameter).
  * @module lib/ai/ollama
  */
-import type { AIProvider, AIResponse, Message, ToolCall, ToolDefinition } from "./types";
+import type { AIProvider, AIResponse, CompleteOptions, Message, ToolCall, ToolDefinition } from "./types";
 import type { HttpClient } from "../context";
+import type { ReasoningEffort } from "../types";
 
 export class OllamaProvider implements AIProvider {
   private model: string;
   private baseUrl: string;
   private http: HttpClient;
   private apiKey: string | undefined;
+  private reasoningEffort: ReasoningEffort;
 
   /**
    * @param model - Model id with optional "ollama/" prefix (stripped before request).
    * @param baseUrl - Ollama server URL (e.g. http://localhost:11434 or https://ollama.com for Cloud).
    * @param http - HTTP client.
    * @param apiKey - Optional API key for Ollama Cloud; when set, sent as Authorization: Bearer.
+   * @param reasoningEffort - Reasoning effort (off/low/medium/high); applied as think param when model supports it.
    */
-  constructor(model: string, baseUrl: string, http: HttpClient, apiKey?: string) {
+  constructor(
+    model: string,
+    baseUrl: string,
+    http: HttpClient,
+    apiKey?: string,
+    reasoningEffort: ReasoningEffort = "medium",
+  ) {
     // strip "ollama/" prefix
     this.model = model.replace(/^ollama\//, "");
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.http = http;
     this.apiKey = apiKey;
+    this.reasoningEffort = reasoningEffort;
   }
 
   async complete(
     messages: Message[],
     tools: ToolDefinition[],
-    onToken: (token: string) => void
+    onToken: (token: string) => void,
+    options?: CompleteOptions,
   ): Promise<AIResponse> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -38,6 +50,17 @@ export class OllamaProvider implements AIProvider {
       })),
       stream: true,
     };
+
+    if (this.reasoningEffort === "off") {
+      body.think = false;
+    } else {
+      const isGptOss = this.model.startsWith("gpt-oss");
+      if (isGptOss) {
+        body.think = this.reasoningEffort;
+      } else {
+        body.think = true;
+      }
+    }
 
     if (tools.length > 0) {
       body.tools = tools.map((t) => ({
@@ -58,6 +81,7 @@ export class OllamaProvider implements AIProvider {
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: options?.signal,
     });
 
     if (!resp.ok) {

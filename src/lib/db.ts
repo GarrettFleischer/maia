@@ -153,6 +153,12 @@ export function initSchema(db: DbAdapter): void {
     );
   }
 
+  // Migration: add reasoning_effort to agents if missing (default medium)
+  const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+  if (!agentsInfo.some((c) => c.name === "reasoning_effort")) {
+    db.exec("ALTER TABLE agents ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'medium'");
+  }
+
   // Seed built-in heartbeat cron job (after migration so tool_name/tool_args exist on older DBs)
   db.prepare(
     `INSERT OR IGNORE INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
@@ -178,6 +184,7 @@ export function initSchema(db: DbAdapter): void {
     contextQueryModel: "",
     contextSummaryModel: "",
     contextRecentTurns: "3",
+    contextReasoningEffort: "medium",
   };
 
   const insert = db.prepare(
