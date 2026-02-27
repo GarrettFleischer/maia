@@ -132,6 +132,7 @@ export interface AppContext {
 // ─── Production adapters ──────────────────────────────────────────────────────
 
 import nodeFs from "fs";
+import { fetch as undiciFetch, Agent } from "undici";
 
 export function makeNodeFsAdapter(): FileSystemAdapter {
   return {
@@ -146,9 +147,27 @@ export function makeNodeFsAdapter(): FileSystemAdapter {
   };
 }
 
+/**
+ * Long-timeout Undici agent used for Ollama chat/embed and other HTTP calls.
+ * Uses a very large headersTimeout so slow models have ample time to respond.
+ */
+const LONG_TIMEOUT_AGENT = new Agent({
+  // Allow up to 10 minutes for response headers (in milliseconds).
+  headersTimeout: 600_000,
+  // Disable body timeout so large responses are not cut off prematurely.
+  bodyTimeout: 0,
+});
+
 export function makeNativeFetchClient(): HttpClient {
   return {
-    fetch: (url, init) => fetch(url, init) as Promise<HttpResponse>,
+    fetch: (url, init) => {
+      const opts = init ?? {};
+      const body = opts.body === null ? undefined : opts.body;
+      const undiciInit = { ...opts, body, dispatcher: LONG_TIMEOUT_AGENT } as Parameters<
+        typeof undiciFetch
+      >[1];
+      return undiciFetch(url, undiciInit) as Promise<HttpResponse>;
+    },
   };
 }
 
