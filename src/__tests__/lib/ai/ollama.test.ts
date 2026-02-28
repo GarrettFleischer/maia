@@ -131,6 +131,88 @@ describe("OllamaProvider", () => {
     expect(result.stopped).toBe(true);
   });
 
+  it("stream() yields text_delta and stop events", async () => {
+    http.on(/\/api\/chat/, async () =>
+      streamResponse(200, [
+        JSON.stringify({ message: { content: "Hi" }, done: false }),
+        JSON.stringify({ message: { content: "!" }, done: true }),
+      ])
+    );
+
+    const provider = new OllamaProvider(
+      "ollama/llama3.2",
+      "http://localhost:11434",
+      ctx.http
+    );
+    const events: Array<{ type: string; delta?: string }> = [];
+    for await (const e of provider.stream([{ role: "user", content: "x" }], [])) {
+      events.push(e.type === "text_delta" ? { type: e.type, delta: e.delta } : { type: e.type });
+    }
+    expect(events).toEqual([
+      { type: "text_delta", delta: "Hi" },
+      { type: "text_delta", delta: "!" },
+      { type: "stop" },
+    ]);
+  });
+
+  it("stream() yields thinking_delta when message.thinking is present", async () => {
+    http.on(/\/api\/chat/, async () =>
+      streamResponse(200, [
+        JSON.stringify({ message: { thinking: "Let me " }, done: false }),
+        JSON.stringify({ message: { thinking: "consider." }, done: false }),
+        JSON.stringify({ message: { content: "Done." }, done: true }),
+      ])
+    );
+
+    const provider = new OllamaProvider(
+      "ollama/llama3.2",
+      "http://localhost:11434",
+      ctx.http
+    );
+    const events: Array<{ type: string; delta?: string }> = [];
+    for await (const e of provider.stream([{ role: "user", content: "x" }], [])) {
+      if (e.type === "text_delta" || e.type === "thinking_delta") {
+        events.push({ type: e.type, delta: e.delta });
+      } else {
+        events.push({ type: e.type });
+      }
+    }
+    expect(events).toEqual([
+      { type: "thinking_delta", delta: "Let me " },
+      { type: "thinking_delta", delta: "consider." },
+      { type: "text_delta", delta: "Done." },
+      { type: "stop" },
+    ]);
+  });
+
+  it("complete() calls onThinkingToken for thinking_delta and does not add to content", async () => {
+    const tokens: string[] = [];
+    const thinking: string[] = [];
+    http.on(/\/api\/chat/, async () =>
+      streamResponse(200, [
+        JSON.stringify({ message: { thinking: "Reasoning " }, done: false }),
+        JSON.stringify({ message: { thinking: "here." }, done: false }),
+        JSON.stringify({ message: { content: "Answer." }, done: true }),
+      ])
+    );
+
+    const provider = new OllamaProvider(
+      "ollama/llama3.2",
+      "http://localhost:11434",
+      ctx.http
+    );
+    const result = await provider.complete(
+      [{ role: "user", content: "Hi" }],
+      [],
+      (t) => tokens.push(t),
+      { onThinkingToken: (d) => thinking.push(d) }
+    );
+
+    expect(thinking).toEqual(["Reasoning ", "here."]);
+    expect(tokens).toEqual(["Answer."]);
+    expect(result.content).toBe("Answer.");
+  });
+
   it("accumulates tool calls from stream", async () => {
     http.on(/\/api\/chat/, async () =>
       streamResponse(200, [
@@ -308,5 +390,53 @@ describe("OllamaProvider", () => {
     await provider.complete([{ role: "user", content: "Hi" }], [], () => {});
 
     expect(capturedBody.think).toBe(false);
+  });
+
+  it("includes options from modelParams when provided", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    http.on(/\/api\/chat/, async (_url, init) => {
+      capturedBody = init?.body ? JSON.parse(init.body as string) as Record<string, unknown> : {};
+      return streamResponse(200, [
+        JSON.stringify({ message: { content: "" }, done: true }),
+      ]);
+    });
+
+    const provider = new OllamaProvider(
+      "ollama/llama3.2",
+      "http://localhost:11434",
+      ctx.http,
+      undefined,
+      "medium",
+      { temperature: 0.6, top_p: 0.95, top_k: 20 }
+    );
+    await provider.complete([{ role: "user", content: "Hi" }], [], () => {});
+
+    expect(capturedBody.options).toEqual({
+      temperature: 0.6,
+      top_p: 0.95,
+      top_k: 20,
+    });
+  });
+
+  it("merges modelParams.options into body.options", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    http.on(/\/api\/chat/, async (_url, init) => {
+      capturedBody = init?.body ? JSON.parse(init.body as string) as Record<string, unknown> : {};
+      return streamResponse(200, [
+        JSON.stringify({ message: { content: "" }, done: true }),
+      ]);
+    });
+
+    const provider = new OllamaProvider(
+      "ollama/llama3.2",
+      "http://localhost:11434",
+      ctx.http,
+      undefined,
+      "medium",
+      { temperature: 0.6, options: { num_ctx: 16384 } }
+    );
+    await provider.complete([{ role: "user", content: "Hi" }], [], () => {});
+
+    expect(capturedBody.options).toMatchObject({ temperature: 0.6, num_ctx: 16384 });
   });
 });

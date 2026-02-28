@@ -252,4 +252,31 @@ describe("OpenRouterProvider", () => {
 
     expect(capturedBody.reasoning).toEqual({ effort: "medium" });
   });
+
+  it("includes temperature and top_p from modelParams when provided", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    http.on("openrouter.ai", async (_url, init) => {
+      capturedBody = init?.body ? JSON.parse(init.body as string) as Record<string, unknown> : {};
+      return streamResponse(200, [
+        "data: " + JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+        "data: [DONE]",
+      ]);
+    });
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      "sk-secret",
+      ctx.http,
+      "medium",
+      { temperature: 0.7, top_p: 0.8 }
+    );
+    await provider.complete(
+      [{ role: "user", content: "Hi" }],
+      [],
+      () => {}
+    );
+
+    expect(capturedBody.temperature).toBe(0.7);
+    expect(capturedBody.top_p).toBe(0.8);
+  });
 });

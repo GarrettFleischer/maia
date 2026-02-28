@@ -1,18 +1,29 @@
-import type { AIProvider, AIResponse, Message, ToolCall, ToolDefinition } from "./types";
+import type {
+  AIProvider,
+  AIResponse,
+  CompleteOptions,
+  Message,
+  StreamEvent,
+  StreamOptions,
+  ToolCall,
+  ToolDefinition,
+} from "./types";
 import type { HttpClient } from "../context";
-import type { ReasoningEffort } from "../types";
+import type { ModelGenerationParams, ReasoningEffort } from "../types";
 
 export class OpenRouterProvider implements AIProvider {
   private model: string;
   private apiKey: string;
   private http: HttpClient;
   private reasoningEffort: ReasoningEffort;
+  private modelParams: ModelGenerationParams | undefined;
 
   constructor(
     model: string,
     apiKey: string,
     http: HttpClient,
     reasoningEffort: ReasoningEffort = "medium",
+    modelParams?: ModelGenerationParams,
   ) {
     // strip "openrouter/" prefix; free router needs full "openrouter/free" in API
     const stripped = model.replace(/^openrouter\//, "");
@@ -20,39 +31,15 @@ export class OpenRouterProvider implements AIProvider {
     this.apiKey = apiKey;
     this.http = http;
     this.reasoningEffort = reasoningEffort;
+    this.modelParams = modelParams;
   }
 
-  async complete(
+  async *stream(
     messages: Message[],
     tools: ToolDefinition[],
-    onToken: (token: string) => void,
-    options?: import("./types").CompleteOptions,
-  ): Promise<AIResponse> {
-    const body: Record<string, unknown> = {
-      model: this.model,
-      messages: messages.map((m) => ({
-        role: m.role === "agent" ? "assistant" : m.role,
-        content: m.content,
-      })),
-      stream: true,
-    };
-
-    if (this.reasoningEffort !== "off") {
-      body.reasoning = { effort: this.reasoningEffort };
-    }
-
-    if (tools.length > 0) {
-      body.tools = tools.map((t) => ({
-        type: "function",
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        },
-      }));
-      body.tool_choice = "auto";
-    }
-
+    options?: StreamOptions,
+  ): AsyncIterable<StreamEvent> {
+    const body = this.buildBody(messages, tools);
     const resp = await this.http.fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       signal: options?.signal,
@@ -72,10 +59,90 @@ export class OpenRouterProvider implements AIProvider {
 
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
-    let fullContent = "";
     const toolCallMap = new Map<number, { id: string; name: string; argsRaw: string }>();
-    let stopped = false;
 
+    for await (const event of this.readOpenRouterStream(reader, decoder, toolCallMap)) {
+      yield event;
+    }
+
+    for (const [, tc] of Array.from(toolCallMap.entries()).sort((a, b) => a[0] - b[0])) {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(tc.argsRaw);
+      } catch {
+        /* ignore */
+      }
+      yield { type: "tool_call", toolCall: { id: tc.id, name: tc.name, args } };
+    }
+    yield { type: "stop" };
+  }
+
+  async complete(
+    messages: Message[],
+    tools: ToolDefinition[],
+    onToken: (token: string) => void,
+    options?: CompleteOptions,
+  ): Promise<AIResponse> {
+    let content = "";
+    const toolCalls: ToolCall[] = [];
+    let stopped = false;
+    for await (const event of this.stream(messages, tools, { signal: options?.signal })) {
+      if (event.type === "text_delta") {
+        content += event.delta;
+        onToken(event.delta);
+      } else if (event.type === "thinking_delta") {
+        options?.onThinkingToken?.(event.delta);
+      } else if (event.type === "tool_call") {
+        toolCalls.push(event.toolCall);
+      } else if (event.type === "stop") {
+        stopped = true;
+      }
+    }
+    return { content, toolCalls, stopped };
+  }
+
+  private buildBody(messages: Message[], tools: ToolDefinition[]): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages: messages.map((m) => ({
+        role: m.role === "agent" ? "assistant" : m.role,
+        content: m.content,
+      })),
+      stream: true,
+    };
+    if (this.reasoningEffort !== "off") {
+      body.reasoning = { effort: this.reasoningEffort };
+    }
+    if (this.modelParams) {
+      if (this.modelParams.temperature !== undefined) body.temperature = this.modelParams.temperature;
+      if (this.modelParams.top_p !== undefined) body.top_p = this.modelParams.top_p;
+      if (this.modelParams.top_k !== undefined) body.top_k = this.modelParams.top_k;
+      if (this.modelParams.min_p !== undefined) body.min_p = this.modelParams.min_p;
+      if (this.modelParams.presence_penalty !== undefined) body.presence_penalty = this.modelParams.presence_penalty;
+      if (this.modelParams.repetition_penalty !== undefined) body.repetition_penalty = this.modelParams.repetition_penalty;
+      if (this.modelParams.options && Object.keys(this.modelParams.options).length > 0) {
+        Object.assign(body, this.modelParams.options);
+      }
+    }
+    if (tools.length > 0) {
+      body.tools = tools.map((t) => ({
+        type: "function",
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters,
+        },
+      }));
+      body.tool_choice = "auto";
+    }
+    return body;
+  }
+
+  private async *readOpenRouterStream(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    decoder: TextDecoder,
+    toolCallMap: Map<number, { id: string; name: string; argsRaw: string }>,
+  ): AsyncGenerator<StreamEvent> {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -86,7 +153,7 @@ export class OpenRouterProvider implements AIProvider {
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
         const data = line.slice(6).trim();
-        if (data === "[DONE]") { stopped = true; continue; }
+        if (data === "[DONE]") continue;
 
         let parsed: Record<string, unknown>;
         try {
@@ -101,11 +168,9 @@ export class OpenRouterProvider implements AIProvider {
         if (!delta) continue;
 
         if (typeof delta.content === "string" && delta.content) {
-          fullContent += delta.content;
-          onToken(delta.content);
+          yield { type: "text_delta", delta: delta.content };
         }
 
-        // accumulate streaming tool calls
         const toolCallDeltas = delta.tool_calls as
           | Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>
           | undefined;
@@ -123,14 +188,5 @@ export class OpenRouterProvider implements AIProvider {
         }
       }
     }
-
-    const toolCalls: ToolCall[] = [];
-    for (const [, tc] of toolCallMap) {
-      let args: Record<string, unknown> = {};
-      try { args = JSON.parse(tc.argsRaw); } catch { /* ignore */ }
-      toolCalls.push({ id: tc.id, name: tc.name, args });
-    }
-
-    return { content: fullContent, toolCalls, stopped };
   }
 }

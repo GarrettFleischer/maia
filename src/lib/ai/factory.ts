@@ -4,8 +4,6 @@ import type { ReasoningEffort } from "../types";
 import type { AIProvider } from "./types";
 import { OllamaProvider } from "./ollama";
 import { OpenRouterProvider } from "./openrouter";
-import { VllmProvider } from "./vllm";
-import { DockerProvider } from "./docker";
 
 /** Options passed when creating a provider (e.g. per-agent reasoning effort). */
 export interface CreateProviderOptions {
@@ -22,6 +20,7 @@ export function createProvider(
   }
   const settings = getSettings(ctx);
   const reasoningEffort = options?.reasoningEffort ?? "medium";
+  const modelParams = settings.modelParams?.[model];
 
   if (!settings.whitelistedModels.includes(model)) {
     throw new Error(`Model not whitelisted: ${model}`);
@@ -34,6 +33,7 @@ export function createProvider(
       ctx.http,
       settings.ollamaApiKey,
       reasoningEffort,
+      modelParams,
     );
   }
 
@@ -46,15 +46,8 @@ export function createProvider(
       settings.openRouterApiKey,
       ctx.http,
       reasoningEffort,
+      modelParams,
     );
-  }
-
-  if (model.startsWith("vllm/")) {
-    return new VllmProvider(model, settings.vllmBaseUrl, ctx.http);
-  }
-
-  if (model.startsWith("docker/")) {
-    return new DockerProvider(model, settings.dockerBaseUrl, ctx.http);
   }
 
   throw new Error(`Unknown model provider for: ${model}`);

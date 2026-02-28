@@ -16,8 +16,6 @@ const OLLAMA_THINKING_URL = "https://ollama.com/search?c=thinking";
 function inferProvider(model: string): ModelProviderId {
   if (model.startsWith("ollama/")) return "ollama";
   if (model.startsWith("openrouter/")) return "openrouter";
-  if (model.startsWith("vllm/")) return "vllm";
-  if (model.startsWith("docker/")) return "docker";
   // Default to ollama for unprefixed models; current seed data always includes prefixes.
   return "ollama";
 }

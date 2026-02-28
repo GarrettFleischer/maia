@@ -3,12 +3,10 @@
  * @module __tests__/lib/ai/factory.test
  */
 import { describe, it, expect, beforeEach } from "bun:test";
-import { makeTestContext } from "../../helpers/fakes";
+import { makeTestContext, FakeHttp } from "../../helpers/fakes";
 import { createProvider } from "@/lib/ai/factory";
 import { OllamaProvider } from "@/lib/ai/ollama";
 import { OpenRouterProvider } from "@/lib/ai/openrouter";
-import { VllmProvider } from "@/lib/ai/vllm";
-import { DockerProvider } from "@/lib/ai/docker";
 import { updateSettings } from "@/lib/settings";
 import type { AppContext } from "@/lib/context";
 
@@ -48,22 +46,6 @@ describe("createProvider", () => {
     ).toThrow("OpenRouter API key not configured");
   });
 
-  it("returns VllmProvider for vllm/ models", () => {
-    updateSettings(ctx, {
-      whitelistedModels: ["ollama/llama3.2", "vllm/Meta-Llama-3-8B-Instruct"],
-    });
-    const provider = createProvider("vllm/Meta-Llama-3-8B-Instruct", ctx);
-    expect(provider).toBeInstanceOf(VllmProvider);
-  });
-
-  it("returns DockerProvider for docker/ models", () => {
-    updateSettings(ctx, {
-      whitelistedModels: ["ollama/llama3.2", "docker/Meta-Llama-3-8B-Instruct"],
-    });
-    const provider = createProvider("docker/Meta-Llama-3-8B-Instruct", ctx);
-    expect(provider).toBeInstanceOf(DockerProvider);
-  });
-
   it("throws for unknown provider prefix when model is whitelisted", () => {
     updateSettings(ctx, {
       whitelistedModels: ["ollama/llama3.2", "custom/my-model"],
@@ -71,5 +53,35 @@ describe("createProvider", () => {
     expect(() => createProvider("custom/my-model", ctx)).toThrow(
       "Unknown model provider"
     );
+  });
+
+  it("passes modelParams to OllamaProvider when set in settings", async () => {
+    const http = new FakeHttp();
+    const testCtx = makeTestContext({ http });
+    updateSettings(testCtx, {
+      whitelistedModels: ["ollama/llama3.2"],
+      modelParams: { "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 } },
+    });
+    let capturedBody: Record<string, unknown> = {};
+    const ollamaLine = JSON.stringify({ message: { content: "" }, done: true }) + "\n";
+    http.on(/\/api\/chat/, async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(ollamaLine));
+          c.close();
+        },
+      });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        body: stream,
+        text: async () => ollamaLine,
+        json: async () => JSON.parse(ollamaLine),
+      });
+    });
+    const provider = createProvider("ollama/llama3.2", testCtx);
+    await provider.complete([{ role: "user", content: "Hi" }], [], () => {});
+    expect(capturedBody.options).toEqual({ temperature: 0.6, top_p: 0.95 });
   });
 });
