@@ -29,7 +29,10 @@ describe("createProvider", () => {
   });
 
   it("returns OpenRouterProvider for openrouter/ models when API key is set", () => {
-    updateSettings(ctx, { openRouterApiKey: "sk-test-key" });
+    updateSettings(ctx, {
+      openRouterApiKey: "sk-test-key",
+      whitelistedModels: ["ollama/llama3.2", "openrouter/anthropic/claude-3.5-haiku"],
+    });
     const provider = createProvider("openrouter/anthropic/claude-3.5-haiku", ctx);
     expect(provider).toBeInstanceOf(OpenRouterProvider);
   });
@@ -41,6 +44,7 @@ describe("createProvider", () => {
   });
 
   it("throws for openrouter/ when API key is not configured", () => {
+    updateSettings(ctx, { whitelistedModels: ["openrouter/anthropic/claude-3.5-haiku"] });
     expect(() =>
       createProvider("openrouter/anthropic/claude-3.5-haiku", ctx)
     ).toThrow("OpenRouter API key not configured");
