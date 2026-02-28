@@ -14,8 +14,9 @@ export class OpenRouterProvider implements AIProvider {
     http: HttpClient,
     reasoningEffort: ReasoningEffort = "medium",
   ) {
-    // strip "openrouter/" prefix
-    this.model = model.replace(/^openrouter\//, "");
+    // strip "openrouter/" prefix; free router needs full "openrouter/free" in API
+    const stripped = model.replace(/^openrouter\//, "");
+    this.model = stripped === "free" ? "openrouter/free" : stripped;
     this.apiKey = apiKey;
     this.http = http;
     this.reasoningEffort = reasoningEffort;
