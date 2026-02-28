@@ -76,14 +76,15 @@ export const settingsPublic: SettingsPublic = {
   hasOpenRouterKey: false,
   hasBraveKey: false,
   hasBraveAnswersKey: false,
-  vllmBaseUrl: "http://localhost:8000/v1",
-  dockerBaseUrl: "http://localhost:8000/v1",
   embeddingModel: "ollama/nomic-embed-text",
   embedMaxContentLength: 4000,
   contextQueryModel: "",
   contextSummaryModel: "",
   contextRecentTurns: 3,
   contextReasoningEffort: "medium",
+  archiveDurationValue: 0,
+  archiveDurationUnit: "days",
+  modelParams: {},
 };
 
 /** GET /api/model-capabilities — capabilities for whitelisted models. */

@@ -48,18 +48,13 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
       { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByText("Ollama Base URL")).toBeInTheDocument();
     });
     expect(screen.getByDisplayValue(settingsPublic.ollamaBaseUrl)).toBeInTheDocument();
-    const vllmUrlInput = screen.getByLabelText("vLLM Base URL");
-    expect(vllmUrlInput).toBeInTheDocument();
-    expect(vllmUrlInput).toHaveValue(settingsPublic.vllmBaseUrl);
-    const dockerUrlInput = screen.getByLabelText("Docker Base URL");
-    expect(dockerUrlInput).toBeInTheDocument();
-    expect(dockerUrlInput).toHaveValue(settingsPublic.dockerBaseUrl);
     expect(screen.getByLabelText("Smart context query model")).toBeInTheDocument();
     expect(screen.getByLabelText("Smart context reasoning effort")).toBeInTheDocument();
     expect(screen.getByDisplayValue(String(settingsPublic.heartbeatIntervalMinutes))).toBeInTheDocument();
@@ -71,6 +66,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
       { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -99,6 +95,7 @@ describe("Settings page", () => {
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
       { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -114,8 +111,6 @@ describe("Settings page", () => {
     });
     expect(putBody.whitelistedModels).toEqual(settingsPublic.whitelistedModels);
     expect(putBody.embeddingModel).toBe(settingsPublic.embeddingModel);
-    expect(putBody.vllmBaseUrl).toBe(settingsPublic.vllmBaseUrl);
-    expect(putBody.dockerBaseUrl).toBe(settingsPublic.dockerBaseUrl);
     expect(putBody.contextReasoningEffort).toBe(settingsPublic.contextReasoningEffort);
   });
 
@@ -124,6 +119,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
       { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -162,15 +158,16 @@ describe("Settings page", () => {
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
       { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
-    const addInput = screen.getByPlaceholderText(/Add model/i);
-    fireEvent.change(addInput, { target: { value: "ollama/qwen2.5-coder" } });
-    fireEvent.click(screen.getByRole("button", { name: /Add/i }));
     const whitelistSectionAddRemove = screen.getByText("Whitelisted Models").closest("section");
+    const addInput = within(whitelistSectionAddRemove!).getByPlaceholderText(/Add model/i);
+    fireEvent.change(addInput, { target: { value: "ollama/qwen2.5-coder" } });
+    fireEvent.click(within(whitelistSectionAddRemove!).getByRole("button", { name: "Add" }));
     await waitFor(() => {
       expect(within(whitelistSectionAddRemove!).getByText("ollama/qwen2.5-coder")).toBeInTheDocument();
     });
@@ -190,6 +187,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
       { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -207,6 +205,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
       { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -258,6 +257,7 @@ describe("Settings page", () => {
       },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
       { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -283,6 +283,21 @@ describe("Settings page", () => {
     expect(callOrder.indexOf("PATCH-maia")).toBeGreaterThan(0);
   });
 
+  it("shows Skills section with scope selector and Add skill button", async () => {
+    installFetchMock([
+      { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
+      { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
+    ]);
+    await renderSettingsPage();
+    await waitFor(() => {
+      expect(screen.getByText("Skills")).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Skills scope")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Add skill/i })).toBeInTheDocument();
+  });
+
   it("disables reasoning effort dropdown when model does not support reasoning", async () => {
     const overriddenCapabilities = {
       modelCapabilities: {
@@ -298,6 +313,7 @@ describe("Settings page", () => {
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
       { url: "/api/model-capabilities", handler: () => jsonResponse(overriddenCapabilities) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
 
     await renderSettingsPage();

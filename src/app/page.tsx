@@ -67,11 +67,13 @@ export default function Home(props: HomePageProps = {}) {
   const [currentAgentId, setCurrentAgentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [currentToken, setCurrentToken] = useState("");
+  const [currentThinking, setCurrentThinking] = useState("");
   const [threadListRefetch, setThreadListRefetch] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   const loadingRef = useRef(false);
   const currentAgentIdRef = useRef<string | null>(null);
+  const thinkingAccumulatorRef = useRef("");
   sessionIdRef.current = sessionId;
   loadingRef.current = loading;
   currentAgentIdRef.current = currentAgentId;
@@ -164,7 +166,7 @@ export default function Home(props: HomePageProps = {}) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, currentToken]);
+  }, [messages, currentToken, currentThinking]);
 
   /** Send a message. If overrideContent is provided, uses that instead of input and does not clear input (used by re-send). */
   const sendMessage = useCallback(async (overrideContent?: string) => {
@@ -175,6 +177,8 @@ export default function Home(props: HomePageProps = {}) {
     if (!overrideContent) setInput("");
     setLoading(true);
     setCurrentToken("");
+    setCurrentThinking("");
+    thinkingAccumulatorRef.current = "";
     setMessages((prev) => [...prev, { role: "user", content: text }]);
 
     try {
@@ -197,6 +201,15 @@ export default function Home(props: HomePageProps = {}) {
       /** Only append agent message on first "done"; avoids second "done" appending with empty accumulated. */
       let doneAppended = false;
 
+      function flushThinking(): void {
+        if (thinkingAccumulatorRef.current.length > 0) {
+          const content = thinkingAccumulatorRef.current;
+          thinkingAccumulatorRef.current = "";
+          setCurrentThinking("");
+          setMessages((prev) => [...prev, { role: "thinking", content }]);
+        }
+      }
+
       function processLine(line: string): void {
         if (!line.startsWith("data: ")) return;
         const data = line.slice(6);
@@ -207,10 +220,15 @@ export default function Home(props: HomePageProps = {}) {
           return;
         }
 
-        if (event.type === "token") {
+        if (event.type === "thinking") {
+          thinkingAccumulatorRef.current += event.content;
+          setCurrentThinking(thinkingAccumulatorRef.current);
+        } else if (event.type === "token") {
+          flushThinking();
           accumulated += event.content;
           setCurrentToken(accumulated);
         } else if (event.type === "tool_call") {
+          flushThinking();
           setMessages((prev) => [...prev, { role: "tool" as const, tool: event.tool, args: event.args }]);
         } else if (event.type === "tool_result") {
           setMessages((prev) => {
@@ -221,6 +239,7 @@ export default function Home(props: HomePageProps = {}) {
             return [...prev.slice(0, idx), { ...item, result: event.result }, ...prev.slice(idx + 1)];
           });
         } else if (event.type === "done") {
+          flushThinking();
           if (event.sessionId) setSessionId(event.sessionId);
           const contentToAdd = accumulated;
           if (!doneAppended && contentToAdd.length > 0) {
@@ -233,6 +252,8 @@ export default function Home(props: HomePageProps = {}) {
         } else if (event.type === "error") {
           setMessages((prev) => [...prev, { role: "system", content: `Error: ${event.message}` }]);
           setCurrentToken("");
+          setCurrentThinking("");
+          thinkingAccumulatorRef.current = "";
           accumulated = "";
         }
       }
@@ -334,6 +355,7 @@ export default function Home(props: HomePageProps = {}) {
               <ChatMessageList
                 messages={messages}
                 currentToken={currentToken}
+                currentThinking={currentThinking}
                 loading={loading}
                 bottomRef={bottomRef}
                 onResendMessage={!isAgentOnlyThread ? handleResendMessage : undefined}

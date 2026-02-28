@@ -32,17 +32,20 @@ export interface ToolCallDisplay {
   result?: unknown;
 }
 
-/** A regular message (user, agent, system) or a standalone tool-call bubble. */
+/** A regular message (user, agent, system), a standalone tool-call bubble, or a thinking (reasoning) bubble. */
 export type ChatMessageListItem =
   | { role: "user" | "agent" | "system"; content: string; toolCalls?: ToolCallDisplay[] }
-  | { role: "tool"; tool: string; args: Record<string, unknown>; result?: unknown };
+  | { role: "tool"; tool: string; args: Record<string, unknown>; result?: unknown }
+  | { role: "thinking"; content: string };
 
 export interface ChatMessageListProps {
   /** List of messages to show. */
   messages: ChatMessageListItem[];
   /** Current streaming token text (shown in a bubble with cursor). */
   currentToken: string;
-  /** Whether a request is in progress (shows loading dots when true and no currentToken). */
+  /** Current streaming thinking text (shown in a thinking bubble with cursor). */
+  currentThinking?: string;
+  /** Whether a request is in progress (shows loading dots when true and no currentToken/currentThinking). */
   loading: boolean;
   /** Ref for the scroll anchor at the bottom. */
   bottomRef?: React.RefObject<HTMLDivElement | null>;
@@ -143,9 +146,37 @@ function ToolCallBubble({
   );
 }
 
+/** Expandable bubble for model reasoning/thinking (persisted or streaming). */
+function ThinkingBubble({
+  content,
+  streaming = false,
+}: { content: string; streaming?: boolean }) {
+  return (
+    <details
+      className="group max-w-[80%] rounded-xl rounded-bl-sm overflow-hidden bg-amber-950/40 text-amber-100/95 border border-amber-800/60"
+      open={streaming}
+    >
+      <summary className="list-none cursor-pointer px-4 py-2.5 text-sm font-mono flex items-center gap-2 hover:bg-amber-900/30 [&::-webkit-details-marker]:hidden">
+        <span className="text-amber-400/90 select-none">◆</span>
+        <span className="truncate">Thinking</span>
+        <span className="ml-auto text-amber-600 text-xs shrink-0" aria-hidden>▾</span>
+      </summary>
+      <div className="px-4 pb-3 pt-0 text-xs font-mono border-t border-amber-800/60">
+        <div className="mt-0.5 p-2 rounded bg-zinc-900/80 text-amber-200/90 overflow-x-auto whitespace-pre-wrap break-all">
+          {content}
+          {streaming && (
+            <span className="inline-block w-1.5 h-4 bg-amber-400 ml-0.5 animate-pulse" aria-hidden />
+          )}
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export default function ChatMessageList({
   messages,
   currentToken,
+  currentThinking = "",
   loading,
   bottomRef,
   onResendMessage,
@@ -193,6 +224,10 @@ export default function ChatMessageList({
             <div className="flex justify-start">
               <ToolCallBubble tool={msg.tool} args={msg.args} result={msg.result} />
             </div>
+          ) : msg.role === "thinking" ? (
+            <div className="flex justify-start">
+              <ThinkingBubble content={msg.content} />
+            </div>
           ) : (
             <>
               {msg.content ? (
@@ -212,16 +247,22 @@ export default function ChatMessageList({
         </div>
       ))}
 
-      {currentToken && (
+      {currentThinking ? (
+        <div className="flex justify-start">
+          <ThinkingBubble content={currentThinking} streaming />
+        </div>
+      ) : null}
+
+      {currentToken ? (
         <div className="flex justify-start">
           <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-3 bg-zinc-800 text-zinc-100 text-sm leading-relaxed">
             <MarkdownContent content={currentToken} />
             <span className="inline-block w-1.5 h-4 bg-violet-400 ml-0.5 animate-pulse" aria-hidden />
           </div>
         </div>
-      )}
+      ) : null}
 
-      {loading && !currentToken && (
+      {loading && !currentToken && !currentThinking ? (
         <div className="flex justify-start">
           <div className="rounded-2xl rounded-bl-sm px-4 py-3 bg-zinc-800">
             <div className="flex gap-1">
@@ -231,9 +272,9 @@ export default function ChatMessageList({
             </div>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {bottomRef && <div ref={bottomRef} />}
+      {bottomRef ? <div ref={bottomRef} /> : null}
     </>
   );
 }

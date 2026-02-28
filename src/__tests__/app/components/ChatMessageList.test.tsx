@@ -55,6 +55,30 @@ describe("ChatMessageList", () => {
     expect(strong.tagName).toBe("STRONG");
   });
 
+  it("renders persisted thinking message in a Thinking bubble", () => {
+    const messages: ChatMessageListItem[] = [
+      { role: "thinking", content: "Let me consider the options first." },
+    ];
+    render(
+      <ChatMessageList messages={messages} currentToken="" loading={false} />
+    );
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.getByText(/Let me consider the options first\./)).toBeInTheDocument();
+  });
+
+  it("renders streaming thinking in a Thinking bubble with cursor", () => {
+    render(
+      <ChatMessageList
+        messages={[]}
+        currentToken=""
+        currentThinking="Reasoning step..."
+        loading={true}
+      />
+    );
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.getByText(/Reasoning step\.\.\./)).toBeInTheDocument();
+  });
+
   it("renders terminal_exec result with readable stdout (not JSON-escaped newlines)", () => {
     const messages: ChatMessageListItem[] = [
       {
