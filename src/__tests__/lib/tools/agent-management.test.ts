@@ -85,6 +85,23 @@ describe("copyDefaultAgentFiles", () => {
     expect(snap[path.join(agentDir, "MEMORY.md")]).toBe(maiaMemory);
     expect(snap[path.join(agentDir, "USER.md")]).toBe(maiaUser);
   });
+
+  it("copies fact .md files from defaults user/ and memory/ into agent user/ and memory/", () => {
+    const fs = new FakeFs();
+    const defaultMaia = getDefaultMaiaDir();
+    fs.seed(path.join(defaultMaia, "SOUL.md"), "# Soul\nMaia.");
+    fs.seed(path.join(defaultMaia, "MEMORY.md"), "# Memory\nCreate fact files.");
+    fs.seed(path.join(defaultMaia, "USER.md"), "# User\nCreate fact files.");
+    fs.seed(path.join(defaultMaia, "AGENTS.md"), "# Agents\n");
+    fs.seed(path.join(defaultMaia, "user", "preference.md"), "User prefers TDD.");
+    fs.seed(path.join(defaultMaia, "memory", "project-fact.md"), "Project uses Bun.");
+    const ctx = makeTestContext({ fs });
+    const agentDir = path.join(getAgentsDir(), "maia");
+    copyDefaultAgentFiles(ctx, agentDir, "Maia", "maia");
+    const snap = fs.snapshot();
+    expect(snap[path.join(agentDir, "user", "preference.md")]).toBe("User prefers TDD.");
+    expect(snap[path.join(agentDir, "memory", "project-fact.md")]).toBe("Project uses Bun.");
+  });
 });
 
 describe("agentCreateTool", () => {

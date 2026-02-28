@@ -33,8 +33,8 @@ const agentCreateSchema = z.object({
 
 /** Inline fallbacks when defaults/agent file is missing (e.g. in tests). */
 const FALLBACK_SOUL = "# Soul\n\nI am {{name}}, a helpful AI agent.\n";
-const FALLBACK_MEMORY = "# Memory\n\nNo memories yet.\n";
-const FALLBACK_USER = "# User\n\nNo user information yet.\n";
+const FALLBACK_MEMORY = "# Memory\n\nCreate individual **fact.md** files in the `memory/` subfolder of this directory. When the app runs, they are copied to the agent's `memory/` folder.\n";
+const FALLBACK_USER = "# User\n\nCreate individual **fact.md** files in the `user/` subfolder of this directory. When the app runs, they are copied to the agent's `user/` folder.\n";
 const FALLBACK_AGENTS_MD = "# How you function\n\nFollow AGENTS.md from project root or defaults/agent. Copy the full system command there into this file for a complete prompt.\n";
 
 /**
@@ -118,7 +118,47 @@ function readDefaultAgentsMd(ctx: AppContext, agentId?: string): string {
 }
 
 /**
- * Copies default agent template files into an agent directory. When agentId is "maia", SOUL/MEMORY/USER and AGENTS.md come from defaults/maia when present; otherwise from defaults/agent. Use when creating a new agent or when seeding Maia on first run.
+ * Returns the default template directory for an agent: defaults/maia when agentId is "maia", else defaults/agent.
+ * @param agentId - When "maia", use defaults/maia; otherwise defaults/agent
+ * @returns Absolute path to the default directory
+ */
+function getDefaultDirForAgent(agentId?: string): string {
+  return agentId === "maia" ? getDefaultMaiaDir() : getDefaultAgentDir();
+}
+
+/**
+ * Copies all .md files from defaultDir/subdir into agentDir/subdir. No-op if the source subdir does not exist.
+ * @param ctx - App context (uses ctx.fs)
+ * @param defaultDir - Default template root (defaults/maia or defaults/agent)
+ * @param agentDir - Agent directory (data/agents/<id>)
+ * @param subdir - "user" or "memory"
+ */
+function copyDefaultFactFiles(
+  ctx: AppContext,
+  defaultDir: string,
+  agentDir: string,
+  subdir: "user" | "memory"
+): void {
+  const srcDir = path.join(defaultDir, subdir);
+  if (!ctx.fs.exists(srcDir)) return;
+  const destDir = path.join(agentDir, subdir);
+  ctx.fs.mkdirp(destDir);
+  try {
+    const names = ctx.fs.listDir(srcDir);
+    for (const name of names) {
+      if (!name.endsWith(".md")) continue;
+      const srcPath = path.join(srcDir, name);
+      const content = ctx.fs.readFile(srcPath);
+      if (typeof content !== "string") continue;
+      ctx.fs.writeFile(path.join(destDir, name), content);
+    }
+  } catch {
+    // ignore list/read errors; agent still gets empty subdir
+  }
+}
+
+/**
+ * Copies default agent template files into an agent directory. When agentId is "maia", SOUL/MEMORY/USER and AGENTS.md come from defaults/maia when present; otherwise from defaults/agent. Any .md files in the default's user/ and memory/ subfolders are copied into the agent's user/ and memory/ folders.
  * @param ctx - App context (uses ctx.fs)
  * @param agentDir - Absolute path to the agent directory (e.g. data/agents/<id>)
  * @param agentName - Used to replace {{name}} in SOUL.md (sub-agents only; Maia template typically has no placeholder)
@@ -134,11 +174,14 @@ export function copyDefaultAgentFiles(
   ctx.fs.mkdirp(path.join(agentDir, "workspace"));
   ctx.fs.mkdirp(path.join(agentDir, "memory"));
   ctx.fs.mkdirp(path.join(agentDir, "user"));
+  const defaultDir = getDefaultDirForAgent(agentId);
   const soulContent = readDefaultIdentityFile(ctx, "SOUL.md", FALLBACK_SOUL, agentId).replace(/\{\{name\}\}/g, agentName);
   ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), soulContent);
   ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), readDefaultIdentityFile(ctx, "MEMORY.md", FALLBACK_MEMORY, agentId));
   ctx.fs.writeFile(path.join(agentDir, "USER.md"), readDefaultIdentityFile(ctx, "USER.md", FALLBACK_USER, agentId));
   ctx.fs.writeFile(path.join(agentDir, "AGENTS.md"), readDefaultAgentsMd(ctx, agentId));
+  copyDefaultFactFiles(ctx, defaultDir, agentDir, "user");
+  copyDefaultFactFiles(ctx, defaultDir, agentDir, "memory");
 }
 
 export const agentCreateTool = makeTool(
