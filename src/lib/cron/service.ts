@@ -109,7 +109,7 @@ function scheduleJob(
             console.error(`Cron job ${jobId} (heartbeat) failed:`, err);
           });
         } else {
-          const message = `[CRON] Timestamp: ${timestamp}\n\nCalling tool: ${toolNameSafe} with args.`;
+          const message = "[CRON]";
           const sessionName = taskDescription.trim() || `Cron: ${jobId}`;
           const sessionId = getOrCreateSession(
             ctx,
@@ -165,13 +165,9 @@ function scheduleJob(
   }
 }
 
-/** Default message for per-agent cron runs (cron_echo). */
-const AGENT_RUN_CRON_MESSAGE =
-  "Review your GOALS and assigned tasks. Check MEMORY. Take action or report blockers.";
-
 /**
  * Syncs agent-run cron jobs with active agents: one staggered job per active agent (except Maia).
- * Removes agent-run jobs for inactive/deleted agents and adds/updates for active agents.
+ * Each job wakes the agent with cron_echo and empty message; no hardcoded prompt.
  * @param ctx - Application context
  */
 export function syncAgentRunJobs(ctx: AppContext): void {
@@ -193,7 +189,7 @@ export function syncAgentRunJobs(ctx: AppContext): void {
       i,
       agents.length,
     );
-    const toolArgs = JSON.stringify({ message: AGENT_RUN_CRON_MESSAGE });
+    const toolArgs = JSON.stringify({ msg: "" });
     ctx.db
       .prepare(
         `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)

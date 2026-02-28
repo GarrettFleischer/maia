@@ -28,7 +28,9 @@ function formatNextRun(iso: string): string {
 }
 
 /** Pre-resolved promise for Next.js 15 params. */
-const RESOLVED_EMPTY = Promise.resolve({} as Record<string, string | string[] | undefined>);
+const RESOLVED_EMPTY = Promise.resolve(
+  {} as Record<string, string | string[] | undefined>,
+);
 
 type CronPageProps = {
   params?: Promise<Record<string, string | undefined>>;
@@ -36,7 +38,10 @@ type CronPageProps = {
 };
 
 export default function CronPage(props: CronPageProps = {}) {
-  use(props.params ?? RESOLVED_EMPTY as Promise<Record<string, string | undefined>>);
+  use(
+    props.params ??
+      (RESOLVED_EMPTY as Promise<Record<string, string | undefined>>),
+  );
   use(props.searchParams ?? RESOLVED_EMPTY);
 
   const [jobs, setJobs] = useState<CronJob[]>([]);
@@ -132,7 +137,8 @@ export default function CronPage(props: CronPageProps = {}) {
       <main className="max-w-3xl mx-auto px-4 py-8">
         <h1 className="text-xl font-semibold mb-2">Cron jobs</h1>
         <p className="text-sm text-zinc-500 mb-6">
-          Scheduled tasks that run on a timer. Each job shows when it will run next.
+          Scheduled tasks that run on a timer. Each job shows when it will run
+          next.
         </p>
 
         {loading && <p className="text-zinc-500 text-sm">Loading...</p>}
@@ -143,7 +149,9 @@ export default function CronPage(props: CronPageProps = {}) {
         )}
 
         {!loading && !error && jobs.length === 0 && (
-          <p className="text-zinc-500 text-sm">No cron jobs. Jobs are created via agent tools or the system.</p>
+          <p className="text-zinc-500 text-sm">
+            No cron jobs. Jobs are created via agent tools or the system.
+          </p>
         )}
 
         {!loading && jobs.length > 0 && (
@@ -157,52 +165,88 @@ export default function CronPage(props: CronPageProps = {}) {
                   <div className="p-5 space-y-4">
                     <h3 className="font-medium text-sm">Edit job</h3>
                     <div>
-                      <label htmlFor="edit-expression" className="block text-xs text-zinc-500 mb-1">
-                        Cron expression (e.g. <code className="bg-zinc-800 px-1 rounded">*/5 * * * *</code>)
+                      <label
+                        htmlFor="edit-expression"
+                        className="block text-xs text-zinc-500 mb-1"
+                      >
+                        Cron expression (e.g.{" "}
+                        <code className="bg-zinc-800 px-1 rounded">
+                          */5 * * * *
+                        </code>
+                        )
                       </label>
                       <input
                         id="edit-expression"
                         type="text"
                         value={editForm.expression}
-                        onChange={(e) => setEditForm((f) => ({ ...f, expression: e.target.value }))}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            expression: e.target.value,
+                          }))
+                        }
                         className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
                         placeholder="*/5 * * * *"
                       />
                     </div>
                     <div>
-                      <label htmlFor="edit-desc" className="block text-xs text-zinc-500 mb-1">
+                      <label
+                        htmlFor="edit-desc"
+                        className="block text-xs text-zinc-500 mb-1"
+                      >
                         Description
                       </label>
                       <input
                         id="edit-desc"
                         type="text"
                         value={editForm.taskDescription}
-                        onChange={(e) => setEditForm((f) => ({ ...f, taskDescription: e.target.value }))}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            taskDescription: e.target.value,
+                          }))
+                        }
                         className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
                         placeholder="e.g. Daily digest"
                       />
                     </div>
                     <div>
-                      <label htmlFor="edit-tool" className="block text-xs text-zinc-500 mb-1">
+                      <label
+                        htmlFor="edit-tool"
+                        className="block text-xs text-zinc-500 mb-1"
+                      >
                         Tool name
                       </label>
                       <input
                         id="edit-tool"
                         type="text"
                         value={editForm.toolName}
-                        onChange={(e) => setEditForm((f) => ({ ...f, toolName: e.target.value }))}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            toolName: e.target.value,
+                          }))
+                        }
                         className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
                         placeholder="cron_echo"
                       />
                     </div>
                     <div>
-                      <label htmlFor="edit-args" className="block text-xs text-zinc-500 mb-1">
+                      <label
+                        htmlFor="edit-args"
+                        className="block text-xs text-zinc-500 mb-1"
+                      >
                         Tool args (JSON)
                       </label>
                       <textarea
                         id="edit-args"
                         value={editForm.toolArgsJson}
-                        onChange={(e) => setEditForm((f) => ({ ...f, toolArgsJson: e.target.value }))}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            toolArgsJson: e.target.value,
+                          }))
+                        }
                         rows={3}
                         className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
                         placeholder='{"message": "Hello"}'
@@ -237,7 +281,9 @@ export default function CronPage(props: CronPageProps = {}) {
                     <div className="px-5 pt-4 pb-2 flex items-start justify-between gap-2">
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-sm">{job.taskDescription || job.id}</span>
+                          <span className="font-medium text-sm">
+                            {job.taskDescription || job.id}
+                          </span>
                           {job.isBuiltIn && (
                             <span className="text-xs bg-zinc-700 text-zinc-400 px-2 py-0.5 rounded">
                               built-in

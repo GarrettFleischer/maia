@@ -140,30 +140,40 @@ export function initSchema(db: DbAdapter): void {
   `);
 
   // Migration: add tool_name / tool_args to cron_jobs if missing (e.g. existing DBs created before cron-tool change)
-  const tableInfo = db.prepare("PRAGMA table_info(cron_jobs)").all() as { name: string }[];
+  const tableInfo = db.prepare("PRAGMA table_info(cron_jobs)").all() as {
+    name: string;
+  }[];
   const hasToolName = tableInfo.some((c) => c.name === "tool_name");
   const hasToolArgs = tableInfo.some((c) => c.name === "tool_args");
   if (!hasToolName) {
-    db.exec("ALTER TABLE cron_jobs ADD COLUMN tool_name TEXT NOT NULL DEFAULT 'cron_echo'");
+    db.exec(
+      "ALTER TABLE cron_jobs ADD COLUMN tool_name TEXT NOT NULL DEFAULT 'cron_echo'",
+    );
   }
   if (!hasToolArgs) {
-    db.exec("ALTER TABLE cron_jobs ADD COLUMN tool_args TEXT NOT NULL DEFAULT '{}'");
+    db.exec(
+      "ALTER TABLE cron_jobs ADD COLUMN tool_args TEXT NOT NULL DEFAULT '{}'",
+    );
     // Backfill legacy rows so they call cron_echo with task_description as message
     db.exec(
-      "UPDATE cron_jobs SET tool_args = json_object('message', task_description) WHERE tool_args = '{}'"
+      "UPDATE cron_jobs SET tool_args = json_object('message', task_description) WHERE tool_args = '{}'",
     );
   }
 
   // Migration: add reasoning_effort to agents if missing (default medium)
-  const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+  const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as {
+    name: string;
+  }[];
   if (!agentsInfo.some((c) => c.name === "reasoning_effort")) {
-    db.exec("ALTER TABLE agents ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'medium'");
+    db.exec(
+      "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'medium'",
+    );
   }
 
   // Seed built-in heartbeat cron job (after migration so tool_name/tool_args exist on older DBs)
   db.prepare(
     `INSERT OR IGNORE INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
-     VALUES ('builtin-heartbeat', '*/30 * * * *', 'Heartbeat', 'maia', 1, datetime('now'), 'cron_echo', '{}')`
+     VALUES ('builtin-heartbeat', '*/30 * * * *', 'Heartbeat', 'maia', 1, datetime('now'), 'cron_echo', '{}')`,
   ).run();
 
   // Seed default settings if not present (whitelisted models live in data/models.json)
@@ -183,7 +193,7 @@ export function initSchema(db: DbAdapter): void {
   };
 
   const insert = db.prepare(
-    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
+    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
   );
   for (const [key, value] of Object.entries(defaults)) {
     insert.run(key, value);
