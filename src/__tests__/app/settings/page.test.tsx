@@ -85,7 +85,7 @@ describe("Settings page", () => {
     });
   });
 
-  it("displays embedding model and save sends whitelistedModels and embeddingModel", async () => {
+  it("displays embedding model as select from whitelist and save sends whitelistedModels and embeddingModel", async () => {
     let putBody: Record<string, unknown> = {};
     installFetchMock([
       {
@@ -104,7 +104,9 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(screen.getByLabelText(/Embedding model/i)).toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue(settingsPublic.embeddingModel)).toBeInTheDocument();
+    const embeddingSelect = screen.getByLabelText(/Embedding model/i) as HTMLSelectElement;
+    expect(embeddingSelect.tagName).toBe("SELECT");
+    expect(embeddingSelect.value).toBe(settingsPublic.embeddingModel);
     const saveButton = screen.getByRole("button", { name: /Save Settings/i });
     fireEvent.click(saveButton);
     await waitFor(() => {

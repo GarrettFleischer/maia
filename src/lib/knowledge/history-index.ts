@@ -82,7 +82,6 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
       msg.includes("ECONNREFUSED") ||
       cause.includes("ECONNREFUSED");
     const hint = isRefused ? " (embedding service not running?)" : "";
-    const embedUrl = `${settings.ollamaBaseUrl.replace(/\/$/, "")}/api/embed`;
-    console.error("History indexing skipped:", msg + hint, `(${embedUrl})`);
+    console.error("History indexing skipped:", msg + hint, `(embedding model: ${settings.embeddingModel})`);
   }
 }

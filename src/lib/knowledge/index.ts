@@ -11,6 +11,7 @@ import { createHash } from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import type { AppContext } from "../context";
 import type { EmbeddingAdapter } from "./embedding";
+import { getEffectiveEmbedMaxLength } from "./embedding";
 import { createVectorStore } from "./vector-store";
 import { getKnowledgeDir } from "../data-dir";
 import { getSettings } from "../settings";
@@ -75,6 +76,12 @@ export async function runKnowledgeIndex(
   const files = listMarkdownFiles(ctx.fs, knowledgeDir, knowledgeDir);
   const currentPaths = new Set(files);
 
+  let maxLen: number | undefined;
+  if (embedder) {
+    const settings = getSettings(ctx);
+    maxLen = await getEffectiveEmbedMaxLength(settings, ctx.http);
+  }
+
   for (const relPath of files) {
     const fullPath = path.join(knowledgeDir, relPath);
     const content = ctx.fs.readFile(fullPath);
@@ -82,9 +89,8 @@ export async function runKnowledgeIndex(
     const existingHash = store.getKnowledgeHash(relPath);
     if (existingHash === contentHash) continue;
 
-    if (!embedder) continue;
+    if (!embedder || maxLen === undefined) continue;
     console.info(`[Embedding] Indexing knowledge file: ${relPath}`);
-    const maxLen = getSettings(ctx).embedMaxContentLength;
     const contentToEmbed =
       content.length > maxLen ? content.slice(0, maxLen) : content;
     try {

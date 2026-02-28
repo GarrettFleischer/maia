@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { FakeHttp, FakeResponse } from "../../helpers/fakes";
 import {
+  createEmbeddingAdapter,
   createOllamaEmbeddingAdapter,
   getOllamaEmbedContextLength,
   getEffectiveEmbedMaxLength,
@@ -109,6 +110,75 @@ describe("embedding", () => {
     });
   });
 
+  describe("createEmbeddingAdapter", () => {
+    it("throws when embedding model is not in whitelist", () => {
+      const http = new FakeHttp();
+      http.on("/api/embed", async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1]] })));
+      const settings: Settings = {
+        whitelistedModels: ["ollama/llama3.2"],
+        heartbeatIntervalMinutes: 30,
+        ollamaBaseUrl: "http://localhost:11434",
+        vllmBaseUrl: "",
+        dockerBaseUrl: "",
+        embeddingModel: "ollama/nomic-embed-text",
+        embedMaxContentLength: 4000,
+        contextQueryModel: "",
+        contextSummaryModel: "",
+        contextRecentTurns: 3,
+        contextReasoningEffort: "medium",
+      };
+      expect(() => createEmbeddingAdapter(settings, http)).toThrow(/not whitelisted/);
+    });
+
+    it("creates adapter when embedding model is in whitelist", async () => {
+      const http = new FakeHttp();
+      const vector = [0.1, 0.2, 0.3];
+      http.on("/api/embed", async () => new FakeResponse(200, JSON.stringify({ embeddings: [vector] })));
+      const settings: Settings = {
+        whitelistedModels: ["ollama/nomic-embed-text"],
+        heartbeatIntervalMinutes: 30,
+        ollamaBaseUrl: "http://localhost:11434",
+        vllmBaseUrl: "",
+        dockerBaseUrl: "",
+        embeddingModel: "ollama/nomic-embed-text",
+        embedMaxContentLength: 4000,
+        contextQueryModel: "",
+        contextSummaryModel: "",
+        contextRecentTurns: 3,
+        contextReasoningEffort: "medium",
+      };
+      const adapter = createEmbeddingAdapter(settings, http);
+      const result = await adapter.embed("hello");
+      expect(result).toEqual(vector);
+    });
+
+    it("creates OpenRouter adapter when model is openrouter/ and API key is set", async () => {
+      const http = new FakeHttp();
+      const vector = [0.5, 0.5, 0.5];
+      http.on(
+        "https://openrouter.ai/api/v1/embeddings",
+        async () => new FakeResponse(200, JSON.stringify({ data: [{ embedding: vector }] }))
+      );
+      const settings: Settings = {
+        whitelistedModels: ["openrouter/qwen/qwen3-embedding-8b"],
+        heartbeatIntervalMinutes: 30,
+        ollamaBaseUrl: "http://localhost:11434",
+        openRouterApiKey: "sk-test",
+        vllmBaseUrl: "",
+        dockerBaseUrl: "",
+        embeddingModel: "openrouter/qwen/qwen3-embedding-8b",
+        embedMaxContentLength: 4000,
+        contextQueryModel: "",
+        contextSummaryModel: "",
+        contextRecentTurns: 3,
+        contextReasoningEffort: "medium",
+      };
+      const adapter = createEmbeddingAdapter(settings, http);
+      const result = await adapter.embed("hello");
+      expect(result).toEqual(vector);
+    });
+  });
+
   describe("getEffectiveEmbedMaxLength", () => {
     let http: FakeHttp;
 
@@ -127,11 +197,12 @@ describe("embedding", () => {
         ollamaBaseUrl: "http://localhost:11434",
         vllmBaseUrl: "",
         dockerBaseUrl: "",
-        embeddingModel: "nomic-embed-text",
+        embeddingModel: "ollama/nomic-embed-text",
         embedMaxContentLength: 32000,
         contextQueryModel: "",
         contextSummaryModel: "",
         contextRecentTurns: 3,
+        contextReasoningEffort: "medium",
       };
       const maxLen = await getEffectiveEmbedMaxLength(settings, http);
       expect(maxLen).toBe(4096);
@@ -147,11 +218,30 @@ describe("embedding", () => {
         ollamaBaseUrl: "http://localhost:11434",
         vllmBaseUrl: "",
         dockerBaseUrl: "",
-        embeddingModel: "nomic-embed-text",
+        embeddingModel: "ollama/nomic-embed-text",
         embedMaxContentLength: 4000,
         contextQueryModel: "",
         contextSummaryModel: "",
         contextRecentTurns: 3,
+        contextReasoningEffort: "medium",
+      };
+      const maxLen = await getEffectiveEmbedMaxLength(settings, http);
+      expect(maxLen).toBe(4000);
+    });
+
+    it("returns min of settings and default for non-Ollama (OpenRouter) models", async () => {
+      const settings: Settings = {
+        whitelistedModels: [],
+        heartbeatIntervalMinutes: 30,
+        ollamaBaseUrl: "http://localhost:11434",
+        vllmBaseUrl: "",
+        dockerBaseUrl: "",
+        embeddingModel: "openrouter/qwen/qwen3-embedding-8b",
+        embedMaxContentLength: 4000,
+        contextQueryModel: "",
+        contextSummaryModel: "",
+        contextRecentTurns: 3,
+        contextReasoningEffort: "medium",
       };
       const maxLen = await getEffectiveEmbedMaxLength(settings, http);
       expect(maxLen).toBe(4000);

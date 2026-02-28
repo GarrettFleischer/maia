@@ -188,6 +188,20 @@ describe("OpenRouterProvider", () => {
     expect(model).toBe("anthropic/claude-sonnet-4-5");
   });
 
+  it("sends openrouter/free as model when using free router", async () => {
+    let model = "";
+    http.on("openrouter.ai", async (_url, init) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      model = body.model ?? "";
+      return streamResponse(200, ["data: [DONE]"]);
+    });
+
+    const provider = new OpenRouterProvider("openrouter/free", "sk-key", ctx.http);
+    await provider.complete([{ role: "user", content: "x" }], [], () => {});
+
+    expect(model).toBe("openrouter/free");
+  });
+
   it("maps agent role to assistant in messages", async () => {
     let messages: unknown[] = [];
     http.on("openrouter.ai", async (_url, init) => {

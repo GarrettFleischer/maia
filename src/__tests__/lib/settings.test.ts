@@ -35,7 +35,7 @@ describe("settings", () => {
     it("returns openRouterApiKey as undefined when empty string in DB", () => {
       const s = getSettings(ctx);
       expect(s.openRouterApiKey).toBeUndefined();
-      expect(s.embeddingModel).toBe("nomic-embed-text");
+      expect(s.embeddingModel).toBe("ollama/nomic-embed-text");
       expect(s.embedMaxContentLength).toBe(4000);
     });
   });
@@ -156,9 +156,16 @@ describe("settings", () => {
       expect(getSettingsPublic(ctx).hasBraveAnswersKey).toBe(true);
     });
 
-    it("updates embeddingModel", () => {
-      updateSettings(ctx, { embeddingModel: "nomic-embed-text-v2" });
-      expect(getSettings(ctx).embeddingModel).toBe("nomic-embed-text-v2");
+    it("updates embeddingModel when model is in whitelist", () => {
+      updateSettings(ctx, { whitelistedModels: ["ollama/nomic-embed-text-v2"], embeddingModel: "ollama/nomic-embed-text-v2" });
+      expect(getSettings(ctx).embeddingModel).toBe("ollama/nomic-embed-text-v2");
+    });
+
+    it("throws when embeddingModel is not in whitelist", () => {
+      updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"] });
+      expect(() =>
+        updateSettings(ctx, { embeddingModel: "ollama/nomic-embed-text" })
+      ).toThrow(/Embedding model must be in whitelist/);
     });
 
     it("updates vllmBaseUrl", () => {

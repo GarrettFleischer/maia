@@ -78,6 +78,15 @@ export function createVectorStore(db: DbAdapter) {
       db.prepare("DELETE FROM knowledge_vectors WHERE path = ?").run(path);
     },
 
+    /**
+     * Clear all knowledge and history embeddings.
+     * @brief Deletes all rows from knowledge_vectors and history_vectors. Used before full rebuild.
+     */
+    clearAll(): void {
+      db.prepare("DELETE FROM knowledge_vectors").run();
+      db.prepare("DELETE FROM history_vectors").run();
+    },
+
     /** Get all knowledge paths (for change detection). */
     getAllKnowledgePaths(): string[] {
       const rows = db.prepare("SELECT path FROM knowledge_vectors").all() as { path: string }[];

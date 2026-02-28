@@ -10,7 +10,15 @@ export async function GET() {
 export async function PUT(req: NextRequest) {
   const ctx = await ensureAppContext();
   const body = (await req.json()) as Record<string, unknown>;
-  updateSettings(ctx, body);
+  try {
+    updateSettings(ctx, body);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("Embedding model must be in whitelist")) {
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+    throw err;
+  }
   if (body.heartbeatIntervalMinutes !== undefined) {
     const { refreshHeartbeatJob } = await import("@/lib/cron/service");
     refreshHeartbeatJob(ctx);

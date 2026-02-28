@@ -36,7 +36,7 @@ export function getSettings(ctx: AppContext): Settings {
     openRouterApiKey: map.openRouterApiKey || undefined,
     vllmBaseUrl: map.vllmBaseUrl ?? "http://localhost:8000/v1",
     dockerBaseUrl: map.dockerBaseUrl ?? "http://localhost:8000/v1",
-    embeddingModel: map.embeddingModel ?? "nomic-embed-text",
+    embeddingModel: map.embeddingModel ?? "ollama/nomic-embed-text",
     embedMaxContentLength: Math.max(500, Math.min(32000, parseInt(map.embedMaxContentLength ?? "4000", 10) || 4000)),
     contextQueryModel: map.contextQueryModel ?? "",
     contextSummaryModel: map.contextSummaryModel ?? "",
@@ -111,6 +111,10 @@ export function updateSettings(
     update.run("dockerBaseUrl", partial.dockerBaseUrl);
   }
   if (partial.embeddingModel !== undefined) {
+    const effectiveWhitelist = partial.whitelistedModels ?? getSettings(ctx).whitelistedModels;
+    if (!effectiveWhitelist.includes(partial.embeddingModel)) {
+      throw new Error(`Embedding model must be in whitelist: ${partial.embeddingModel}`);
+    }
     update.run("embeddingModel", partial.embeddingModel);
   }
   if (partial.embedMaxContentLength !== undefined) {

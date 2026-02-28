@@ -4,9 +4,8 @@
  * @module lib/knowledge/refresh-embeddings
  *
  * @note Only history entries are refreshed here. Knowledge documents are indexed separately
- * (e.g. by the knowledge-index tool or manual trigger). This module is designed to be fast
- * and non-blocking: failures are logged and never propagate.
- * Long entries are chunked using the model's context length so embedding never exceeds limits.
+ * (e.g. by the knowledge-index tool or manual trigger). Uses batch embedding when available
+ * to reduce API round trips.
  */
 
 import { getSettings } from "../settings";
@@ -14,23 +13,28 @@ import {
   createEmbeddingAdapter,
   getEffectiveEmbedMaxLength,
   chunkContentForEmbedding,
+  EMBED_BATCH_SIZE,
 } from "./embedding";
 import { createVectorStore } from "./vector-store";
 import type { AppContext } from "../context";
 
+interface ChunkWithMeta {
+  text: string;
+  sessionId: string;
+  entryId: string;
+  isCompressed: boolean;
+}
+
 /**
  * Finds all history entries that have no corresponding row in history_vectors and embeds them.
- * Uses Ollama context length when available to avoid "input length exceeds context length" errors.
- * Long content is chunked and stored as multiple vectors per entry.
+ * Batches chunks into groups of EMBED_BATCH_SIZE when the adapter supports embedBatch.
  * Safe to call multiple times; already-indexed entries are skipped.
- * Logs errors and resolves (never rejects) so callers can fire-and-await safely.
  * @param ctx - Application context
  */
 export async function refreshEmbeddings(ctx: AppContext): Promise<void> {
   const settings = getSettings(ctx);
   const maxLen = await getEffectiveEmbedMaxLength(settings, ctx.http);
 
-  // Find history entries not yet in history_vectors
   const unindexed = ctx.db
     .prepare(
       `SELECT he.id, he.session_id, he.content, he.is_compressed
@@ -47,40 +51,89 @@ export async function refreshEmbeddings(ctx: AppContext): Promise<void> {
   const { v4: uuidv4 } = await import("uuid");
   const now = new Date().toISOString();
 
-  const totalEntries = unindexed.length;
-  console.info(`[Embedding] Indexing ${totalEntries} history entries...`);
-
-  for (let i = 0; i < unindexed.length; i++) {
-    const row = unindexed[i];
-    const entryNum = i + 1;
+  const chunksWithMeta: ChunkWithMeta[] = [];
+  for (const row of unindexed) {
     try {
       const chunks = chunkContentForEmbedding(row.content, maxLen);
-      if (chunks.length > 1) {
-        console.info(`[Embedding] Entry ${entryNum}/${totalEntries} (${row.id}): ${chunks.length} chunks`);
-      }
-      for (let c = 0; c < chunks.length; c++) {
-        const chunk = chunks[c];
-        if (chunks.length > 1) {
-          console.info(`[Embedding] Entry ${entryNum}/${totalEntries}, chunk ${c + 1}/${chunks.length}`);
-        }
-        await embedOneChunk(
-          embedder,
-          store,
-          chunk,
-          maxLen,
-          row.session_id,
-          row.id,
-          row.is_compressed === 1,
-          now,
-          uuidv4,
-        );
-      }
-      if (entryNum % 10 === 0 || entryNum === totalEntries) {
-        console.info(`[Embedding] Progress: ${entryNum}/${totalEntries} entries indexed`);
+      for (const chunk of chunks) {
+        chunksWithMeta.push({
+          text: chunk,
+          sessionId: row.session_id,
+          entryId: row.id,
+          isCompressed: row.is_compressed === 1,
+        });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[refreshEmbeddings] Failed to index entry ${row.id}:`, msg);
+      console.error(`[refreshEmbeddings] Failed to chunk entry ${row.id}:`, msg);
+    }
+  }
+
+  const totalChunks = chunksWithMeta.length;
+  const totalEntries = unindexed.length;
+  console.info(`[Embedding] Indexing ${totalEntries} history entries (${totalChunks} chunks)...`);
+
+  const useBatch = typeof embedder.embedBatch === "function";
+
+  if (useBatch) {
+    for (let i = 0; i < chunksWithMeta.length; i += EMBED_BATCH_SIZE) {
+      const batch = chunksWithMeta.slice(i, i + EMBED_BATCH_SIZE);
+      const texts = batch.map((c) => c.text);
+      try {
+        const embeddings = await embedder.embedBatch!(texts);
+        if (embeddings.length !== batch.length) {
+          throw new Error(`Batch size mismatch: got ${embeddings.length}, expected ${batch.length}`);
+        }
+        for (let j = 0; j < batch.length; j++) {
+          store.insertHistory(
+            uuidv4(),
+            batch[j].sessionId,
+            batch[j].entryId,
+            batch[j].text,
+            embeddings[j],
+            batch[j].isCompressed,
+            now,
+          );
+        }
+        const done = Math.min(i + EMBED_BATCH_SIZE, totalChunks);
+        if (done % (EMBED_BATCH_SIZE * 4) === 0 || done === totalChunks) {
+          console.info(`[Embedding] Progress: ${done}/${totalChunks} chunks indexed`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[refreshEmbeddings] Batch failed, falling back to sequential:`, msg);
+        for (let j = 0; j < batch.length; j++) {
+          try {
+            await embedOneChunk(
+              embedder,
+              store,
+              batch[j].text,
+              maxLen,
+              batch[j].sessionId,
+              batch[j].entryId,
+              batch[j].isCompressed,
+              now,
+              uuidv4,
+            );
+          } catch (chunkErr) {
+            const chunkMsg = chunkErr instanceof Error ? chunkErr.message : String(chunkErr);
+            console.error(`[refreshEmbeddings] Failed to index entry ${batch[j].entryId}:`, chunkMsg);
+          }
+        }
+      }
+    }
+  } else {
+    for (let i = 0; i < chunksWithMeta.length; i++) {
+      const c = chunksWithMeta[i];
+      try {
+        await embedOneChunk(embedder, store, c.text, maxLen, c.sessionId, c.entryId, c.isCompressed, now, uuidv4);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[refreshEmbeddings] Failed to index entry ${c.entryId}:`, msg);
+      }
+      if ((i + 1) % 50 === 0 || i + 1 === totalChunks) {
+        console.info(`[Embedding] Progress: ${i + 1}/${totalChunks} chunks indexed`);
+      }
     }
   }
 }

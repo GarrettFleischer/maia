@@ -46,6 +46,11 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [editingModel, setEditingModel] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [modelCapabilities, setModelCapabilities] = useState<Record<string, ModelCapabilities>>({});
+  const [rebuildingEmbeddings, setRebuildingEmbeddings] = useState(false);
+  const [buildingEmbeddings, setBuildingEmbeddings] = useState(false);
+  const [rebuildResult, setRebuildResult] = useState<{ knowledgeIndexed: number; historyIndexed: number } | null>(null);
+  const [buildResult, setBuildResult] = useState<{ knowledgeIndexed: number; historyIndexed: number } | null>(null);
+  const [rebuildError, setRebuildError] = useState<string | null>(null);
   /** Snapshot of agent models when last loaded or saved; used to PATCH only changed agents on Save. */
   const initialAgentsRef = useRef<AgentDefinition[]>([]);
 
@@ -373,14 +378,24 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
 
               <div>
                 <label htmlFor="settings-embedding-model" className="block text-xs text-zinc-500 mb-1">Embedding model</label>
-                <input
+                <select
                   id="settings-embedding-model"
-                  type="text"
                   value={embeddingModel}
                   onChange={(e) => setEmbeddingModel(e.target.value)}
                   className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
                   aria-label="Embedding model"
-                />
+                >
+                  {whitelistedModels.length > 0
+                    ? (whitelistedModels.includes(embeddingModel) ? whitelistedModels : [embeddingModel, ...whitelistedModels]).map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))
+                    : embeddingModel ? (
+                        <option value={embeddingModel}>{embeddingModel}</option>
+                      ) : (
+                        <option value="">Select a model (add to whitelist first)</option>
+                      )}
+                </select>
+                <p className="text-xs text-zinc-500 mt-0.5">Model for knowledge base and history semantic search. Must be in whitelist. Supports Ollama, OpenRouter, vLLM, and Docker.</p>
               </div>
 
               <div>
@@ -397,6 +412,79 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                 />
                 <p className="text-xs text-zinc-500 mt-0.5">Truncation limit to avoid Ollama context-length errors. 4000 is safe for 2048-token default.</p>
               </div>
+
+              <div className="flex flex-wrap gap-2 items-end">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setBuildingEmbeddings(true);
+                    setBuildResult(null);
+                    setRebuildError(null);
+                    try {
+                      const res = await fetch("/api/embeddings/build", { method: "POST" });
+                      const data = (await res.json()) as { ok?: boolean; knowledgeIndexed?: number; historyIndexed?: number; error?: string };
+                      if (data.ok) {
+                        setBuildResult({
+                          knowledgeIndexed: data.knowledgeIndexed ?? 0,
+                          historyIndexed: data.historyIndexed ?? 0,
+                        });
+                      } else {
+                        setRebuildError(data.error ?? "Build failed");
+                      }
+                    } catch (err) {
+                      setRebuildError(err instanceof Error ? err.message : "Build failed");
+                    } finally {
+                      setBuildingEmbeddings(false);
+                    }
+                  }}
+                  disabled={buildingEmbeddings || rebuildingEmbeddings}
+                  className="px-4 py-2 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 text-violet-400 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  aria-label="Index new knowledge and history"
+                >
+                  {buildingEmbeddings ? "Building…" : "Build Embeddings"}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setRebuildingEmbeddings(true);
+                    setRebuildResult(null);
+                    setBuildResult(null);
+                    setRebuildError(null);
+                    try {
+                      const res = await fetch("/api/embeddings/rebuild", { method: "POST" });
+                      const data = (await res.json()) as { ok?: boolean; knowledgeIndexed?: number; historyIndexed?: number; error?: string };
+                      if (data.ok) {
+                        setRebuildResult({
+                          knowledgeIndexed: data.knowledgeIndexed ?? 0,
+                          historyIndexed: data.historyIndexed ?? 0,
+                        });
+                      } else {
+                        setRebuildError(data.error ?? "Rebuild failed");
+                      }
+                    } catch (err) {
+                      setRebuildError(err instanceof Error ? err.message : "Rebuild failed");
+                    } finally {
+                      setRebuildingEmbeddings(false);
+                    }
+                  }}
+                  disabled={buildingEmbeddings || rebuildingEmbeddings}
+                  className="px-4 py-2 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  aria-label="Clear and rebuild all embeddings"
+                >
+                  {rebuildingEmbeddings ? "Rebuilding…" : "Clear & Rebuild"}
+                </button>
+                {(buildResult || rebuildResult) && !buildingEmbeddings && !rebuildingEmbeddings && (
+                  <p className="text-xs text-green-400">
+                    {(buildResult ?? rebuildResult)!.knowledgeIndexed} knowledge, {(buildResult ?? rebuildResult)!.historyIndexed} history vectors.
+                  </p>
+                )}
+                {rebuildError && !buildingEmbeddings && !rebuildingEmbeddings && (
+                  <p className="text-xs text-red-400">{rebuildError}</p>
+                )}
+              </div>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Build: index new/changed knowledge and history. Clear & Rebuild: delete all and re-index from scratch (use after changing embedding model).
+              </p>
 
               <div>
                 <label className="block text-xs text-zinc-500 mb-1">Heartbeat Interval (minutes)</label>
