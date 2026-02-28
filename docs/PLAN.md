@@ -465,12 +465,11 @@ credential_get(key: string): Promise<string>  // used by other tools internally
 ### Messaging Tool (`messaging`)
 
 ```typescript
-message_send(toAgentId: string, content: string): Promise<void>
-message_to_user(content: string): Promise<void>
+message_send({ to: "user" | agentId, text: string }): Promise<string>
 ```
 
-- `message_send` finds or creates an agent-to-agent session and appends to it.
-- `message_to_user` posts to the active user session, adding the agent as a participant.
+- `message_send({ to: "user", text })` posts to the active user session, adding the agent as a participant; returns `"Message sent to user."`
+- `message_send({ to: agentId, text })` finds or creates an agent-to-agent session and appends to it; returns a status string.
 
 ### History Tool (`history`)
 
@@ -687,7 +686,7 @@ Maia can schedule arbitrary cron jobs via the `cron_schedule` tool. Jobs are sto
 
 **Agent-to-agent**: If a session exists with exactly `[agent_X, agent_Y]` as participants, reuse it. Otherwise create a new one.
 
-**Agent-to-user**: Agent calls `message_to_user(content)`. The system adds the agent to the active user session's participants and appends the message. The UI updates in real time via SSE.
+**Agent-to-user**: Agent calls `message_send({ to: "user", text: content })`. The system adds the agent to the active user session's participants and appends the message. The UI updates in real time via SSE.
 
 **User mentions**: If the user's message starts with `@agent_name`, that agent is added to the user session and receives the message (with compressed history) as its trigger.
 

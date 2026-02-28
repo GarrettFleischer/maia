@@ -105,14 +105,14 @@ Trigger (user message | heartbeat | agent message)
 
 ### Agent → User
 
-An agent can post to the active user session at any time using `message_to_user()`. This:
+An agent can post to the active user session at any time using `message_send({ to: "user", text: "..." })`. This:
 1. Adds the agent to the session's `participants` array if not already present.
 2. Appends the message as an `"agent"` role entry.
 3. Emits an SSE event causing the UI to update.
 
 ### Agent → Agent
 
-An agent uses `message_send(targetAgentId, content)`. This:
+An agent uses `message_send({ to: targetAgentId, text: content })`. This:
 1. Searches for an existing session where `participants` contains exactly `[senderAgentId, targetAgentId]`.
 2. If found, appends to that session.
 3. If not found, creates a new session in `data/history/agents/`.

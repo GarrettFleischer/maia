@@ -208,12 +208,11 @@ One browser **page per session** (keyed by `sessionId`). Use for multi-step agen
 
 ### `messaging` — Inter-agent and User Communication
 
-| Function          | Args                                 | Returns |
-| ----------------- | ------------------------------------ | ------- |
-| `message_send`    | `toAgentId: string, content: string` | `void`  |
-| `message_to_user` | `content: string`                    | `void`  |
+| Function       | Args                                              | Returns  |
+| -------------- | ------------------------------------------------- | -------- |
+| `message_send` | `to: "user" \| agentId`, `text: string`           | `string` |
 
-`message_send` behavior:
+`message_send` (to agent) behavior:
 
 1. Find existing session where participants are exactly `[callerAgentId, toAgentId]`.
 2. If not found, create new session in `data/history/agents/`.
@@ -222,11 +221,12 @@ One browser **page per session** (keyed by `sessionId`). Use for multi-step agen
 5. **Automatic reply forwarding:** Each agent's reply is automatically fed to the other. No further message_send calls are needed—the conversation continues until one indicates they are done.
 6. **[DONE] convention:** If either agent ends their reply with `[DONE]`, they indicate they do not want to continue. The reply (with `[DONE]` stripped) is posted to the caller session, and the loop ends.
 
-`message_to_user` behavior:
+`message_send` (to `"user"`) behavior:
 
 1. Add caller agent to active user session participants (if not already).
 2. Append message as `role: "agent"` entry.
 3. Emit SSE event to UI.
+4. Returns `"Message sent to user."`
 
 ### `history` — Session Management
 
