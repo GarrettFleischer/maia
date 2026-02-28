@@ -71,6 +71,33 @@ function readDefaultAgentFile(ctx: AppContext, filename: string, fallback: strin
 }
 
 /**
+ * Reads a default identity file (SOUL, MEMORY, USER). When agentId is "maia", reads from defaults/maia first; otherwise (or if missing) from defaults/agent.
+ * @param ctx - App context (uses ctx.fs)
+ * @param filename - e.g. "SOUL.md", "MEMORY.md", "USER.md"
+ * @param fallback - Used when file is missing or unreadable in both locations
+ * @param agentId - When "maia", use defaults/maia first
+ * @returns File content or fallback
+ */
+function readDefaultIdentityFile(
+  ctx: AppContext,
+  filename: string,
+  fallback: string,
+  agentId?: string,
+): string {
+  if (agentId === "maia") {
+    try {
+      const maiaPath = path.join(getDefaultMaiaDir(), filename);
+      const raw = ctx.fs.readFile(maiaPath);
+      const s = typeof raw === "string" ? raw.trim() : "";
+      if (s !== "") return s;
+    } catch {
+      // fall through to defaults/agent
+    }
+  }
+  return readDefaultAgentFile(ctx, filename, fallback);
+}
+
+/**
  * Reads AGENTS.md default for the given agent. Maia gets content from defaults/maia/AGENTS.md when present; others (and fallback) use defaults/agent/AGENTS.md.
  * @param ctx - App context (uses ctx.fs)
  * @param agentId - Optional agent id; when "maia", use defaults/maia/AGENTS.md first
@@ -91,12 +118,11 @@ function readDefaultAgentsMd(ctx: AppContext, agentId?: string): string {
 }
 
 /**
- * Copies default agent template files into an agent directory. SOUL, MEMORY, USER come from defaults/agent. AGENTS.md comes from defaults/maia when agentId is "maia" (if that file exists), otherwise from defaults/agent.
- * Use when creating a new agent or when seeding an agent dir (e.g. Maia on first run).
+ * Copies default agent template files into an agent directory. When agentId is "maia", SOUL/MEMORY/USER and AGENTS.md come from defaults/maia when present; otherwise from defaults/agent. Use when creating a new agent or when seeding Maia on first run.
  * @param ctx - App context (uses ctx.fs)
  * @param agentDir - Absolute path to the agent directory (e.g. data/agents/<id>)
- * @param agentName - Used to replace {{name}} in SOUL.md
- * @param agentId - Optional agent id; when "maia", AGENTS.md is read from defaults/maia when present
+ * @param agentName - Used to replace {{name}} in SOUL.md (sub-agents only; Maia template typically has no placeholder)
+ * @param agentId - Optional agent id; when "maia", identity files and AGENTS.md are read from defaults/maia when present
  */
 export function copyDefaultAgentFiles(
   ctx: AppContext,
@@ -105,10 +131,13 @@ export function copyDefaultAgentFiles(
   agentId?: string
 ): void {
   ctx.fs.mkdirp(agentDir);
-  const soulContent = readDefaultAgentFile(ctx, "SOUL.md", FALLBACK_SOUL).replace(/\{\{name\}\}/g, agentName);
+  ctx.fs.mkdirp(path.join(agentDir, "workspace"));
+  ctx.fs.mkdirp(path.join(agentDir, "memory"));
+  ctx.fs.mkdirp(path.join(agentDir, "user"));
+  const soulContent = readDefaultIdentityFile(ctx, "SOUL.md", FALLBACK_SOUL, agentId).replace(/\{\{name\}\}/g, agentName);
   ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), soulContent);
-  ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), readDefaultAgentFile(ctx, "MEMORY.md", FALLBACK_MEMORY));
-  ctx.fs.writeFile(path.join(agentDir, "USER.md"), readDefaultAgentFile(ctx, "USER.md", FALLBACK_USER));
+  ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), readDefaultIdentityFile(ctx, "MEMORY.md", FALLBACK_MEMORY, agentId));
+  ctx.fs.writeFile(path.join(agentDir, "USER.md"), readDefaultIdentityFile(ctx, "USER.md", FALLBACK_USER, agentId));
   ctx.fs.writeFile(path.join(agentDir, "AGENTS.md"), readDefaultAgentsMd(ctx, agentId));
 }
 
@@ -178,62 +207,6 @@ export const agentGetTool = makeTool(
   }
 );
 
-const IDENTITY_FILE_MAP: Record<string, string> = {
-  soul: "SOUL.md",
-  memory: "MEMORY.md",
-  user: "USER.md",
-  agents: "AGENTS.md",
-};
-
-/**
- * Tool for agents to update their own identity files (MEMORY, SOUL, USER, AGENTS.md).
- * Use this to keep your memory and user notes up to date as you learn. Use the tasks tool for task tracking.
- */
-export const agentUpdateIdentityTool = makeTool(
-  "agent_update_identity",
-  "Update your own identity file: memory, soul, user, or agents (AGENTS.md). Use agent_get first to read the current content before updating. Use this to keep MEMORY.md and USER.md up to date as you learn new things. Use the tasks tool for all task tracking.",
-  z.object({
-    file: z.enum(["soul", "memory", "user", "agents"]).describe("Which identity file to update"),
-    content: z.string().describe("Full new content for the file (replaces entire file)"),
-  }),
-  async ({ file, content }, ctx) => {
-    const filename = IDENTITY_FILE_MAP[file];
-    const agentDir = path.join(getAgentsDir(), ctx.agentId);
-    ctx.fs.mkdirp(agentDir);
-    ctx.fs.writeFile(path.join(agentDir, filename), content);
-    return { updated: file };
-  }
-);
-
-const agentUpdateAgentIdentitySchema = z.object({
-  agentId: z.string().describe("ID of the agent whose identity file to update"),
-  file: z.enum(["soul", "memory", "user", "agents"]).describe("Which identity file to update"),
-  content: z.string().describe("Full new content for the file (replaces entire file)"),
-});
-
-/**
- * Tool for Maia to update any agent's identity files (SOUL, MEMORY, USER, AGENTS.md).
- * Only available to the Maia agent; used to maintain other agents' identity files.
- */
-export const agentUpdateAgentIdentityTool = makeTool(
-  "agent_update_agent_identity",
-  "Update an agent's identity file (soul, memory, user, or agents). Use agent_list first to find the agent ID. Maia only. Use to maintain another agent's SOUL.md, MEMORY.md, USER.md, or AGENTS.md.",
-  agentUpdateAgentIdentitySchema,
-  async ({ agentId, file, content }, ctx) => {
-    const row = ctx.db
-      .prepare("SELECT id FROM agents WHERE id = ? AND status != 'deleted'")
-      .get(agentId) as { id: string } | undefined;
-    if (!row) {
-      throw new Error(`Agent not found or deleted: ${agentId}`);
-    }
-    const filename = IDENTITY_FILE_MAP[file];
-    const agentDir = path.join(getAgentsDir(), agentId);
-    ctx.fs.mkdirp(agentDir);
-    ctx.fs.writeFile(path.join(agentDir, filename), content);
-    return { updated: file, agentId };
-  }
-);
-
 function rowToAgent(r: Record<string, unknown>): AgentDefinition {
   return {
     id: r.id as string,
@@ -253,8 +226,4 @@ export const agentManagementTools: Tool[] = [
   agentDeleteTool,
   agentListTool,
   agentGetTool,
-  agentUpdateAgentIdentityTool,
 ];
-
-/** Available to all agents (not maiaOnly) so they can update their own identity files. */
-export const agentIdentityTools: Tool[] = [agentUpdateIdentityTool];

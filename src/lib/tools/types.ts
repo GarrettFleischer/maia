@@ -20,6 +20,8 @@ export interface ToolContext extends AppContext {
   volumeRoot: string;
   /** Used by smart_context tool for query extraction; absent in tests or when not provided by runner. */
   providerFactory?: ProviderFactory;
+  /** Used by find_tool to resolve tools for an agent; set by runner to avoid circular dependency. */
+  getToolsForAgent?: (agentId: string) => Tool[];
 }
 
 export interface Tool<TArgs = unknown, TResult = unknown> {

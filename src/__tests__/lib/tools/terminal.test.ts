@@ -2,9 +2,8 @@
  * @fileoverview Tests for terminal_exec tool (process runner DI, truncation, exit code).
  * @module __tests__/lib/tools/terminal.test
  */
-import { describe, it, expect, beforeEach } from "bun:test";
-import path from "path";
-import { getWorkspaceRoot } from "@/lib/data-dir";
+import { describe, it, expect } from "bun:test";
+import { getAgentDir } from "@/lib/data-dir";
 import { makeTestContext, FakeProcessRunner } from "../../helpers/fakes";
 import { terminalTool } from "@/lib/tools/terminal";
 import type { ToolContext } from "@/lib/tools/types";
@@ -15,7 +14,7 @@ function makeToolCtx(overrides: Partial<ToolContext> = {}): ToolContext {
     ...ctx,
     agentId: "maia",
     sessionId: "session-1",
-    volumeRoot: path.join(getWorkspaceRoot(), "maia"),
+    volumeRoot: getAgentDir("maia"),
     ...overrides,
   };
 }
@@ -51,7 +50,12 @@ describe("terminalTool", () => {
 
     await terminalTool.execute({ command: "true" }, ctx);
 
-    expect(runner.lastExec?.cmd).toContain("bash -c");
+    expect(runner.lastExec?.cmd).toBeDefined();
+    if (process.platform === "win32") {
+      expect(runner.lastExec?.cmd).toContain("powershell");
+    } else {
+      expect(runner.lastExec?.cmd).toContain("bash -c");
+    }
     expect(runner.lastExec?.cmd).toContain("true");
     expect(runner.lastExec?.opts?.cwd).toBe(ctx.volumeRoot);
     expect(runner.lastExec?.cmd).not.toContain("docker");

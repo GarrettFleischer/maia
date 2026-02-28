@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "../zod-to-json";
 import { searchEntries, searchAcrossSessions, getSession } from "../history";
+import { formatRecentThreadTurns } from "../agent/context-query";
 import type { Tool, ToolContext } from "./types";
 
 function makeTool<S extends z.ZodTypeAny>(
@@ -108,8 +109,22 @@ export const historyGetSessionTool = makeTool(
   }
 );
 
+export const chatReadTool = makeTool(
+  "chat_read",
+  "Return the last N user/agent conversation rounds (user message + agent reply pairs) from the current session. Use this to get prior context when you need it instead of having it in every prompt.",
+  z.object({
+    steps: z.number().int().min(1).max(50).describe("Number of recent user/agent rounds to return (default 5)"),
+  }),
+  async ({ steps }, ctx) => {
+    const session = getSession(ctx, ctx.sessionId);
+    if (!session) return "No session or no recent turns.";
+    return formatRecentThreadTurns(session, steps);
+  }
+);
+
 export const historyTools: Tool[] = [
   historyFindTool,
   historySearchAllTool,
   historyGetSessionTool,
+  chatReadTool,
 ];

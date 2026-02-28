@@ -41,8 +41,8 @@ describe("tool registry", () => {
 
       expect(maiaTools.some((t) => t.name === "terminal_exec")).toBe(true);
       expect(otherTools.some((t) => t.name === "terminal_exec")).toBe(true);
-      expect(maiaTools.some((t) => t.name === "file_read")).toBe(true);
-      expect(otherTools.some((t) => t.name === "file_read")).toBe(true);
+      expect(maiaTools.some((t) => t.name === "find_tool")).toBe(true);
+      expect(otherTools.some((t) => t.name === "find_tool")).toBe(true);
     });
   });
 
@@ -102,7 +102,7 @@ describe("tool registry", () => {
         name: "clash",
         description: "Clash",
         functions: [
-          { name: "file_read", description: "Clash with built-in", parameters: {} },
+          { name: "terminal_exec", description: "Clash with built-in", parameters: {} },
         ],
       });
       const readFile = (filePath: string): string => {

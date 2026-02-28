@@ -13,11 +13,30 @@ const schema = z.object({
 });
 
 /**
- * Resolve cwd for local execution: map Docker /workspace[/...] to volumeRoot[/...].
+ * Resolve cwd for local execution: map Docker /workspace[/...] or relative paths to volumeRoot[/...].
+ * Sandbox: ensures the resolved path stays under volumeRoot (no escape).
  */
 function localCwd(cwd: string | undefined, volumeRoot: string): string {
   const inner = (cwd ?? "/workspace").replace(/^\/workspace\/?/, "") || ".";
-  return path.resolve(volumeRoot, inner);
+  const resolved = path.resolve(volumeRoot, inner);
+  const normalizedRoot = path.normalize(volumeRoot).replace(/\/$/, "") + path.sep;
+  const normalizedResolved = path.normalize(resolved) + (resolved.endsWith(path.sep) ? "" : path.sep);
+  if (!normalizedResolved.startsWith(normalizedRoot)) {
+    return volumeRoot;
+  }
+  return resolved;
+}
+
+/** On Windows, convert common bash-isms so the command can run in PowerShell. */
+function toPowerShellIfNeeded(command: string): { command: string; shell: string } {
+  if (process.platform !== "win32") {
+    return { command, shell: "bash" };
+  }
+  let out = command
+    .replace(/\s*&&\s*/g, "; ")
+    .replace(/\s*\|\|\s*/g, "; if ($?) { ");
+  if (command.includes("||")) out += " }";
+  return { command: out, shell: "powershell" };
 }
 
 export const terminalTool: Tool<z.infer<typeof schema>, ExecResult> = {
@@ -26,7 +45,12 @@ export const terminalTool: Tool<z.infer<typeof schema>, ExecResult> = {
     "Execute a shell command. Uses the sandbox container when one is configured (SANDBOX_CONTAINER_NAME); otherwise runs in the agent workspace on the host.",
   schema,
   toDefinition() {
-    return { name: this.name, description: this.description, parameters: zodToJsonSchema(schema) };
+    return {
+      name: this.name,
+      description: this.description,
+      parameters: zodToJsonSchema(schema),
+      returns: "object (stdout: string, stderr: string, exitCode: number)",
+    };
   },
   async execute({ command, cwd }, ctx) {
     const useSandbox = ctx.sandboxContainerName != null && ctx.sandboxContainerName !== "";
@@ -57,7 +81,11 @@ export const terminalTool: Tool<z.infer<typeof schema>, ExecResult> = {
     }
 
     const workdir = localCwd(cwd, ctx.volumeRoot);
-    const localCmd = `bash -c ${JSON.stringify(command)}`;
+    const { command: translated, shell } = toPowerShellIfNeeded(command);
+    const localCmd =
+      shell === "powershell"
+        ? `powershell -NoProfile -Command ${JSON.stringify(translated)}`
+        : `bash -c ${JSON.stringify(translated)}`;
     const { stdout, stderr, exitCode } = await ctx.processRunner.exec(localCmd, {
       timeout: TERMINAL_TIMEOUT_MS,
       cwd: workdir,

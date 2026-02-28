@@ -265,7 +265,7 @@ export function createHeartbeatTool(runAgentFn: RunAgentFn): Tool {
             agentId: MAIA_AGENT_ID,
             sessionId,
             message,
-            options: { enableSmartContext: false },
+            options: {},
             queueCaller: "maia",
             runAgentFn,
           },

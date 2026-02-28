@@ -1,6 +1,5 @@
 import path from "path";
 import fs from "fs";
-import { fileCrudTools } from "./file-crud";
 import { terminalTool } from "./terminal";
 import { webSearchTool } from "./web-search";
 import { braveAnswersTool } from "./brave-answers";
@@ -10,9 +9,11 @@ import { browserTools } from "./browser-tools";
 import { messagingTools } from "./messaging";
 import { historyTools } from "./history-tool";
 import { knowledgeTools } from "./knowledge-tool";
+import { findTool } from "./find-tool";
+import { chainTool } from "./chain-tool";
 import { smartContextTool } from "./smart-context-tool";
 import { credentialTools } from "./credentials";
-import { agentManagementTools, agentIdentityTools } from "./agent-management";
+import { agentManagementTools } from "./agent-management";
 import { cronTools } from "./cron-tool";
 import { taskTrackerTools } from "./task-tracker";
 import { yahooMailTools } from "./yahoo-mail";
@@ -32,7 +33,8 @@ import { parseManifest, buildToolsFromManifest } from "./custom-tool-manifest";
  */
 
 export const TOOL_REGISTRY: ToolRegistration[] = [
-  ...fileCrudTools.map((tool) => ({ tool, maiaOnly: false })),
+  { tool: findTool, maiaOnly: false },
+  { tool: chainTool, maiaOnly: false },
   { tool: terminalTool, maiaOnly: false },
   { tool: webSearchTool, maiaOnly: false },
   { tool: braveAnswersTool, maiaOnly: false },
@@ -50,7 +52,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
   ...yahooMailTools.map((tool) => ({ tool, maiaOnly: false })),
   ...dateTimeTools.map((tool) => ({ tool, maiaOnly: false })),
   ...agentManagementTools.map((tool) => ({ tool, maiaOnly: true })),
-  ...agentIdentityTools.map((tool) => ({ tool, maiaOnly: false })),
   ...cronTools.map((tool) => ({ tool, maiaOnly: true })),
   ...customToolManagementTools.map((tool) => ({ tool, maiaOnly: true })),
   ...threadManagementTools.map((tool) => ({ tool, maiaOnly: true })),
@@ -112,6 +113,23 @@ function getApprovedCustomTools(): Tool[] {
   }
 }
 
+/** Tool names sent to the LLM by default; agents discover and invoke other tools via find_tool. */
+const MINIMAL_DEFAULT_TOOL_NAMES = new Set([
+  "find_tool",
+  "chat_read",
+  "chat_find",
+  "terminal_exec",
+]);
+
+/** Maia-only tools included in the minimal set for the maia agent. */
+const MAIA_MINIMAL_TOOL_NAMES = new Set([
+  "agent_create",
+  "agent_delete",
+  "agent_list",
+  "agent_get",
+  "settings_list_whitelisted_models",
+]);
+
 /**
  * @brief Get the list of tools available to a specific agent.
  * @param agentId Agent identifier; some tools are restricted to the special \"maia\" orchestrator.
@@ -123,6 +141,21 @@ export function getToolsForAgent(agentId: string): Tool[] {
   ).map((reg) => reg.tool);
   const customTools = getApprovedCustomTools();
   return [...staticTools, ...customTools];
+}
+
+/**
+ * @brief Get the minimal tool definitions to send to the LLM (find_tool, chat_read, chat_find, terminal; for maia also agent management).
+ * The runner uses this so the model discovers other tools via find_tool; tool execution still resolves by name from getToolsForAgent.
+ * @param agentId - Agent id (maia gets additional agent-management tools in the minimal set).
+ * @returns Tool definitions for the minimal set only.
+ */
+export function getMinimalToolDefsForAgent(agentId: string): import("../ai/types").ToolDefinition[] {
+  const tools = getToolsForAgent(agentId);
+  const names = new Set(MINIMAL_DEFAULT_TOOL_NAMES);
+  if (agentId === "maia") {
+    for (const n of MAIA_MINIMAL_TOOL_NAMES) names.add(n);
+  }
+  return tools.filter((t) => names.has(t.name)).map((t) => t.toDefinition());
 }
 
 /**
