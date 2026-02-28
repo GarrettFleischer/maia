@@ -50,12 +50,66 @@ export interface ChatMessageListProps {
   onResendMessage?: (index: number, content: string) => void;
 }
 
+/** ExecResult shape from terminal_exec tool. */
+interface ExecResultShape {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+}
+
+function isExecResult(r: unknown): r is ExecResultShape {
+  return (
+    r != null &&
+    typeof r === "object" &&
+    "stdout" in r &&
+    "stderr" in r &&
+    "exitCode" in r
+  );
+}
+
 /** Single expandable tool-call bubble (args + optional result). */
 function ToolCallBubble({
   tool,
   args,
   result,
 }: { tool: string; args: Record<string, unknown>; result?: unknown }) {
+  const renderResult = () => {
+    if (result === undefined) return null;
+    if (tool === "terminal_exec" && isExecResult(result)) {
+      return (
+        <div className="space-y-2">
+          {result.stdout != null && result.stdout !== "" && (
+            <div>
+              <span className="text-zinc-500">stdout</span>
+              <pre className="mt-0.5 p-2 rounded bg-zinc-900/80 text-zinc-400 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs">
+                {result.stdout}
+              </pre>
+            </div>
+          )}
+          {result.stderr != null && result.stderr !== "" && (
+            <div>
+              <span className="text-zinc-500">stderr</span>
+              <pre className="mt-0.5 p-2 rounded bg-zinc-900/80 text-amber-400/90 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs">
+                {result.stderr}
+              </pre>
+            </div>
+          )}
+          <div className="text-zinc-500">
+            exit code:{" "}
+            <span className={result.exitCode === 0 ? "text-emerald-400" : "text-red-400"}>
+              {result.exitCode}
+            </span>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <pre className="mt-0.5 p-2 rounded bg-zinc-900/80 text-zinc-400 overflow-x-auto whitespace-pre-wrap break-all">
+        {typeof result === "string" ? result : JSON.stringify(result, null, 2)}
+      </pre>
+    );
+  };
+
   return (
     <details className="group max-w-[80%] rounded-xl rounded-bl-sm overflow-hidden bg-zinc-800/80 text-zinc-200 border border-zinc-700">
       <summary className="list-none cursor-pointer px-4 py-2.5 text-sm font-mono flex items-center gap-2 hover:bg-zinc-700/50 [&::-webkit-details-marker]:hidden">
@@ -80,10 +134,8 @@ function ToolCallBubble({
         </div>
         {result !== undefined && (
           <div>
-            <span className="text-zinc-500">result</span>
-            <pre className="mt-0.5 p-2 rounded bg-zinc-900/80 text-zinc-400 overflow-x-auto whitespace-pre-wrap break-all">
-              {typeof result === "string" ? result : JSON.stringify(result, null, 2)}
-            </pre>
+            {tool !== "terminal_exec" && <span className="text-zinc-500">result</span>}
+            {renderResult()}
           </div>
         )}
       </div>

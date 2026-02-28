@@ -69,7 +69,7 @@ export const sessionActiveWithCustomAgent: {
 
 /** GET /api/settings — public settings (no raw API key). */
 export const settingsPublic: SettingsPublic = {
-  whitelistedModels: ["ollama/llama3.2", "ollama/qwen2.5-coder", "openrouter/anthropic/claude-3.5-sonnet"],
+  whitelistedModels: ["ollama/llama3.2", "ollama/qwen2.5-coder", "ollama/nomic-embed-text", "openrouter/anthropic/claude-3.5-sonnet"],
   heartbeatIntervalMinutes: 30,
   ollamaBaseUrl: "http://localhost:11434",
   hasOllamaKey: false,
@@ -78,7 +78,7 @@ export const settingsPublic: SettingsPublic = {
   hasBraveAnswersKey: false,
   vllmBaseUrl: "http://localhost:8000/v1",
   dockerBaseUrl: "http://localhost:8000/v1",
-  embeddingModel: "nomic-embed-text",
+  embeddingModel: "ollama/nomic-embed-text",
   embedMaxContentLength: 4000,
   contextQueryModel: "",
   contextSummaryModel: "",
@@ -93,6 +93,7 @@ export const modelCapabilitiesFixture: {
   modelCapabilities: {
     "ollama/llama3.2": { provider: "ollama", supportsReasoning: true },
     "ollama/qwen2.5-coder": { provider: "ollama", supportsReasoning: true },
+    "ollama/nomic-embed-text": { provider: "ollama", supportsReasoning: false },
     "openrouter/anthropic/claude-3.5-sonnet": { provider: "openrouter", supportsReasoning: true },
   },
 };

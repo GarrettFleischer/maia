@@ -54,4 +54,27 @@ describe("ChatMessageList", () => {
     const strong = screen.getByText("yes");
     expect(strong.tagName).toBe("STRONG");
   });
+
+  it("renders terminal_exec result with readable stdout (not JSON-escaped newlines)", () => {
+    const messages: ChatMessageListItem[] = [
+      {
+        role: "tool",
+        tool: "terminal_exec",
+        args: { command: "ls -la" },
+        result: {
+          stdout: "file1.txt\nfile2.txt\n",
+          stderr: "",
+          exitCode: 0,
+        },
+      },
+    ];
+    render(
+      <ChatMessageList messages={messages} currentToken="" loading={false} />
+    );
+    // stdout should render with actual newlines, not literal \n
+    expect(screen.getByText(/file1\.txt/)).toBeInTheDocument();
+    expect(screen.getByText(/file2\.txt/)).toBeInTheDocument();
+    expect(screen.getByText(/exit code:/)).toBeInTheDocument();
+    expect(screen.getByText("0")).toBeInTheDocument();
+  });
 });
