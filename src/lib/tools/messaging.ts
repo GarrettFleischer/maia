@@ -49,12 +49,12 @@ const messageSendSchema = z.object({
 export const messageSendTool: Tool<z.infer<typeof messageSendSchema>, string> = {
   name: "message_send",
   description:
-    "Send a message to another agent. They work in a separate thread; when they reply, you will be run again in this thread to review and report to the user. Returns immediately.",
+    "Send a message to another agent. Replies are automatically forwarded between you—no need to call message_send again. The conversation continues until one of you ends a reply with [DONE]. Returns immediately.",
   schema: messageSendSchema,
   toDefinition: () => ({
     name: "message_send",
     description:
-      "Send a message to another agent. They work in a separate thread; when they reply, you will be run again in this thread to review and report to the user. Returns immediately.",
+      "Send a message to another agent. Replies are automatically forwarded between you—no need to call message_send again. The conversation continues until one of you ends a reply with [DONE]. Returns immediately.",
     parameters: zodToJsonSchema(messageSendSchema),
   }),
   async execute({ toAgentId, content }, ctx) {

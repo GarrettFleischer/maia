@@ -12,7 +12,11 @@ import type { Tool, ToolContext } from "./types";
 import type { BraveAnswerResult } from "./brave-answers";
 
 const schema = z.object({
-  question: z.string().describe("Research question to get a deeply researched, web-grounded AI answer for"),
+  question: z
+    .string()
+    .describe(
+      "Single comprehensive research question covering all aspects of the topic. Combine multiple angles into one complete query; do not split into separate calls.",
+    ),
   enableCitations: z
     .boolean()
     .optional()
@@ -124,7 +128,7 @@ async function getBraveResearchAnswer(
 export const webResearchTool: Tool<z.infer<typeof schema>, BraveAnswerResult> = {
   name: "web_research",
   description:
-    "Run a deep, streaming research query using Brave Answers (research mode). Use for complex questions that benefit from multi-search, citations, and thorough answers. Same API key as web_answer.",
+    "Run a deep, streaming research query using Brave Answers (research mode). Call ONCE with a single comprehensive question that covers all aspects of the research (e.g. combine scam investigation, reviews, connections into one query). Do not make multiple calls with smaller queries—the API performs multi-search internally. Same API key as web_answer.",
   schema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(schema) };
