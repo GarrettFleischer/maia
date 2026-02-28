@@ -9,7 +9,7 @@ import { updateSettings } from "@/lib/settings";
 import { createSession, appendEntry } from "@/lib/history";
 import { rebuildEmbeddings } from "@/lib/knowledge/rebuild-embeddings";
 import { createVectorStore } from "@/lib/knowledge/vector-store";
-import { KNOWLEDGE_DIR } from "@/lib/knowledge/index";
+import { DATA_DIR } from "@/lib/knowledge/index";
 
 describe("rebuildEmbeddings", () => {
   it("clears all vectors and rebuilds knowledge and history", async () => {
@@ -25,8 +25,8 @@ describe("rebuildEmbeddings", () => {
       async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] }))
     );
 
-    ctx.fs.mkdirp(KNOWLEDGE_DIR);
-    ctx.fs.writeFile(path.join(KNOWLEDGE_DIR, "doc.md"), "# Doc\n\nContent.");
+    ctx.fs.mkdirp(DATA_DIR);
+    ctx.fs.writeFile(path.join(DATA_DIR, "doc.md"), "# Doc\n\nContent.");
     const sessionId = createSession(ctx, ["user", "maia"]);
     appendEntry(ctx, sessionId, {
       role: "user",

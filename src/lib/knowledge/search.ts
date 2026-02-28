@@ -1,16 +1,61 @@
 /**
- * @fileoverview Semantic search over the knowledge base and (optionally) history.
+ * @fileoverview Semantic search over the data folder (and optionally history).
  * @module lib/knowledge/search
  */
 
 import type { AppContext } from "../context";
 import type { EmbeddingAdapter } from "./embedding";
 import { createVectorStore } from "./vector-store";
+import { getSettings } from "../settings";
 
 export interface KnowledgeSearchResult {
   path: string;
   content: string;
   score: number;
+  /** ISO timestamp when the file was last updated (embedding upsert). */
+  last_modified: string;
+}
+
+/** Compute archive cutoff: ISO timestamp before which files are considered archived. */
+function getArchiveCutoff(
+  value: number,
+  unit: "seconds" | "minutes" | "hours" | "days" | "months" | "years"
+): string {
+  if (value <= 0) return "";
+  let seconds = value;
+  switch (unit) {
+    case "minutes":
+      seconds *= 60;
+      break;
+    case "hours":
+      seconds *= 3600;
+      break;
+    case "days":
+      seconds *= 86400;
+      break;
+    case "months":
+      seconds *= 86400 * 30;
+      break;
+    case "years":
+      seconds *= 86400 * 365;
+      break;
+    default:
+      break;
+  }
+  const cutoff = new Date(Date.now() - seconds * 1000);
+  return cutoff.toISOString();
+}
+
+/** Map scope to path prefix (paths in store are relative to data/). */
+function scopeToPathPrefix(
+  scope: "self" | "user" | "global" | string,
+  agentId: string
+): string | undefined {
+  if (scope === "global") return undefined;
+  if (scope === "user") return "user/";
+  if (scope === "self") return `agents/${agentId}/`;
+  if (typeof scope === "string" && scope.length > 0) return `agents/${scope}/`;
+  return undefined;
 }
 
 export interface HistorySearchResult {
@@ -21,24 +66,51 @@ export interface HistorySearchResult {
   score: number;
 }
 
+export interface SearchKnowledgeOptions {
+  /** Scope: self (current agent), user (data/user), global (all), or another agent id. Default "self". */
+  scope?: "self" | "user" | "global" | string;
+  /** Include files older than archive duration. Default false. */
+  includeArchived?: boolean;
+  /** Current agent id (used when scope is "self"). */
+  agentId?: string;
+}
+
 /**
- * Semantic search over the knowledge base. Returns top-k documents (full content).
+ * Semantic search over indexed data files. Returns top-k documents with last_modified.
  * @param ctx - App context (db)
  * @param embedder - Embedding adapter
  * @param query - Search query text
  * @param limit - Max results (default 5)
+ * @param options - scope, includeArchived, agentId
  */
 export async function searchKnowledge(
   ctx: AppContext,
   embedder: EmbeddingAdapter,
   query: string,
-  limit = 5
+  limit = 5,
+  options: SearchKnowledgeOptions = {}
 ): Promise<KnowledgeSearchResult[]> {
   const store = createVectorStore(ctx.db);
+  const { scope = "self", includeArchived = false, agentId = "" } = options;
+  const pathPrefix = scopeToPathPrefix(scope, agentId);
+  const settings = getSettings(ctx);
+  const excludeArchivedBefore =
+    includeArchived || settings.archiveDurationValue <= 0
+      ? undefined
+      : getArchiveCutoff(settings.archiveDurationValue, settings.archiveDurationUnit);
+
   try {
     const queryEmbedding = await embedder.embed(query);
-    const hits = store.searchKnowledge(queryEmbedding, limit);
-    return hits.map((h) => ({ path: h.path, content: h.content, score: h.score }));
+    const hits = store.searchKnowledge(queryEmbedding, limit, {
+      pathPrefix,
+      excludeArchivedBefore,
+    });
+    return hits.map((h) => ({
+      path: h.path,
+      content: h.content,
+      score: h.score,
+      last_modified: h.last_modified,
+    }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(

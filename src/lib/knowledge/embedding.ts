@@ -2,7 +2,7 @@
  * @fileoverview Embedding adapter for knowledge base and history semantic search.
  * @module lib/knowledge/embedding
  *
- * Supports Ollama, OpenRouter, vLLM, and Docker providers. Context length for chunking
+ * Supports Ollama and OpenRouter providers. Context length for chunking
  * is obtained via Ollama POST /api/show for Ollama models; other providers use defaults.
  */
 
@@ -271,7 +271,7 @@ export function chunkContentForEmbedding(content: string, maxChars: number): str
 
 /**
  * Create the embedding adapter from app settings.
- * Routes to Ollama, OpenRouter, vLLM, or Docker based on model prefix.
+ * Routes to Ollama or OpenRouter based on model prefix.
  * @param settings - App settings (embeddingModel, provider URLs/keys, whitelistedModels)
  * @param http - HTTP client
  * @returns Embedding adapter for the configured model
@@ -294,16 +294,6 @@ export function createEmbeddingAdapter(settings: Settings, http: HttpClient): Em
     }
     const bareModel = model.replace(/^openrouter\//, "");
     return createOpenRouterEmbeddingAdapter(bareModel, settings.openRouterApiKey, http);
-  }
-
-  if (model.startsWith("vllm/")) {
-    const bareModel = model.replace(/^vllm\//, "");
-    return createOpenAICompatibleEmbeddingAdapter(bareModel, settings.vllmBaseUrl, http);
-  }
-
-  if (model.startsWith("docker/")) {
-    const bareModel = model.replace(/^docker\//, "");
-    return createOpenAICompatibleEmbeddingAdapter(bareModel, settings.dockerBaseUrl, http);
   }
 
   throw new Error(`Unknown embedding provider for: ${model}`);

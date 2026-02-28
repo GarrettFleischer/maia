@@ -5,7 +5,7 @@
 import path from "path";
 import { describe, it, expect, beforeEach } from "bun:test";
 import { makeTestContext, FakeHttp, FakeResponse } from "@/__tests__/helpers/fakes";
-import { runKnowledgeIndex, KNOWLEDGE_DIR } from "@/lib/knowledge/index";
+import { runKnowledgeIndex, DATA_DIR } from "@/lib/knowledge/index";
 import { createVectorStore } from "@/lib/knowledge/vector-store";
 import { _clearOllamaEmbedContextLengthCacheForTests } from "@/lib/knowledge/embedding";
 import type { AppContext } from "@/lib/context";
@@ -29,8 +29,8 @@ describe("knowledge index", () => {
     const fakeEmbedder: EmbeddingAdapter = {
       embed: async () => [0.1, 0.2, 0.3],
     };
-    ctx.fs.mkdirp(KNOWLEDGE_DIR);
-    ctx.fs.writeFile(path.join(KNOWLEDGE_DIR, "report.md"), "# Report\n\nContent here.");
+    ctx.fs.mkdirp(DATA_DIR);
+    ctx.fs.writeFile(path.join(DATA_DIR, "report.md"), "# Report\n\nContent here.");
 
     const result = await runKnowledgeIndex(ctx, { embedder: fakeEmbedder });
     expect(result.indexed).toBe(1);
@@ -49,8 +49,8 @@ describe("knowledge index", () => {
         return [0.1, 0.2];
       },
     };
-    ctx.fs.mkdirp(KNOWLEDGE_DIR);
-    ctx.fs.writeFile(path.join(KNOWLEDGE_DIR, "same.md"), "unchanged");
+    ctx.fs.mkdirp(DATA_DIR);
+    ctx.fs.writeFile(path.join(DATA_DIR, "same.md"), "unchanged");
 
     await runKnowledgeIndex(ctx, { embedder: fakeEmbedder });
     expect(embedCalls).toHaveLength(1);
@@ -62,11 +62,11 @@ describe("knowledge index", () => {
 
   it("removes vector when file deleted from disk", async () => {
     const fakeEmbedder: EmbeddingAdapter = { embed: async () => [0.1] };
-    ctx.fs.mkdirp(KNOWLEDGE_DIR);
-    ctx.fs.writeFile(path.join(KNOWLEDGE_DIR, "gone.md"), "content");
+    ctx.fs.mkdirp(DATA_DIR);
+    ctx.fs.writeFile(path.join(DATA_DIR, "gone.md"), "content");
     await runKnowledgeIndex(ctx, { embedder: fakeEmbedder });
 
-    ctx.fs.deleteFile(path.join(KNOWLEDGE_DIR, "gone.md"));
+    ctx.fs.deleteFile(path.join(DATA_DIR, "gone.md"));
     const result = await runKnowledgeIndex(ctx, {});
     expect(result.removed).toBe(1);
     const store = createVectorStore(ctx.db);
@@ -87,9 +87,9 @@ describe("knowledge index", () => {
       new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 2048\n" }))
     );
     ctx = { ...ctx, http };
-    ctx.fs.mkdirp(KNOWLEDGE_DIR);
+    ctx.fs.mkdirp(DATA_DIR);
     const longContent = "x".repeat(10000);
-    ctx.fs.writeFile(path.join(KNOWLEDGE_DIR, "long.md"), longContent);
+    ctx.fs.writeFile(path.join(DATA_DIR, "long.md"), longContent);
 
     await runKnowledgeIndex(ctx, { embedder: fakeEmbedder });
 

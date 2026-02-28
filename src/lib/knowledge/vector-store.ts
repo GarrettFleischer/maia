@@ -8,8 +8,8 @@
 
 import type { DbAdapter } from "../context";
 
-/** Cosine similarity between two vectors. */
-function cosineSimilarity(a: number[], b: number[]): number {
+/** Cosine similarity between two vectors. Exported for skills matching. */
+export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) return 0;
   let dot = 0;
   let normA = 0;
@@ -34,6 +34,8 @@ export interface KnowledgeHit {
   path: string;
   content: string;
   score: number;
+  /** ISO timestamp when the file was last updated (embedding upsert). */
+  last_modified: string;
 }
 
 export interface HistoryHit {
@@ -101,21 +103,65 @@ export function createVectorStore(db: DbAdapter) {
       return row?.content_hash ?? null;
     },
 
-    /** Semantic search over knowledge. Returns top-k by cosine similarity. */
-    searchKnowledge(queryEmbedding: number[], limit: number): KnowledgeHit[] {
-      const rows = db
-        .prepare("SELECT id, path, content, embedding_json FROM knowledge_vectors")
-        .all() as { id: string; path: string; content: string; embedding_json: string }[];
+    /**
+     * Semantic search over knowledge. Returns top-k by cosine similarity.
+     * @param queryEmbedding - Query vector
+     * @param limit - Max results
+     * @param options - Optional pathPrefix (e.g. "agents/maia/") and excludeArchivedBefore (ISO timestamp: exclude rows with updated_at before this)
+     */
+    searchKnowledge(
+      queryEmbedding: number[],
+      limit: number,
+      options?: { pathPrefix?: string; excludeArchivedBefore?: string }
+    ): KnowledgeHit[] {
+      let rows: { id: string; path: string; content: string; embedding_json: string; updated_at: string }[];
+      if (options?.pathPrefix != null || options?.excludeArchivedBefore != null) {
+        const conditions: string[] = [];
+        const params: (string | number)[] = [];
+        if (options.pathPrefix != null) {
+          conditions.push("path LIKE ?");
+          params.push(`${options.pathPrefix}%`);
+        }
+        if (options.excludeArchivedBefore != null) {
+          conditions.push("updated_at >= ?");
+          params.push(options.excludeArchivedBefore);
+        }
+        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        rows = db
+          .prepare(
+            `SELECT id, path, content, embedding_json, updated_at FROM knowledge_vectors ${where}`
+          )
+          .all(...params) as {
+          id: string;
+          path: string;
+          content: string;
+          embedding_json: string;
+          updated_at: string;
+        }[];
+      } else {
+        rows = db
+          .prepare(
+            "SELECT id, path, content, embedding_json, updated_at FROM knowledge_vectors"
+          )
+          .all() as {
+          id: string;
+          path: string;
+          content: string;
+          embedding_json: string;
+          updated_at: string;
+        }[];
+      }
       const withScore = rows.map((r) => ({
         ...r,
         score: cosineSimilarity(queryEmbedding, parseEmbedding(r.embedding_json)),
       }));
       withScore.sort((a, b) => b.score - a.score);
-      return withScore.slice(0, limit).map(({ id, path, content, score }) => ({
+      return withScore.slice(0, limit).map(({ id, path, content, score, updated_at }) => ({
         id,
         path,
         content,
         score,
+        last_modified: updated_at,
       }));
     },
 
