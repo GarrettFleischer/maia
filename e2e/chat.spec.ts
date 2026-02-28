@@ -60,8 +60,11 @@ test.describe("Chat", () => {
     await expect(page.getByText(/Welcome to Maia/i)).toBeVisible();
     const input = page.getByPlaceholder(/Message Maia/i);
     await input.fill("Trigger session");
-    await page.getByRole("button", { name: "Send message" }).click();
+    const sendBtn = page.getByRole("button", { name: "Send message" });
+    await sendBtn.click();
     await expect(page.getByText("Trigger session").first()).toBeVisible({ timeout: 15_000 });
+    // Wait for chat request to finish so EventSource handler will accept the async message (not skip due to loadingRef)
+    await expect(sendBtn).toBeEnabled({ timeout: 15_000 });
 
     const asyncContent = "Async reply from agent E2E " + Date.now();
     const emitRes = await page.request.post(`${baseURL}/api/test/emit-event`, {
