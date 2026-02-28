@@ -40,7 +40,23 @@ export interface SessionMeta {
 export type ReasoningEffort = "off" | "low" | "medium" | "high";
 
 /** Provider identifier for AI models used in Maia. */
-export type ModelProviderId = "ollama" | "openrouter" | "vllm" | "docker";
+export type ModelProviderId = "ollama" | "openrouter";
+
+/**
+ * Per-model generation parameters (temperature, sampling, etc.).
+ * Keys in modelParams must be whitelisted model ids (e.g. ollama/qwen3.5-35b-a3b).
+ * Used so models like Qwen3.5 can follow provider docs (e.g. Unsloth recommended settings).
+ */
+export interface ModelGenerationParams {
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  presence_penalty?: number;
+  repetition_penalty?: number;
+  /** Provider-specific options (e.g. Ollama num_ctx, enable_thinking). */
+  options?: Record<string, unknown>;
+}
 
 /** Capabilities for a single model (used by /api/model-capabilities and settings UI). */
 export interface ModelCapabilities {
@@ -135,10 +151,6 @@ export interface Settings {
   /** Optional API key for Ollama Cloud (Bearer token). When set, sent as Authorization header. */
   ollamaApiKey?: string;
   openRouterApiKey?: string;
-  /** vLLM server base URL (e.g. http://localhost:8000/v1). */
-  vllmBaseUrl: string;
-  /** Docker-hosted OpenAI-compatible API base URL (e.g. http://localhost:8000/v1). */
-  dockerBaseUrl: string;
   /** Embedding model for knowledge base and history semantic search (e.g. nomic-embed-text). */
   embeddingModel: string;
   /** Max characters to send to the embedding model per chunk (avoids context-length 400). Default 4000. */
@@ -162,6 +174,12 @@ export interface Settings {
   contextRecentTurns: number;
   /** Reasoning effort for smart context (query, relevance filter, and quote extraction models). Same API as per-agent effort. */
   contextReasoningEffort: ReasoningEffort;
+  /** Auto-archive: files with updated_at older than this duration are excluded from knowledge_search unless include_archived is true. Value (positive integer). */
+  archiveDurationValue: number;
+  /** Auto-archive duration unit. */
+  archiveDurationUnit: "seconds" | "minutes" | "hours" | "days" | "months" | "years";
+  /** Per-model generation params (keys must be whitelisted model ids). */
+  modelParams: Record<string, ModelGenerationParams>;
 }
 
 export interface SettingsPublic {
@@ -172,8 +190,6 @@ export interface SettingsPublic {
   hasOpenRouterKey: boolean;
   hasBraveKey: boolean;
   hasBraveAnswersKey: boolean;
-  vllmBaseUrl: string;
-  dockerBaseUrl: string;
   embeddingModel: string;
   embedMaxContentLength: number;
   /** @see Settings.contextQueryModel */
@@ -188,6 +204,12 @@ export interface SettingsPublic {
   contextRecentTurns: number;
   /** @see Settings.contextReasoningEffort */
   contextReasoningEffort: ReasoningEffort;
+  /** @see Settings.archiveDurationValue */
+  archiveDurationValue: number;
+  /** @see Settings.archiveDurationUnit */
+  archiveDurationUnit: "seconds" | "minutes" | "hours" | "days" | "months" | "years";
+  /** @see Settings.modelParams */
+  modelParams: Record<string, ModelGenerationParams>;
 }
 
 export interface EncryptedValue {
@@ -219,9 +241,34 @@ export interface ExecResult {
   exitCode: number;
 }
 
+/**
+ * Pi-style agent loop events. Emitted by the agentic loop for persistence and SSE mapping.
+ * @see docs/architecture/agent-system.md
+ */
+export type AgentLoopEvent =
+  | { type: "agent_start" }
+  | { type: "turn_start"; loopIndex: number }
+  | { type: "message_start" }
+  | { type: "message_update"; delta: string }
+  | { type: "message_end"; content: string; toolCalls: Array<{ id: string; name: string; args: Record<string, unknown> }> }
+  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
+  | {
+      type: "tool_execution_end";
+      toolCallId: string;
+      toolName: string;
+      content: string;
+      toolArgs: Record<string, unknown>;
+      /** When set, sent as SSE tool_result result (e.g. { error: string }); otherwise content is sent. */
+      resultForSSE?: unknown;
+    }
+  | { type: "turn_end" }
+  | { type: "agent_end"; finalContent?: string }
+  | { type: "agent_error"; message: string };
+
 // SSE event types
 export type SSEEvent =
   | { type: "token"; content: string }
+  | { type: "thinking"; content: string }
   | { type: "tool_call"; tool: string; args: Record<string, unknown> }
   | { type: "tool_result"; tool: string; result: unknown }
   | { type: "done"; sessionId: string; compressed: HistoryEntry; original: HistoryEntry }

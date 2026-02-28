@@ -128,14 +128,13 @@ export function registerLlmQueueHandlers(): void {
    * Args: toolName (string), toolArgs (Record<string, unknown>), agentId?, sessionId?, volumeRoot?
    */
   registerToolHandler("executeTool", async (ctx, args) => {
-    const { getToolByName } = await import("../tools/registry");
-    const { getWorkspaceRoot } = await import("../data-dir");
+    const { getToolByName, getToolsForAgent } = await import("../tools/registry");
+    const { getAgentDir } = await import("../data-dir");
     const toolName = args.toolName as string;
     const toolArgs = (args.toolArgs ?? {}) as Record<string, unknown>;
     const agentId = (args.agentId as string) ?? "maia";
     const sessionId = (args.sessionId as string) ?? "";
-    const volumeRoot =
-      (args.volumeRoot as string) ?? `${getWorkspaceRoot()}/agents/${agentId}`;
+    const volumeRoot = (args.volumeRoot as string) ?? getAgentDir(agentId);
     const tool = getToolByName(toolName);
     if (!tool) throw new Error(`Queue: tool not found: ${toolName}`);
     const toolContext = {
@@ -143,6 +142,7 @@ export function registerLlmQueueHandlers(): void {
       agentId,
       sessionId,
       volumeRoot,
+      getToolsForAgent,
     };
     const parsed = tool.schema.safeParse(toolArgs);
     if (!parsed.success) {

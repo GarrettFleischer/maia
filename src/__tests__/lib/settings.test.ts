@@ -17,8 +17,6 @@ describe("settings", () => {
       expect(s.heartbeatIntervalMinutes).toBe(30);
       expect(s.ollamaBaseUrl).toBe("http://localhost:11434");
       expect(s.contextReasoningEffort).toBe("medium");
-      expect(s.vllmBaseUrl).toBe("http://localhost:8000/v1");
-      expect(s.dockerBaseUrl).toBe("http://localhost:8000/v1");
       expect(s.whitelistedModels).toContain("ollama/llama3.2");
       expect(s.ollamaApiKey).toBeUndefined();
       expect(s.openRouterApiKey).toBeUndefined();
@@ -37,6 +35,24 @@ describe("settings", () => {
       expect(s.openRouterApiKey).toBeUndefined();
       expect(s.embeddingModel).toBe("ollama/nomic-embed-text");
       expect(s.embedMaxContentLength).toBe(4000);
+    });
+
+    it("returns modelParams as empty object when missing", () => {
+      const s = getSettings(ctx);
+      expect(s.modelParams).toEqual({});
+    });
+
+    it("parses modelParams when set", () => {
+      ctx.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
+        "modelParams",
+        JSON.stringify({
+          "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 },
+        })
+      );
+      const s = getSettings(ctx);
+      expect(s.modelParams).toEqual({
+        "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 },
+      });
     });
   });
 
@@ -93,16 +109,6 @@ describe("settings", () => {
       const pub = getSettingsPublic(ctx);
       expect(pub.hasBraveAnswersKey).toBe(true);
       expect(credentialGet(ctx, "BRAVE_ANSWERS_API_KEY")).toBe("brave-answers-secret");
-    });
-
-    it("includes vllmBaseUrl in public settings", () => {
-      const pub = getSettingsPublic(ctx);
-      expect(pub.vllmBaseUrl).toBe("http://localhost:8000/v1");
-    });
-
-    it("includes dockerBaseUrl in public settings", () => {
-      const pub = getSettingsPublic(ctx);
-      expect(pub.dockerBaseUrl).toBe("http://localhost:8000/v1");
     });
 
     it("includes contextReasoningEffort in public settings", () => {
@@ -168,16 +174,6 @@ describe("settings", () => {
       ).toThrow(/Embedding model must be in whitelist/);
     });
 
-    it("updates vllmBaseUrl", () => {
-      updateSettings(ctx, { vllmBaseUrl: "http://vllm:8000/v1" });
-      expect(getSettings(ctx).vllmBaseUrl).toBe("http://vllm:8000/v1");
-    });
-
-    it("updates dockerBaseUrl", () => {
-      updateSettings(ctx, { dockerBaseUrl: "http://docker-host:8000/v1" });
-      expect(getSettings(ctx).dockerBaseUrl).toBe("http://docker-host:8000/v1");
-    });
-
     it("updates embedMaxContentLength and persists", () => {
       updateSettings(ctx, { embedMaxContentLength: 6000 });
       expect(getSettings(ctx).embedMaxContentLength).toBe(6000);
@@ -195,6 +191,28 @@ describe("settings", () => {
       updateSettings(ctx, { contextReasoningEffort: "high" });
       expect(getSettings(ctx).contextReasoningEffort).toBe("high");
       expect(getSettingsPublic(ctx).contextReasoningEffort).toBe("high");
+    });
+
+    it("persists modelParams only for whitelisted model ids", () => {
+      updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2", "openrouter/free"] });
+      updateSettings(ctx, {
+        modelParams: {
+          "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 },
+          "openrouter/free": { temperature: 0.7 },
+          "ollama/not-whitelisted": { temperature: 0.5 },
+        },
+      });
+      const s = getSettings(ctx);
+      expect(s.modelParams["ollama/llama3.2"]).toEqual({ temperature: 0.6, top_p: 0.95 });
+      expect(s.modelParams["openrouter/free"]).toEqual({ temperature: 0.7 });
+      expect(s.modelParams["ollama/not-whitelisted"]).toBeUndefined();
+    });
+
+    it("getSettingsPublic includes modelParams", () => {
+      updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"] });
+      updateSettings(ctx, { modelParams: { "ollama/llama3.2": { temperature: 0.6 } } });
+      const pub = getSettingsPublic(ctx);
+      expect(pub.modelParams).toEqual({ "ollama/llama3.2": { temperature: 0.6 } });
     });
   });
 });

@@ -8,7 +8,7 @@
  */
 import path from "path";
 import type { AppContext } from "./context";
-import { getWorkspaceRoot } from "./data-dir";
+import { getDataDir } from "./data-dir";
 import { createHeartbeatTool } from "./tools/heartbeat-tool";
 import type { RunAgentFn } from "./agent/runner";
 
@@ -50,7 +50,7 @@ export async function fireHeartbeat(
     ...ctx,
     agentId: "system",
     sessionId: "",
-    volumeRoot: path.join(getWorkspaceRoot(), "system"),
+    volumeRoot: path.join(getDataDir(), "system"),
   };
   await tool.execute({}, toolContext);
 }

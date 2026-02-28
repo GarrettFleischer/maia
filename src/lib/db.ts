@@ -2,12 +2,13 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import type { DbAdapter } from "./context";
-import { getDataDir, getToolsDir } from "./data-dir";
+import { getDataDir, getToolsDir, getUserDir } from "./data-dir";
 
 const DB_PATH = path.join(getDataDir(), "maia.db");
 
 fs.mkdirSync(getDataDir(), { recursive: true });
 fs.mkdirSync(getToolsDir(), { recursive: true });
+fs.mkdirSync(getUserDir(), { recursive: true });
 
 let _db: Database.Database | null = null;
 
@@ -180,14 +181,14 @@ export function initSchema(db: DbAdapter): void {
     ollamaBaseUrl: "http://localhost:11434",
     ollamaApiKey: "",
     openRouterApiKey: "",
-    vllmBaseUrl: "http://localhost:8000/v1",
-    dockerBaseUrl: "http://localhost:8000/v1",
     embeddingModel: "ollama/nomic-embed-text",
     embedMaxContentLength: "4000",
     contextQueryModel: "",
     contextSummaryModel: "",
     contextRecentTurns: "3",
     contextReasoningEffort: "medium",
+    archiveDurationValue: "0",
+    archiveDurationUnit: "days",
   };
 
   const insert = db.prepare(

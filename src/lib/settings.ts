@@ -1,6 +1,6 @@
 import { credentialCreate, credentialList } from "./security/credential-vault";
 import type { AppContext } from "./context";
-import type { ReasoningEffort, Settings, SettingsPublic } from "./types";
+import type { ModelGenerationParams, ReasoningEffort, Settings, SettingsPublic } from "./types";
 import { BUILTIN_HEARTBEAT_JOB_ID, minutesToCronExpression } from "./cron/expression";
 
 /** Vault key used for Brave Search API key (encrypted). */
@@ -34,15 +34,30 @@ export function getSettings(ctx: AppContext): Settings {
     ollamaBaseUrl: map.ollamaBaseUrl ?? "http://localhost:11434",
     ollamaApiKey: map.ollamaApiKey || undefined,
     openRouterApiKey: map.openRouterApiKey || undefined,
-    vllmBaseUrl: map.vllmBaseUrl ?? "http://localhost:8000/v1",
-    dockerBaseUrl: map.dockerBaseUrl ?? "http://localhost:8000/v1",
     embeddingModel: map.embeddingModel ?? "ollama/nomic-embed-text",
     embedMaxContentLength: Math.max(500, Math.min(32000, parseInt(map.embedMaxContentLength ?? "4000", 10) || 4000)),
     contextQueryModel: map.contextQueryModel ?? "",
     contextSummaryModel: map.contextSummaryModel ?? "",
     contextRecentTurns: Math.max(1, parseInt(map.contextRecentTurns ?? "3", 10) || 3),
     contextReasoningEffort: normalizeContextReasoningEffort(map.contextReasoningEffort),
+    archiveDurationValue: Math.max(0, parseInt(map.archiveDurationValue ?? "0", 10) || 0),
+    archiveDurationUnit: (["seconds", "minutes", "hours", "days", "months", "years"] as const).includes(
+      map.archiveDurationUnit as "seconds"
+    )
+      ? (map.archiveDurationUnit as "seconds" | "minutes" | "hours" | "days" | "months" | "years")
+      : "days",
+    modelParams: parseModelParams(map.modelParams),
   };
+}
+
+function parseModelParams(raw: string | undefined): Record<string, ModelGenerationParams> {
+  if (raw == null || raw === "") return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, ModelGenerationParams>;
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 export function getSettingsPublic(ctx: AppContext): SettingsPublic {
@@ -58,14 +73,15 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
     hasOpenRouterKey: !!s.openRouterApiKey,
     hasBraveKey,
     hasBraveAnswersKey,
-    vllmBaseUrl: s.vllmBaseUrl,
-    dockerBaseUrl: s.dockerBaseUrl,
     embeddingModel: s.embeddingModel,
     embedMaxContentLength: s.embedMaxContentLength,
     contextQueryModel: s.contextQueryModel,
     contextSummaryModel: s.contextSummaryModel,
     contextRecentTurns: s.contextRecentTurns,
     contextReasoningEffort: s.contextReasoningEffort,
+    archiveDurationValue: s.archiveDurationValue,
+    archiveDurationUnit: s.archiveDurationUnit,
+    modelParams: s.modelParams,
   };
 }
 
@@ -80,6 +96,7 @@ export function updateSettings(
     }
   >
 ): void {
+  const effectiveWhitelist = partial.whitelistedModels ?? getSettings(ctx).whitelistedModels;
   const update = ctx.db.prepare(
     "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)"
   );
@@ -104,14 +121,7 @@ export function updateSettings(
   if (partial.openRouterApiKey !== undefined) {
     update.run("openRouterApiKey", partial.openRouterApiKey);
   }
-  if (partial.vllmBaseUrl !== undefined) {
-    update.run("vllmBaseUrl", partial.vllmBaseUrl);
-  }
-  if (partial.dockerBaseUrl !== undefined) {
-    update.run("dockerBaseUrl", partial.dockerBaseUrl);
-  }
   if (partial.embeddingModel !== undefined) {
-    const effectiveWhitelist = partial.whitelistedModels ?? getSettings(ctx).whitelistedModels;
     if (!effectiveWhitelist.includes(partial.embeddingModel)) {
       throw new Error(`Embedding model must be in whitelist: ${partial.embeddingModel}`);
     }
@@ -136,10 +146,30 @@ export function updateSettings(
       : "medium";
     update.run("contextReasoningEffort", value);
   }
+  if (partial.archiveDurationValue !== undefined) {
+    update.run("archiveDurationValue", String(Math.max(0, Math.floor(partial.archiveDurationValue))));
+  }
+  if (partial.archiveDurationUnit !== undefined) {
+    const unit = ["seconds", "minutes", "hours", "days", "months", "years"].includes(
+      partial.archiveDurationUnit
+    )
+      ? partial.archiveDurationUnit
+      : "days";
+    update.run("archiveDurationUnit", unit);
+  }
   if (partial.braveSearchApiKey !== undefined) {
     credentialCreate(ctx, BRAVE_SEARCH_CREDENTIAL_KEY, partial.braveSearchApiKey);
   }
   if (partial.braveAnswersApiKey !== undefined) {
     credentialCreate(ctx, BRAVE_ANSWERS_CREDENTIAL_KEY, partial.braveAnswersApiKey);
+  }
+  if (partial.modelParams !== undefined) {
+    const filtered: Record<string, ModelGenerationParams> = {};
+    for (const [modelId, params] of Object.entries(partial.modelParams)) {
+      if (effectiveWhitelist.includes(modelId) && params != null && typeof params === "object") {
+        filtered[modelId] = params;
+      }
+    }
+    update.run("modelParams", JSON.stringify(filtered));
   }
 }

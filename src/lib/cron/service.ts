@@ -130,7 +130,6 @@ function scheduleJob(
                 message,
                 options: {
                   initialToolCall: { name: toolNameSafe, args: toolArgs },
-                  enableSmartContext: false,
                 },
                 queueCaller: "agent",
                 runAgentFn,
