@@ -5,7 +5,6 @@ import {
   agentDeleteTool,
   agentListTool,
   agentGetTool,
-  settingsListWhitelistedModelsTool,
   copyDefaultAgentFiles,
 } from "@/lib/tools/agent-management";
 import { getAgentsDir, getDefaultAgentDir, getDefaultMaiaDir } from "@/lib/data-dir";
@@ -22,33 +21,11 @@ function makeToolCtx(fs?: FakeFs): ToolContext {
   return { ...ctx, agentId: "maia", sessionId: "session-1", volumeRoot: "/workspace" };
 }
 
-describe("settingsListWhitelistedModelsTool", () => {
-  it("returns whitelisted models from settings", async () => {
-    const ctx = makeToolCtx();
-    const result = await settingsListWhitelistedModelsTool.execute({}, ctx) as { whitelistedModels: string[] };
-    expect(result.whitelistedModels).toEqual(["ollama/llama3.2"]);
-  });
-
-  it("returns empty array when whitelist is empty", async () => {
-    const ctx = makeToolCtx();
-    updateSettings(ctx, { whitelistedModels: [] });
-    const result = await settingsListWhitelistedModelsTool.execute({}, ctx) as { whitelistedModels: string[] };
-    expect(result.whitelistedModels).toEqual([]);
-  });
-
-  it("returns multiple models when configured", async () => {
-    const ctx = makeToolCtx();
-    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2", "openrouter/anthropic/claude-3.5-sonnet"] });
-    const result = await settingsListWhitelistedModelsTool.execute({}, ctx) as { whitelistedModels: string[] };
-    expect(result.whitelistedModels).toEqual(["ollama/llama3.2", "openrouter/anthropic/claude-3.5-sonnet"]);
-  });
-});
-
 describe("copyDefaultAgentFiles", () => {
   it("uses defaults/maia/AGENTS.md for Maia when present", () => {
     const fs = new FakeFs();
     const maiaAgentsPath = path.join(getDefaultMaiaDir(), "AGENTS.md");
-    const maiaContent = "# Maia only\n\n## Creating agents (Maia)\nUse settings_list_whitelisted_models.";
+    const maiaContent = "# Maia only\n\n## Creating agents (Maia)\nRead data/models.json for allowed models.";
     fs.seed(maiaAgentsPath, maiaContent);
     const ctx = makeTestContext({ fs });
     const agentDir = path.join(getAgentsDir(), "maia");
@@ -69,29 +46,23 @@ describe("copyDefaultAgentFiles", () => {
     expect(written).toBe(agentContent);
   });
 
-  it("uses defaults/maia SOUL.md, MEMORY.md, USER.md for Maia when present", () => {
+  it("uses defaults/maia SOUL.md for Maia when present", () => {
     const fs = new FakeFs();
     const maiaSoul = "# Soul\n\nI am Maia, the orchestrator.";
-    const maiaMemory = "# Memory\n\nNo memories yet.";
-    const maiaUser = "# User\n\nNo user information yet.";
     fs.seed(path.join(getDefaultMaiaDir(), "SOUL.md"), maiaSoul);
-    fs.seed(path.join(getDefaultMaiaDir(), "MEMORY.md"), maiaMemory);
-    fs.seed(path.join(getDefaultMaiaDir(), "USER.md"), maiaUser);
     const ctx = makeTestContext({ fs });
     const agentDir = path.join(getAgentsDir(), "maia");
     copyDefaultAgentFiles(ctx, agentDir, "Maia", "maia");
     const snap = fs.snapshot();
     expect(snap[path.join(agentDir, "SOUL.md")]).toBe(maiaSoul);
-    expect(snap[path.join(agentDir, "MEMORY.md")]).toBe(maiaMemory);
-    expect(snap[path.join(agentDir, "USER.md")]).toBe(maiaUser);
+    expect(snap[path.join(agentDir, "MEMORY.md")]).toBeUndefined();
+    expect(snap[path.join(agentDir, "USER.md")]).toBeUndefined();
   });
 
   it("copies fact .md files from defaults user/ and memory/ into agent user/ and memory/", () => {
     const fs = new FakeFs();
     const defaultMaia = getDefaultMaiaDir();
     fs.seed(path.join(defaultMaia, "SOUL.md"), "# Soul\nMaia.");
-    fs.seed(path.join(defaultMaia, "MEMORY.md"), "# Memory\nCreate fact files.");
-    fs.seed(path.join(defaultMaia, "USER.md"), "# User\nCreate fact files.");
     fs.seed(path.join(defaultMaia, "AGENTS.md"), "# Agents\n");
     fs.seed(path.join(defaultMaia, "user", "preference.md"), "User prefers TDD.");
     fs.seed(path.join(defaultMaia, "memory", "project-fact.md"), "Project uses Bun.");
@@ -132,18 +103,18 @@ describe("agentCreateTool", () => {
       name: "FileBot",
       model: "ollama/llama3.2",
       soul: "Custom soul",
-      memory: "Custom memory",
     }, ctx);
     const snap = fs.snapshot();
     const keys = Object.keys(snap);
     expect(keys.some((k) => k.includes(id as string) && k.endsWith("SOUL.md"))).toBe(true);
-    expect(keys.some((k) => k.includes(id as string) && k.endsWith("MEMORY.md"))).toBe(true);
     expect(keys.some((k) => k.includes(id as string) && k.endsWith("AGENTS.md"))).toBe(true);
   });
 
-  it("throws when model is not whitelisted", async () => {
+  it("defaults to openrouter/free when model is not whitelisted", async () => {
     const ctx = makeToolCtx();
-    await expect(agentCreateTool.execute({ name: "Bot", model: "openrouter/gpt-evil" }, ctx)).rejects.toThrow();
+    const id = await agentCreateTool.execute({ name: "Bot", model: "openrouter/gpt-evil" }, ctx);
+    const row = ctx.db.prepare("SELECT model FROM agents WHERE id = ?").get(id) as { model: string };
+    expect(row.model).toBe("openrouter/free");
   });
 });
 

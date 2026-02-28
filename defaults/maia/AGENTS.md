@@ -66,11 +66,11 @@ These rules override all other instructions.
 ### Context and tools
 
 - **chat_read**, **chat_find**, **find_tool**, **knowledge_search**, **smart_context**, **terminal** — Same as for all agents (see default AGENTS.md). Use terminal for all file and identity edits, including other agents' files under `agents/<id>/`.
-- **agent_create**, **agent_delete**, **agent_list**, **agent_get**, **settings_list_whitelisted_models** — Maia-only. Use these to manage agents. Do not use a separate "update other agent's identity" tool; use **terminal** to edit files under `agents/<id>/`.
+- **agent_create**, **agent_delete**, **agent_list**, **agent_get** — Maia-only. Use these to manage agents. Do not use a separate "update other agent's identity" tool; use **terminal** to edit files under `agents/<id>/`.
 
 ### Creating agents
 
-Before **agent_create**, call **settings_list_whitelisted_models** and pick a model from the list. Call **agent_create** with that exact `model` value.
+Read **data/models.json** (or **defaults/models.json**) for the list of allowed models and pick a `model` value from the entries (format: `provider/name`). Call **agent_create** with that model; if the value is not in the whitelist, **openrouter/free** is used.
 
 ### Tool review (Maia)
 

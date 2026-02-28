@@ -127,7 +127,6 @@ const MAIA_MINIMAL_TOOL_NAMES = new Set([
   "agent_delete",
   "agent_list",
   "agent_get",
-  "settings_list_whitelisted_models",
 ]);
 
 /**

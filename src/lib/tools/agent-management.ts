@@ -26,31 +26,15 @@ const agentCreateSchema = z.object({
   name: z.string(),
   model: z.string(),
   soul: z.string().optional(),
-  memory: z.string().optional(),
-  user: z.string().optional(),
   systemPromptExtra: z.string().optional(),
 });
 
 /** Inline fallbacks when defaults/agent file is missing (e.g. in tests). */
 const FALLBACK_SOUL = "# Soul\n\nI am {{name}}, a helpful AI agent.\n";
-const FALLBACK_MEMORY = "# Memory\n\nCreate individual **fact.md** files in the `memory/` subfolder of this directory. When the app runs, they are copied to the agent's `memory/` folder.\n";
-const FALLBACK_USER = "# User\n\nCreate individual **fact.md** files in the `user/` subfolder of this directory. When the app runs, they are copied to the agent's `user/` folder.\n";
 const FALLBACK_AGENTS_MD = "# How you function\n\nFollow AGENTS.md from project root or defaults/agent. Copy the full system command there into this file for a complete prompt.\n";
 
-/**
- * List the whitelisted AI models from settings for use when creating agents.
- * @brief Returns whitelisted models so Maia can pick one for agent_create.
- * @note Call before agent_create; the model parameter must be in this list.
- */
-export const settingsListWhitelistedModelsTool = makeTool(
-  "settings_list_whitelisted_models",
-  "List the whitelisted AI models from settings. Call this before creating an agent so you can pick the model parameter from this list; agent_create fails if the model is not whitelisted. Maia only.",
-  z.object({}),
-  async (_args, ctx) => {
-    const settings = getSettings(ctx);
-    return { whitelistedModels: settings.whitelistedModels };
-  }
-);
+/** Default model when agent_create receives a model not in the whitelist. */
+const DEFAULT_MODEL = "openrouter/free";
 
 /**
  * Reads a default agent template file from defaults/agent.
@@ -71,9 +55,9 @@ function readDefaultAgentFile(ctx: AppContext, filename: string, fallback: strin
 }
 
 /**
- * Reads a default identity file (SOUL, MEMORY, USER). When agentId is "maia", reads from defaults/maia first; otherwise (or if missing) from defaults/agent.
+ * Reads a default identity file (SOUL). When agentId is "maia", reads from defaults/maia first; otherwise (or if missing) from defaults/agent.
  * @param ctx - App context (uses ctx.fs)
- * @param filename - e.g. "SOUL.md", "MEMORY.md", "USER.md"
+ * @param filename - e.g. "SOUL.md"
  * @param fallback - Used when file is missing or unreadable in both locations
  * @param agentId - When "maia", use defaults/maia first
  * @returns File content or fallback
@@ -158,7 +142,7 @@ function copyDefaultFactFiles(
 }
 
 /**
- * Copies default agent template files into an agent directory. When agentId is "maia", SOUL/MEMORY/USER and AGENTS.md come from defaults/maia when present; otherwise from defaults/agent. Any .md files in the default's user/ and memory/ subfolders are copied into the agent's user/ and memory/ folders.
+ * Copies default agent template files into an agent directory. When agentId is "maia", SOUL and AGENTS.md come from defaults/maia when present; otherwise from defaults/agent. Any .md files in the default's user/ and memory/ subfolders are copied into the agent's user/ and memory/ folders.
  * @param ctx - App context (uses ctx.fs)
  * @param agentDir - Absolute path to the agent directory (e.g. data/agents/<id>)
  * @param agentName - Used to replace {{name}} in SOUL.md (sub-agents only; Maia template typically has no placeholder)
@@ -177,8 +161,6 @@ export function copyDefaultAgentFiles(
   const defaultDir = getDefaultDirForAgent(agentId);
   const soulContent = readDefaultIdentityFile(ctx, "SOUL.md", FALLBACK_SOUL, agentId).replace(/\{\{name\}\}/g, agentName);
   ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), soulContent);
-  ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), readDefaultIdentityFile(ctx, "MEMORY.md", FALLBACK_MEMORY, agentId));
-  ctx.fs.writeFile(path.join(agentDir, "USER.md"), readDefaultIdentityFile(ctx, "USER.md", FALLBACK_USER, agentId));
   ctx.fs.writeFile(path.join(agentDir, "AGENTS.md"), readDefaultAgentsMd(ctx, agentId));
   copyDefaultFactFiles(ctx, defaultDir, agentDir, "user");
   copyDefaultFactFiles(ctx, defaultDir, agentDir, "memory");
@@ -186,27 +168,23 @@ export function copyDefaultAgentFiles(
 
 export const agentCreateTool = makeTool(
   "agent_create",
-  "Create a new agent. Use agent_list first to see existing agents and avoid duplicates. Before calling, use settings_list_whitelisted_models to get the allowed models and set the model parameter to one of those; otherwise creation fails. Maia only.",
+  "Create a new agent. Use agent_list first to see existing agents and avoid duplicates. Pick the model from data/models.json (or defaults/models.json); if the model is not in the whitelist, openrouter/free is used. Maia only.",
   agentCreateSchema,
   async (args, ctx) => {
     const settings = getSettings(ctx);
-    if (!settings.whitelistedModels.includes(args.model)) {
-      throw new Error(`Model not whitelisted: ${args.model}`);
-    }
+    const model = settings.whitelistedModels.includes(args.model) ? args.model : DEFAULT_MODEL;
 
     const id = uuidv4();
     const now = new Date().toISOString();
     ctx.db.prepare(
       `INSERT INTO agents (id, name, model, system_prompt_extra, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'active', ?, ?)`
-    ).run(id, args.name, args.model, args.systemPromptExtra ?? null, now, now);
+    ).run(id, args.name, model, args.systemPromptExtra ?? null, now, now);
 
     const agentDir = path.join(getAgentsDir(), id);
     copyDefaultAgentFiles(ctx, agentDir, args.name, id);
 
     if (args.soul !== undefined) ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), args.soul);
-    if (args.memory !== undefined) ctx.fs.writeFile(path.join(agentDir, "MEMORY.md"), args.memory);
-    if (args.user !== undefined) ctx.fs.writeFile(path.join(agentDir, "USER.md"), args.user);
 
     syncAgentRunJobs(ctx);
     reconcileAgentRunTasks(ctx);
@@ -264,7 +242,6 @@ function rowToAgent(r: Record<string, unknown>): AgentDefinition {
 }
 
 export const agentManagementTools: Tool[] = [
-  settingsListWhitelistedModelsTool,
   agentCreateTool,
   agentDeleteTool,
   agentListTool,
