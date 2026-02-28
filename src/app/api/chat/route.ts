@@ -71,7 +71,13 @@ export async function POST(req: NextRequest) {
       initMessagingService(ctx, runAgentFn);
 
       try {
-        await runAgent(ctx, createProvider, agentId, sessionId!, body.message, send);
+        // Run agent directly so the queue worker stays free to process extractSearchQueries
+        // and other smart-context jobs that the agent awaits. Pass send so tokens and done
+        // are streamed to the client.
+        await runAgent(ctx, createProvider, agentId, sessionId!, body.message, send, {
+          emitHistoryEntries: true,
+          queueCaller: "user",
+        });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         send({ type: "error", message });

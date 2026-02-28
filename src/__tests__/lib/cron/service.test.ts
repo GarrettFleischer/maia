@@ -11,6 +11,7 @@ import {
   syncAgentRunJobs,
   reconcileAgentRunTasks,
 } from "@/lib/cron/service";
+import { registerLlmQueueHandlers } from "@/lib/queue/llm-queue-handlers";
 import { AGENT_RUN_JOB_ID_PREFIX } from "@/lib/cron/expression";
 import { updateSettings } from "@/lib/settings";
 import { makeTestContext, FakeEvents } from "../../helpers/fakes";
@@ -62,6 +63,7 @@ describe("CronService", () => {
   let events: FakeEvents;
 
   beforeEach(() => {
+    registerLlmQueueHandlers();
     events = new FakeEvents();
     ctx = makeTestContext({ events });
   });

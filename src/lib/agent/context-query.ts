@@ -867,19 +867,26 @@ export async function summarizeRetrievedContext(
   const allRetrievedSourceIds = options?.allRetrievedSourceIds ?? [];
 
   if (contents != null && contents.length === sources.length) {
+    agentDebug("[Smart context] summarizeRetrievedContext: using quote extraction (focused quotes)");
     const rawQuotes = await extractRelevantQuotes(ctx, providerFactory, userMessage, sources, contents, retryOptions);
+    agentDebug("[Smart context] quote extraction: raw quotes count", rawQuotes.length);
     const contentMap = new Map<string, string>();
     for (let i = 0; i < sources.length; i++) contentMap.set(sources[i].id, contents[i] ?? "");
     const quotes = cleanupQuotes(rawQuotes, contentMap);
     const quotedSourceIds = [...new Set(quotes.map((q) => q.sourceId))];
     const additionalSourceIds = allRetrievedSourceIds.filter((id) => !quotedSourceIds.includes(id));
     if (quotes.length === 0) {
+      const fallbackBlock = `## Smart context\n\nNo relevant quotes extracted. Raw context:\n\n${rawText}`;
+      agentDebug("[Smart context] quote extraction: no quotes after cleanup, using raw context fallback");
+      logDebugSection("RESULT (quote extraction)", fallbackBlock);
       return {
-        block: `## Smart context\n\nNo relevant quotes extracted. Raw context:\n\n${rawText}`,
+        block: fallbackBlock,
         quotes: [],
       };
     }
     const block = buildFocusedContextBlock(quotes, quotedSourceIds, additionalSourceIds);
+    agentDebug("[Smart context] quote extraction: result length", block.length, "quotes count", quotes.length);
+    logDebugSection("RESULT (quote extraction)", block);
     return { block, quotes };
   }
 

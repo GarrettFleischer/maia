@@ -9,7 +9,6 @@ import { getSettings } from "../settings";
 import { getAgentIdentity, setAgentStatus } from "./identity";
 import { getSession, appendEntry, ensureSession } from "../history";
 import { getToolsForAgent } from "../tools/registry";
-import { indexHistoryEntry } from "../knowledge/history-index";
 import { SECURITY_PREAMBLE } from "../security/preamble";
 import { filterText } from "../security/injection-filter";
 import {
@@ -29,6 +28,7 @@ import type { ToolContext } from "../tools/types";
 import { getWorkspaceRoot } from "../data-dir";
 import { getCurrentSystemDateTime } from "../date-time";
 import { completeOllamaJob, registerOllamaJob } from "../ollama/jobs";
+import { enqueue } from "../queue/llm-queue";
 import { runWithAgentContext, agentDebug, agentError } from "./agent-logger";
 
 export type SSECallback = (event: SSEEvent) => void;
@@ -51,6 +51,8 @@ export type RunAgentFn = (
   options?: RunAgentOptions,
 ) => Promise<string>;
 
+import type { QueueCaller } from "../queue/llm-queue";
+
 /** Options for runAgent (e.g. emit history entries for background runs so the client receives them via EventSource). */
 export interface RunAgentOptions {
   emitHistoryEntries?: boolean;
@@ -64,9 +66,50 @@ export interface RunAgentOptions {
    * Default true. Set false for heartbeat and other system-originated runs that already have inline context.
    */
   enableSmartContext?: boolean;
+  /** Caller for queue priority when enqueueing smart context sub-jobs. */
+  queueCaller?: QueueCaller;
+  /**
+   * When false, smart context steps (extractSearchQueries, buildRawRetrievedContext, etc.) run
+   * inline instead of via the queue. Set when the agent is already running inside a queue job
+   * (e.g. message_send) to avoid deadlock: the single worker would otherwise wait for itself.
+   * Default true (use queue) for direct chat and other non-queue entry points.
+   */
+  smartContextViaQueue?: boolean;
 }
 
 const WORKSPACE_ROOT = getWorkspaceRoot();
+
+/**
+ * Schedules history indexing for one entry. When we're already inside a queue job (smartContextViaQueue false),
+ * runs indexing in setImmediate so the single queue worker isn't blocked; otherwise enqueues.
+ * @param ctx - Application context
+ * @param entryId - History entry id to index
+ * @param options - Run options (queueCaller, smartContextViaQueue)
+ * @param onError - Called if indexing fails
+ */
+function scheduleHistoryIndex(
+  ctx: AppContext,
+  entryId: string,
+  options: RunAgentOptions | undefined,
+  onError: (err: unknown) => void,
+): void {
+  if (options?.smartContextViaQueue === false) {
+    setImmediate(() => {
+      import("../knowledge/history-index")
+        .then(({ indexHistoryEntry }) => indexHistoryEntry(ctx, entryId))
+        .catch(onError);
+    });
+    return;
+  }
+  enqueue(
+    {
+      tool: "indexHistoryEntry",
+      args: { entryId },
+      caller: options?.queueCaller ?? "agent",
+    },
+    () => ctx,
+  ).catch(onError);
+}
 
 /**
  * Runs an agent in the given session with the given user message.
@@ -161,7 +204,7 @@ async function _runLoop(
     timestamp: new Date().toISOString(),
   });
   emitEntryIfRequested(userEntry);
-  indexHistoryEntry(ctx, userEntry.id).catch((err) =>
+  scheduleHistoryIndex(ctx, userEntry.id, options, (err) =>
     agentError("History index (user entry) failed:", err),
   );
 
@@ -254,13 +297,37 @@ async function _runLoop(
   );
 
   if (smartContextEnabled) {
+    const queueCaller = options?.queueCaller ?? "agent";
+    const useQueue = options?.smartContextViaQueue !== false;
     const contextProviderFactory = (model: string, ctx: AppContext) =>
       providerFactory(model, ctx, { reasoningEffort: settings.contextReasoningEffort });
     try {
-      const queries = await extractSearchQueries(ctx, contextProviderFactory, userMessage, recentThreadBlock);
+      const queries = useQueue
+        ? ((await enqueue(
+            {
+              tool: "extractSearchQueries",
+              args: {
+                userMessage,
+                recentThreadBlock,
+                providerFactory: contextProviderFactory,
+              },
+              caller: queueCaller,
+            },
+            () => ctx,
+          )) as string[])
+        : await extractSearchQueries(ctx, contextProviderFactory, userMessage, recentThreadBlock);
       agentDebug("[Smart context] extracted queries", { count: queries.length, queries });
       agentDebug("[Smart context] building raw context for", queries.length, "queries");
-      const { text: rawContext, sources, contents } = await buildRawRetrievedContext(ctx, queries);
+      const { text: rawContext, sources, contents } = useQueue
+        ? ((await enqueue(
+            {
+              tool: "buildRawRetrievedContext",
+              args: { queries },
+              caller: queueCaller,
+            },
+            () => ctx,
+          )) as Awaited<ReturnType<typeof buildRawRetrievedContext>>)
+        : await buildRawRetrievedContext(ctx, queries);
       agentDebug("[Smart context] buildRawRetrievedContext done", {
         rawLength: rawContext.length,
         sourcesCount: sources.length,
@@ -279,13 +346,21 @@ async function _runLoop(
         agentDebug("[Smart context] no retrieved sources; skipping relevance filter and summarizer");
         smartContextBlock = "## Smart context\n\nNo relevant prior context found.";
       } else {
-        const { sources: filteredSources, contents: filteredContents } = await filterRelevantSources(
-          ctx,
-          contextProviderFactory,
-          userMessage,
-          sources,
-          contents,
-        );
+        const { sources: filteredSources, contents: filteredContents } = useQueue
+          ? ((await enqueue(
+              {
+                tool: "filterRelevantSources",
+                args: {
+                  userMessage,
+                  sources,
+                  contents,
+                  providerFactory: contextProviderFactory,
+                },
+                caller: queueCaller,
+              },
+              () => ctx,
+            )) as Awaited<ReturnType<typeof filterRelevantSources>>)
+          : await filterRelevantSources(ctx, contextProviderFactory, userMessage, sources, contents);
         agentDebug("[Smart context] sources after relevance filter", {
           before: sources.length,
           after: filteredSources.length,
@@ -297,18 +372,30 @@ async function _runLoop(
           smartContextBlock = "## Smart context\n\nNo relevant prior context found.";
         } else {
           const filteredRawContext = buildRawTextFromChunks(filteredSources, filteredContents);
-          const summarizeResult = await summarizeRetrievedContext(
-            ctx,
-            contextProviderFactory,
-            filteredRawContext,
-            filteredSources,
-            {
-              contents: filteredContents,
-              userMessage,
-              allRetrievedSourceIds,
-              retryOptions: undefined,
-            },
-          );
+          const summarizeResult = useQueue
+            ? ((await enqueue(
+                {
+                  tool: "summarizeRetrievedContext",
+                  args: {
+                    rawText: filteredRawContext,
+                    sources: filteredSources,
+                    options: {
+                      contents: filteredContents,
+                      userMessage,
+                      allRetrievedSourceIds,
+                      retryOptions: undefined,
+                    },
+                    providerFactory: contextProviderFactory,
+                  },
+                  caller: queueCaller,
+                },
+                () => ctx,
+              )) as Awaited<ReturnType<typeof summarizeRetrievedContext>>)
+            : await summarizeRetrievedContext(ctx, contextProviderFactory, filteredRawContext, filteredSources, {
+                contents: filteredContents,
+                userMessage,
+                allRetrievedSourceIds,
+              });
           if (typeof summarizeResult === "string") {
             smartContextBlock = summarizeResult;
           } else {
@@ -445,7 +532,7 @@ async function _runLoop(
       agentEntry.timestamp = new Date().toISOString();
       const storedEntry = appendEntry(ctx, sessionId, agentEntry);
       emitEntryIfRequested(storedEntry);
-      indexHistoryEntry(ctx, storedEntry.id).catch((err) =>
+      scheduleHistoryIndex(ctx, storedEntry.id, options, (err) =>
         agentError("History index (agent entry) failed:", err),
       );
 

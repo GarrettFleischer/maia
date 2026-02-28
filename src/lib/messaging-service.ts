@@ -8,6 +8,7 @@ import { appendEntry, createSession, listSessions } from "./history";
 import { registerMessagingImpls } from "./tools/messaging";
 import { getAgentIdentity } from "./agent/identity";
 import type { RunAgentFn } from "./agent/runner";
+import { enqueue } from "./queue/llm-queue";
 
 /**
  * Formats the user message passed to the recipient agent: sender name/id and content only.
@@ -21,6 +22,19 @@ function formatMessageToRecipient(senderName: string, senderId: string, content:
   return `Message from **${senderName}** (agent id: \`${senderId}\`):\n\n${content}`;
 }
 
+/** Strips trailing [DONE] from a reply. */
+function stripDone(reply: string): string {
+  return reply.replace(/\s*\[DONE\]\s*$/i, "").trim();
+}
+
+/** Returns true if the reply ends with [DONE] (case-insensitive). */
+function endsWithDone(reply: string): boolean {
+  return /\[DONE\]\s*$/i.test(reply.trim());
+}
+
+/** Max turns in agent-agent conversation before forcing stop (safety limit). */
+const MAX_AGENT_CHAT_TURNS = 100;
+
 /**
  * Registers implementations for message_to_user and message_send with the tool layer.
  * @param ctx Application context
@@ -30,40 +44,41 @@ export function initMessagingService(
   ctx: AppContext,
   runAgentFn: RunAgentFn,
 ): void {
-  registerMessagingImpls(
-    // message_to_user
-    async (agentId: string, sessionId: string, content: string) => {
-      const entry = appendEntry(ctx, sessionId, {
-        role: "agent",
-        content,
-        timestamp: new Date().toISOString(),
-      });
+  const messageToUserImpl = async (agentId: string, sessionId: string, content: string) => {
+    const entry = appendEntry(ctx, sessionId, {
+      role: "agent",
+      content,
+      timestamp: new Date().toISOString(),
+    });
 
-      // Add agent to session participants if not present
-      const row = ctx.db.prepare("SELECT participants FROM sessions WHERE id = ?").get(sessionId) as
-        | { participants: string }
-        | undefined;
-      if (row) {
-        const parts: string[] = JSON.parse(row.participants);
-        if (!parts.includes(agentId)) {
-          parts.push(agentId);
-          ctx.db.prepare("UPDATE sessions SET participants = ?, updated_at = ? WHERE id = ?").run(
-            JSON.stringify(parts),
-            new Date().toISOString(),
-            sessionId
-          );
-        }
+    // Add agent to session participants if not present
+    const row = ctx.db.prepare("SELECT participants FROM sessions WHERE id = ?").get(sessionId) as
+      | { participants: string }
+      | undefined;
+    if (row) {
+      const parts: string[] = JSON.parse(row.participants);
+      if (!parts.includes(agentId)) {
+        parts.push(agentId);
+        ctx.db.prepare("UPDATE sessions SET participants = ?, updated_at = ? WHERE id = ?").run(
+          JSON.stringify(parts),
+          new Date().toISOString(),
+          sessionId
+        );
       }
+    }
 
-      ctx.events.emit({
-        event: "message",
-        data: {
-          sessionId,
-          entry,
-          participants: row ? JSON.parse(row.participants) : [agentId],
-        },
-      });
-    },
+    ctx.events.emit({
+      event: "message",
+      data: {
+        sessionId,
+        entry,
+        participants: row ? JSON.parse(row.participants) : [agentId],
+      },
+    });
+  };
+
+  registerMessagingImpls(
+    messageToUserImpl,
 
     // message_send (agent → agent): run recipient in background; when done, run caller in callerSession with reply so they can review and report
     async (fromAgentId: string, toAgentId: string, content: string, callerSessionId: string) => {
@@ -104,23 +119,60 @@ export function initMessagingService(
           ? formatMessageToRecipient(sender.name, sender.id, content)
           : `[from:${fromAgentId}] ${content}`;
 
-      // Run recipient in background; when done, run caller in user session with the reply so they can review and report
-      void runAgentFn(ctx, toAgentId, sessionId, messageToRecipient)
-        .catch((err) => {
+      // Run conversation loop: alternate between agents, automatically forwarding each reply to the other until one says [DONE]
+      async function runConversationLoop(
+        currentAgentId: string,
+        message: string,
+        turn: number,
+      ): Promise<void> {
+        if (turn >= MAX_AGENT_CHAT_TURNS) {
+          console.warn(`message_send: max turns (${MAX_AGENT_CHAT_TURNS}) reached; stopping conversation`);
+          return;
+        }
+        const reply = (await enqueue(
+          {
+            tool: "runAgent",
+            args: {
+              agentId: currentAgentId,
+              sessionId,
+              message,
+              options: { emitHistoryEntries: true },
+              queueCaller: "agent",
+              runAgentFn,
+            },
+            caller: "agent",
+            callerAgentId: fromAgentId,
+          },
+          () => ctx,
+        ).catch((err) => {
           console.error("message_send runAgentFn error:", err);
           return "";
-        })
-        .then((reply) => {
-          const syntheticMessage =
-            reply && reply.trim().length > 0
-              ? `Agent ${toAgentId} has replied:\n\n${reply.trim()}\n\nPlease review and report to the user if needed.`
-              : `Agent ${toAgentId} finished with no reply. Please report to the user.`;
-          void runAgentFn(ctx, fromAgentId, callerSessionId, syntheticMessage, {
-            emitHistoryEntries: true,
-          }).catch((err) => console.error("message_send follow-up runAgentFn error:", err));
-        });
+        })) as string;
+        if (endsWithDone(reply)) {
+          const stripped = stripDone(reply);
+          await messageToUserImpl(
+            currentAgentId,
+            callerSessionId,
+            stripped.length > 0 ? stripped : "(No message)",
+          ).catch((err) => console.error("message_send [DONE] message_to_user error:", err));
+          return;
+        }
+        const otherAgentId = currentAgentId === toAgentId ? fromAgentId : toAgentId;
+        const replierIdentity = getAgentIdentity(ctx, currentAgentId);
+        const messageToOther =
+          reply && reply.trim().length > 0
+            ? replierIdentity !== null
+              ? formatMessageToRecipient(replierIdentity.name, replierIdentity.id, reply.trim())
+              : `[from:${currentAgentId}]\n\n${reply.trim()}`
+            : `[from:${currentAgentId}] (no reply)`;
+        return runConversationLoop(otherAgentId, messageToOther, turn + 1);
+      }
 
-      return "Message sent. They're working on it in a separate thread; when they reply you'll be run again here to review and report to the user.";
+      void runConversationLoop(toAgentId, messageToRecipient, 0).catch((err) =>
+        console.error("message_send conversation loop error:", err),
+      );
+
+      return "Message sent. You're chatting in a separate thread; replies are automatically forwarded between you until one of you ends with [DONE].";
     }
   );
 }

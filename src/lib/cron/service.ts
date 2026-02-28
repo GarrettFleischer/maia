@@ -11,6 +11,7 @@ import { getOrCreateSession } from "../history";
 import type { RunAgentFn } from "../agent/runner";
 import { fireHeartbeat } from "../heartbeat";
 import { getSettings } from "../settings";
+import { enqueue } from "../queue/llm-queue";
 import { listAgents } from "../agent/identity";
 import {
   BUILTIN_HEARTBEAT_JOB_ID,
@@ -120,11 +121,25 @@ function scheduleJob(
             event: "cron_fired",
             data: { jobId, agentId, timestamp },
           });
-          runAgentFn(ctx, agentId, sessionId, message, {
-            initialToolCall: { name: toolNameSafe, args: toolArgs },
-            // System-generated cron messages already include all necessary context, so skip smart context.
-            enableSmartContext: false,
-          }).catch((err) => {
+          enqueue(
+            {
+              tool: "runAgent",
+              args: {
+                agentId,
+                sessionId,
+                message,
+                options: {
+                  initialToolCall: { name: toolNameSafe, args: toolArgs },
+                  enableSmartContext: false,
+                },
+                queueCaller: "agent",
+                runAgentFn,
+              },
+              caller: "agent",
+              callerAgentId: agentId,
+            },
+            () => ctx,
+          ).catch((err) => {
             console.error(
               `Cron job ${jobId} failed for agent ${agentId}:`,
               err,

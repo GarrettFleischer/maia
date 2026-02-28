@@ -1,6 +1,7 @@
 import path from "path";
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { initMessagingService } from "@/lib/messaging-service";
+import { registerLlmQueueHandlers } from "@/lib/queue/llm-queue-handlers";
 import { registerMessagingImpls, messageToUserTool, messageSendTool } from "@/lib/tools/messaging";
 import { makeTestContext, FakeEvents, FakeFs } from "../helpers/fakes";
 import { createSession } from "@/lib/history";
@@ -30,6 +31,7 @@ describe("initMessagingService", () => {
   let ctx: AppContext;
 
   beforeEach(() => {
+    registerLlmQueueHandlers();
     ctx = makeTestContext();
   });
 
@@ -83,7 +85,10 @@ describe("initMessagingService", () => {
   describe("message_send (agent-to-agent)", () => {
     it("creates a new session for the conversation if none exists", async () => {
       const runCalls: string[] = [];
-      initMessagingService(ctx, async (_c, toAgentId) => { runCalls.push(toAgentId); return ""; });
+      initMessagingService(ctx, async (_c, toAgentId) => {
+        runCalls.push(toAgentId);
+        return "[DONE]";
+      });
       const sourceSession = createSession(ctx, ["agent-1", "maia"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
       await messageSendTool.execute({ toAgentId: "agent-2", content: "Hello agent 2" }, toolCtx);
@@ -98,7 +103,7 @@ describe("initMessagingService", () => {
     });
 
     it("reuses existing agent-to-agent session", async () => {
-      initMessagingService(ctx, async () => "");
+      initMessagingService(ctx, async () => "[DONE]");
       // Pre-create the session
       const agentSession = createSession(ctx, ["agent-1", "agent-2"], "agents");
       const sourceSession = createSession(ctx, ["agent-1"]);
@@ -121,7 +126,7 @@ describe("initMessagingService", () => {
       const triggered: string[] = [];
       initMessagingService(ctx, async (_c, agentId) => {
         triggered.push(agentId);
-        return "Reply from agent-2";
+        return "Reply from agent-2. [DONE]";
       });
       const sourceSession = createSession(ctx, ["agent-1"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
@@ -141,7 +146,7 @@ describe("initMessagingService", () => {
       let capturedMessage = "";
       initMessagingService(ctx, async (_c, toAgentId, _sessionId, message, _opts) => {
         if (toAgentId === "agent-2") capturedMessage = message;
-        return "OK";
+        return toAgentId === "agent-2" ? "OK" : "[DONE]";
       });
       const sourceSession = createSession(ctx, ["agent-1"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
@@ -155,6 +160,97 @@ describe("initMessagingService", () => {
       expect(capturedMessage).not.toContain("Sender's Identity");
       expect(capturedMessage).not.toContain("### Soul");
       expect(capturedMessage).not.toContain("I am Sender Agent, the one who sends.");
+    });
+
+    it("automatically forwards replies between agents until one says [DONE]", async () => {
+      seedAgent(ctx, "agent-2", "Recipient Agent");
+      const runCalls: { agentId: string; sessionId: string; message?: string }[] = [];
+      let agentSessionId: string | undefined;
+      initMessagingService(ctx, async (_c, agentId, sessionId, message) => {
+        runCalls.push({ agentId, sessionId, message });
+        if (agentId === "agent-2") agentSessionId = sessionId;
+        return agentId === "agent-2"
+          ? "Here is my reply."
+          : "I have reviewed. [DONE]";
+      });
+      const sourceSession = createSession(ctx, ["agent-1", "user"]);
+      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
+      await messageSendTool.execute({ toAgentId: "agent-2", content: "Question" }, toolCtx);
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2", "agent-1"]);
+      const callerRun = runCalls.find((c) => c.agentId === "agent-1");
+      expect(callerRun?.sessionId).toBe(agentSessionId);
+      expect(callerRun?.message).toContain("Message from **Recipient Agent**");
+      expect(callerRun?.message).toContain("Here is my reply.");
+    });
+
+    it("continues multiple rounds until one says [DONE]", async () => {
+      seedAgent(ctx, "agent-2", "Recipient Agent");
+      const runCalls: { agentId: string; message?: string }[] = [];
+      let turn = 0;
+      initMessagingService(ctx, async (_c, agentId, _sessionId, message) => {
+        runCalls.push({ agentId, message });
+        turn++;
+        if (agentId === "agent-2") {
+          return turn === 1 ? "First reply from B." : "Second reply from B. [DONE]";
+        }
+        return "Reply from A.";
+      });
+      const sourceSession = createSession(ctx, ["agent-1", "user"]);
+      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
+      await messageSendTool.execute({ toAgentId: "agent-2", content: "Question" }, toolCtx);
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2", "agent-1", "agent-2"]);
+      expect(runCalls[2].message).toContain("Reply from A.");
+      const entries = ctx.db
+        .prepare("SELECT * FROM history_entries WHERE session_id = ? ORDER BY timestamp")
+        .all(sourceSession) as Record<string, unknown>[];
+      const doneEntry = entries.find((e) => (e.content as string).includes("Second reply from B"));
+      expect(doneEntry?.content).toBe("Second reply from B.");
+    });
+
+    it("when recipient reply ends with [DONE], does not run caller; posts reply to caller session instead", async () => {
+      const runCalls: { agentId: string; sessionId: string }[] = [];
+      initMessagingService(ctx, async (_c, agentId, sessionId) => {
+        runCalls.push({ agentId, sessionId });
+        return agentId === "agent-2" ? "Here is my final answer. [DONE]" : "";
+      });
+      const sourceSession = createSession(ctx, ["agent-1", "user"]);
+      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
+      await messageSendTool.execute({ toAgentId: "agent-2", content: "Question" }, toolCtx);
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2"]);
+      expect(runCalls.some((c) => c.agentId === "agent-1")).toBe(false);
+      const entries = ctx.db
+        .prepare("SELECT * FROM history_entries WHERE session_id = ? ORDER BY timestamp")
+        .all(sourceSession) as Record<string, unknown>[];
+      const agent2Entry = entries.find((e) => (e.content as string).includes("Here is my final answer"));
+      expect(agent2Entry).toBeDefined();
+      expect(agent2Entry?.content).toBe("Here is my final answer.");
+    });
+
+    it("when caller reply ends with [DONE], posts caller reply to caller session", async () => {
+      seedAgent(ctx, "agent-2", "Recipient Agent");
+      const runCalls: { agentId: string; sessionId: string }[] = [];
+      initMessagingService(ctx, async (_c, agentId) => {
+        runCalls.push({ agentId, sessionId: "" });
+        return agentId === "agent-2" ? "Here is my reply." : "I have reviewed. [DONE]";
+      });
+      const sourceSession = createSession(ctx, ["agent-1", "user"]);
+      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
+      await messageSendTool.execute({ toAgentId: "agent-2", content: "Question" }, toolCtx);
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2", "agent-1"]);
+      const entries = ctx.db
+        .prepare("SELECT * FROM history_entries WHERE session_id = ? ORDER BY timestamp")
+        .all(sourceSession) as Record<string, unknown>[];
+      const callerEntry = entries.find((e) => (e.content as string).includes("I have reviewed"));
+      expect(callerEntry).toBeDefined();
+      expect(callerEntry?.content).toBe("I have reviewed.");
     });
   });
 });

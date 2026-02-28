@@ -13,12 +13,24 @@ export function getAppContext(): AppContext {
 /**
  * Returns the AppContext, running register() once if not yet initialized.
  * Use in route handlers when the process may handle requests before instrumentation ran (e.g. dev workers).
+ * After resolving, ticks the LLM queue processor once so jobs are processed even when the
+ * instrumentation timer is not running in this process.
  */
 export async function ensureAppContext(): Promise<AppContext> {
-  if (_appCtx) return _appCtx;
+  if (_appCtx) {
+    if (process.env.NEXT_RUNTIME === "nodejs") {
+      const node = await import("./instrumentation-node");
+      node.tickQueueProcessor();
+    }
+    return _appCtx;
+  }
   if (!_registerPromise) _registerPromise = register();
   await _registerPromise;
   if (!_appCtx) throw new Error("AppContext not yet initialized");
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const node = await import("./instrumentation-node");
+    node.tickQueueProcessor();
+  }
   return _appCtx;
 }
 
@@ -33,36 +45,7 @@ export function _setTestContext(ctx: AppContext): void {
 export async function register() {
   if (_appCtx) return;
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    const { getDb } = await import("./lib/db");
-    const {
-      makeNodeFsAdapter,
-      makeNativeFetchClient,
-      makeNodeProcessRunner,
-    } = await import("./lib/context");
-    const { globalEventBus } = await import("./lib/events");
-    const { initMaiaAgent } = await import("./lib/init");
-
-    _appCtx = {
-      db: getDb(),
-      fs: makeNodeFsAdapter(),
-      http: makeNativeFetchClient(),
-      events: globalEventBus,
-      processRunner: makeNodeProcessRunner(),
-      sandboxContainerName:
-        process.env.SANDBOX_CONTAINER_NAME?.trim() || undefined,
-    };
-
-    initMaiaAgent(_appCtx);
-
-    const { runAgent } = await import("./lib/agent/runner");
-    const { createProvider } = await import("./lib/ai/factory");
-    const { initMessagingService } = await import("./lib/messaging-service");
-    const runAgentFn = (c: AppContext, agentId: string, sessionId: string, message: string, options?: import("./lib/agent/runner").RunAgentOptions) =>
-      runAgent(c, createProvider, agentId, sessionId, message, () => {}, options);
-
-    initMessagingService(_appCtx, runAgentFn);
-
-    const { startCronScheduler } = await import("./lib/cron/service");
-    startCronScheduler(_appCtx, runAgentFn);
+    const { registerNode } = await import("./instrumentation-node");
+    _appCtx = await registerNode();
   }
 }

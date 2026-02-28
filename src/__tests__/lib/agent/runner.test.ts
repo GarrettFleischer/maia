@@ -5,6 +5,7 @@
 import path from "path";
 import { describe, it, expect, beforeEach } from "bun:test";
 import { runAgent } from "@/lib/agent/runner";
+import { registerLlmQueueHandlers } from "@/lib/queue/llm-queue-handlers";
 import { makeTestContext, FakeEvents, FakeResponse, FakeFs, FakeHttp } from "../../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
 import { createSession, appendEntry } from "@/lib/history";
@@ -51,9 +52,10 @@ describe("runAgent", () => {
   const events: SSEEvent[] = [];
 
   beforeEach(() => {
+    registerLlmQueueHandlers();
     ctx = makeTestContext();
     events.length = 0;
-    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"] });
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2", "ollama/nomic-embed-text"] });
     seedAgent(ctx);
     sessionId = createSession(ctx, ["user", "maia"]);
     // Stub embeddings so history index (fire-and-forget) does not throw

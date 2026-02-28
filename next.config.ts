@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
   logging: {
     incomingRequests: {
-      ignore: [/\/api\/ollama\/metrics/],
+      ignore: [/\/api\/ollama\/metrics/, /\/api\/queue/],
     },
   },
 };

@@ -222,8 +222,8 @@ describe("buildRawRetrievedContext", () => {
   beforeEach(() => {
     ctx = makeTestContext();
     updateSettings(ctx, {
-      whitelistedModels: ["ollama/llama3.2"],
-      embeddingModel: "nomic-embed-text",
+      whitelistedModels: ["ollama/llama3.2", "ollama/nomic-embed-text"],
+      embeddingModel: "ollama/nomic-embed-text",
     });
     (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
       "/api/embed",

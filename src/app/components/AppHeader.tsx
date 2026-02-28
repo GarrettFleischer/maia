@@ -7,6 +7,7 @@
  */
 
 import OllamaPerformanceMonitor from "./OllamaPerformanceMonitor";
+import QueueListMonitor from "./QueueListMonitor";
 export interface AppHeaderProps {
   /** Subtitle under "Maia" (e.g. "AI Agent System", "Settings", "Agents"). */
   subtitle?: string;
@@ -42,6 +43,7 @@ export default function AppHeader({ subtitle }: AppHeaderProps) {
             Settings
           </a>
         </nav>
+        <QueueListMonitor />
         <OllamaPerformanceMonitor />
       </div>
     </header>

@@ -4,6 +4,7 @@ import {
   _resetHeartbeatIdempotencyForTests,
 } from "@/lib/heartbeat";
 import { refreshEmbeddings } from "@/lib/knowledge/refresh-embeddings";
+import { registerLlmQueueHandlers } from "@/lib/queue/llm-queue-handlers";
 import { _clearOllamaEmbedContextLengthCacheForTests } from "@/lib/knowledge/embedding";
 import { makeTestContext, FakeEvents, FakeResponse } from "../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
@@ -25,7 +26,7 @@ describe("refreshEmbeddings", () => {
 
   beforeEach(() => {
     ctx = makeTestContext();
-    updateSettings(ctx, { embeddingModel: "nomic-embed-text" });
+    updateSettings(ctx, { embeddingModel: "ollama/nomic-embed-text" });
     (
       ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
     ).on(
@@ -142,7 +143,7 @@ describe("refreshEmbeddings", () => {
   it("chunks long content and stores multiple vectors per entry", async () => {
     _clearOllamaEmbedContextLengthCacheForTests();
     const chunkCtx = makeTestContext();
-    updateSettings(chunkCtx, { embeddingModel: "nomic-embed-text" });
+    updateSettings(chunkCtx, { embeddingModel: "ollama/nomic-embed-text" });
     (
       chunkCtx.http as {
         on: (p: string, h: () => Promise<FakeResponse>) => void;
@@ -157,12 +158,13 @@ describe("refreshEmbeddings", () => {
       chunkCtx.http as {
         on: (p: string, h: () => Promise<FakeResponse>) => void;
       }
-    ).on("/api/embed", async () => {
+    ).on("/api/embed", async (_url: string, init?: RequestInit) => {
       embedCallCount++;
-      return new FakeResponse(
-        200,
-        JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }),
-      );
+      const body = init?.body ? (JSON.parse(init.body as string) as { input?: string | string[] }) : {};
+      const input = body.input;
+      const count = Array.isArray(input) ? input.length : 1;
+      const embeddings = Array.from({ length: count }, () => [0.1, 0.2, 0.3]);
+      return new FakeResponse(200, JSON.stringify({ embeddings }));
     });
     const sessionId = createSession(chunkCtx, ["user", "maia"]);
     const longContent = "one two three four five six seven eight";
@@ -178,13 +180,13 @@ describe("refreshEmbeddings", () => {
       )
       .all(entry.id) as { id: string; entry_id: string; content: string }[];
     expect(vectorRows.length).toBeGreaterThan(1);
-    expect(embedCallCount).toBe(vectorRows.length);
+    expect(embedCallCount).toBeGreaterThanOrEqual(1);
   });
 
   it("retries with half-sized chunks when embed fails with context length error", async () => {
     _clearOllamaEmbedContextLengthCacheForTests();
     const retryCtx = makeTestContext();
-    updateSettings(retryCtx, { embeddingModel: "nomic-embed-text" });
+    updateSettings(retryCtx, { embeddingModel: "ollama/nomic-embed-text" });
     (
       retryCtx.http as {
         on: (
@@ -207,10 +209,11 @@ describe("refreshEmbeddings", () => {
       }
     ).on("/api/embed", async (_url: string, init?: RequestInit) => {
       embedCallCount++;
-      const body = init?.body as string | undefined;
-      const parsed = body ? (JSON.parse(body) as { input?: string }) : {};
-      const len = typeof parsed.input === "string" ? parsed.input.length : 0;
-      if (embedCallCount === 1 && len > 50) {
+      const body = init?.body ? (JSON.parse(init.body as string) as { input?: string | string[] }) : {};
+      const input = body.input;
+      const count = Array.isArray(input) ? input.length : 1;
+      const firstLen = Array.isArray(input) ? input[0]?.length ?? 0 : (input as string)?.length ?? 0;
+      if (firstLen > 100 && count === 1) {
         return new FakeResponse(
           400,
           JSON.stringify({
@@ -218,10 +221,8 @@ describe("refreshEmbeddings", () => {
           }),
         );
       }
-      return new FakeResponse(
-        200,
-        JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }),
-      );
+      const embeddings = Array.from({ length: count }, () => [0.1, 0.2, 0.3]);
+      return new FakeResponse(200, JSON.stringify({ embeddings }));
     });
     const sessionId = createSession(retryCtx, ["user", "maia"]);
     const content = "a".repeat(120);
@@ -246,6 +247,7 @@ describe("fireHeartbeat", () => {
   let events: FakeEvents;
 
   beforeEach(() => {
+    registerLlmQueueHandlers();
     _resetHeartbeatIdempotencyForTests();
     events = new FakeEvents();
     ctx = makeTestContext({ events });

@@ -15,10 +15,7 @@ import type { RunAgentFn } from "../agent/runner";
 import { getAgentIdentity } from "../agent/identity";
 import { getOrCreateSession } from "../history";
 import { runDataBackup } from "../data-backup";
-import { refreshEmbeddings } from "../knowledge/refresh-embeddings";
-import { runKnowledgeIndex } from "../knowledge/index";
-import { createEmbeddingAdapter } from "../knowledge/embedding";
-import { getSettings } from "../settings";
+import { enqueue } from "../queue/llm-queue";
 
 /** Agent id for the orchestrator that receives the single heartbeat thread. */
 const MAIA_AGENT_ID = "maia";
@@ -220,14 +217,31 @@ export function createHeartbeatTool(runAgentFn: RunAgentFn): Tool {
       ctx.events.emit({ event: "heartbeat", data: { timestamp } });
 
       // Refresh embeddings and knowledge index before waking agents so smart context search is current.
-      await refreshEmbeddings(ctx).catch((err) => {
+      // If embedding fails, do not run knowledge index or Maia.
+      const getCtx = () => ctx;
+      try {
+        await enqueue(
+          { tool: "refreshEmbeddings", args: {}, caller: "system" },
+          getCtx,
+        );
+      } catch (err) {
         console.error("Embedding refresh failed during heartbeat:", err);
-      });
-      await runKnowledgeIndex(ctx, {
-        embedder: createEmbeddingAdapter(getSettings(ctx), ctx.http),
-      }).catch((err) => {
+        try {
+          await runDataBackup(ctx);
+        } catch (backupErr) {
+          console.error("Data backup failed during heartbeat:", backupErr);
+        }
+        return { woken: 0, timestamp };
+      }
+
+      try {
+        await enqueue(
+          { tool: "runKnowledgeIndex", args: {}, caller: "system" },
+          getCtx,
+        );
+      } catch (err) {
         console.error("Knowledge index failed during heartbeat:", err);
-      });
+      }
 
       const maia = getAgentIdentity(ctx, MAIA_AGENT_ID);
       if (!maia || maia.status === "paused" || maia.status === "deleted") {
@@ -244,9 +258,21 @@ export function createHeartbeatTool(runAgentFn: RunAgentFn): Tool {
 
       const message = buildHeartbeatMessage(ctx, timestamp);
       const sessionId = getOrCreateHeartbeatSession(ctx);
-      await runAgentFn(ctx, MAIA_AGENT_ID, sessionId, message, {
-        enableSmartContext: false,
-      }).catch((err) => {
+      await enqueue(
+        {
+          tool: "runAgent",
+          args: {
+            agentId: MAIA_AGENT_ID,
+            sessionId,
+            message,
+            options: { enableSmartContext: false },
+            queueCaller: "maia",
+            runAgentFn,
+          },
+          caller: "maia",
+        },
+        getCtx,
+      ).catch((err) => {
         console.error("Heartbeat failed for maia:", err);
       });
 

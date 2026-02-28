@@ -235,5 +235,6 @@ export type SystemSSEEvent =
   | { event: "heartbeat"; data: { timestamp: string } }
   | { event: "ping"; data: { timestamp: string } }
   | { event: "tasks_changed"; data: Record<string, never> }
+  | { event: "queue_changed"; data: { jobs: Array<{ tool: string; args: Record<string, unknown>; caller?: string; priority: number }> } }
   | { event: "web_search_empty"; data: { reason: "captcha" | "no_results_parsed"; query: string } }
   | { event: "cron_fired"; data: { jobId: string; agentId: string; timestamp: string } };
