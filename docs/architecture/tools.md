@@ -143,6 +143,7 @@ interface SearchResult {
 
 - Runs Brave Answers in streaming research mode (`stream: true`, `enable_research: true`) and aggregates the answer text.
 - Use for complex, research-grade questions where thoroughness matters more than latency.
+- **Call once** with a single comprehensive question covering all aspects; do not split into multiple smaller queries—the API performs multi-search internally.
 - `enableCitations` is accepted for forward compatibility but currently ignored because Brave Answers research mode does not support `enable_citations`.
 - `language` and `country` map directly to Brave Answers advanced parameters for localisation.
 - `enableEntities` is also accepted for forward compatibility but currently ignored because Brave Answers research mode does not support `enable_entities`.
@@ -217,7 +218,9 @@ One browser **page per session** (keyed by `sessionId`). Use for multi-step agen
 1. Find existing session where participants are exactly `[callerAgentId, toAgentId]`.
 2. If not found, create new session in `data/history/agents/`.
 3. Append message.
-4. Queue target agent for response (either immediately or at next heartbeat).
+4. Run target agent; when they reply, their response is looped back to the caller in the agent-agent session.
+5. **Automatic reply forwarding:** Each agent's reply is automatically fed to the other. No further message_send calls are needed—the conversation continues until one indicates they are done.
+6. **[DONE] convention:** If either agent ends their reply with `[DONE]`, they indicate they do not want to continue. The reply (with `[DONE]` stripped) is posted to the caller session, and the loop ends.
 
 `message_to_user` behavior:
 

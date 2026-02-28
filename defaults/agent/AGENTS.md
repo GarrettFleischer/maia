@@ -134,4 +134,5 @@ Update identity files as often as relevant—do not wait for the user to ask. Th
 
 - For questions that can be answered from the web, prefer **web_answer** to get an AI-generated answer grounded in current web search.
 - Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools (for example, when you need to inspect a specific page).
+- Use **web_research** for complex, multi-faceted research (e.g. scam investigations, due diligence). Call it **once** with a single comprehensive question that covers all aspects—do not split into multiple smaller queries.
 - Avoid calling both tools for the same simple factual question unless you need to verify sources or inspect pages directly.

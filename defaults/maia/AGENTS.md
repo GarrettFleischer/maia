@@ -115,6 +115,8 @@ Use skills and tools according to their definitions. Prefer **web_answer** for w
 
 - **Multiple tool rounds:** You may call tools, receive results, then call more tools as needed. Use as many rounds as the task requires. Only respond with your final text to the user when the task is fully complete (or you need user input). Do not stop after a single tool call if more steps are needed.
 
+- **Agent-to-agent messaging (message_send):** When you message another agent, replies are automatically forwarded between you in a separate thread. You do not need to call message_send again—each reply is fed to the other agent. End your reply with **`[DONE]`** when you do not want to continue; the conversation stops and your reply is posted to the caller session.
+
 ### Creating agents (Maia)
 
 When creating a new agent with **agent_create**, you must set the `model` parameter to a value from the whitelist. Before calling agent_create:
@@ -156,4 +158,5 @@ Update identity files as often as relevant—do not wait for the user to ask. Th
 
 - For questions that can be answered from the web, prefer **web_answer** to get an AI-generated answer grounded in current web search.
 - Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools (for example, when you need to inspect a specific page).
+- Use **web_research** for complex, multi-faceted research (e.g. scam investigations, due diligence). Call it **once** with a single comprehensive question that covers all aspects—do not split into multiple smaller queries.
 - Avoid calling both tools for the same simple factual question unless you need to verify sources or inspect pages directly.
