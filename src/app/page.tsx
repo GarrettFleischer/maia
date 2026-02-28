@@ -127,6 +127,11 @@ export default function Home(props: HomePageProps = {}) {
         const payload = JSON.parse(e.data) as { sessionId: string; entry: HistoryEntry; participants: string[] };
         const current = sessionIdRef.current;
         if (payload.sessionId && payload.entry && current && payload.sessionId === current) {
+          // While our chat request is in flight, the stream is the source of truth; skip EventSource
+          // echoes for user and tool_call so we don't duplicate bubbles.
+          if (loadingRef.current && (payload.entry.role === "user" || payload.entry.role === "tool_call")) {
+            return;
+          }
           const item = entryToItem(payload.entry);
           const contentLen = "content" in item ? (item.content?.length ?? 0) : 0;
           if (payload.entry.role === "agent") {
@@ -134,7 +139,20 @@ export default function Home(props: HomePageProps = {}) {
             if (loadingRef.current) return;
             if (contentLen === 0) return;
           }
-          setMessages((prev) => [...prev, item]);
+          // Dedupe: server may echo user entry via EventSource after we added it optimistically.
+          if (payload.entry.role === "user") {
+            setMessages((prev) => {
+              if (prev.length > 0) {
+                const last = prev[prev.length - 1];
+                if (last.role === "user" && "content" in last && last.content === payload.entry.content) {
+                  return prev;
+                }
+              }
+              return [...prev, item];
+            });
+          } else {
+            setMessages((prev) => [...prev, item]);
+          }
         }
       } catch {
         // ignore non-message or malformed
