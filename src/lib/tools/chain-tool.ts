@@ -70,18 +70,22 @@ export interface ChainErrorResult {
 }
 
 const chainSchema = z.object({
-  expression: z.string().describe("Pipeline expression, e.g. terminal_exec({\"command\":\"cat x\"}).stdout | knowledge_search({\"query\":\"@prev\"})"),
+  expr: z.string().describe("Pipeline: tool(args).prop | tool(args). Use @prev for previous result."),
 });
 
 export const chainTool: Tool<z.infer<typeof chainSchema>, unknown | ChainErrorResult> = {
   name: "chain",
   description:
-    "Run a pipeline of tools: segment | segment | ... Each segment is toolName(args).property? Use @prev in args for the previous stage result. Example: terminal_exec({\"command\":\"cat file.md\"}).stdout | knowledge_search({\"query\":\"@prev\"}). On error returns { error, callStack, failedTool, message }.",
+    "Run a pipeline of tools: segment | segment | ... Use @prev in args for previous result. Example: terminal_exec({cmd:'cat file.md'}).stdout | knowledge_search({q:'@prev'}). On error returns { error, callStack, failedTool, message }.",
   schema: chainSchema,
   async execute(args, ctx): Promise<unknown | ChainErrorResult> {
     const tools = ctx.getToolsForAgent?.(ctx.agentId) ?? [];
     const getTool = (name: string) => tools.find((t) => t.name === name);
-    const segments = parseChainExpression(args.expression);
+    const expression = args.expr ?? (args as { expression?: string }).expression;
+    if (expression == null || expression === "") {
+      return { error: true, callStack: [], failedTool: "", message: "Empty chain" };
+    }
+    const segments = parseChainExpression(expression);
     if (segments.length === 0) return { error: true, callStack: [], failedTool: "", message: "Empty chain" };
 
     let prev: unknown = undefined;
@@ -129,7 +133,7 @@ export const chainTool: Tool<z.infer<typeof chainSchema>, unknown | ChainErrorRe
   toDefinition: () => ({
     name: "chain",
     description:
-      "Run a pipeline of tools: segment | segment | ... Each segment is toolName(args).property? Use @prev in args for the previous stage result.",
+      "Run a pipeline of tools: segment | segment | ... Use @prev for previous result. Example: chain({ expr: 'terminal_exec({cmd:\"cat file.md\"}).stdout | knowledge_search({q:\"@prev\"})' }).",
     parameters: zodToJsonSchema(chainSchema),
     returns: "Last stage result or ChainErrorResult on failure",
   }),

@@ -88,7 +88,7 @@ describe("threadUpdateTool", () => {
     const ctx = makeTestContext();
     const sessionId = createSession(ctx, ["user", "maia"]);
     const toolCtx = makeToolCtx(ctx, sessionId);
-    await threadUpdateTool.execute({ sessionId, name: "My Thread" }, toolCtx);
+    await threadUpdateTool.execute({ id: sessionId, name: "My Thread" }, toolCtx);
     const session = getSession(ctx, sessionId);
     expect(session?.name).toBe("My Thread");
   });
@@ -97,7 +97,7 @@ describe("threadUpdateTool", () => {
     const ctx = makeTestContext();
     const sessionId = createSession(ctx, ["user", "maia"]);
     const toolCtx = makeToolCtx(ctx, sessionId);
-    await threadUpdateTool.execute({ sessionId, description: "A test thread" }, toolCtx);
+    await threadUpdateTool.execute({ id: sessionId, desc: "A test thread" }, toolCtx);
     const session = getSession(ctx, sessionId);
     expect(session?.description).toBe("A test thread");
   });
@@ -106,7 +106,7 @@ describe("threadUpdateTool", () => {
     const ctx = makeTestContext();
     const sessionId = createSession(ctx, ["user", "maia"]);
     const toolCtx = makeToolCtx(ctx, sessionId);
-    await threadUpdateTool.execute({ sessionId, tags: ["work", "urgent"] }, toolCtx);
+    await threadUpdateTool.execute({ id: sessionId, tags: ["work", "urgent"] }, toolCtx);
     const session = getSession(ctx, sessionId);
     expect(session?.tags).toEqual(["work", "urgent"]);
   });
@@ -116,9 +116,9 @@ describe("threadUpdateTool", () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
     const toolCtx = makeToolCtx(ctx, sessionId);
     await threadUpdateTool.execute({
-      sessionId,
+      id: sessionId,
       name: "Named",
-      description: "Described",
+      desc: "Described",
       tags: ["a"],
     }, toolCtx);
     const session = getSession(ctx, sessionId);
@@ -133,7 +133,7 @@ describe("threadDeleteTool", () => {
     const ctx = makeTestContext();
     const sessionId = createSession(ctx, ["user", "maia"]);
     const toolCtx = makeToolCtx(ctx, sessionId);
-    const result = await threadDeleteTool.execute({ sessionId }, toolCtx) as boolean;
+    const result = await threadDeleteTool.execute({ id: sessionId }, toolCtx) as boolean;
     expect(result).toBe(true);
     expect(getSession(ctx, sessionId)).toBeNull();
     expect(listSessions(ctx, "all").some((s) => s.id === sessionId)).toBe(false);
@@ -142,7 +142,7 @@ describe("threadDeleteTool", () => {
   it("returns false for non-existent session", async () => {
     const ctx = makeTestContext();
     const toolCtx = makeToolCtx(ctx, "s1");
-    const result = await threadDeleteTool.execute({ sessionId: "nonexistent" }, toolCtx) as boolean;
+    const result = await threadDeleteTool.execute({ id: "nonexistent" }, toolCtx) as boolean;
     expect(result).toBe(false);
   });
 
@@ -150,9 +150,9 @@ describe("threadDeleteTool", () => {
     const ctx = makeTestContext();
     const sessionId = createSession(ctx, ["user", "maia"]);
     const toolCtx = makeToolCtx(ctx, sessionId);
-    await threadSetActiveTool.execute({ sessionId }, toolCtx);
+    await threadSetActiveTool.execute({ id: sessionId }, toolCtx);
     expect(getActiveSessionId(ctx)).toBe(sessionId);
-    await threadDeleteTool.execute({ sessionId }, toolCtx);
+    await threadDeleteTool.execute({ id: sessionId }, toolCtx);
     expect(getActiveSessionId(ctx)).toBeNull();
   });
 });
@@ -169,7 +169,7 @@ describe("threadGetActiveTool", () => {
     const ctx = makeTestContext();
     const sessionId = createSession(ctx, ["user", "maia"]);
     const toolCtx = makeToolCtx(ctx, sessionId);
-    await threadSetActiveTool.execute({ sessionId }, toolCtx);
+    await threadSetActiveTool.execute({ id: sessionId }, toolCtx);
     const result = await threadGetActiveTool.execute({}, toolCtx) as string | null;
     expect(result).toBe(sessionId);
   });
@@ -180,7 +180,7 @@ describe("threadSetActiveTool", () => {
     const ctx = makeTestContext();
     const sessionId = createSession(ctx, ["user", "maia"]);
     const toolCtx = makeToolCtx(ctx, "other");
-    await threadSetActiveTool.execute({ sessionId }, toolCtx);
+    await threadSetActiveTool.execute({ id: sessionId }, toolCtx);
     expect(getActiveSessionId(ctx)).toBe(sessionId);
   });
 
@@ -189,9 +189,9 @@ describe("threadSetActiveTool", () => {
     const id1 = createSession(ctx, ["user", "maia"]);
     const id2 = createSession(ctx, ["user", "maia"]);
     const toolCtx = makeToolCtx(ctx, id1);
-    await threadSetActiveTool.execute({ sessionId: id1 }, toolCtx);
+    await threadSetActiveTool.execute({ id: id1 }, toolCtx);
     expect(getActiveSessionId(ctx)).toBe(id1);
-    await threadSetActiveTool.execute({ sessionId: id2 }, toolCtx);
+    await threadSetActiveTool.execute({ id: id2 }, toolCtx);
     expect(getActiveSessionId(ctx)).toBe(id2);
   });
 });

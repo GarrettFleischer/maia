@@ -10,11 +10,8 @@ import { getBraveAnswersApiKey, BRAVE_ANSWERS_URL } from "./brave-api";
 import type { Tool, ToolContext } from "./types";
 
 const schema = z.object({
-  question: z.string().describe("Question to get a web-grounded AI answer for"),
-  enableResearch: z
-    .boolean()
-    .optional()
-    .describe("If true, enable multi-search research mode for thorough answers (slower, higher cost)"),
+  q: z.string().describe("Question for web-grounded answer"),
+  research: z.boolean().optional().describe("Enable research mode (slower, deeper)"),
 });
 
 /** Response shape from Brave Answers (OpenAI-compatible). */
@@ -84,12 +81,12 @@ async function getBraveAnswer(
 export const braveAnswersTool: Tool<z.infer<typeof schema>, BraveAnswerResult> = {
   name: "web_answer",
   description:
-    "Get an AI-generated answer backed by real-time web search (Brave Answers). Prefer this tool for web-grounded Q&A; use web_search when you need raw links or plan to fetch a specific page. Same API key as web_search. Optionally enable research mode for deeper answers.",
+    "Get an AI-generated answer backed by real-time web search (Brave Answers). Prefer this tool for web-grounded Q&A; use web_search when you need raw links or plan to fetch a specific page. Same API key as web_search. Optionally enable research mode for deeper answers. Example: web_answer({ q: 'What is the current Node.js LTS version?' }).",
   schema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(schema) };
   },
-  async execute({ question, enableResearch }, ctx) {
+  async execute({ q: question, research: enableResearch }, ctx) {
     return getBraveAnswer(question, ctx, enableResearch ?? false);
   },
 };

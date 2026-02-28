@@ -69,7 +69,7 @@ function makeTool<S extends z.ZodTypeAny>(
 
 export const emailListFoldersTool = makeTool(
   "email_list_folders",
-  "List all Yahoo Mail folders/mailboxes (Inbox, Sent, Trash, Spam, and any custom folders).",
+  "List all Yahoo Mail folders/mailboxes (Inbox, Sent, Trash, Spam, and any custom folders). Example: email_list_folders({}).",
   z.object({}),
   async (_args, ctx) => {
     return withImap(ctx, async (client) => {
@@ -91,7 +91,7 @@ export const emailListFoldersTool = makeTool(
 
 export const emailListTool = makeTool(
   "email_list",
-  "List emails in a Yahoo Mail folder with pagination. Returns sender, subject, date, UID, and read/starred status. Most recent emails first.",
+  "List emails in a Yahoo Mail folder with pagination. Returns sender, subject, date, UID, and read/starred status. Most recent emails first. Example: email_list({ folder: 'INBOX', limit: 10 }).",
   z.object({
     folder: z.string().optional().describe("Folder path (default: INBOX)"),
     limit: z.number().optional().describe("Max emails to return (default: 20, max: 100)"),
@@ -144,7 +144,7 @@ export const emailListTool = makeTool(
 
 export const emailReadTool = makeTool(
   "email_read",
-  "Fetch the full content of an email by its UID, including body text. Marks the email as read.",
+  "Fetch the full content of an email by its UID, including body text. Marks the email as read. Example: email_read({ uid: 42, folder: 'INBOX' }).",
   z.object({
     uid: z.number().describe("Email UID (from email_list or email_search)"),
     folder: z.string().optional().describe("Folder path (default: INBOX)"),
@@ -196,7 +196,7 @@ export const emailReadTool = makeTool(
 
 export const emailSearchTool = makeTool(
   "email_search",
-  "Search emails in a folder. Supports searching by subject, from address, or body text. Returns matching emails (most recent first).",
+  "Search emails in a folder. Supports searching by subject, from address, or body text. Returns matching emails (most recent first). Example: email_search({ query: 'invoice', folder: 'INBOX' }).",
   z.object({
     query: z.string().describe("Search string — matched against subject, from, and body"),
     folder: z.string().optional().describe("Folder to search (default: INBOX)"),
@@ -250,7 +250,7 @@ export const emailSearchTool = makeTool(
 
 export const emailMoveTool = makeTool(
   "email_move",
-  "Move an email from one folder to another. Use email_list or email_search first to get the email UID, and email_list_folders to see available folder paths.",
+  "Move an email from one folder to another. Use email_list or email_search first to get the email UID, and email_list_folders to see available folder paths. Example: email_move({ uid: 42, toFolder: 'Archive' }).",
   z.object({
     uid: z.number().describe("Email UID to move"),
     toFolder: z.string().describe("Destination folder path (e.g. 'Archive', 'Bulk Mail')"),
@@ -275,7 +275,7 @@ export const emailMoveTool = makeTool(
 
 export const emailMarkTool = makeTool(
   "email_mark",
-  "Mark an email as read, unread, starred, or unstarred. Use email_list or email_search first to get the email UID.",
+  "Mark an email as read, unread, starred, or unstarred. Use email_list or email_search first to get the email UID. Example: email_mark({ uid: 42, mark: 'read' }).",
   z.object({
     uid: z.number().describe("Email UID to mark"),
     mark: z.enum(["read", "unread", "starred", "unstarred"]).describe("Action to apply"),
@@ -309,7 +309,7 @@ export const emailMarkTool = makeTool(
 
 export const emailDeleteTool = makeTool(
   "email_delete",
-  "Move an email to the Trash folder (reversible). Use email_list or email_search first to get the email UID. The email is not permanently deleted.",
+  "Move an email to the Trash folder (reversible). Use email_list or email_search first to get the email UID. The email is not permanently deleted. Example: email_delete({ uid: 42 }).",
   z.object({
     uid: z.number().describe("Email UID to delete (move to Trash)"),
     folder: z.string().optional().describe("Source folder (default: INBOX)"),

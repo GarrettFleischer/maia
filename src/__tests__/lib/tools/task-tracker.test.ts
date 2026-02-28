@@ -22,9 +22,9 @@ describe("task_list", () => {
     const ctx = makeToolCtx();
     await taskCreateTool.execute({ title: "Todo one" }, ctx);
     const inProgress = await taskCreateTool.execute({ title: "In progress one" }, ctx) as { id: string };
-    await taskUpdateTool.execute({ taskId: inProgress.id, status: "in_progress" }, ctx);
+    await taskUpdateTool.execute({ id: inProgress.id, status: "in_progress" }, ctx);
     const doneTask = await taskCreateTool.execute({ title: "Done one" }, ctx) as { id: string };
-    await taskUpdateTool.execute({ taskId: doneTask.id, status: "done" }, ctx);
+    await taskUpdateTool.execute({ id: doneTask.id, status: "done" }, ctx);
 
     const result = await taskListTool.execute({}, ctx) as { id: string; status: string }[];
     expect(result.length).toBe(2);
@@ -36,7 +36,7 @@ describe("task_list", () => {
     const ctx = makeToolCtx();
     await taskCreateTool.execute({ title: "Todo" }, ctx);
     const doneId = (await taskCreateTool.execute({ title: "Done" }, ctx) as { id: string }).id;
-    await taskUpdateTool.execute({ taskId: doneId, status: "done" }, ctx);
+    await taskUpdateTool.execute({ id: doneId, status: "done" }, ctx);
 
     const result = await taskListTool.execute({ status: "done" }, ctx) as { id: string; status: string }[];
     expect(result.length).toBe(1);
@@ -56,9 +56,9 @@ describe("task_list", () => {
   it("filters by assignedTo (agent id)", async () => {
     const ctx = makeToolCtx();
     await taskCreateTool.execute({ title: "Unassigned" }, ctx);
-    await taskCreateTool.execute({ title: "Mine", assignedTo: "agent-a" }, ctx);
+    await taskCreateTool.execute({ title: "Mine", assign: "agent-a" }, ctx);
 
-    const result = await taskListTool.execute({ assignedTo: "agent-a" }, ctx) as { title: string }[];
+    const result = await taskListTool.execute({ assign: "agent-a" }, ctx) as { title: string }[];
     expect(result.length).toBe(1);
     expect(result[0].title).toBe("Mine");
   });
@@ -67,7 +67,7 @@ describe("task_list", () => {
     const ctx = makeToolCtx();
     await taskCreateTool.execute({ title: "By me" }, ctx);
 
-    const result = await taskListTool.execute({ createdBy: "agent-a" }, ctx) as { title: string }[];
+    const result = await taskListTool.execute({ created: "agent-a" }, ctx) as { title: string }[];
     expect(result.length).toBe(1);
     expect(result[0].title).toBe("By me");
   });

@@ -10,8 +10,8 @@ import type { Tool, ToolContext } from "./types";
 import type { SearchResult } from "../types";
 
 const schema = z.object({
-  query: z.string().describe("Search query"),
-  maxResults: z.number().optional().describe("Maximum number of results (default 5)"),
+  q: z.string().describe("Search query"),
+  max: z.number().optional().describe("Max results (default 5)"),
 });
 
 /**
@@ -76,13 +76,12 @@ async function searchBrave(query: string, max: number, ctx: ToolContext): Promis
 export const webSearchTool: Tool<z.infer<typeof schema>, SearchResult[]> = {
   name: "web_search",
   description:
-    "Search the web using Brave Search API. Returns a list of results (title, url, snippet). Requires BRAVE_SEARCH_API_KEY to be set. Prefer web_answer for web-grounded Q&A; use web_search when you specifically need raw links or plan to fetch a specific page (for example with fetch_web_page).",
+    "Search the web using Brave Search API. Returns a list of results (title, url, snippet). Requires BRAVE_SEARCH_API_KEY to be set. Prefer web_answer for web-grounded Q&A; use web_search when you specifically need raw links or plan to fetch a specific page (for example with fetch_web_page). Example: web_search({ q: 'latest Node.js LTS release' }).",
   schema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(schema) };
   },
-  async execute({ query, maxResults }, ctx) {
-    const max = maxResults ?? 5;
-    return searchBrave(query, max, ctx);
+  async execute({ q: query, max: maxResults = 5 }, ctx) {
+    return searchBrave(query, maxResults, ctx);
   },
 };

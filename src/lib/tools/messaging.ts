@@ -22,45 +22,31 @@ export function registerMessagingImpls(
   _messageSendImpl = toAgent;
 }
 
-const messageToUserSchema = z.object({
-  content: z.string().describe("Message content to send to the user"),
-});
-
-export const messageToUserTool: Tool<z.infer<typeof messageToUserSchema>> = {
-  name: "message_to_user",
-  description: "Send a message to the user in the active session.",
-  schema: messageToUserSchema,
-  toDefinition: () => ({
-    name: "message_to_user",
-    description: "Send a message to the user in the active session.",
-    parameters: zodToJsonSchema(messageToUserSchema),
-  }),
-  async execute({ content }, ctx) {
-    if (!_messageToUserImpl) throw new Error("Messaging service not initialized");
-    await _messageToUserImpl(ctx.agentId, ctx.sessionId, content);
-  },
-};
-
 const messageSendSchema = z.object({
-  toAgentId: z.string().describe("Target agent ID"),
-  content: z.string().describe("Message content to send"),
+  to: z.string().describe("Target: 'user' (message in active session) or agent ID (agent-to-agent; replies until [DONE])"),
+  text: z.string().describe("Message content"),
 });
 
 export const messageSendTool: Tool<z.infer<typeof messageSendSchema>, string> = {
   name: "message_send",
   description:
-    "Send a message to another agent. Replies are automatically forwarded between you—no need to call message_send again. The conversation continues until one of you ends a reply with [DONE]. Returns immediately.",
+    "Send a message. Use to: 'user' to message the user in the active session, or to: '<agent-id>' to message another agent (replies forwarded until [DONE]). Example: message_send({ to: 'user', text: 'Done.' }) or message_send({ to: 'agent-uuid', text: 'Please review.' }).",
   schema: messageSendSchema,
   toDefinition: () => ({
     name: "message_send",
     description:
-      "Send a message to another agent. Replies are automatically forwarded between you—no need to call message_send again. The conversation continues until one of you ends a reply with [DONE]. Returns immediately.",
+      "Send a message. Use to: 'user' to message the user in the active session, or to: '<agent-id>' to message another agent (replies forwarded until [DONE]). Example: message_send({ to: 'user', text: 'Done.' }) or message_send({ to: 'agent-uuid', text: 'Please review.' }).",
     parameters: zodToJsonSchema(messageSendSchema),
   }),
-  async execute({ toAgentId, content }, ctx) {
+  async execute({ to: toTarget, text: content }, ctx) {
+    if (toTarget === "user") {
+      if (!_messageToUserImpl) throw new Error("Messaging service not initialized");
+      await _messageToUserImpl(ctx.agentId, ctx.sessionId, content);
+      return "Message sent to user.";
+    }
     if (!_messageSendImpl) throw new Error("Messaging service not initialized");
-    return _messageSendImpl(ctx.agentId, toAgentId, content, ctx.sessionId);
+    return _messageSendImpl(ctx.agentId, toTarget, content, ctx.sessionId);
   },
 };
 
-export const messagingTools: Tool[] = [messageToUserTool, messageSendTool];
+export const messagingTools: Tool[] = [messageSendTool];

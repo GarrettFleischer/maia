@@ -29,7 +29,7 @@ const navigateSchema = z.object({
 
 export const browserNavigateTool: Tool<z.infer<typeof navigateSchema>, { ok: boolean; url: string }> = {
   name: "browser_navigate",
-  description: "Navigate the session browser to a URL. Creates the browser session if needed.",
+  description: "Navigate the session browser to a URL. Creates the browser session if needed. Example: browser_navigate({ url: 'https://example.com' }).",
   schema: navigateSchema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(navigateSchema) };
@@ -89,7 +89,7 @@ function SNAPSHOT_FN(opts: { interactiveOnly: boolean; maxDepth: number }) {
 
 export const browserSnapshotTool: Tool<z.infer<typeof snapshotSchema>, { snapshot: string }> = {
   name: "browser_snapshot",
-  description: "Get a snapshot of the current page with stable element refs for use in browser_click, browser_type, browser_fill, browser_select_option.",
+  description: "Get a snapshot of the current page with stable element refs for use in browser_click, browser_type, browser_fill, browser_select_option. Example: browser_snapshot({}).",
   schema: snapshotSchema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(snapshotSchema) };
@@ -118,7 +118,7 @@ const clickSchema = z.object({
 
 export const browserClickTool: Tool<z.infer<typeof clickSchema>, { ok: boolean }> = {
   name: "browser_click",
-  description: "Click an element by ref (from browser_snapshot) or CSS selector.",
+  description: "Click an element by ref (from browser_snapshot) or CSS selector. Example: browser_click({ ref: 'el-1' }).",
   schema: clickSchema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(clickSchema) };
@@ -148,7 +148,7 @@ const typeSchema = z.object({
 
 export const browserTypeTool: Tool<z.infer<typeof typeSchema>, { ok: boolean }> = {
   name: "browser_type",
-  description: "Type text into an editable element (by ref or selector). Use browser_fill to replace value in one go.",
+  description: "Type text into an editable element (by ref or selector). Use browser_fill to replace value in one go. Example: browser_type({ ref: 'el-1', text: 'hello' }).",
   schema: typeSchema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(typeSchema) };
@@ -179,7 +179,7 @@ const fillSchema = z.object({
 
 export const browserFillTool: Tool<z.infer<typeof fillSchema>, { ok: boolean }> = {
   name: "browser_fill",
-  description: "Clear and set the value of an input (by ref or selector).",
+  description: "Clear and set the value of an input (by ref or selector). Example: browser_fill({ ref: 'el-1', value: 'new value' }).",
   schema: fillSchema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(fillSchema) };
@@ -203,7 +203,7 @@ const selectOptionSchema = z.object({
 
 export const browserSelectOptionTool: Tool<z.infer<typeof selectOptionSchema>, { ok: boolean }> = {
   name: "browser_select_option",
-  description: "Select option(s) in a dropdown by ref or selector.",
+  description: "Select option(s) in a dropdown by ref or selector. Example: browser_select_option({ ref: 'el-1', value: 'opt1' }).",
   schema: selectOptionSchema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(selectOptionSchema) };
@@ -223,7 +223,7 @@ const goBackSchema = z.object({});
 
 export const browserGoBackTool: Tool<z.infer<typeof goBackSchema>, { ok: boolean }> = {
   name: "browser_go_back",
-  description: "Navigate back in session browser history.",
+  description: "Navigate back in session browser history. Example: browser_go_back({}).",
   schema: goBackSchema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(goBackSchema) };
@@ -242,7 +242,7 @@ const closeSchema = z.object({});
 
 export const browserCloseTool: Tool<z.infer<typeof closeSchema>, { ok: boolean }> = {
   name: "browser_close",
-  description: "Close the session browser and release resources.",
+  description: "Close the session browser and release resources. Example: browser_close({}).",
   schema: closeSchema,
   toDefinition() {
     return { name: this.name, description: this.description, parameters: zodToJsonSchema(closeSchema) };

@@ -26,16 +26,16 @@ function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 const findToolSchema = z.object({
-  query: z.string().describe("Natural language description of what you want to do (e.g. 'search the web', 'run a shell command')"),
-  limit: z.number().int().min(1).max(20).optional().describe("Max number of tool definitions to return (default 5)"),
+  q: z.string().describe("What you want to do"),
+  limit: z.number().int().min(1).max(20).optional().describe("Max tools to return (default 5)"),
 });
 
 export const findTool: Tool<z.infer<typeof findToolSchema>, ToolDefinition[]> = {
   name: "find_tool",
-  description: "Find tools by natural language. Returns tool definitions (name, description, parameters) that match what you want to do. Use this to discover available tools before calling them.",
+  description: "Find tools by natural language. Returns tool definitions (name, description, parameters) that match what you want to do. Use this to discover available tools before calling them. Example: find_tool({ q: 'search the web' }).",
   schema: findToolSchema,
   async execute(args, ctx): Promise<ToolDefinition[]> {
-    const { query, limit = 5 } = args;
+    const { q: query, limit = 5 } = args;
     const tools = ctx.getToolsForAgent ? ctx.getToolsForAgent(ctx.agentId) : [];
     if (tools.length === 0) return [];
 
@@ -51,7 +51,7 @@ export const findTool: Tool<z.infer<typeof findToolSchema>, ToolDefinition[]> = 
       });
     const [toolEmbeddings, queryEmbedding] = await Promise.all([
       embedBatch(texts),
-      embedder.embed(query),
+      embedder.embed(args.q),
     ]);
 
     const withScore = tools.map((t, i) => ({
@@ -63,7 +63,7 @@ export const findTool: Tool<z.infer<typeof findToolSchema>, ToolDefinition[]> = 
   },
   toDefinition: () => ({
     name: "find_tool",
-    description: "Find tools by natural language. Returns tool definitions (name, description, parameters) that match what you want to do. Use this to discover available tools before calling them.",
+    description: "Find tools by natural language. Returns tool definitions (name, description, parameters) that match what you want to do. Use this to discover available tools before calling them. Example: find_tool({ q: 'search the web' }).",
     parameters: zodToJsonSchema(findToolSchema),
   }),
 };

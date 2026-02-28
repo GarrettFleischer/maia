@@ -37,7 +37,7 @@ describe("find_tool", () => {
   it("returns tool definitions matching the query by similarity", async () => {
     const toolCtx = { ...ctx, agentId: "maia", sessionId: "s1", volumeRoot: "/tmp", getToolsForAgent };
     const result = await findTool.execute(
-      { query: "search the web", limit: 3 },
+      { q: "search the web", limit: 3 },
       toolCtx
     );
     expect(Array.isArray(result)).toBe(true);
@@ -49,7 +49,7 @@ describe("find_tool", () => {
   it("returns definitions with name, description, and parameters", async () => {
     const toolCtx = { ...ctx, agentId: "maia", sessionId: "s1", volumeRoot: "/tmp", getToolsForAgent };
     const result = await findTool.execute(
-      { query: "run a command", limit: 2 },
+      { q: "run a command", limit: 2 },
       toolCtx
     );
     const list = result as { name: string; description: string; parameters?: Record<string, unknown> }[];

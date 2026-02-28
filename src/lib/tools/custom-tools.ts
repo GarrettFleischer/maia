@@ -33,11 +33,11 @@ function makeTool<S extends z.ZodTypeAny>(
  */
 export const approveTool = makeTool(
   "approve_tool",
-  "Register a custom tool by slug after reviewing it. Use file_list first to inspect data/tools/ and see available tool slugs. Reads data/tools/<slug>/manifest.json. Maia only. Use after you have reviewed a tool and found it safe.",
+  "Register a custom tool by slug after reviewing it. Use file_list first to inspect data/tools/ and see available tool slugs. Reads data/tools/<slug>/manifest.json. Maia only. Use after you have reviewed a tool and found it safe. Example: approve_tool({ slug: 'my-tool' }).",
   z.object({
-    toolSlug: z.string().describe("Tool folder name under data/tools (e.g. my-tool)"),
+    slug: z.string().describe("Tool folder under data/tools (e.g. my-tool)"),
   }),
-  async ({ toolSlug }, ctx) => {
+  async ({ slug: toolSlug }, ctx) => {
     if (!isSlugSafe(toolSlug)) {
       throw new Error(`Invalid tool slug: ${toolSlug}`);
     }
@@ -57,11 +57,11 @@ export const approveTool = makeTool(
  */
 export const toolDeregisterTool = makeTool(
   "tool_deregister",
-  "Remove a tool from the approved list so it can be edited. Use file_list first to inspect data/tools/ and identify the tool slug to deregister. After edits, the agent must create a new task for you to review again. Maia only.",
+  "Remove a tool from the approved list so it can be edited. Use file_list first to inspect data/tools/ and identify the tool slug to deregister. After edits, the agent must create a new task for you to review again. Maia only. Example: tool_deregister({ slug: 'my-tool' }).",
   z.object({
-    toolSlug: z.string().describe("Tool folder name under data/tools"),
+    slug: z.string().describe("Tool folder under data/tools"),
   }),
-  async ({ toolSlug }, ctx) => {
+  async ({ slug: toolSlug }, ctx) => {
     if (!isSlugSafe(toolSlug)) {
       throw new Error(`Invalid tool slug: ${toolSlug}`);
     }

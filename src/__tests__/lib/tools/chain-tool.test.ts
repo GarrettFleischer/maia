@@ -38,7 +38,7 @@ describe("chain tool", () => {
   it("returns error when getToolsForAgent is missing", async () => {
     const ctx = makeTestContext();
     const toolCtx: ToolContext = { ...ctx, agentId: "maia", sessionId: "s1", volumeRoot: "/tmp" };
-    const result = await chainTool.execute({ expression: "find_tool({})" }, toolCtx);
+    const result = await chainTool.execute({ expr: "find_tool({})" }, toolCtx);
     expect(result).toHaveProperty("error", true);
     expect((result as { callStack: string[] }).callStack).toContain("find_tool");
   });
@@ -66,7 +66,7 @@ describe("chain tool", () => {
       getToolsForAgent,
     };
     const result = await chainTool.execute({
-      expression: 'find_tool({"query":"web","limit":2})',
+      expr: 'find_tool({"q":"web","limit":2})',
     }, toolCtx);
     expect((result as { error?: boolean }).error).not.toBe(true);
     expect(Array.isArray(result)).toBe(true);

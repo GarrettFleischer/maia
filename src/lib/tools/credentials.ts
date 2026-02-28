@@ -25,28 +25,28 @@ function makeTool<S extends z.ZodTypeAny>(
 
 export const credentialCreateTool = makeTool(
   "credential_create",
-  "Store a new credential (key/value). Use credential_list first to see existing keys and avoid overwriting. The value is encrypted and never revealed to you again.",
+  "Store a new credential (key/value). Use credential_list first to see existing keys and avoid overwriting. The value is encrypted and never revealed to you again. Example: credential_create({ key: 'API_KEY', value: 'secret' }).",
   z.object({ key: z.string(), value: z.string() }),
   async ({ key, value }, ctx) => { credentialCreate(ctx, key, value); }
 );
 
 export const credentialUpdateTool = makeTool(
   "credential_update",
-  "Update the value of an existing credential. Use credential_list first to verify the key exists.",
+  "Update the value of an existing credential. Use credential_list first to verify the key exists. Example: credential_update({ key: 'API_KEY', value: 'new-secret' }).",
   z.object({ key: z.string(), value: z.string() }),
   async ({ key, value }, ctx) => { credentialUpdate(ctx, key, value); }
 );
 
 export const credentialDeleteTool = makeTool(
   "credential_delete",
-  "Delete a credential by key. Use credential_list first to verify the key exists before deleting.",
+  "Delete a credential by key. Use credential_list first to verify the key exists before deleting. Example: credential_delete({ key: 'API_KEY' }).",
   z.object({ key: z.string() }),
   async ({ key }, ctx) => { credentialDelete(ctx, key); }
 );
 
 export const credentialListTool = makeTool(
   "credential_list",
-  "List all stored credential keys (values are never returned).",
+  "List all stored credential keys (values are never returned). Example: credential_list({}).",
   z.object({}),
   async (_args, ctx) => credentialList(ctx)
 );

@@ -17,7 +17,7 @@ describe("historyFindTool", () => {
     appendEntry(ctx, sessionId, { role: "user", content: "Tell me about TypeScript interfaces", timestamp: new Date().toISOString() });
     appendEntry(ctx, sessionId, { role: "agent", content: "Sure! TypeScript interfaces define contracts.", timestamp: new Date().toISOString() });
     const toolCtx: ToolContext = { ...ctx, agentId: "agent-1", sessionId, volumeRoot: "/workspace" };
-    const results = await historyFindTool.execute({ query: "TypeScript" }, toolCtx) as HistoryEntry[];
+    const results = await historyFindTool.execute({ q: "TypeScript" }, toolCtx) as HistoryEntry[];
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].content).toContain("TypeScript");
   });
@@ -27,7 +27,7 @@ describe("historyFindTool", () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
     appendEntry(ctx, sessionId, { role: "user", content: "Hello world", timestamp: new Date().toISOString() });
     const toolCtx: ToolContext = { ...ctx, agentId: "agent-1", sessionId, volumeRoot: "/workspace" };
-    const results = await historyFindTool.execute({ query: "zzznomatches" }, toolCtx) as HistoryEntry[];
+    const results = await historyFindTool.execute({ q: "zzznomatches" }, toolCtx) as HistoryEntry[];
     expect(results).toHaveLength(0);
   });
 
@@ -38,7 +38,7 @@ describe("historyFindTool", () => {
     appendEntry(ctx, sessionId, { role: "user", content: "original content", timestamp: new Date().toISOString() }, false);
     appendEntry(ctx, sessionId, { role: "user", content: "compressed content", timestamp: new Date().toISOString() }, true);
     const toolCtx: ToolContext = { ...ctx, agentId: "agent-1", sessionId, volumeRoot: "/workspace" };
-    const results = await historyFindTool.execute({ query: "content", mode: "compressed" }, toolCtx) as HistoryEntry[];
+    const results = await historyFindTool.execute({ q: "content", mode: "compressed" }, toolCtx) as HistoryEntry[];
     // Should only return compressed entries (is_compressed=1)
     expect(results.every((e) => e.content === "compressed content")).toBe(true);
   });
@@ -52,7 +52,7 @@ describe("historySearchAllTool", () => {
     appendEntry(ctx, s1, { role: "user", content: "Python is great for data science", timestamp: new Date().toISOString() });
     appendEntry(ctx, s2, { role: "user", content: "Python decorators are powerful", timestamp: new Date().toISOString() });
     const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId: s1, volumeRoot: "/w" };
-    const results = await historySearchAllTool.execute({ query: "Python" }, toolCtx) as Array<{ sessionId: string; entries: HistoryEntry[] }>;
+    const results = await historySearchAllTool.execute({ q: "Python" }, toolCtx) as Array<{ id: string; entries: HistoryEntry[] }>;
     expect(results.length).toBeGreaterThan(0);
     const allEntries = results.flatMap((r) => r.entries);
     expect(allEntries.every((e) => e.content.includes("Python"))).toBe(true);
@@ -66,7 +66,7 @@ describe("historySearchAllTool", () => {
     const s2 = createSession(ctx, ["user", "maia"]);
     appendEntry(ctx, s2, { role: "user", content: "Machine learning data", timestamp: new Date().toISOString() });
     const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId: s1, volumeRoot: "/w" };
-    const results = await historySearchAllTool.execute({ query: "Machine", tags: "ml" }, toolCtx) as Array<{ sessionId: string }>;
+    const results = await historySearchAllTool.execute({ q: "Machine", tags: "ml" }, toolCtx) as Array<{ id: string }>;
     // Only the session tagged with "ml" should appear
     expect(results.every((r) => r.sessionId === s1)).toBe(true);
   });
@@ -76,7 +76,7 @@ describe("historyGetSessionTool", () => {
   it("returns null for nonexistent session", async () => {
     const ctx = makeTestContext();
     const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId: "x", volumeRoot: "/w" };
-    const result = await historyGetSessionTool.execute({ sessionId: "nonexistent" }, toolCtx);
+    const result = await historyGetSessionTool.execute({ id: "nonexistent" }, toolCtx);
     expect(result).toBeNull();
   });
 
@@ -85,7 +85,7 @@ describe("historyGetSessionTool", () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
     appendEntry(ctx, sessionId, { role: "user", content: "hello", timestamp: new Date().toISOString() });
     const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId, volumeRoot: "/w" };
-    const result = await historyGetSessionTool.execute({ sessionId }, toolCtx) as { id: string; original: HistoryEntry[] };
+    const result = await historyGetSessionTool.execute({ id: sessionId }, toolCtx) as { id: string; original: HistoryEntry[] };
     expect(result.id).toBe(sessionId);
     expect(result.original).toHaveLength(1);
   });
@@ -96,7 +96,7 @@ describe("historyGetSessionTool", () => {
     appendEntry(ctx, sessionId, { role: "user", content: "original", timestamp: new Date().toISOString() }, false);
     appendEntry(ctx, sessionId, { role: "user", content: "compressed", timestamp: new Date().toISOString() }, true);
     const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId, volumeRoot: "/w" };
-    const result = await historyGetSessionTool.execute({ sessionId, mode: "compressed" }, toolCtx) as { original: HistoryEntry[]; compressed: HistoryEntry[] };
+    const result = await historyGetSessionTool.execute({ id: sessionId, mode: "compressed" }, toolCtx) as { original: HistoryEntry[]; compressed: HistoryEntry[] };
     expect(result.original).toHaveLength(0);
     expect(result.compressed).toHaveLength(1);
   });
@@ -110,9 +110,9 @@ describe("historyGetSessionTool", () => {
     appendEntry(ctx, sessionId, { role: "agent", content: "turn3", timestamp: new Date().toISOString() }, false);
     const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId, volumeRoot: "/w" };
     const result = await historyGetSessionTool.execute(
-      { sessionId, mode: "original", indexes: [0, 2] },
+      { id: sessionId, mode: "original", indexes: [0, 2] },
       toolCtx
-    ) as { sessionId: string; mode: string; entries: Array<{ index: number; original?: HistoryEntry }> };
+    ) as { id: string; mode: string; entries: Array<{ index: number; original?: HistoryEntry }> };
     expect(result.sessionId).toBe(sessionId);
     expect(result.entries).toHaveLength(2);
     expect(result.entries[0]).toMatchObject({ index: 0, original: expect.objectContaining({ content: "turn0" }) });
@@ -128,9 +128,9 @@ describe("historyGetSessionTool", () => {
     appendEntry(ctx, sessionId, { role: "agent", content: "d", timestamp: new Date().toISOString() }, false);
     const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId, volumeRoot: "/w" };
     const result = await historyGetSessionTool.execute(
-      { sessionId, mode: "original", rangeStart: 1, rangeEnd: 2 },
+      { id: sessionId, mode: "original", start: 1, end: 2 },
       toolCtx
-    ) as { sessionId: string; entries: Array<{ index: number; original?: HistoryEntry }> };
+    ) as { id: string; entries: Array<{ index: number; original?: HistoryEntry }> };
     expect(result.entries).toHaveLength(2);
     expect(result.entries[0]).toMatchObject({ index: 1, original: expect.objectContaining({ content: "b" }) });
     expect(result.entries[1]).toMatchObject({ index: 2, original: expect.objectContaining({ content: "c" }) });

@@ -101,7 +101,7 @@ function makeFileTool<TSchema extends z.ZodTypeAny>(
 
 export const fileReadTool = makeFileTool(
   "file_read",
-  "Read the contents of a file within the workspace volume.",
+  "Read the contents of a file within the workspace volume. Example: file_read({ path: 'workspace/notes.md' }).",
   z.object({ path: z.string().describe("Path relative to workspace root") }),
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
@@ -114,7 +114,7 @@ export const fileReadTool = makeFileTool(
 
 export const fileWriteTool = makeFileTool(
   "file_write",
-  "Write content to a file within the workspace volume. Creates or overwrites. Use file_list first to inspect the workspace and verify paths.",
+  "Write content to a file within the workspace volume. Creates or overwrites. Use file_list first to inspect the workspace and verify paths. Example: file_write({ path: 'workspace/notes.md', content: 'Hello' }).",
   z.object({
     path: z.string().describe("Path relative to workspace root"),
     content: z.string().describe("Content to write"),
@@ -129,7 +129,7 @@ export const fileWriteTool = makeFileTool(
 
 export const fileAppendTool = makeFileTool(
   "file_append",
-  "Append content to a file within the workspace volume. Use file_list first to inspect the workspace and verify the file exists.",
+  "Append content to a file within the workspace volume. Use file_list first to inspect the workspace and verify the file exists. Example: file_append({ path: 'workspace/log.txt', content: '\\nNew line' }).",
   z.object({
     path: z.string().describe("Path relative to workspace root"),
     content: z.string().describe("Content to append"),
@@ -144,7 +144,7 @@ export const fileAppendTool = makeFileTool(
 
 export const fileDeleteTool = makeFileTool(
   "file_delete",
-  "Delete a file or empty directory within the workspace volume. Use file_list first to inspect the workspace and verify the path before deleting.",
+  "Delete a file or empty directory within the workspace volume. Use file_list first to inspect the workspace and verify the path before deleting. Example: file_delete({ path: 'workspace/temp.txt' }).",
   z.object({ path: z.string().describe("Path relative to workspace root") }),
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
@@ -193,7 +193,7 @@ function listRecursive(
 
 export const fileListTool = makeFileTool(
   "file_list",
-  "List all files and folders in your workspace (your writable directory). No arguments; returns a recursive listing of everything under your workspace.",
+  "List all files and folders in your workspace (your writable directory). No arguments; returns a recursive listing of everything under your workspace. Example: file_list({}).",
   z.object({}),
   async (_args, ctx) => {
     return listRecursive(ctx.fs, ctx.volumeRoot, ctx.volumeRoot, "");
@@ -202,7 +202,7 @@ export const fileListTool = makeFileTool(
 
 export const fileMoveTool = makeFileTool(
   "file_move",
-  "Move or rename a file within the workspace volume. Use file_list first to inspect the workspace and verify source/destination paths.",
+  "Move or rename a file within the workspace volume. Use file_list first to inspect the workspace and verify source/destination paths. Example: file_move({ from: 'workspace/old.md', to: 'workspace/new.md' }).",
   z.object({
     from: z.string().describe("Source path relative to workspace root"),
     to: z.string().describe("Destination path relative to workspace root"),
@@ -219,7 +219,7 @@ export const fileMoveTool = makeFileTool(
 
 export const fileExistsTool = makeFileTool(
   "file_exists",
-  "Check whether a file or directory exists within the workspace volume.",
+  "Check whether a file or directory exists within the workspace volume. Example: file_exists({ path: 'workspace/notes.md' }).",
   z.object({ path: z.string().describe("Path relative to workspace root") }),
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
@@ -233,7 +233,7 @@ export const fileExistsTool = makeFileTool(
  */
 export const directoryCreateTool = makeFileTool(
   "directory_create",
-  "Create a directory within the workspace or knowledge base. Creates parent directories as needed. Use file_list first to inspect the workspace and verify the parent path. Use this instead of terminal_exec for mkdir.",
+  "Create a directory within the workspace or knowledge base. Creates parent directories as needed. Use file_list first to inspect the workspace and verify the parent path. Use this instead of terminal_exec for mkdir. Example: directory_create({ path: 'workspace/docs' }).",
   z.object({
     path: z
       .string()

@@ -18,23 +18,23 @@ function makeTool<S extends z.ZodTypeAny>(
 
 export const historyFindTool = makeTool(
   "history_find",
-  "Fuzzy search within the current session history.",
+  "Fuzzy search within the current session history. Example: history_find({ q: 'deployment steps' }).",
   z.object({
-    query: z.string().describe("Search query"),
+    q: z.string().describe("Search query"),
     mode: z.enum(["compressed", "original", "both"]).optional(),
   }),
-  async ({ query, mode }, ctx) => searchEntries(ctx, query, ctx.sessionId, mode)
+  async ({ q: query, mode }, ctx) => searchEntries(ctx, query, ctx.sessionId, mode)
 );
 
 export const historySearchAllTool = makeTool(
   "history_search_all",
-  "Fuzzy search across all sessions in the knowledge base.",
+  "Fuzzy search across all sessions in the knowledge base. Example: history_search_all({ q: 'API key' }).",
   z.object({
-    query: z.string().describe("Search query"),
-    tags: z.string().optional().describe("Comma-separated tags to filter by"),
+    q: z.string().describe("Search query"),
+    tags: z.string().optional().describe("Comma-separated tags"),
     mode: z.enum(["compressed", "original", "both"]).optional(),
   }),
-  async ({ query, tags, mode }, ctx) => {
+  async ({ q: query, tags, mode }, ctx) => {
     const tagList = tags?.split(",").map((t) => t.trim()).filter(Boolean);
     return searchAcrossSessions(ctx, query, mode, tagList);
   }
@@ -77,15 +77,15 @@ function resolveRequestedIndices(
 
 export const historyGetSessionTool = makeTool(
   "history_get_session",
-  "Get session history. By default returns the full session. Pass indexes (array of turn indices) or rangeStart/rangeEnd (inclusive) to return only those turns in one call.",
+  "Get session history. By default returns the full session. Pass indexes or start/end range. Example: history_get_session({ id: 's1', start: 0, end: 4 }).",
   z.object({
-    sessionId: z.string().describe("Session ID"),
-    mode: z.enum(["compressed", "original", "both"]).optional().describe("Which layer: original (full), compressed (summaries), or both"),
-    indexes: z.array(z.number().int().min(0)).optional().describe("Specific turn indices to return (e.g. [0, 2, 5]). Use to fetch multiple turns in one call."),
-    rangeStart: z.number().int().min(0).optional().describe("Start of inclusive range (with rangeEnd) to return only those turns."),
-    rangeEnd: z.number().int().min(0).optional().describe("End of inclusive range (with rangeStart) to return only those turns."),
+    id: z.string().describe("Session ID"),
+    mode: z.enum(["compressed", "original", "both"]).optional().describe("Layer: original, compressed, or both"),
+    indexes: z.array(z.number().int().min(0)).optional().describe("Turn indices"),
+    start: z.number().int().min(0).optional().describe("Range start (inclusive)"),
+    end: z.number().int().min(0).optional().describe("Range end (inclusive)"),
   }),
-  async ({ sessionId, mode, indexes, rangeStart, rangeEnd }, ctx) => {
+  async ({ id: sessionId, mode, indexes, start: rangeStart, end: rangeEnd }, ctx) => {
     const session = getSession(ctx, sessionId);
     if (!session) return null;
     const length = session.original.length;
@@ -111,11 +111,11 @@ export const historyGetSessionTool = makeTool(
 
 export const chatReadTool = makeTool(
   "chat_read",
-  "Return the last N user/agent conversation rounds (user message + agent reply pairs) from the current session. Use this to get prior context when you need it instead of having it in every prompt.",
+  "Return the last N user/agent conversation rounds (user message + agent reply pairs) from the current session. Use this to get prior context when you need it instead of having it in every prompt. Example: chat_read({ n: 5 }).",
   z.object({
-    steps: z.number().int().min(1).max(50).describe("Number of recent user/agent rounds to return (default 5)"),
+    n: z.number().int().min(1).max(50).optional().describe("Rounds to return (default 5)"),
   }),
-  async ({ steps }, ctx) => {
+  async ({ n: steps = 5 }, ctx) => {
     const session = getSession(ctx, ctx.sessionId);
     if (!session) return "No session or no recent turns.";
     return formatRecentThreadTurns(session, steps);

@@ -23,8 +23,8 @@ describe("smart_context tool", () => {
 
     const result = await smartContextTool.execute(
       {
-        context: "user asked about dashboard setup",
-        command: "find past discussions about dashboard",
+        ctx: "user asked about dashboard setup",
+        cmd: "find past discussions about dashboard",
       },
       toolCtx,
     );
@@ -52,8 +52,8 @@ describe("smart_context tool", () => {
 
     const result = await smartContextTool.execute(
       {
-        context: "user asked about dashboard",
-        command: "find dashboard discussions",
+        ctx: "user asked about dashboard",
+        cmd: "find dashboard discussions",
       },
       toolCtx,
     );

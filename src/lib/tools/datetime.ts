@@ -24,7 +24,7 @@ const emptyArgsSchema = z
 export const systemDateTimeTool: Tool<z.infer<typeof emptyArgsSchema>> = {
   name: "system_datetime",
   description:
-    "Get the current host system date and time in ISO 8601 (UTC), local string, and timezone identifier formats.",
+    "Get the current host system date and time in ISO 8601 (UTC), local string, and timezone identifier formats. Example: system_datetime({}).",
   schema: emptyArgsSchema,
   toDefinition() {
     return {
@@ -50,7 +50,7 @@ export const systemDateTimeTool: Tool<z.infer<typeof emptyArgsSchema>> = {
 export const systemDateTool: Tool<z.infer<typeof emptyArgsSchema>> = {
   name: "system_date",
   description:
-    "Get the current host system calendar date as YYYY-MM-DD (local time), plus the ISO 8601 datetime in UTC.",
+    "Get the current host system calendar date as YYYY-MM-DD (local time), plus the ISO 8601 datetime in UTC. Example: system_date({}).",
   schema: emptyArgsSchema,
   toDefinition() {
     return {

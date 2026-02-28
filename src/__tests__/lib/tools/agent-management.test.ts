@@ -122,7 +122,7 @@ describe("agentDeleteTool", () => {
   it("soft-deletes an agent (sets status=deleted)", async () => {
     const ctx = makeToolCtx();
     const id = await agentCreateTool.execute({ name: "DeleteMe", model: "ollama/llama3.2" }, ctx);
-    await agentDeleteTool.execute({ agentId: id as string }, ctx);
+    await agentDeleteTool.execute({ id: id as string }, ctx);
     const row = ctx.db.prepare("SELECT status FROM agents WHERE id = ?").get(id) as { status: string };
     expect(row.status).toBe("deleted");
   });
@@ -148,7 +148,7 @@ describe("agentListTool", () => {
   it("excludes deleted agents", async () => {
     const ctx = makeToolCtx();
     const id = await agentCreateTool.execute({ name: "Deleted", model: "ollama/llama3.2" }, ctx);
-    await agentDeleteTool.execute({ agentId: id as string }, ctx);
+    await agentDeleteTool.execute({ id: id as string }, ctx);
     const result = await agentListTool.execute({}, ctx) as AgentDefinition[];
     expect(result.every((a) => a.name !== "Deleted")).toBe(true);
   });
@@ -157,7 +157,7 @@ describe("agentListTool", () => {
 describe("agentGetTool", () => {
   it("returns null for nonexistent agent", async () => {
     const ctx = makeToolCtx();
-    const result = await agentGetTool.execute({ agentId: "nonexistent" }, ctx);
+    const result = await agentGetTool.execute({ id: "nonexistent" }, ctx);
     expect(result).toBeNull();
   });
 
@@ -169,7 +169,7 @@ describe("agentGetTool", () => {
       model: "ollama/llama3.2",
       soul: "My soul",
     }, ctx);
-    const result = await agentGetTool.execute({ agentId: id as string }, ctx) as {
+    const result = await agentGetTool.execute({ id: id as string }, ctx) as {
       agent: AgentDefinition;
       soul: string;
     };

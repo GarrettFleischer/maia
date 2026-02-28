@@ -85,7 +85,7 @@ async function execute(
 export const fetchWebPageTool: Tool<z.infer<typeof schema>, WebPageContent> = {
   name: "fetch_web_page",
   description:
-    "Open a URL in a real browser and return the page title and main text content. Use when you need the full content of a page (e.g. after web_search). Content is filtered for security.",
+    "Open a URL in a real browser and return the page title and main text content. Use when you need the full content of a page (e.g. after web_search). Content is filtered for security. Example: fetch_web_page({ url: 'https://example.com/docs' }).",
   schema,
   toDefinition() {
     return {

@@ -33,7 +33,7 @@ describe("approve_tool", () => {
     const fs = new FakeFs();
     fs.seed(path.join(TOOLS_DIR, "my-tool", "manifest.json"), validManifest);
     const ctx = makeCtx({ fs });
-    const result = (await approveTool.execute({ toolSlug: "my-tool" }, ctx)) as { approved: string };
+    const result = (await approveTool.execute({ slug: "my-tool" }, ctx)) as { approved: string };
     expect(result.approved).toBe("my-tool");
     expect(isToolRegistered(ctx.db, "my-tool")).toBe(true);
     expect(getApprovedToolSlugs(ctx.db)).toContain("my-tool");
@@ -43,28 +43,28 @@ describe("approve_tool", () => {
     const fs = new FakeFs();
     fs.seed(path.join(TOOLS_DIR, "my-tool", "manifest.json"), validManifest);
     const ctx = makeCtx({ fs });
-    await approveTool.execute({ toolSlug: "my-tool" }, ctx);
-    await approveTool.execute({ toolSlug: "my-tool" }, ctx);
+    await approveTool.execute({ slug: "my-tool" }, ctx);
+    await approveTool.execute({ slug: "my-tool" }, ctx);
     expect(getApprovedToolSlugs(ctx.db)).toEqual(["my-tool"]);
   });
 
   it("throws on invalid slug", async () => {
     const ctx = makeCtx();
-    await expect(approveTool.execute({ toolSlug: "../etc" }, ctx)).rejects.toThrow(
+    await expect(approveTool.execute({ slug: "../etc" }, ctx)).rejects.toThrow(
       "Invalid tool slug",
     );
   });
 
   it("throws when manifest is missing", async () => {
     const ctx = makeCtx();
-    await expect(approveTool.execute({ toolSlug: "missing-tool" }, ctx)).rejects.toThrow();
+    await expect(approveTool.execute({ slug: "missing-tool" }, ctx)).rejects.toThrow();
   });
 
   it("throws when manifest is invalid", async () => {
     const fs = new FakeFs();
     fs.seed(path.join(TOOLS_DIR, "bad-tool", "manifest.json"), '{"name":"x","functions":[]}');
     const ctx = makeCtx({ fs });
-    await expect(approveTool.execute({ toolSlug: "bad-tool" }, ctx)).rejects.toThrow();
+    await expect(approveTool.execute({ slug: "bad-tool" }, ctx)).rejects.toThrow();
   });
 });
 
@@ -75,7 +75,7 @@ describe("tool_deregister", () => {
       .prepare("INSERT INTO approved_tools (tool_slug, approved_at) VALUES (?, ?)")
       .run("my-tool", "2025-01-01T00:00:00.000Z");
     expect(isToolRegistered(ctx.db, "my-tool")).toBe(true);
-    const result = (await toolDeregisterTool.execute({ toolSlug: "my-tool" }, ctx)) as {
+    const result = (await toolDeregisterTool.execute({ slug: "my-tool" }, ctx)) as {
       deregistered: string;
     };
     expect(result.deregistered).toBe("my-tool");
@@ -84,7 +84,7 @@ describe("tool_deregister", () => {
 
   it("throws on invalid slug", async () => {
     const ctx = makeCtx();
-    await expect(toolDeregisterTool.execute({ toolSlug: "bad/slug" }, ctx)).rejects.toThrow(
+    await expect(toolDeregisterTool.execute({ slug: "bad/slug" }, ctx)).rejects.toThrow(
       "Invalid tool slug",
     );
   });

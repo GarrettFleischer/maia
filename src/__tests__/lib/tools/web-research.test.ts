@@ -29,7 +29,7 @@ describe("webResearchTool", () => {
   it("throws when Brave Answers API key is not set", async () => {
     delete process.env.BRAVE_ANSWERS_API_KEY;
     const ctx = makeToolCtx(http);
-    await expect(webResearchTool.execute({ question: "What is 2+2?" }, ctx)).rejects.toThrow(
+    await expect(webResearchTool.execute({ q: "What is 2+2?" }, ctx)).rejects.toThrow(
       "Brave Answers API key",
     );
   });
@@ -59,7 +59,7 @@ describe("webResearchTool", () => {
     });
     const ctx = makeToolCtx(http);
     const result = (await webResearchTool.execute(
-      { question: "Explain quantum computing", enableCitations: true },
+      { q: "Explain quantum computing", enableCitations: true },
       ctx,
     )) as BraveAnswerResult;
     expect(capturedBody.model).toBe("brave");

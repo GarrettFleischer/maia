@@ -29,7 +29,7 @@ describe("terminalTool", () => {
     });
 
     await terminalTool.execute(
-      { command: "echo hello", cwd: "/workspace/app" },
+      { cmd: "echo hello", cwd: "/workspace/app" },
       ctx
     );
 
@@ -48,7 +48,7 @@ describe("terminalTool", () => {
       sandboxContainerName: undefined,
     });
 
-    await terminalTool.execute({ command: "true" }, ctx);
+    await terminalTool.execute({ cmd: "true" }, ctx);
 
     expect(runner.lastExec?.cmd).toBeDefined();
     if (process.platform === "win32") {
@@ -70,7 +70,7 @@ describe("terminalTool", () => {
     });
     const ctx = makeToolCtx({ processRunner: runner });
 
-    const result = await terminalTool.execute({ command: "echo Hello" }, ctx);
+    const result = await terminalTool.execute({ cmd: "echo Hello" }, ctx);
 
     expect(result.stdout).toBe("Hello\n");
     expect(result.stderr).toBe("warn\n");
@@ -86,7 +86,7 @@ describe("terminalTool", () => {
     });
     const ctx = makeToolCtx({ processRunner: runner });
 
-    const result = await terminalTool.execute({ command: "badcmd" }, ctx);
+    const result = await terminalTool.execute({ cmd: "badcmd" }, ctx);
 
     expect(result.exitCode).toBe(127);
     expect(result.stderr).toBe("command not found");
@@ -98,7 +98,7 @@ describe("terminalTool", () => {
     runner.setResult({ stdout: big, stderr: "", exitCode: 0 });
     const ctx = makeToolCtx({ processRunner: runner });
 
-    const result = await terminalTool.execute({ command: "cat big" }, ctx);
+    const result = await terminalTool.execute({ cmd: "cat big" }, ctx);
 
     expect(result.stdout.length).toBeLessThanOrEqual(50 * 1024 + 20);
     expect(result.stdout).toContain("[truncated]");
@@ -110,7 +110,7 @@ describe("terminalTool", () => {
     runner.setResult({ stdout: "", stderr: big, exitCode: 1 });
     const ctx = makeToolCtx({ processRunner: runner });
 
-    const result = await terminalTool.execute({ command: "fail" }, ctx);
+    const result = await terminalTool.execute({ cmd: "fail" }, ctx);
 
     expect(result.stderr.length).toBeLessThanOrEqual(50 * 1024 + 20);
     expect(result.stderr).toContain("[truncated]");

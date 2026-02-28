@@ -8,8 +8,8 @@ const TERMINAL_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT = 50 * 1024;
 
 const schema = z.object({
-  command: z.string().describe("Shell command to execute"),
-  cwd: z.string().optional().describe("Working directory within /workspace (defaults to /workspace)"),
+  cmd: z.string().describe("Shell command"),
+  cwd: z.string().optional().describe("Working directory (default /workspace)"),
 });
 
 /**
@@ -42,7 +42,7 @@ function toPowerShellIfNeeded(command: string): { command: string; shell: string
 export const terminalTool: Tool<z.infer<typeof schema>, ExecResult> = {
   name: "terminal_exec",
   description:
-    "Execute a shell command. Uses the sandbox container when one is configured (SANDBOX_CONTAINER_NAME); otherwise runs in the agent workspace on the host.",
+    "Execute a shell command. Uses the sandbox container when configured; otherwise runs in the agent workspace. Example: terminal_exec({ cmd: 'ls -la' }).",
   schema,
   toDefinition() {
     return {
@@ -52,7 +52,7 @@ export const terminalTool: Tool<z.infer<typeof schema>, ExecResult> = {
       returns: "object (stdout: string, stderr: string, exitCode: number)",
     };
   },
-  async execute({ command, cwd }, ctx) {
+  async execute({ cmd: command, cwd }, ctx) {
     const useSandbox = ctx.sandboxContainerName != null && ctx.sandboxContainerName !== "";
 
     if (useSandbox) {

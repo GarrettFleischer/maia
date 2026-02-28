@@ -32,7 +32,7 @@ describe("knowledge_search tool", () => {
 
     const toolCtx = { ...ctx, agentId: "maia", sessionId: "s1", volumeRoot: "/tmp/ws" };
     const result = await knowledgeSearchTool.execute(
-      { query: "annual report", limit: 2 },
+      { q: "annual report", limit: 2 },
       toolCtx
     );
 
@@ -64,7 +64,7 @@ describe("history_semantic_search tool", () => {
 
     const toolCtx = { ...ctx, agentId: "maia", sessionId: "s1", volumeRoot: "/tmp/ws" };
     const result = await historySemanticSearchTool.execute(
-      { query: "past message", limit: 5 },
+      { q: "past message", limit: 5 },
       toolCtx
     );
 

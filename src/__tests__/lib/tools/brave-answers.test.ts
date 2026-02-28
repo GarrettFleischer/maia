@@ -29,7 +29,7 @@ describe("braveAnswersTool", () => {
   it("throws when Brave Answers API key is not set", async () => {
     delete process.env.BRAVE_ANSWERS_API_KEY;
     const ctx = makeToolCtx(http);
-    await expect(braveAnswersTool.execute({ question: "What is 2+2?" }, ctx)).rejects.toThrow(
+    await expect(braveAnswersTool.execute({ q: "What is 2+2?" }, ctx)).rejects.toThrow(
       "Brave Answers API key",
     );
   });
@@ -45,7 +45,7 @@ describe("braveAnswersTool", () => {
     });
     const ctx = makeToolCtx(http);
     const result = await braveAnswersTool.execute(
-      { question: "How do excess foreclosure funds arise?" },
+      { q: "How do excess foreclosure funds arise?" },
       ctx,
     ) as BraveAnswerResult;
     expect(result.answer).toContain("surplus");
@@ -61,11 +61,11 @@ describe("braveAnswersTool", () => {
       return new FakeResponse(200, JSON.stringify({ choices: [{ message: { content: "42" } }] }));
     });
     const ctx = makeToolCtx(http);
-    await braveAnswersTool.execute({ question: "What is the answer?" }, ctx);
+    await braveAnswersTool.execute({ q: "What is the answer?" }, ctx);
     expect(capturedBody.model).toBe("brave");
     expect(capturedBody.stream).toBe(false);
     expect(capturedBody.messages).toHaveLength(1);
-    expect((capturedBody.messages?.[0] as { role: string; content: string })?.content).toBe("What is the answer?");
+    expect((capturedBody.messages?.[0] as { role: string; content?: string })?.content).toBe("What is the answer?");
   });
 
   it("accepts enableResearch flag without sending enable_research (non-streaming mode)", async () => {
@@ -76,14 +76,14 @@ describe("braveAnswersTool", () => {
       return new FakeResponse(200, JSON.stringify({ choices: [{ message: { content: "Done" } }] }));
     });
     const ctx = makeToolCtx(http);
-    await braveAnswersTool.execute({ question: "Research this", enableResearch: true }, ctx);
+    await braveAnswersTool.execute({ q: "Research this", research: true }, ctx);
     expect(capturedBody.enable_research).toBeUndefined();
   });
 
   it("throws when response is not ok", async () => {
     http.on("api.search.brave.com", async () => new FakeResponse(403, "Forbidden"));
     const ctx = makeToolCtx(http);
-    await expect(braveAnswersTool.execute({ question: "test" }, ctx)).rejects.toThrow();
+    await expect(braveAnswersTool.execute({ q: "test" }, ctx)).rejects.toThrow();
   });
 
   it("has correct tool definition", () => {

@@ -19,28 +19,22 @@ import {
 import type { Tool, ToolContext } from "./types";
 
 const schema = z.object({
-  context: z
-    .string()
-    .describe(
-      "What to base the search queries on (e.g. the user's question, prior discussion topics, relevant background)",
-    ),
-  command: z
-    .string()
-    .describe("What you are trying to accomplish with this search (e.g. find past discussions about X)"),
+  ctx: z.string().describe("What to base search on (e.g. user question, prior discussion)"),
+  cmd: z.string().describe("What you want to accomplish with this search"),
 });
 
 export const smartContextTool: Tool<z.infer<typeof schema>> = {
   name: "smart_context",
   description:
-    "Query history and knowledge base using context and command. Generates search queries from your context, retrieves relevant history and knowledge entries, filters and summarizes them. Prefer this over knowledge_search and history_semantic_search when you need to access prior knowledge or session history—it produces better, focused results.",
+    "Query history and knowledge base using context and command. Generates search queries from your context, retrieves relevant history and knowledge entries, filters and summarizes them. Prefer this over knowledge_search and history_semantic_search when you need to access prior knowledge or session history—it produces better, focused results. Example: smart_context({ ctx: 'user asked about deployment', cmd: 'find past discussions' }).",
   schema,
   toDefinition: () => ({
     name: "smart_context",
     description:
-      "Query history and knowledge base using context and command. Generates search queries from your context, retrieves relevant history and knowledge entries, filters and summarizes them. Prefer this over knowledge_search and history_semantic_search when you need to access prior knowledge or session history—it produces better, focused results.",
+      "Query history and knowledge base using context and command. Generates search queries from your context, retrieves relevant history and knowledge entries, filters and summarizes them. Prefer this over knowledge_search and history_semantic_search when you need to access prior knowledge or session history—it produces better, focused results. Example: smart_context({ ctx: 'user asked about deployment', cmd: 'find past discussions' }).",
     parameters: zodToJsonSchema(schema),
   }),
-  execute: async ({ context, command }, ctx) => {
+  execute: async ({ ctx: context, cmd: command }, ctx) => {
     const settings = getSettings(ctx);
     const providerFactory = ctx.providerFactory;
 

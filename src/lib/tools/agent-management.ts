@@ -26,7 +26,7 @@ const agentCreateSchema = z.object({
   name: z.string(),
   model: z.string(),
   soul: z.string().optional(),
-  systemPromptExtra: z.string().optional(),
+  extra: z.string().optional().describe("System prompt extra"),
 });
 
 /** Inline fallbacks when defaults/agent file is missing (e.g. in tests). */
@@ -168,7 +168,7 @@ export function copyDefaultAgentFiles(
 
 export const agentCreateTool = makeTool(
   "agent_create",
-  "Create a new agent. Use agent_list first to see existing agents and avoid duplicates. Pick the model from data/models.json (or defaults/models.json); if the model is not in the whitelist, openrouter/free is used. Maia only.",
+  "Create a new agent. Use agent_list first to see existing agents and avoid duplicates. Pick the model from data/models.json (or defaults/models.json); if the model is not in the whitelist, openrouter/free is used. Maia only. Example: agent_create({ name: 'Helper', model: 'openrouter/free' }).",
   agentCreateSchema,
   async (args, ctx) => {
     const settings = getSettings(ctx);
@@ -179,7 +179,7 @@ export const agentCreateTool = makeTool(
     ctx.db.prepare(
       `INSERT INTO agents (id, name, model, system_prompt_extra, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'active', ?, ?)`
-    ).run(id, args.name, model, args.systemPromptExtra ?? null, now, now);
+    ).run(id, args.name, model, args.extra ?? null, now, now);
 
     const agentDir = path.join(getAgentsDir(), id);
     copyDefaultAgentFiles(ctx, agentDir, args.name, id);
@@ -194,9 +194,9 @@ export const agentCreateTool = makeTool(
 
 export const agentDeleteTool = makeTool(
   "agent_delete",
-  "Delete an agent by ID. Use agent_list first to find the agent ID. Maia only.",
-  z.object({ agentId: z.string() }),
-  async ({ agentId }, ctx) => {
+  "Delete an agent by ID. Use agent_list first to find the agent ID. Maia only. Example: agent_delete({ id: 'uuid' }).",
+  z.object({ id: z.string().describe("Agent ID") }),
+  async ({ id: agentId }, ctx) => {
     ctx.db.prepare("UPDATE agents SET status = 'deleted', updated_at = ? WHERE id = ?")
       .run(new Date().toISOString(), agentId);
     syncAgentRunJobs(ctx);
@@ -206,7 +206,7 @@ export const agentDeleteTool = makeTool(
 
 export const agentListTool = makeTool(
   "agent_list",
-  "List all agents. Maia only.",
+  "List all agents. Maia only. Example: agent_list({}).",
   z.object({}),
   async (_args, ctx) => {
     return (ctx.db.prepare("SELECT * FROM agents WHERE status != 'deleted' ORDER BY created_at").all() as Record<string, unknown>[]).map(rowToAgent);
@@ -215,9 +215,9 @@ export const agentListTool = makeTool(
 
 export const agentGetTool = makeTool(
   "agent_get",
-  "Get an agent's definition and identity files. Maia only.",
-  z.object({ agentId: z.string() }),
-  async ({ agentId }, ctx) => {
+  "Get an agent's definition and identity files. Maia only. Example: agent_get({ id: 'uuid' }).",
+  z.object({ id: z.string().describe("Agent ID") }),
+  async ({ id: agentId }, ctx) => {
     const row = ctx.db.prepare("SELECT * FROM agents WHERE id = ?").get(agentId) as Record<string, unknown> | undefined;
     if (!row) return null;
     const agentDir = path.join(getAgentsDir(), agentId);

@@ -27,21 +27,14 @@ function makeTool<S extends z.ZodTypeAny>(
 
 export const knowledgeSearchTool = makeTool(
   "knowledge_search",
-  "Semantic search over indexed files under the data folder (agent workspace, memory, user folders, and data/user). Returns the most relevant documents with last_modified. Use scope: self for your own files, user for data/user, global for all, or an agent id for another agent. By default archived files (older than the configured duration) are excluded; set include_archived true to include them.",
+  "Semantic search over indexed files (workspace, memory, user). Returns relevant docs with last_modified. Use scope: self, user, global, or agent id. Example: knowledge_search({ q: 'deployment steps', scope: 'self' }).",
   z.object({
-    query: z.string().describe("Natural language search query"),
+    q: z.string().describe("Search query"),
     limit: z.number().min(1).max(20).optional().describe("Max results (default 5)"),
-    scope: z
-      .enum(["self", "user", "global"])
-      .or(z.string())
-      .optional()
-      .describe("Scope: self (current agent), user (data/user), global (all), or another agent id. Default self."),
-    include_archived: z
-      .boolean()
-      .optional()
-      .describe("Include files older than the archive duration. Default false. Results always include last_modified."),
+    scope: z.enum(["self", "user", "global"]).or(z.string()).optional().describe("self, user, global, or agent id"),
+    include_archived: z.boolean().optional().describe("Include archived files"),
   }),
-  async ({ query, limit, scope, include_archived }, ctx) => {
+  async ({ q: query, limit, scope, include_archived }, ctx) => {
     const settings = getSettings(ctx);
     const embedder = createEmbeddingAdapter(settings, ctx.http);
     return searchKnowledge(ctx, embedder, query, limit ?? 5, {
@@ -54,12 +47,12 @@ export const knowledgeSearchTool = makeTool(
 
 export const historySemanticSearchTool = makeTool(
   "history_semantic_search",
-  "Semantic search over past session history. Returns the most relevant past messages or tool results. Use when you need to find something by meaning rather than keywords.",
+  "Semantic search over past session history. Example: history_semantic_search({ q: 'what did we decide about the API?' }).",
   z.object({
-    query: z.string().describe("Natural language search query"),
+    q: z.string().describe("Search query"),
     limit: z.number().min(1).max(20).optional().describe("Max results (default 5)"),
   }),
-  async ({ query, limit }, ctx) => {
+  async ({ q: query, limit }, ctx) => {
     const settings = getSettings(ctx);
     const embedder = createEmbeddingAdapter(settings, ctx.http);
     return searchHistory(ctx, embedder, query, limit ?? 5);
@@ -68,12 +61,12 @@ export const historySemanticSearchTool = makeTool(
 
 export const chatFindTool = makeTool(
   "chat_find",
-  "Semantic search over chat history (current and past sessions). Returns relevant past messages with sessionId, entryId, content, and score. Use when you need to find something by meaning rather than keywords.",
+  "Semantic search over chat history (current and past sessions). Returns relevant past messages. Example: chat_find({ q: 'what did we decide about the API?' }).",
   z.object({
-    query: z.string().describe("Natural language search query"),
+    q: z.string().describe("Search query"),
     limit: z.number().min(1).max(20).optional().describe("Max results (default 5)"),
   }),
-  async ({ query, limit }, ctx) => {
+  async ({ q: query, limit }, ctx) => {
     const settings = getSettings(ctx);
     const embedder = createEmbeddingAdapter(settings, ctx.http);
     return searchHistory(ctx, embedder, query, limit ?? 5);
