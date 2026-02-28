@@ -166,17 +166,8 @@ export function initSchema(db: DbAdapter): void {
      VALUES ('builtin-heartbeat', '*/30 * * * *', 'Heartbeat', 'maia', 1, datetime('now'), 'cron_echo', '{}')`
   ).run();
 
-  // Seed default settings if not present
+  // Seed default settings if not present (whitelisted models live in data/models.json)
   const defaults: Record<string, string> = {
-    whitelistedModels: JSON.stringify([
-      "ollama/llama3.2",
-      "ollama/qwen2.5-coder",
-      "ollama/nomic-embed-text",
-      "openrouter/anthropic/claude-3.5-haiku",
-      "openrouter/anthropic/claude-sonnet-4-5",
-      "openrouter/free",
-      "openrouter/qwen/qwen3-embedding-8b",
-    ]),
     heartbeatIntervalMinutes: "30",
     ollamaBaseUrl: "http://localhost:11434",
     ollamaApiKey: "",

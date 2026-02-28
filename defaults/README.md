@@ -4,6 +4,17 @@ These files are copied into agent directories when an agent is created (or when 
 
 ---
 
+## models.json (whitelisted AI models)
+
+**models.json** at the root of this folder is copied to **data/models.json** on first run (or migrated from existing DB settings if upgrading). It defines the whitelisted models and their optional generation parameters.
+
+- Each entry has **provider** (e.g. `ollama`, `openrouter`), **name** (e.g. `llama3.2`, `anthropic/claude-3.5-haiku`), and optional params (temperature, top_p, top_k, min_p, presence_penalty, repetition_penalty, options).
+- Model id in the app is **provider/name** (e.g. `ollama/llama3.2`).
+- Edit **data/models.json** at runtime to add/remove models or change params; the settings UI reads and writes that file.
+- **Unsloth (Hugging Face) models**: Pull with `ollama pull hf.co/<name>` (e.g. `ollama pull hf.co/unsloth/GLM-4.7-Flash-GGUF:UD-Q3_K_XL`). If Ollama lists the model under a different name after pull, use that name in **data/models.json**. Entries use `UD-Q3_K_XL` / `UD-Q4_K_M` etc. for &lt;15GB RAM where possible.
+
+---
+
 ## Who gets which defaults
 
 | File      | Maia (first run)     | New sub-agents      |

@@ -1,7 +1,9 @@
 import { credentialCreate, credentialList } from "./security/credential-vault";
 import type { AppContext } from "./context";
 import type { ModelGenerationParams, ReasoningEffort, Settings, SettingsPublic } from "./types";
+import type { ModelsJsonEntry } from "./types";
 import { BUILTIN_HEARTBEAT_JOB_ID, minutesToCronExpression } from "./cron/expression";
+import { readModelsConfig, writeModelsConfig } from "./models-config";
 
 /** Vault key used for Brave Search API key (encrypted). */
 export const BRAVE_SEARCH_CREDENTIAL_KEY = "BRAVE_SEARCH_API_KEY";
@@ -28,8 +30,10 @@ export function getSettings(ctx: AppContext): Settings {
     map[row.key] = row.value;
   }
 
+  const { whitelistedModels, modelParams } = readModelsConfig(ctx.db);
+
   return {
-    whitelistedModels: JSON.parse(map.whitelistedModels ?? "[]"),
+    whitelistedModels,
     heartbeatIntervalMinutes: parseInt(map.heartbeatIntervalMinutes ?? "30"),
     ollamaBaseUrl: map.ollamaBaseUrl ?? "http://localhost:11434",
     ollamaApiKey: map.ollamaApiKey || undefined,
@@ -46,18 +50,8 @@ export function getSettings(ctx: AppContext): Settings {
     )
       ? (map.archiveDurationUnit as "seconds" | "minutes" | "hours" | "days" | "months" | "years")
       : "days",
-    modelParams: parseModelParams(map.modelParams),
+    modelParams,
   };
-}
-
-function parseModelParams(raw: string | undefined): Record<string, ModelGenerationParams> {
-  if (raw == null || raw === "") return {};
-  try {
-    const parsed = JSON.parse(raw) as Record<string, ModelGenerationParams>;
-    return typeof parsed === "object" && parsed !== null ? parsed : {};
-  } catch {
-    return {};
-  }
 }
 
 export function getSettingsPublic(ctx: AppContext): SettingsPublic {
@@ -96,13 +90,30 @@ export function updateSettings(
     }
   >
 ): void {
-  const effectiveWhitelist = partial.whitelistedModels ?? getSettings(ctx).whitelistedModels;
+  const current = getSettings(ctx);
+  const effectiveWhitelist = partial.whitelistedModels ?? current.whitelistedModels;
+  const effectiveModelParams = partial.modelParams ?? current.modelParams;
   const update = ctx.db.prepare(
     "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)"
   );
 
-  if (partial.whitelistedModels !== undefined) {
-    update.run("whitelistedModels", JSON.stringify(partial.whitelistedModels));
+  if (partial.whitelistedModels !== undefined || partial.modelParams !== undefined) {
+    const entries: ModelsJsonEntry[] = effectiveWhitelist.map((id) => {
+      const slash = id.indexOf("/");
+      const provider = slash >= 0 ? id.slice(0, slash) : "ollama";
+      const name = slash >= 0 ? id.slice(slash + 1) : id;
+      const params = effectiveModelParams[id];
+      const entry: ModelsJsonEntry = { provider, name };
+      if (params?.temperature !== undefined) entry.temperature = params.temperature;
+      if (params?.top_p !== undefined) entry.top_p = params.top_p;
+      if (params?.top_k !== undefined) entry.top_k = params.top_k;
+      if (params?.min_p !== undefined) entry.min_p = params.min_p;
+      if (params?.presence_penalty !== undefined) entry.presence_penalty = params.presence_penalty;
+      if (params?.repetition_penalty !== undefined) entry.repetition_penalty = params.repetition_penalty;
+      if (params?.options !== undefined && Object.keys(params.options).length > 0) entry.options = params.options;
+      return entry;
+    });
+    writeModelsConfig(entries);
   }
   if (partial.heartbeatIntervalMinutes !== undefined) {
     const minutes = Math.max(1, Math.min(60, Math.floor(partial.heartbeatIntervalMinutes)));
@@ -162,14 +173,5 @@ export function updateSettings(
   }
   if (partial.braveAnswersApiKey !== undefined) {
     credentialCreate(ctx, BRAVE_ANSWERS_CREDENTIAL_KEY, partial.braveAnswersApiKey);
-  }
-  if (partial.modelParams !== undefined) {
-    const filtered: Record<string, ModelGenerationParams> = {};
-    for (const [modelId, params] of Object.entries(partial.modelParams)) {
-      if (effectiveWhitelist.includes(modelId) && params != null && typeof params === "object") {
-        filtered[modelId] = params;
-      }
-    }
-    update.run("modelParams", JSON.stringify(filtered));
   }
 }

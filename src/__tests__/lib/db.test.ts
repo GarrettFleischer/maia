@@ -62,7 +62,6 @@ describe("db", () => {
         value: string;
       }[];
       const keys = rows.map((r) => r.key);
-      expect(keys).toContain("whitelistedModels");
       expect(keys).toContain("heartbeatIntervalMinutes");
       expect(keys).toContain("contextQueryModel");
     });

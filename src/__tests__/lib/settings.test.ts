@@ -1,6 +1,9 @@
+import * as fs from "fs";
+import * as path from "path";
 import { describe, it, expect, beforeEach } from "bun:test";
 import { makeTestContext } from "../helpers/fakes";
 import { getSettings, getSettingsPublic, updateSettings } from "@/lib/settings";
+import { getModelsJsonPath } from "@/lib/models-config";
 import { credentialGet } from "@/lib/security/credential-vault";
 import type { AppContext } from "@/lib/context";
 
@@ -17,7 +20,7 @@ describe("settings", () => {
       expect(s.heartbeatIntervalMinutes).toBe(30);
       expect(s.ollamaBaseUrl).toBe("http://localhost:11434");
       expect(s.contextReasoningEffort).toBe("medium");
-      expect(s.whitelistedModels).toContain("ollama/llama3.2");
+      expect(s.whitelistedModels).toContain("ollama/nomic-embed-text");
       expect(s.ollamaApiKey).toBeUndefined();
       expect(s.openRouterApiKey).toBeUndefined();
       expect(s.contextQueryModel).toBe("");
@@ -38,17 +41,22 @@ describe("settings", () => {
     });
 
     it("returns modelParams as empty object when missing", () => {
+      const dataPath = getModelsJsonPath();
+      fs.mkdirSync(path.dirname(dataPath), { recursive: true });
+      fs.writeFileSync(
+        dataPath,
+        JSON.stringify([{ provider: "ollama", name: "nomic-embed-text" }]),
+        "utf-8"
+      );
       const s = getSettings(ctx);
       expect(s.modelParams).toEqual({});
     });
 
-    it("parses modelParams when set", () => {
-      ctx.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
-        "modelParams",
-        JSON.stringify({
-          "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 },
-        })
-      );
+    it("parses modelParams when set (from models.json)", () => {
+      updateSettings(ctx, {
+        whitelistedModels: ["ollama/llama3.2"],
+        modelParams: { "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 } },
+      });
       const s = getSettings(ctx);
       expect(s.modelParams).toEqual({
         "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 },

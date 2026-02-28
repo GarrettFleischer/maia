@@ -43,6 +43,22 @@ export type ReasoningEffort = "off" | "low" | "medium" | "high";
 export type ModelProviderId = "ollama" | "openrouter";
 
 /**
+ * One entry in models.json: provider, model name, and optional generation params.
+ * Model id is derived as provider/name (e.g. ollama/llama3.2).
+ */
+export interface ModelsJsonEntry {
+  provider: string;
+  name: string;
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  presence_penalty?: number;
+  repetition_penalty?: number;
+  options?: Record<string, unknown>;
+}
+
+/**
  * Per-model generation parameters (temperature, sampling, etc.).
  * Keys in modelParams must be whitelisted model ids (e.g. ollama/qwen3.5-35b-a3b).
  * Used so models like Qwen3.5 can follow provider docs (e.g. Unsloth recommended settings).
