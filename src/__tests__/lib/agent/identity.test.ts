@@ -49,8 +49,9 @@ describe("getAgentIdentity", () => {
     expect(result!.id).toBe("agent-1");
     expect(result!.name).toBe("Test Agent");
     expect(result!.soul).toContain("# Soul");
-    expect(result!.memory).toContain("# Memory");
-    expect(result!.user).toContain("# User");
+    // Memory and user are no longer read from MEMORY.md/USER.md; they live in memory/ and user/ and are retrieved via knowledge_search.
+    expect(result!.memory).toBe("");
+    expect(result!.user).toBe("");
     expect(result!.agentsMd).toContain("# How I function");
   });
 

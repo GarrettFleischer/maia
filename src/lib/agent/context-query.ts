@@ -371,7 +371,7 @@ export async function buildRawRetrievedContext(
     try {
       const [histHits, knowledgeHits] = await Promise.all([
         searchHistory(ctx, embedder, query, historyLimit),
-        searchKnowledge(ctx, embedder, query, knowledgeLimit),
+        searchKnowledge(ctx, embedder, query, knowledgeLimit, { scope: "global" }),
       ]);
       debugPerQuery.push({ query, historyHits: histHits.length, knowledgeHits: knowledgeHits.length });
 
@@ -980,4 +980,56 @@ export function formatRecentThreadTurns(session: Session, count: number): string
   });
 
   return `${heading}\n\n${formatted.join("\n\n")}`;
+}
+
+/** Separator between context blocks and system prompt in the combined system content. */
+const CONTEXT_SYSTEM_SEP = "\n\n---\n\n";
+
+/**
+ * Transforms context blocks and system prompt into the single string sent as the system message.
+ * Pipeline step: recent thread + smart context → combined system content for the LLM.
+ * @param recentThreadBlock - Formatted recent thread turns (e.g. from formatRecentThreadTurns).
+ * @param smartContextBlock - Optional smart context section (query → retrieve → summarize).
+ * @param systemPromptContent - Agent instructions and identity (e.g. from buildSystemPrompt).
+ * @returns Combined system content (context + separator + system prompt).
+ * @example
+ * const combined = transformContext(recentThreadBlock, smartContextBlock, systemPromptContent);
+ */
+export function transformContext(
+  recentThreadBlock: string,
+  smartContextBlock: string,
+  systemPromptContent: string,
+): string {
+  const contextBlocks = [recentThreadBlock, smartContextBlock].filter(Boolean).join("\n\n");
+  return contextBlocks + CONTEXT_SYSTEM_SEP + systemPromptContent;
+}
+
+/**
+ * Builds the initial Message[] for the LLM from system content, user message, and optional tool result.
+ * Pipeline step: converts "logical" context (system + user + optional tool) to the provider's Message[] format.
+ * @param combinedSystemContent - Full system message content (e.g. from transformContext).
+ * @param userMessage - The user's message text.
+ * @param initialToolResult - Optional first-turn tool result (e.g. from cron initialToolCall).
+ * @returns Messages array for the first LLM request.
+ * @example
+ * const messages = convertToLlm(combinedSystemContent, userMessage, initialToolResult);
+ */
+export function convertToLlm(
+  combinedSystemContent: string,
+  userMessage: string,
+  initialToolResult?: { content: string; toolName: string },
+): Message[] {
+  const messages: Message[] = [
+    { role: "system", content: combinedSystemContent },
+    { role: "user", content: userMessage },
+  ];
+  if (initialToolResult) {
+    messages.push({
+      role: "tool",
+      content: initialToolResult.content,
+      toolCallId: "cron-initial",
+      toolName: initialToolResult.toolName,
+    });
+  }
+  return messages;
 }

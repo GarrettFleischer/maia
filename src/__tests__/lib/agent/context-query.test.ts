@@ -14,6 +14,8 @@ import {
   cleanupQuotes,
   summarizeRetrievedContext,
   formatRecentThreadTurns,
+  transformContext,
+  convertToLlm,
 } from "@/lib/agent/context-query";
 import { makeTestContext, FakeResponse } from "@/__tests__/helpers/fakes";
 import { createVectorStore } from "@/lib/knowledge/vector-store";
@@ -685,5 +687,51 @@ describe("formatRecentThreadTurns", () => {
     const result = formatRecentThreadTurns(session, 3);
     expect(result).toContain("## Recent thread");
     expect(result).toContain("No recent turns");
+  });
+});
+
+// ─── transformContext & convertToLlm (context pipeline) ─────────────────────
+
+describe("transformContext", () => {
+  it("joins recent thread, smart context, and system prompt with separator", () => {
+    const recent = "## Recent thread\n\nNo recent turns.";
+    const smart = "## Smart context\n\nSummary.";
+    const system = "You are helpful.";
+    const result = transformContext(recent, smart, system);
+    expect(result).toContain("## Recent thread");
+    expect(result).toContain("## Smart context");
+    expect(result).toContain("You are helpful.");
+    expect(result).toMatch(/\n\n---\n\n/);
+  });
+
+  it("omits smart context when empty", () => {
+    const recent = "## Recent thread\n\nNo recent turns.";
+    const system = "You are helpful.";
+    const result = transformContext(recent, "", system);
+    expect(result).toBe("## Recent thread\n\nNo recent turns.\n\n---\n\nYou are helpful.");
+  });
+});
+
+describe("convertToLlm", () => {
+  it("returns system and user messages when no initial tool result", () => {
+    const messages = convertToLlm("System content", "Hello");
+    expect(messages).toEqual([
+      { role: "system", content: "System content" },
+      { role: "user", content: "Hello" },
+    ]);
+  });
+
+  it("appends tool message when initialToolResult is provided", () => {
+    const messages = convertToLlm("System", "Hi", {
+      content: "tool output",
+      toolName: "my_tool",
+    });
+    expect(messages).toHaveLength(3);
+    expect(messages[2]).toEqual({
+      role: "tool",
+      content: "tool output",
+      toolCallId: "cron-initial",
+      toolName: "my_tool",
+    });
   });
 });

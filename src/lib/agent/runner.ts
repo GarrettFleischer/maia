@@ -8,25 +8,19 @@ import path from "path";
 import { getSettings } from "../settings";
 import { getAgentIdentity, setAgentStatus } from "./identity";
 import { getSession, appendEntry, ensureSession } from "../history";
-import { getToolsForAgent } from "../tools/registry";
+import { getToolsForAgent, getMinimalToolDefsForAgent } from "../tools/registry";
 import { SECURITY_PREAMBLE } from "../security/preamble";
 import { filterText } from "../security/injection-filter";
-import {
-  extractSearchQueries,
-  buildRawRetrievedContext,
-  filterRelevantSources,
-  buildRawTextFromChunks,
-  summarizeRetrievedContext,
-  formatRecentThreadTurns,
-} from "./context-query";
+import { transformContext, convertToLlm } from "./context-query";
 import type { AppContext } from "../context";
 import type { CreateProviderOptions } from "../ai/factory";
 import type { AIProvider } from "../ai/types";
-import type { HistoryEntry, SSEEvent } from "../types";
+import type { AgentLoopEvent, HistoryEntry, SSEEvent } from "../types";
 import type { Message } from "../ai/types";
 import type { ToolContext } from "../tools/types";
-import { getWorkspaceRoot } from "../data-dir";
+import { getAgentDir } from "../data-dir";
 import { getCurrentSystemDateTime } from "../date-time";
+import { getMatchedSkillsContent } from "../skills";
 import { completeOllamaJob, registerOllamaJob } from "../ollama/jobs";
 import { enqueue } from "../queue/llm-queue";
 import { runWithAgentContext, agentDebug, agentError } from "./agent-logger";
@@ -61,23 +55,16 @@ export interface RunAgentOptions {
    * Used by cron jobs so each job invokes a specific tool (with args) instead of a free-form message.
    */
   initialToolCall?: { name: string; args: Record<string, unknown> };
-  /**
-   * When false, the smart context pipeline (query extraction + semantic search + summarization) is skipped.
-   * Default true. Set false for heartbeat and other system-originated runs that already have inline context.
-   */
-  enableSmartContext?: boolean;
-  /** Caller for queue priority when enqueueing smart context sub-jobs. */
+  /** Caller for queue priority when enqueueing background jobs (e.g. history index). */
   queueCaller?: QueueCaller;
   /**
-   * When false, smart context steps (extractSearchQueries, buildRawRetrievedContext, etc.) run
-   * inline instead of via the queue. Set when the agent is already running inside a queue job
-   * (e.g. message_send) to avoid deadlock: the single worker would otherwise wait for itself.
+   * When false, background steps (e.g. history indexing) run inline instead of via the queue.
+   * Set when the agent is already running inside a queue job (e.g. message_send) to avoid deadlock.
    * Default true (use queue) for direct chat and other non-queue entry points.
    */
   smartContextViaQueue?: boolean;
 }
 
-const WORKSPACE_ROOT = getWorkspaceRoot();
 
 /**
  * Schedules history indexing for one entry. When we're already inside a queue job (smartContextViaQueue false),
@@ -184,14 +171,15 @@ async function _runLoop(
 
   const provider = providerFactory(agent.model, ctx, { reasoningEffort: agent.reasoningEffort });
   const tools = getToolsForAgent(agent.id);
-  const toolDefs = tools.map((t) => t.toDefinition());
+  const toolDefs = getMinimalToolDefsForAgent(agent.id);
 
   const toolContext: ToolContext = {
     ...ctx,
     agentId: agent.id,
     sessionId,
-    volumeRoot: path.join(WORKSPACE_ROOT, agent.id),
+    volumeRoot: getAgentDir(agent.id),
     providerFactory,
+    getToolsForAgent,
   };
 
   // Ensure session exists in this db (avoids FOREIGN KEY failure when session was created in another connection/process)
@@ -266,188 +254,18 @@ async function _runLoop(
     }
   }
 
-  // Build context: recent thread turns (always included) + optional smart context via semantic search.
-  const session = getSession(ctx, sessionId);
-  const sessionForContext = session ?? { original: [] as HistoryEntry[], compressed: [] as HistoryEntry[] };
+  // No recent thread or smart context in the prompt; agents use chat_read, chat_find, and smart_context when needed.
+  const recentThreadBlock = "";
+  const smartContextBlock = "";
 
-  // Number of prior entries to expose (exclude the current user message just appended, and any initialToolResult entry)
-  const priorEntriesCount = initialToolResult
-    ? sessionForContext.original.length - 2
-    : sessionForContext.original.length - 1;
-  const priorEntries = sessionForContext.original.slice(0, Math.max(0, priorEntriesCount));
-  const sessionForThread = { ...sessionForContext, original: priorEntries };
-
-  const recentTurns = Math.max(1, settings.contextRecentTurns);
-  const recentThreadBlock = formatRecentThreadTurns(sessionForThread as Parameters<typeof formatRecentThreadTurns>[0], recentTurns);
-
-  // Smart context: extract queries → search history+knowledge → summarize with citations (only when enabled by call site)
-  let smartContextBlock = "";
-  const queryModel = settings.contextQueryModel;
-  const smartContextAllowed = options?.enableSmartContext !== false;
-  const smartContextEnabled = Boolean(
-    smartContextAllowed && queryModel && settings.whitelistedModels.includes(queryModel),
+  const skillsContent = await getMatchedSkillsContent(ctx, agent.id, userMessage);
+  const systemPromptContent = buildSystemPrompt(ctx, agent, skillsContent);
+  const combinedSystemContent = transformContext(
+    recentThreadBlock,
+    smartContextBlock,
+    systemPromptContent,
   );
-  agentDebug(
-    "[Smart context]",
-    smartContextEnabled
-      ? `enabled (query model: ${queryModel})`
-      : smartContextAllowed
-        ? "disabled (no query model or not whitelisted)"
-        : "disabled (call site set enableSmartContext: false)",
-  );
-
-  if (smartContextEnabled) {
-    const queueCaller = options?.queueCaller ?? "agent";
-    const useQueue = options?.smartContextViaQueue !== false;
-    const contextProviderFactory = (model: string, ctx: AppContext) =>
-      providerFactory(model, ctx, { reasoningEffort: settings.contextReasoningEffort });
-    try {
-      const queries = useQueue
-        ? ((await enqueue(
-            {
-              tool: "extractSearchQueries",
-              args: {
-                userMessage,
-                recentThreadBlock,
-                providerFactory: contextProviderFactory,
-              },
-              caller: queueCaller,
-            },
-            () => ctx,
-          )) as string[])
-        : await extractSearchQueries(ctx, contextProviderFactory, userMessage, recentThreadBlock);
-      agentDebug("[Smart context] extracted queries", { count: queries.length, queries });
-      agentDebug("[Smart context] building raw context for", queries.length, "queries");
-      const { text: rawContext, sources, contents } = useQueue
-        ? ((await enqueue(
-            {
-              tool: "buildRawRetrievedContext",
-              args: { queries },
-              caller: queueCaller,
-            },
-            () => ctx,
-          )) as Awaited<ReturnType<typeof buildRawRetrievedContext>>)
-        : await buildRawRetrievedContext(ctx, queries);
-      agentDebug("[Smart context] buildRawRetrievedContext done", {
-        rawLength: rawContext.length,
-        sourcesCount: sources.length,
-      });
-      agentDebug("[Smart context] retrieved context", {
-        rawLength: rawContext.length,
-        sourcesCount: sources.length,
-        sourceIds: sources.map((s) => s.id),
-      });
-      agentDebug("[Smart context] sources found (before relevance filter)", sources);
-
-      const allRetrievedSourceIds = sources.map((s) => s.id);
-      let smartContextQuotes: Array<{ sourceId: string; text: string }> = [];
-
-      if (sources.length === 0) {
-        agentDebug("[Smart context] no retrieved sources; skipping relevance filter and summarizer");
-        smartContextBlock = "## Smart context\n\nNo relevant prior context found.";
-      } else {
-        const { sources: filteredSources, contents: filteredContents } = useQueue
-          ? ((await enqueue(
-              {
-                tool: "filterRelevantSources",
-                args: {
-                  userMessage,
-                  sources,
-                  contents,
-                  providerFactory: contextProviderFactory,
-                },
-                caller: queueCaller,
-              },
-              () => ctx,
-            )) as Awaited<ReturnType<typeof filterRelevantSources>>)
-          : await filterRelevantSources(ctx, contextProviderFactory, userMessage, sources, contents);
-        agentDebug("[Smart context] sources after relevance filter", {
-          before: sources.length,
-          after: filteredSources.length,
-          keptIds: filteredSources.map((s) => s.id),
-        });
-
-        if (filteredSources.length === 0) {
-          agentDebug("[Smart context] relevance filter kept no sources; skipping summarizer");
-          smartContextBlock = "## Smart context\n\nNo relevant prior context found.";
-        } else {
-          const filteredRawContext = buildRawTextFromChunks(filteredSources, filteredContents);
-          const summarizeResult = useQueue
-            ? ((await enqueue(
-                {
-                  tool: "summarizeRetrievedContext",
-                  args: {
-                    rawText: filteredRawContext,
-                    sources: filteredSources,
-                    options: {
-                      contents: filteredContents,
-                      userMessage,
-                      allRetrievedSourceIds,
-                      retryOptions: undefined,
-                    },
-                    providerFactory: contextProviderFactory,
-                  },
-                  caller: queueCaller,
-                },
-                () => ctx,
-              )) as Awaited<ReturnType<typeof summarizeRetrievedContext>>)
-            : await summarizeRetrievedContext(ctx, contextProviderFactory, filteredRawContext, filteredSources, {
-                contents: filteredContents,
-                userMessage,
-                allRetrievedSourceIds,
-              });
-          if (typeof summarizeResult === "string") {
-            smartContextBlock = summarizeResult;
-          } else {
-            smartContextBlock = summarizeResult.block;
-            smartContextQuotes = summarizeResult.quotes;
-          }
-          agentDebug("[Smart context] summary produced", {
-            blockLength: smartContextBlock.length,
-            quotesCount: smartContextQuotes.length,
-          });
-        }
-      }
-
-      const quotedSourceIds = [...new Set(smartContextQuotes.map((q) => q.sourceId))];
-      const additionalSourceIds = allRetrievedSourceIds.filter((id) => !quotedSourceIds.includes(id));
-      const quotedSourcesForHistory = quotedSourceIds.map((sourceId) => ({
-        sourceId,
-        snippets: smartContextQuotes.filter((q) => q.sourceId === sourceId).map((q) => q.text),
-      }));
-      appendEntry(ctx, sessionId, {
-        role: "tool_call",
-        content: JSON.stringify({ quotedSources: quotedSourcesForHistory, additionalSources: additionalSourceIds }),
-        toolName: "smart_context",
-        toolArgs: { queries },
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const errStack = err instanceof Error ? err.stack : undefined;
-      agentError("[Smart context] pipeline failed:", errMsg, errStack ?? "");
-      // Surface smart context failures (for example, when the embedding service is unavailable)
-      // so the agent run fails fast instead of silently skipping semantic context.
-      throw err;
-    }
-  }
-
-  const contextBlocks = [recentThreadBlock, smartContextBlock].filter(Boolean).join("\n\n");
-  const systemPromptContent = buildSystemPrompt(ctx, agent);
-  const combinedSystemContent = contextBlocks + "\n\n---\n\n" + systemPromptContent;
-
-  const messages: Message[] = [
-    { role: "system", content: combinedSystemContent },
-    { role: "user", content: userMessage },
-  ];
-  if (initialToolResult) {
-    messages.push({
-      role: "tool",
-      content: initialToolResult.content,
-      toolCallId: "cron-initial",
-      toolName: initialToolResult.toolName,
-    });
-  }
+  const messages: Message[] = convertToLlm(combinedSystemContent, userMessage, initialToolResult ?? undefined);
 
   let agentResponseContent = "";
   const agentEntry: Omit<HistoryEntry, "id"> = {
@@ -455,6 +273,81 @@ async function _runLoop(
     content: "",
     timestamp: new Date().toISOString(),
   };
+
+  /** When set, _runLoop returns this (final reply when no more tool calls). */
+  const resultRef: { current: string | null } = { current: null };
+
+  const DEBUG_SEP = "────────────────────────────────────────────────────────";
+  const DEBUG_BLOCK = "════════════════════════════════════════════════════════";
+
+  /**
+   * Handles pi-style agent loop events: persistence (appendEntry, scheduleHistoryIndex) and SSE (onEvent).
+   * @param event - AgentLoopEvent from the agentic loop
+   */
+  function handleAgentLoopEvent(event: AgentLoopEvent): void {
+    switch (event.type) {
+      case "agent_start":
+        break;
+      case "turn_start":
+        agentDebug(`\n${DEBUG_BLOCK}\n  REQUEST START (loop ${event.loopIndex})\n${DEBUG_BLOCK}`);
+        break;
+      case "message_start":
+        break;
+      case "message_update":
+        agentResponseContent += event.delta;
+        onEvent({ type: "token", content: event.delta });
+        break;
+      case "message_end":
+        if (event.toolCalls.length === 0) {
+          const finalContent = event.content || agentResponseContent;
+          agentEntry.content = finalContent;
+          agentEntry.timestamp = new Date().toISOString();
+          const storedEntry = appendEntry(ctx, sessionId, agentEntry);
+          emitEntryIfRequested(storedEntry);
+          scheduleHistoryIndex(ctx, storedEntry.id, options, (err) =>
+            agentError("History index (agent entry) failed:", err),
+          );
+          agentDebug(`${DEBUG_SEP}\n  END OF TURN (done, no more tool calls)\n${DEBUG_BLOCK}\n`);
+          onEvent({
+            type: "done",
+            sessionId,
+            compressed: storedEntry,
+            original: storedEntry,
+          });
+          resultRef.current = finalContent;
+        }
+        break;
+      case "tool_execution_start":
+        onEvent({ type: "tool_call", tool: event.toolName, args: event.args });
+        break;
+      case "tool_execution_end": {
+        const storedToolEntry = appendEntry(ctx, sessionId, {
+          role: "tool_call",
+          content: event.content,
+          toolName: event.toolName,
+          toolArgs: event.toolArgs,
+          timestamp: new Date().toISOString(),
+        });
+        emitEntryIfRequested(storedToolEntry);
+        onEvent({
+          type: "tool_result",
+          tool: event.toolName,
+          result: event.resultForSSE !== undefined ? event.resultForSSE : event.content,
+        });
+        break;
+      }
+      case "turn_end":
+        agentDebug(
+          `${DEBUG_SEP}\n  END OF TURN (tool calls applied; next request follows)\n${DEBUG_BLOCK}\n`,
+        );
+        break;
+      case "agent_end":
+        break;
+      case "agent_error":
+        onEvent({ type: "error", message: event.message });
+        break;
+    }
+  }
 
   // Agentic loop
   let loopCount = 0;
@@ -476,17 +369,17 @@ async function _runLoop(
     });
   }
 
-  const DEBUG_SEP = "────────────────────────────────────────────────────────";
-  const DEBUG_BLOCK = "════════════════════════════════════════════════════════";
   /** Max chars to log per message so SYSTEM/CONTEXT/QUERY are readable with real line breaks. */
   const DEBUG_MESSAGE_MAX_LEN = 2000;
 
   try {
-    while (loopCount < MAX_LOOPS) {
+    handleAgentLoopEvent({ type: "agent_start" });
+
+    while (loopCount < MAX_LOOPS && resultRef.current === null) {
       loopCount++;
+      handleAgentLoopEvent({ type: "turn_start", loopIndex: loopCount });
 
     /** @note Debug: log prompt with clear SYSTEM / CONTEXT / QUERY separation; content with real newlines. */
-    agentDebug(`\n${DEBUG_BLOCK}\n  REQUEST START (loop ${loopCount})\n${DEBUG_BLOCK}`);
     const roles = messages.map((m) => m.role).join(", ");
     const lengths = messages.map((m) => (typeof m.content === "string" ? m.content.length : 0));
     agentDebug("[LLM request] Roles: [%s]. Content lengths: [%s]", roles, lengths.join(", "));
@@ -510,11 +403,14 @@ async function _runLoop(
 
       const controller = new AbortController();
       controllerRef.current = controller;
-      const completeOptions = ollamaJobId ? { signal: controller.signal } : undefined;
+      const completeOptions = {
+        ...(ollamaJobId ? { signal: controller.signal } : {}),
+        onThinkingToken: (delta: string) => onEvent({ type: "thinking", content: delta }),
+      };
 
+      handleAgentLoopEvent({ type: "message_start" });
       const response = await provider.complete(messages, toolDefs, (token) => {
-        agentResponseContent += token;
-        onEvent({ type: "token", content: token });
+        handleAgentLoopEvent({ type: "message_update", delta: token });
       }, completeOptions);
 
     agentDebug(`\n${DEBUG_SEP}\n  LLM RESPONSE\n${DEBUG_SEP}`);
@@ -526,51 +422,38 @@ async function _runLoop(
       agentDebug("\n--- TOOL CALLS ---", JSON.stringify(response.toolCalls, null, 2));
     }
 
-    // If there are no tool calls, this is the final response
-    if (response.toolCalls.length === 0) {
-      agentEntry.content = response.content || agentResponseContent;
-      agentEntry.timestamp = new Date().toISOString();
-      const storedEntry = appendEntry(ctx, sessionId, agentEntry);
-      emitEntryIfRequested(storedEntry);
-      scheduleHistoryIndex(ctx, storedEntry.id, options, (err) =>
-        agentError("History index (agent entry) failed:", err),
-      );
-
-      // Send "done" immediately so the stream closes and the UI never blocks.
-      const finalContent = response.content || agentResponseContent;
-      agentDebug(`${DEBUG_SEP}\n  END OF TURN (done, no more tool calls)\n${DEBUG_BLOCK}\n`);
-      onEvent({
-        type: "done",
-        sessionId,
-        compressed: storedEntry,
-        original: storedEntry,
-      });
-      return finalContent;
+    // Emit message_end; handler persists and sets resultRef when no tool calls
+    handleAgentLoopEvent({
+      type: "message_end",
+      content: response.content || agentResponseContent,
+      toolCalls: response.toolCalls,
+    });
+    if (resultRef.current !== null) {
+      return resultRef.current;
     }
 
     // Execute tool calls
     const toolResults: Message[] = [];
     for (const tc of response.toolCalls) {
-      onEvent({ type: "tool_call", tool: tc.name, args: tc.args });
+      handleAgentLoopEvent({
+        type: "tool_execution_start",
+        toolCallId: tc.id,
+        toolName: tc.name,
+        args: tc.args,
+      });
 
       const tool = tools.find((t) => t.name === tc.name);
       if (!tool) {
         const errorResult = `Unknown tool: ${tc.name}`;
-        onEvent({
-          type: "tool_result",
-          tool: tc.name,
-          result: { error: errorResult },
-        });
         const contentStr = JSON.stringify({ error: errorResult });
-        const toolEntry = {
-          role: "tool_call" as const,
-          content: contentStr,
+        handleAgentLoopEvent({
+          type: "tool_execution_end",
+          toolCallId: tc.id,
           toolName: tc.name,
+          content: contentStr,
           toolArgs: tc.args,
-          timestamp: new Date().toISOString(),
-        };
-        const storedToolEntry = appendEntry(ctx, sessionId, toolEntry);
-        emitEntryIfRequested(storedToolEntry);
+          resultForSSE: { error: errorResult },
+        });
         toolResults.push({
           role: "tool",
           content: contentStr,
@@ -581,24 +464,18 @@ async function _runLoop(
       }
 
       try {
-        // Validate args with Zod
         const parsed = tool.schema.parse(tc.args);
         const result = await tool.execute(parsed, toolContext);
-
-        // Filter result for injection (guard against undefined result)
         const resultStr =
           typeof result === "string" ? result : JSON.stringify(result ?? null);
         const filtered = filterText(resultStr ?? "", `tool:${tc.name}`);
-
-        onEvent({ type: "tool_result", tool: tc.name, result: filtered.text });
-        const storedToolResult = appendEntry(ctx, sessionId, {
-          role: "tool_call",
-          content: filtered.text,
+        handleAgentLoopEvent({
+          type: "tool_execution_end",
+          toolCallId: tc.id,
           toolName: tc.name,
+          content: filtered.text,
           toolArgs: tc.args,
-          timestamp: new Date().toISOString(),
         });
-        emitEntryIfRequested(storedToolResult);
         toolResults.push({
           role: "tool",
           content: filtered.text,
@@ -607,20 +484,15 @@ async function _runLoop(
         });
       } catch (err: unknown) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        onEvent({
-          type: "tool_result",
-          tool: tc.name,
-          result: { error: errorMsg },
-        });
         const contentStr = JSON.stringify({ error: errorMsg });
-        const storedToolError = appendEntry(ctx, sessionId, {
-          role: "tool_call",
-          content: contentStr,
+        handleAgentLoopEvent({
+          type: "tool_execution_end",
+          toolCallId: tc.id,
           toolName: tc.name,
+          content: contentStr,
           toolArgs: tc.args,
-          timestamp: new Date().toISOString(),
+          resultForSSE: { error: errorMsg },
         });
-        emitEntryIfRequested(storedToolError);
         toolResults.push({
           role: "tool",
           content: contentStr,
@@ -630,31 +502,24 @@ async function _runLoop(
       }
     }
 
+    handleAgentLoopEvent({ type: "turn_end" });
+
     // Append assistant response + tool results to messages, loop again
     messages.push({
       role: "assistant",
       content: response.content || agentResponseContent,
     });
     messages.push(...toolResults);
-    // Nudge models that tend to stop after one tool round: remind them they may call more tools.
-    messages.push({
-      role: "user",
-      content:
-        "[System reminder: If more steps are needed to complete the task, call tools again. Only reply with your final text when the task is complete.]",
-    });
     agentResponseContent = "";
-    agentDebug(
-      `${DEBUG_SEP}\n  END OF TURN (tool calls applied; next request follows)\n${DEBUG_BLOCK}\n`,
-    );
   }
 
   if (loopCount >= MAX_LOOPS) {
-    onEvent({
-      type: "error",
+    handleAgentLoopEvent({
+      type: "agent_error",
       message: "Agent reached maximum tool call loop limit",
     });
   }
-  return "";
+  return resultRef.current ?? "";
   } finally {
     if (ollamaJobId) completeOllamaJob(ollamaJobId);
   }
@@ -668,11 +533,8 @@ async function _runLoop(
 const FALLBACK_SYSTEM_INSTRUCTIONS = [
   SECURITY_PREAMBLE,
   "",
-  "## Using your identity files",
-  "Use your Memory and User sections above constantly. Keep them up to date using the agent_update_identity tool. Use the tasks tool for all task tracking (create, assign, update status).",
-  "- **MEMORY**: When you learn something important (preferences, facts, context), update MEMORY.md.",
-  "- **USER**: When you learn about the user (role, preferences, constraints), update USER.md.",
-  "Update these files as often as relevant—do not wait for the user to ask. This keeps your context accurate across sessions.",
+  "## Identity and context",
+  "Your identity is in SOUL above. Memory and user facts live in the memory/ and user/ folders under your agent directory; use **knowledge_search** with scope (self, user, global) to retrieve them. Edit identity files (SOUL.md, AGENTS.md) and create fact files in memory/ and user/ via the **terminal** from your agent directory.",
   "",
   "## Using web tools",
   "- For questions that can be answered from the web, prefer **web_answer** to get an AI-generated answer grounded in current web search.",
@@ -699,20 +561,22 @@ function readAgentsMd(ctx: AppContext): string {
 
 /**
  * Builds the full system prompt for an agent run.
- * @brief Uses AGENTS.md (agent dir or project root) as the full system command, then appends Identity/Memory/Goals/User. If no file, uses fallback instructions.
+ * Order: agent ID → system date/time → AGENTS.md (attribution + content) → SOUL.md (attribution + content).
+ * No Memory/User blocks; those live in memory/ and user/ and are retrieved via knowledge_search.
  * @param ctx - App context (for reading project-root AGENTS.md fallback via ctx.fs)
- * @param agent - Loaded identity (soul, memory, user, agentsMd, optional systemPromptExtra)
+ * @param agent - Loaded identity (id, soul, agentsMd, optional systemPromptExtra)
+ * @param skillsContent - Optional "## Active skills" block from getMatchedSkillsContent (empty string when none matched)
  * @returns Single string system prompt
  */
 function buildSystemPrompt(
   ctx: AppContext,
   agent: {
+    id: string;
     soul: string;
-    memory: string;
-    user: string;
     agentsMd: string;
     systemPromptExtra?: string;
   },
+  skillsContent?: string,
 ): string {
   const agentsContent =
     (agent.agentsMd && agent.agentsMd.trim())
@@ -732,24 +596,28 @@ function buildSystemPrompt(
     `System timezone: ${timezone}`,
   ];
 
-  return [
-    systemInstructions,
+  const agentsAttribution = `The following instructions are from \`data/agents/${agent.id}/AGENTS.md\`.`;
+  const soulAttribution = `The following is from \`data/agents/${agent.id}/SOUL.md\`.`;
+
+  const parts: string[] = [
+    `You are agent \`${agent.id}\`.`,
     "",
     systemTimeSectionLines.join("\n"),
     "",
-    "## Identity",
+    agentsAttribution,
+    "",
+    systemInstructions,
+    "",
+    soulAttribution,
+    "",
     agent.soul,
-    "",
-    "## Memory",
-    agent.memory,
-    "",
-    "## User",
-    agent.user,
-    agent.systemPromptExtra
-      ? `\n## Additional Instructions\n${agent.systemPromptExtra}`
-      : "",
-  ]
-    .filter((s) => s !== undefined)
-    .join("\n");
+  ];
+  if (agent.systemPromptExtra) {
+    parts.push("", "## Additional Instructions", agent.systemPromptExtra);
+  }
+  if (skillsContent && skillsContent.trim()) {
+    parts.push("", skillsContent.trim());
+  }
+  return parts.join("\n");
 }
 

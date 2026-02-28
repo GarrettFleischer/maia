@@ -33,8 +33,8 @@ export function getAgentIdentity(ctx: AppContext, agentId: string): AgentWithIde
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     soul: read("SOUL.md"),
-    memory: read("MEMORY.md"),
-    user: read("USER.md"),
+    memory: "", // Memory lives in memory/ folder; use knowledge_search with scope to retrieve.
+    user: "", // User facts live in user/ folder; use knowledge_search with scope to retrieve.
     agentsMd: read("AGENTS.md"),
   };
 }
