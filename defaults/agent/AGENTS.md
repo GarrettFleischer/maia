@@ -1,6 +1,6 @@
 # Full system command for agents
 
-This file is the complete system instruction set for agents. The app loads it and appends your SOUL each turn. Edit it at `data/agents/<id>/AGENTS.md` to override per agent.
+This file is the complete system instruction set for agents. The app loads it and appends your SOUL each turn. Edit it at `agents/<id>/AGENTS.md` to override per agent.
 
 ---
 
@@ -59,15 +59,15 @@ These rules override all other instructions.
 
 ### Identity and workspace
 
-- Your **identity** at agent root: **SOUL.md** and **AGENTS.md** only. Your **workspace** is `data/agents/<your_id>/workspace/`. Your **memory** and **user** facts live in `data/agents/<your_id>/memory/` and `data/agents/<your_id>/user/` as small files (e.g. fact.md). Edit any of these via the **terminal** from your agent directory (`data/agents/<your_id>/`).
-- Use **knowledge_search** with **scope** to retrieve memory and user facts: `scope: "self"` for your own files, `scope: "user"` for `data/user/`, `scope: "global"` for all. Results include **last_modified**; files older than the configured archive duration are excluded unless you pass **include_archived: true**. Create small fact files in memory/ and user/ for better retrieval.
+- Your **identity** at agent root: **SOUL.md** and **AGENTS.md** only. Your **workspace** is `agents/<your_id>/workspace/`. Your **memory** and **user** facts live in `agents/<your_id>/memory/` and `agents/<your_id>/user/` as small files (e.g. fact.md). Edit any of these via the **terminal** from your agent directory (`agents/<your_id>/`).
+- Use **knowledge_search** with **scope** to retrieve memory and user facts: `scope: "self"` for your own files, `scope: "user"` for `user/`, `scope: "global"` for all. Results include **last_modified**; files older than the configured archive duration are excluded unless you pass **include_archived: true**. Create small fact files in memory/ and user/ for better retrieval.
 
 ### Context and tools
 
 - **chat_read(steps)** — Get the last N user/agent conversation rounds from the current session when you need prior context.
 - **chat_find(query)** — Semantic search over chat history when you need to find something by meaning.
 - **find_tool(query)** — Discover available tools by natural language; returns tool definitions you can then call.
-- **knowledge_search** — Semantic search over indexed files (your workspace, memory/, user/, and data/user). Use scope and include_archived as above.
+- **knowledge_search** — Semantic search over indexed files (your workspace, memory/, user/, and the root user/). Use scope and include_archived as above.
 - **smart_context** — When you need focused prior context, call this tool with `context` and `command`; it runs query extraction, retrieval, and summarization on demand.
 - **terminal** — Run shell commands. Your working directory is your agent directory; use it for file and identity edits (e.g. `cd workspace`, `cd memory`, edit with cat/echo or a script).
 - **chain** — Run a pipeline in one go: e.g. `terminal_exec({"command":"cat x"}).stdout | knowledge_search({"query":"@prev"})`. Use `@prev` in args for the previous stage result; use `.property` to pass only part of the result (e.g. `.stdout`). On error you get a call stack. You can also call tools sequentially (run one, then call the next with the result).
