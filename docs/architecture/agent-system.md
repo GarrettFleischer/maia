@@ -2,67 +2,49 @@
 
 ## Agent behavior (AGENTS.md)
 
-`AGENTS.md` is loaded from the agent's directory (`data/agents/<id>/AGENTS.md`) and injected into every agent’s system prompt (after the security notice, before identity usage guidance). It describes how agents should function—session behavior, memory, safety, heartbeats, tools—and can be edited per agent without code changes. If the per-agent file is missing or empty, the system falls back to `AGENTS.md` at project root; if that is also missing or empty, no "How you function" section is added.
+`AGENTS.md` is loaded from the agent's directory (`data/agents/<id>/AGENTS.md`) or project root and injected into the system prompt with explicit attribution (see System prompt order below). It describes how agents should function—context tools, workspace, safety, tools—and can be edited per agent. If the per-agent file is missing or empty, the system falls back to `AGENTS.md` at project root.
 
 ## Agent Identity
 
-Each agent is defined by a directory at `data/agents/<agent_id>/` containing Markdown files. These form the agent's persistent identity and are included in every context window.
+Each agent has a directory at `data/agents/<agent_id>/`. Identity files at the root are **SOUL.md** and **AGENTS.md** only. Memory and user facts live in **memory/** and **user/** as small files and are retrieved via **knowledge_search** with scope (self, user, global, or another agent id); they are not injected as blocks into the system prompt.
 
 ```
 data/agents/agent_007/
 ├── AGENTS.md    # How this agent should function (fallback: project root AGENTS.md)
-├── SOUL.md      # Who the agent is
-├── MEMORY.md    # What the agent remembers
-├── GOALS.md     # What the agent is working toward
-└── USER.md      # What the agent knows about the user(s)
+├── SOUL.md      # Who the agent is (included in system prompt with attribution)
+├── workspace/   # Agent file work
+├── memory/      # Small fact files (e.g. fact.md); retrieved via knowledge_search
+└── user/        # Small fact files about the user; retrieved via knowledge_search
 ```
 
 ### SOUL.md
 
-The agent's self-concept. Encouraged content:
-- Name and preferred pronouns
-- Personality, communication style, quirks
-- Areas of expertise or interest
-- How the agent prefers to approach problems
+The agent's self-concept (name, personality, expertise). Included in the system prompt with attribution. Edited via the **terminal** from the agent directory.
 
-The agent should feel free to express creativity here. This is their identity, not a job description.
+### memory/ and user/
 
-### MEMORY.md
+Persistent facts the agent deems important (user preferences, decisions, lessons learned) live as small files under `memory/` and `user/`. Agents retrieve them via **knowledge_search** with the appropriate scope. Results include **last_modified**; files older than the archive duration are excluded unless **include_archived: true**. Agents create and edit these files via the **terminal**.
 
-Persistent knowledge the agent deems important. Examples:
-- User preferences learned through interaction
-- Architectural decisions made in the workspace
-- Important file paths or project structures
-- Lessons learned from failed approaches
-- Relationships with other agents
+## System prompt order
 
-Agents should proactively add to this file using the `file_write` tool after learning something significant.
+The system prompt is built in this order (in `buildSystemPrompt` and `transformContext`):
 
-### GOALS.md
+1. **Agent ID** — e.g. "You are agent \`<agent_id>\`".
+2. **System date and time** — Current ISO/local datetime and timezone.
+3. **AGENTS.md** — A line stating that the following instructions are from `data/agents/<agent_id>/AGENTS.md`, then the full AGENTS content.
+4. **SOUL.md** — A line stating that the following is from `data/agents/<agent_id>/SOUL.md`, then the SOUL content.
 
-Uses a checklist format. Goals are NEVER deleted — completed ones are checked off.
+There are no "Memory" or "User" blocks in the prompt; memory and user facts are in `memory/` and `user/` and are retrieved via **knowledge_search** when the agent needs them.
 
-```markdown
-## Long-term Goals
-- [x] Set up Python project structure
-- [ ] Implement data pipeline
-- [ ] Write comprehensive tests
+## Context pipeline
 
-## Current Tasks
-- [ ] Fix the failing test in data_processor.py
-- [ ] Review agent_012's PR for the API module
-```
+Context is built and passed to the LLM as follows:
 
-Agents should check off completed items and add new tasks as they emerge.
+1. **transformContext** — Combines (optionally empty) recent-thread and smart-context blocks with the system prompt into a single system string. By default, recent thread and smart context are not included; agents use **chat_read**, **chat_find**, and **smart_context** when they need prior context. Implemented in `src/lib/agent/context-query.ts` as `transformContext(recentThreadBlock, smartContextBlock, systemPromptContent)`.
 
-### USER.md
+2. **convertToLlm** — Maps that system string plus the user message (and optional initial tool result) to the `Message[]` format the AI provider expects.
 
-Everything the agent knows about the user(s) it works with:
-- Communication preferences
-- Technical skill level
-- Project context
-- Important personal details the user has shared
-- Working hours or availability (if known)
+Flow: `systemPromptContent` (agent ID → date/time → AGENTS with attribution → SOUL with attribution) → `transformContext` → `convertToLlm` → `Message[]` → LLM.
 
 ## Agent Execution Loop
 
@@ -79,11 +61,11 @@ Trigger (user message | heartbeat | agent message)
          │
          ▼
    Assemble context window:
-   - Security preamble
-   - Identity files (SOUL, MEMORY, GOALS, USER)
-   - Compressed session history
+   - Agent ID, system date/time
+   - AGENTS.md (with attribution)
+   - SOUL.md (with attribution)
    - Current message (original)
-   - Tool definitions
+   - Minimal tool definitions (find_tool, chat_read, chat_find, terminal; Maia gets agent-management tools)
          │
          ▼
    Call AI provider
