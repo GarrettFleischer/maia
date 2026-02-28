@@ -32,7 +32,6 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [braveAnswersApiKey, setBraveAnswersApiKey] = useState("");
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaApiKey, setOllamaApiKey] = useState("");
-  const [heartbeatInterval, setHeartbeatInterval] = useState(30);
   const [contextQueryModel, setContextQueryModel] = useState("");
   const [contextSummaryModel, setContextSummaryModel] = useState("");
   const [contextReasoningEffort, setContextReasoningEffort] = useState<ReasoningEffort>("medium");
@@ -78,7 +77,6 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     ]).then(([settingsData, agentsList, capabilities]) => {
       setSettings(settingsData);
       setOllamaUrl(settingsData.ollamaBaseUrl);
-      setHeartbeatInterval(settingsData.heartbeatIntervalMinutes);
       setContextQueryModel(settingsData.contextQueryModel);
       setContextSummaryModel(settingsData.contextSummaryModel);
       setContextReasoningEffort(settingsData.contextReasoningEffort);
@@ -116,7 +114,6 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     setSaving(true);
     const body: Record<string, unknown> = {
       ollamaBaseUrl: ollamaUrl,
-      heartbeatIntervalMinutes: heartbeatInterval,
       contextQueryModel,
       contextSummaryModel,
       contextReasoningEffort,
@@ -609,17 +606,6 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
               <p className="text-xs text-zinc-500 mt-0.5">
                 Files whose last-modified time is older than this duration are considered archived and excluded from knowledge_search by default. Agents can pass include_archived: true to include them. Results always include last_modified per file. Set to 0 to disable archiving.
               </p>
-
-              <div>
-                <label className="block text-xs text-zinc-500 mb-1">Heartbeat Interval (minutes)</label>
-                <input
-                  type="number"
-                  value={heartbeatInterval}
-                  onChange={(e) => setHeartbeatInterval(Number(e.target.value))}
-                  min={1}
-                  className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                />
-              </div>
             </section>
 
             <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">

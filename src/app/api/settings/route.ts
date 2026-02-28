@@ -19,9 +19,5 @@ export async function PUT(req: NextRequest) {
     }
     throw err;
   }
-  if (body.heartbeatIntervalMinutes !== undefined) {
-    const { refreshHeartbeatJob } = await import("@/lib/cron/service");
-    refreshHeartbeatJob(ctx);
-  }
   return NextResponse.json(getSettingsPublic(ctx));
 }

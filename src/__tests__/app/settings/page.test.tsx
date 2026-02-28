@@ -57,7 +57,6 @@ describe("Settings page", () => {
     expect(screen.getByDisplayValue(settingsPublic.ollamaBaseUrl)).toBeInTheDocument();
     expect(screen.getByLabelText("Smart context query model")).toBeInTheDocument();
     expect(screen.getByLabelText("Smart context reasoning effort")).toBeInTheDocument();
-    expect(screen.getByDisplayValue(String(settingsPublic.heartbeatIntervalMinutes))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save Settings/i })).toBeInTheDocument();
   });
 

@@ -170,12 +170,6 @@ export function initSchema(db: DbAdapter): void {
     );
   }
 
-  // Seed built-in heartbeat cron job (after migration so tool_name/tool_args exist on older DBs)
-  db.prepare(
-    `INSERT OR IGNORE INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
-     VALUES ('builtin-heartbeat', '*/30 * * * *', 'Heartbeat', 'maia', 1, datetime('now'), 'cron_echo', '{}')`,
-  ).run();
-
   // Seed default settings if not present (whitelisted models live in data/models.json)
   const defaults: Record<string, string> = {
     heartbeatIntervalMinutes: "30",

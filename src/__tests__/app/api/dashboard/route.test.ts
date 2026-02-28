@@ -88,14 +88,11 @@ describe("GET /api/dashboard", () => {
     expect(session!.updatedAt).toBe(now);
   });
 
-  it("includes cron jobs with built-in heartbeat", async () => {
+  it("includes cron jobs array (heartbeat is optional; user can ask Maia to create it)", async () => {
     const req = createNextRequest("http://localhost/api/dashboard");
     const res = await GET(req);
     expect(res.status).toBe(200);
     const body = await res.json() as { cronJobs: { id: string; agentId: string; isBuiltIn: boolean }[] };
-    const heartbeat = body.cronJobs.find((j) => j.id === "builtin-heartbeat");
-    expect(heartbeat).toBeDefined();
-    expect(heartbeat!.agentId).toBe("maia");
-    expect(heartbeat!.isBuiltIn).toBe(true);
+    expect(Array.isArray(body.cronJobs)).toBe(true);
   });
 });
