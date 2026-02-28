@@ -1,5 +1,5 @@
 /**
- * @fileoverview POST /api/chat — streamed agent chat. Ensures messaging service is initialized so message_to_user and message_send work.
+ * @fileoverview POST /api/chat — streamed agent chat. Ensures messaging service is initialized so message_send (to user or agent) works.
  * @module app/api/chat/route
  */
 import { NextRequest } from "next/server";

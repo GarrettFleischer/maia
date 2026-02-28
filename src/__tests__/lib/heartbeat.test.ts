@@ -160,7 +160,9 @@ describe("refreshEmbeddings", () => {
       }
     ).on("/api/embed", async (_url: string, init?: RequestInit) => {
       embedCallCount++;
-      const body = init?.body ? (JSON.parse(init.body as string) as { input?: string | string[] }) : {};
+      const body = init?.body
+        ? (JSON.parse(init.body as string) as { input?: string | string[] })
+        : {};
       const input = body.input;
       const count = Array.isArray(input) ? input.length : 1;
       const embeddings = Array.from({ length: count }, () => [0.1, 0.2, 0.3]);
@@ -209,10 +211,14 @@ describe("refreshEmbeddings", () => {
       }
     ).on("/api/embed", async (_url: string, init?: RequestInit) => {
       embedCallCount++;
-      const body = init?.body ? (JSON.parse(init.body as string) as { input?: string | string[] }) : {};
+      const body = init?.body
+        ? (JSON.parse(init.body as string) as { input?: string | string[] })
+        : {};
       const input = body.input;
       const count = Array.isArray(input) ? input.length : 1;
-      const firstLen = Array.isArray(input) ? input[0]?.length ?? 0 : (input as string)?.length ?? 0;
+      const firstLen = Array.isArray(input)
+        ? (input[0]?.length ?? 0)
+        : ((input as string)?.length ?? 0);
       if (firstLen > 100 && count === 1) {
         return new FakeResponse(
           400,

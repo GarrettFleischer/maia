@@ -41,10 +41,13 @@ export async function GET() {
 
   const assignedRows = ctx.db
     .prepare(
-      "SELECT assigned_to AS agent_id, status, COUNT(*) as count FROM tasks WHERE assigned_to IS NOT NULL GROUP BY assigned_to, status"
+      "SELECT assigned_to AS agent_id, status, COUNT(*) as count FROM tasks WHERE assigned_to IS NOT NULL GROUP BY assigned_to, status",
     )
     .all() as { agent_id: string; status: string; count: number }[];
-  const taskCountsByAgent: Record<string, { todo: number; in_progress: number; done: number }> = {};
+  const taskCountsByAgent: Record<
+    string,
+    { todo: number; in_progress: number; done: number }
+  > = {};
   for (const a of agents) {
     taskCountsByAgent[a.id] = { todo: 0, in_progress: 0, done: 0 };
   }
@@ -53,11 +56,15 @@ export async function GET() {
       taskCountsByAgent[row.agent_id] = { todo: 0, in_progress: 0, done: 0 };
     }
     if (row.status in taskCountsByAgent[row.agent_id]) {
-      (taskCountsByAgent[row.agent_id] as Record<string, number>)[row.status] = row.count;
+      (taskCountsByAgent[row.agent_id] as Record<string, number>)[row.status] =
+        row.count;
     }
   }
 
-  const agentSessions = listSessions(ctx, "agents").slice(0, RECENT_AGENT_SESSIONS_LIMIT);
+  const agentSessions = listSessions(ctx, "agents").slice(
+    0,
+    RECENT_AGENT_SESSIONS_LIMIT,
+  );
   const recentAgentSessions = agentSessions.map((s) => ({
     id: s.id,
     name: s.name,
@@ -78,7 +85,10 @@ export async function GET() {
       isBuiltIn: Boolean(r.is_built_in),
       createdAt: r.created_at as string,
       toolName: (r.tool_name as string) ?? "cron_echo",
-      toolArgs: r.tool_args != null ? (JSON.parse(r.tool_args as string) as Record<string, unknown>) : {},
+      toolArgs:
+        r.tool_args != null
+          ? (JSON.parse(r.tool_args as string) as Record<string, unknown>)
+          : {},
       scheduleDescription: describeCronSchedule(expression),
       nextRunAt: getNextCronRun(expression) ?? undefined,
     };

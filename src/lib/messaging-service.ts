@@ -1,5 +1,5 @@
 /**
- * @fileoverview Initializes the messaging service: message_to_user (agent→user) and message_send (agent→agent with request-response).
+ * @fileoverview Initializes the messaging service: message_send with to:'user' (agent→user) or to:agentId (agent→agent with request-response).
  * When agents message each other, the recipient is run with their own system prompt and context; the message body is only who sent it and the request.
  * @module lib/messaging-service
  */
@@ -36,7 +36,7 @@ function endsWithDone(reply: string): boolean {
 const MAX_AGENT_CHAT_TURNS = 100;
 
 /**
- * Registers implementations for message_to_user and message_send with the tool layer.
+ * Registers implementations for message_send (user and agent targets) with the tool layer.
  * @param ctx Application context
  * @param runAgentFn Runs an agent and returns its final reply text. Optional second argument can set emitHistoryEntries for background runs.
  */

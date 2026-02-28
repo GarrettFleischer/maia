@@ -2,7 +2,7 @@ import path from "path";
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { initMessagingService } from "@/lib/messaging-service";
 import { registerLlmQueueHandlers } from "@/lib/queue/llm-queue-handlers";
-import { registerMessagingImpls, messageToUserTool, messageSendTool } from "@/lib/tools/messaging";
+import { registerMessagingImpls, messageSendTool } from "@/lib/tools/messaging";
 import { makeTestContext, FakeEvents, FakeFs } from "../helpers/fakes";
 import { createSession } from "@/lib/history";
 import { getAgentsDir } from "@/lib/data-dir";
@@ -38,19 +38,18 @@ describe("initMessagingService", () => {
   it("registers messaging implementations", async () => {
     const runAgentFn = async () => "";
     initMessagingService(ctx, runAgentFn);
-    // After init, messageToUserTool should NOT throw
+    // After init, message_send to user should NOT throw
     const sessionId = createSession(ctx, ["user", "maia"]);
     const toolCtx = { ...ctx, agentId: "maia", sessionId, volumeRoot: "/workspace" };
-    // Should resolve without throwing
-    await messageToUserTool.execute({ content: "hello" }, toolCtx);
+    await messageSendTool.execute({ to: "user", text: "hello" }, toolCtx);
   });
 
-  describe("message_to_user", () => {
+  describe("message_send to user", () => {
     it("appends an agent entry to the session", async () => {
       const sessionId = createSession(ctx, ["user", "maia"]);
       initMessagingService(ctx, async () => "");
       const toolCtx = { ...ctx, agentId: "maia", sessionId, volumeRoot: "/workspace" };
-      await messageToUserTool.execute({ content: "Hi there!" }, toolCtx);
+      await messageSendTool.execute({ to: "user", text: "Hi there!" }, toolCtx);
       const rows = ctx.db
         .prepare("SELECT * FROM history_entries WHERE session_id = ?")
         .all(sessionId) as Record<string, unknown>[];
@@ -65,7 +64,7 @@ describe("initMessagingService", () => {
       const sessionId = createSession(ctx, ["user", "maia"]);
       initMessagingService(ctx, async () => "");
       const toolCtx = { ...ctx, agentId: "maia", sessionId, volumeRoot: "/workspace" };
-      await messageToUserTool.execute({ content: "Event test" }, toolCtx);
+      await messageSendTool.execute({ to: "user", text: "Event test" }, toolCtx);
       const messageEvents = events.emitted.filter((e) => e.event === "message");
       expect(messageEvents).toHaveLength(1);
       expect((messageEvents[0].data as { entry: { content: string } }).entry.content).toBe("Event test");
@@ -75,7 +74,7 @@ describe("initMessagingService", () => {
       const sessionId = createSession(ctx, ["user"]);
       initMessagingService(ctx, async () => "");
       const toolCtx = { ...ctx, agentId: "maia", sessionId, volumeRoot: "/workspace" };
-      await messageToUserTool.execute({ content: "Join me" }, toolCtx);
+      await messageSendTool.execute({ to: "user", text: "Join me" }, toolCtx);
       const row = ctx.db.prepare("SELECT participants FROM sessions WHERE id = ?").get(sessionId) as { participants: string };
       const parts = JSON.parse(row.participants);
       expect(parts).toContain("maia");
@@ -91,7 +90,7 @@ describe("initMessagingService", () => {
       });
       const sourceSession = createSession(ctx, ["agent-1", "maia"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ toAgentId: "agent-2", content: "Hello agent 2" }, toolCtx);
+      await messageSendTool.execute({ to: "agent-2", text: "Hello agent 2" }, toolCtx);
       // A new agent session should have been created
       const sessions = ctx.db
         .prepare("SELECT * FROM sessions WHERE type = 'agents'")
@@ -108,8 +107,8 @@ describe("initMessagingService", () => {
       const agentSession = createSession(ctx, ["agent-1", "agent-2"], "agents");
       const sourceSession = createSession(ctx, ["agent-1"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ toAgentId: "agent-2", content: "Reuse session" }, toolCtx);
-      await messageSendTool.execute({ toAgentId: "agent-2", content: "Second message" }, toolCtx);
+      await messageSendTool.execute({ to: "agent-2", text: "Reuse session" }, toolCtx);
+      await messageSendTool.execute({ to: "agent-2", text: "Second message" }, toolCtx);
       // Should still be only one session between agent-1 and agent-2
       const sessions = ctx.db
         .prepare("SELECT * FROM sessions WHERE type = 'agents'")
@@ -130,7 +129,7 @@ describe("initMessagingService", () => {
       });
       const sourceSession = createSession(ctx, ["agent-1"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      const reply = await messageSendTool.execute({ toAgentId: "agent-2", content: "Wake up!" }, toolCtx);
+      const reply = await messageSendTool.execute({ to: "agent-2", text: "Wake up!" }, toolCtx);
       expect(reply).toContain("Message sent");
       expect(reply).toContain("separate thread");
       await new Promise((r) => setImmediate(r));
@@ -150,7 +149,7 @@ describe("initMessagingService", () => {
       });
       const sourceSession = createSession(ctx, ["agent-1"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ toAgentId: "agent-2", content: "Hello recipient" }, toolCtx);
+      await messageSendTool.execute({ to: "agent-2", text: "Hello recipient" }, toolCtx);
       await new Promise((r) => setImmediate(r));
 
       expect(capturedMessage).toContain("Message from **Sender Agent**");
@@ -175,7 +174,7 @@ describe("initMessagingService", () => {
       });
       const sourceSession = createSession(ctx, ["agent-1", "user"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ toAgentId: "agent-2", content: "Question" }, toolCtx);
+      await messageSendTool.execute({ to: "agent-2", text: "Question" }, toolCtx);
       await new Promise((r) => setTimeout(r, 50));
 
       expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2", "agent-1"]);
@@ -199,7 +198,7 @@ describe("initMessagingService", () => {
       });
       const sourceSession = createSession(ctx, ["agent-1", "user"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ toAgentId: "agent-2", content: "Question" }, toolCtx);
+      await messageSendTool.execute({ to: "agent-2", text: "Question" }, toolCtx);
       await new Promise((r) => setTimeout(r, 100));
 
       expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2", "agent-1", "agent-2"]);
@@ -219,7 +218,7 @@ describe("initMessagingService", () => {
       });
       const sourceSession = createSession(ctx, ["agent-1", "user"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ toAgentId: "agent-2", content: "Question" }, toolCtx);
+      await messageSendTool.execute({ to: "agent-2", text: "Question" }, toolCtx);
       await new Promise((r) => setTimeout(r, 50));
 
       expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2"]);
@@ -241,7 +240,7 @@ describe("initMessagingService", () => {
       });
       const sourceSession = createSession(ctx, ["agent-1", "user"]);
       const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ toAgentId: "agent-2", content: "Question" }, toolCtx);
+      await messageSendTool.execute({ to: "agent-2", text: "Question" }, toolCtx);
       await new Promise((r) => setTimeout(r, 50));
 
       expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2", "agent-1"]);

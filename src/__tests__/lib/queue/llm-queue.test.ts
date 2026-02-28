@@ -31,24 +31,40 @@ describe("llm-queue", () => {
 
   describe("getPriority", () => {
     it("returns 1 for embedding tools", () => {
-      expect(getPriority({ tool: "refreshEmbeddings", args: {}, caller: "system" })).toBe(1);
-      expect(getPriority({ tool: "buildRawRetrievedContext", args: {}, caller: "user" })).toBe(1);
+      expect(
+        getPriority({ tool: "refreshEmbeddings", args: {}, caller: "system" }),
+      ).toBe(1);
+      expect(
+        getPriority({
+          tool: "buildRawRetrievedContext",
+          args: {},
+          caller: "user",
+        }),
+      ).toBe(1);
     });
 
     it("returns 2 for smart context tools", () => {
-      expect(getPriority({ tool: "extractSearchQueries", args: {}, caller: "user" })).toBe(2);
+      expect(
+        getPriority({ tool: "extractSearchQueries", args: {}, caller: "user" }),
+      ).toBe(2);
     });
 
     it("returns 3 for runAgent with user caller", () => {
-      expect(getPriority({ tool: "runAgent", args: {}, caller: "user" })).toBe(3);
+      expect(getPriority({ tool: "runAgent", args: {}, caller: "user" })).toBe(
+        3,
+      );
     });
 
     it("returns 4 for runAgent with maia caller", () => {
-      expect(getPriority({ tool: "runAgent", args: {}, caller: "maia" })).toBe(4);
+      expect(getPriority({ tool: "runAgent", args: {}, caller: "maia" })).toBe(
+        4,
+      );
     });
 
     it("returns 5 for runAgent with agent caller", () => {
-      expect(getPriority({ tool: "runAgent", args: {}, caller: "agent" })).toBe(5);
+      expect(getPriority({ tool: "runAgent", args: {}, caller: "agent" })).toBe(
+        5,
+      );
     });
 
     it("uses explicit priority when provided", () => {
@@ -70,7 +86,11 @@ describe("llm-queue", () => {
         enqueue(
           {
             tool: "test",
-            args: { exec: async () => { throw new Error("work failed"); } },
+            args: {
+              exec: async () => {
+                throw new Error("work failed");
+              },
+            },
             priority: 3,
           },
           getCtx,
@@ -81,23 +101,68 @@ describe("llm-queue", () => {
     it("processes higher priority jobs first", async () => {
       const order: number[] = [];
       const p5 = enqueue(
-        { tool: "test", args: { exec: async () => { order.push(5); return 5; } }, priority: 5 },
+        {
+          tool: "test",
+          args: {
+            exec: async () => {
+              order.push(5);
+              return 5;
+            },
+          },
+          priority: 5,
+        },
         getCtx,
       );
       const p3 = enqueue(
-        { tool: "test", args: { exec: async () => { order.push(3); return 3; } }, priority: 3 },
+        {
+          tool: "test",
+          args: {
+            exec: async () => {
+              order.push(3);
+              return 3;
+            },
+          },
+          priority: 3,
+        },
         getCtx,
       );
       const p1 = enqueue(
-        { tool: "test", args: { exec: async () => { order.push(1); return 1; } }, priority: 1 },
+        {
+          tool: "test",
+          args: {
+            exec: async () => {
+              order.push(1);
+              return 1;
+            },
+          },
+          priority: 1,
+        },
         getCtx,
       );
       const p4 = enqueue(
-        { tool: "test", args: { exec: async () => { order.push(4); return 4; } }, priority: 4 },
+        {
+          tool: "test",
+          args: {
+            exec: async () => {
+              order.push(4);
+              return 4;
+            },
+          },
+          priority: 4,
+        },
         getCtx,
       );
       const p2 = enqueue(
-        { tool: "test", args: { exec: async () => { order.push(2); return 2; } }, priority: 2 },
+        {
+          tool: "test",
+          args: {
+            exec: async () => {
+              order.push(2);
+              return 2;
+            },
+          },
+          priority: 2,
+        },
         getCtx,
       );
 
@@ -130,15 +195,42 @@ describe("llm-queue", () => {
         getCtx,
       );
       const p3a = enqueue(
-        { tool: "test", args: { exec: async () => { order.push(1); return 1; } }, priority: 3 },
+        {
+          tool: "test",
+          args: {
+            exec: async () => {
+              order.push(1);
+              return 1;
+            },
+          },
+          priority: 3,
+        },
         getCtx,
       );
       const p3b = enqueue(
-        { tool: "test", args: { exec: async () => { order.push(2); return 2; } }, priority: 3 },
+        {
+          tool: "test",
+          args: {
+            exec: async () => {
+              order.push(2);
+              return 2;
+            },
+          },
+          priority: 3,
+        },
         getCtx,
       );
       const p3c = enqueue(
-        { tool: "test", args: { exec: async () => { order.push(3); return 3; } }, priority: 3 },
+        {
+          tool: "test",
+          args: {
+            exec: async () => {
+              order.push(3);
+              return 3;
+            },
+          },
+          priority: 3,
+        },
         getCtx,
       );
 
@@ -167,7 +259,9 @@ describe("llm-queue", () => {
       );
       const snap = getQueueSnapshot();
       expect(snap.length).toBeGreaterThanOrEqual(1);
-      const testJob = snap.find((j) => j.args && "x" in j.args && j.args.x === 5);
+      const testJob = snap.find(
+        (j) => j.args && "x" in j.args && j.args.x === 5,
+      );
       expect(testJob).toBeDefined();
       expect(testJob?.tool).toBe("test");
       expect(testJob?.args).toEqual({ x: 5, fn: "[fn]" });
@@ -195,7 +289,11 @@ describe("llm-queue", () => {
     it("processes queued jobs when heartbeat is running", async () => {
       startQueueProcessor(50);
       const result = await enqueue(
-        { tool: "test", args: { exec: async () => "heartbeat-ok" }, priority: 3 },
+        {
+          tool: "test",
+          args: { exec: async () => "heartbeat-ok" },
+          priority: 3,
+        },
         getCtx,
       );
       expect(result).toBe("heartbeat-ok");
@@ -226,7 +324,11 @@ describe("llm-queue", () => {
       _resetQueueForTests();
       // Do NOT call registerLlmQueueHandlers() - simulate a chunk that never ran instrumentation.
       const result = await enqueue(
-        { tool: "test", args: { exec: async () => "lazy-init-ok" }, priority: 3 },
+        {
+          tool: "test",
+          args: { exec: async () => "lazy-init-ok" },
+          priority: 3,
+        },
         getCtx,
       );
       expect(result).toBe("lazy-init-ok");
@@ -236,7 +338,11 @@ describe("llm-queue", () => {
       _resetQueueForTests();
       // No startQueueProcessor, no registerLlmQueueHandlers - enqueue triggers both lazy init and sync heartbeat.
       const result = await enqueue(
-        { tool: "test", args: { exec: async () => "no-interval-ok" }, priority: 3 },
+        {
+          tool: "test",
+          args: { exec: async () => "no-interval-ok" },
+          priority: 3,
+        },
         getCtx,
       );
       expect(result).toBe("no-interval-ok");
