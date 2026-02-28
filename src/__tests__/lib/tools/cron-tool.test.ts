@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import {
   cronScheduleTool,
   cronListTool,
@@ -10,6 +10,12 @@ import type { CronJob } from "@/lib/types";
 
 function makeToolCtx(): ToolContext {
   const ctx = makeTestContext();
+  const now = new Date().toISOString();
+  ctx.db
+    .prepare(
+      "INSERT OR IGNORE INTO agents (id, name, model, system_prompt_extra, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .run("maia", "Maia", "ollama/llama3.2", null, "active", now, now);
   return {
     ...ctx,
     agentId: "maia",
@@ -23,6 +29,7 @@ describe("cronScheduleTool", () => {
     const ctx = makeToolCtx();
     const id = await cronScheduleTool.execute(
       {
+        id: "maia",
         expr: "0 9 * * 1",
         tool: "cron_echo",
         args: { msg: "Monday morning check-in" },
@@ -40,6 +47,7 @@ describe("cronScheduleTool", () => {
       .run();
     await cronScheduleTool.execute(
       {
+        id: "maia",
         expr: "*/5 * * * *",
         tool: "web_search",
         args: { q: "test" },
@@ -58,10 +66,26 @@ describe("cronScheduleTool", () => {
     expect(JSON.parse(rows[0].tool_args as string)).toEqual({ q: "test" });
   });
 
+  it("throws when target agent does not exist", async () => {
+    const ctx = makeToolCtx();
+    await expect(
+      cronScheduleTool.execute(
+        {
+          id: "nonexistent-agent",
+          expr: "0 * * * *",
+          tool: "cron_echo",
+          args: {},
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/Target agent not found or deleted/);
+  });
+
   it("generates unique IDs for each job", async () => {
     const ctx = makeToolCtx();
     const id1 = await cronScheduleTool.execute(
       {
+        id: "maia",
         expr: "0 * * * *",
         tool: "cron_echo",
         args: {},
@@ -70,6 +94,7 @@ describe("cronScheduleTool", () => {
     );
     const id2 = await cronScheduleTool.execute(
       {
+        id: "maia",
         expr: "0 * * * *",
         tool: "cron_echo",
         args: {},
@@ -95,6 +120,7 @@ describe("cronListTool", () => {
       .run();
     await cronScheduleTool.execute(
       {
+        id: "maia",
         expr: "0 9 * * *",
         tool: "cron_echo",
         args: { msg: "Daily" },
@@ -103,6 +129,7 @@ describe("cronListTool", () => {
     );
     await cronScheduleTool.execute(
       {
+        id: "maia",
         expr: "0 18 * * *",
         tool: "cron_echo",
         args: { msg: "Evening" },
@@ -130,6 +157,7 @@ describe("cronDeleteTool", () => {
     const ctx = makeToolCtx();
     const id = await cronScheduleTool.execute(
       {
+        id: "maia",
         expr: "0 * * * *",
         tool: "cron_echo",
         args: { msg: "Delete me" },

@@ -136,6 +136,10 @@ describe("CronService", () => {
 
   describe("execution behavior (runOnInit)", () => {
     it("invokes runAgentFn with agentId, sessionId, message, and initialToolCall when a job fires", async () => {
+      ctx.db
+        .prepare("DELETE FROM cron_jobs WHERE id = 'builtin-heartbeat'")
+        .run();
+      seedAgent(ctx, "maia");
       seedCronJob(ctx, {
         id: "job-1",
         expression: "0 9 * * *",
@@ -174,6 +178,7 @@ describe("CronService", () => {
     });
 
     it("emits cron_fired event when a job runs", async () => {
+      seedAgent(ctx, "maia");
       seedCronJob(ctx, {
         id: "job-event",
         expression: "0 9 * * *",
@@ -209,6 +214,7 @@ describe("CronService", () => {
     });
 
     it("creates a session for the owning agent when job runs", async () => {
+      seedAgent(ctx, "agent-alpha");
       seedCronJob(ctx, {
         id: "job-session",
         agentId: "agent-alpha",
@@ -228,6 +234,11 @@ describe("CronService", () => {
     });
 
     it("schedules multiple jobs and runs each on runOnInit", async () => {
+      ctx.db
+        .prepare("DELETE FROM cron_jobs WHERE id = 'builtin-heartbeat'")
+        .run();
+      seedAgent(ctx, "agent-a", "paused");
+      seedAgent(ctx, "agent-b", "paused");
       seedCronJob(ctx, {
         id: "a",
         agentId: "agent-a",
@@ -257,6 +268,7 @@ describe("CronService", () => {
       ctx.db
         .prepare("DELETE FROM cron_jobs WHERE id = 'builtin-heartbeat'")
         .run();
+      seedAgent(ctx, "worker-a", "paused");
       seedCronJob(ctx, {
         id: "job-1",
         agentId: "worker-a",
@@ -284,6 +296,14 @@ describe("CronService", () => {
     });
 
     it("when builtin-heartbeat job runs, emits heartbeat event and cron_fired", async () => {
+      seedAgent(ctx, "maia");
+      seedCronJob(ctx, {
+        id: "builtin-heartbeat",
+        expression: "*/30 * * * *",
+        taskDescription: "Heartbeat",
+        agentId: "maia",
+        isBuiltIn: 1,
+      });
       _resetHeartbeatIdempotencyForTests();
       startCronScheduler(ctx, async () => {}, { runOnInit: true });
       await new Promise((r) => setTimeout(r, 20));
@@ -304,6 +324,14 @@ describe("CronService", () => {
 
   describe("refreshHeartbeatJob", () => {
     it("updates heartbeat job expression and re-schedules when scheduler is running", () => {
+      seedAgent(ctx, "maia");
+      seedCronJob(ctx, {
+        id: "builtin-heartbeat",
+        expression: "*/30 * * * *",
+        taskDescription: "Heartbeat",
+        agentId: "maia",
+        isBuiltIn: 1,
+      });
       updateSettings(ctx, { heartbeatIntervalMinutes: 30 });
       startCronScheduler(ctx, async () => {}, { runOnInit: false });
       updateSettings(ctx, { heartbeatIntervalMinutes: 15 });
@@ -325,7 +353,7 @@ describe("CronService", () => {
           "SELECT expression FROM cron_jobs WHERE id = 'builtin-heartbeat'",
         )
         .get() as { expression: string } | undefined;
-      expect(row?.expression).toBe("*/5 * * * *");
+      expect(row).toBeUndefined();
     });
   });
 

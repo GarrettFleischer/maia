@@ -53,6 +53,7 @@ export default function CronPage(props: CronPageProps = {}) {
     taskDescription: "",
     toolName: "",
     toolArgsJson: "{}",
+    agentId: "",
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -82,6 +83,7 @@ export default function CronPage(props: CronPageProps = {}) {
       taskDescription: job.taskDescription,
       toolName: job.toolName ?? "cron_echo",
       toolArgsJson: JSON.stringify(job.toolArgs ?? {}, null, 2),
+      agentId: job.agentId ?? "",
     });
     setSaveError(null);
   };
@@ -112,6 +114,7 @@ export default function CronPage(props: CronPageProps = {}) {
           taskDescription: editForm.taskDescription,
           toolName: editForm.toolName,
           toolArgs,
+          ...(editForm.agentId.trim() && { agentId: editForm.agentId.trim() }),
         }),
       });
       if (!res.ok) {
@@ -187,6 +190,27 @@ export default function CronPage(props: CronPageProps = {}) {
                         }
                         className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
                         placeholder="*/5 * * * *"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="edit-agent"
+                        className="block text-xs text-zinc-500 mb-1"
+                      >
+                        Target agent ID
+                      </label>
+                      <input
+                        id="edit-agent"
+                        type="text"
+                        value={editForm.agentId}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            agentId: e.target.value,
+                          }))
+                        }
+                        className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
+                        placeholder="e.g. maia"
                       />
                     </div>
                     <div>

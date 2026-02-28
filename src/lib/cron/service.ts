@@ -76,6 +76,17 @@ function scheduleJob(
     tool_name: toolName,
     tool_args: toolArgsJson,
   } = row;
+
+  const agentExists = ctx.db
+    .prepare("SELECT 1 FROM agents WHERE id = ? AND status != 'deleted'")
+    .get(agentId);
+  if (!agentExists) {
+    console.warn(
+      `CronService: skipping job ${jobId} — target agent ${agentId} not found or deleted`,
+    );
+    return;
+  }
+
   if (!cron.validate(expression)) {
     console.error(
       `CronService: invalid expression for job ${jobId}, skipping: ${expression}`,

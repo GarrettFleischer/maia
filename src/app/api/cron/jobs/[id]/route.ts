@@ -48,6 +48,7 @@ export async function PATCH(
     taskDescription?: string;
     toolName?: string;
     toolArgs?: Record<string, unknown>;
+    agentId?: string;
   };
   try {
     body = await req.json();
@@ -59,6 +60,7 @@ export async function PATCH(
   let task_description = row.task_description;
   let tool_name = row.tool_name;
   let tool_args = row.tool_args;
+  let agent_id = row.agent_id;
 
   if (body.expression !== undefined) {
     if (!cron.validate(body.expression)) {
@@ -84,12 +86,31 @@ export async function PATCH(
     }
     tool_args = JSON.stringify(body.toolArgs);
   }
+  if (body.agentId !== undefined) {
+    const targetId = String(body.agentId).trim();
+    if (!targetId) {
+      return NextResponse.json(
+        { error: "Target agent ID is required and cannot be empty" },
+        { status: 400 },
+      );
+    }
+    const agentExists = ctx.db
+      .prepare("SELECT 1 FROM agents WHERE id = ? AND status != 'deleted'")
+      .get(targetId);
+    if (!agentExists) {
+      return NextResponse.json(
+        { error: `Target agent not found or deleted: ${targetId}` },
+        { status: 400 },
+      );
+    }
+    agent_id = targetId;
+  }
 
   ctx.db
     .prepare(
-      "UPDATE cron_jobs SET expression = ?, task_description = ?, tool_name = ?, tool_args = ? WHERE id = ?",
+      "UPDATE cron_jobs SET expression = ?, task_description = ?, tool_name = ?, tool_args = ?, agent_id = ? WHERE id = ?",
     )
-    .run(expression, task_description, tool_name, tool_args, id);
+    .run(expression, task_description, tool_name, tool_args, agent_id, id);
 
   refreshCronJob(id);
 

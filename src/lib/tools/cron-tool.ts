@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { zodToJsonSchema } from "../zod-to-json";
 import type { Tool, ToolContext } from "./types";
 import type { CronJob } from "../types";
+import { BUILTIN_HEARTBEAT_JOB_ID } from "../cron/expression";
 
 function makeTool<S extends z.ZodTypeAny>(
   name: string,
@@ -39,18 +40,25 @@ export const cronEchoTool = makeTool(
 
 export const cronScheduleTool = makeTool(
   "cron_schedule",
-  "Schedule a recurring cron job that invokes any tool (with args) on a schedule. Use cron_list first to see existing jobs and avoid duplicates. Maia only. Example: cron_schedule({ expr: '0 9 * * *', tool: 'cron_echo', args: { msg: 'Daily sync' }, desc: 'Daily sync' }).",
+  "Schedule a recurring cron job that invokes any tool (with args) on a schedule for a target agent. Use cron_list first to see existing jobs and avoid duplicates. Maia only. Example: cron_schedule({ id: 'maia', expr: '0 9 * * *', tool: 'cron_echo', args: { msg: 'Daily sync' }, desc: 'Daily sync' }).",
   z.object({
+    id: z.string().describe("Target agent ID (the agent that will run when the job fires)"),
     expr: z.string().describe("5-field cron expression e.g. '0 9 * * 1'"),
     tool: z.string().describe("Any registered tool name e.g. cron_echo, web_search, task_list"),
     args: z.record(z.string(), z.unknown()).describe("Arguments for the tool"),
     desc: z.string().optional().describe("Short label for listing"),
   }),
   async (
-    { expr: expression, tool: toolName, args: toolArgs, desc: taskDescription },
+    { id: targetAgentId, expr: expression, tool: toolName, args: toolArgs, desc: taskDescription },
     ctx,
   ) => {
-    const id = uuidv4();
+    const agentExists = ctx.db
+      .prepare("SELECT 1 FROM agents WHERE id = ? AND status != 'deleted'")
+      .get(targetAgentId);
+    if (!agentExists) {
+      throw new Error(`Target agent not found or deleted: ${targetAgentId}. Use agent_list to see valid IDs.`);
+    }
+    const jobId = uuidv4();
     const now = new Date().toISOString();
     const label = taskDescription ?? `${toolName}(${JSON.stringify(toolArgs)})`;
     ctx.db
@@ -59,15 +67,15 @@ export const cronScheduleTool = makeTool(
        VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
       )
       .run(
-        id,
+        jobId,
         expression,
         label,
-        ctx.agentId,
+        targetAgentId,
         now,
         toolName,
         JSON.stringify(toolArgs),
       );
-    return id;
+    return jobId;
   },
 );
 
@@ -102,6 +110,9 @@ export const cronDeleteTool = makeTool(
   "Delete a cron job by ID. Use cron_list first to find the job ID. Cannot delete built-in jobs. Maia only. Example: cron_delete({ id: 'uuid' }).",
   z.object({ id: z.string().describe("Job ID") }),
   async ({ id: jobId }, ctx) => {
+    if (jobId === BUILTIN_HEARTBEAT_JOB_ID) {
+      throw new Error("Cannot delete built-in cron jobs");
+    }
     const row = ctx.db
       .prepare("SELECT is_built_in FROM cron_jobs WHERE id = ?")
       .get(jobId) as { is_built_in: number } | undefined;
