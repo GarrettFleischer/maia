@@ -55,6 +55,9 @@ package-lock.json
 # E2E test data (separate from dev data)
 /data-e2e/
 
+# Legacy/local data snapshots
+/data_old/
+
 # Python virtual environments
 /venv/
 /.venv/
