@@ -1,0 +1,12 @@
+---
+description: Keep architecture docs in sync with implementation
+alwaysApply: true
+---
+
+## Architecture docs and implementation
+
+- Always consult the `docs/architecture` folder (including files like `system-overview.md`, `backend-and-domain.md`, and `runtime-and-ops.md`) for relevant design and runtime details before implementing or changing features.
+- Align implementations with the documented architecture; if you intentionally diverge from the existing design, update the appropriate architecture docs to explain the new decision and rationale.
+- Whenever you add new features, APIs, workflows, or significant behavior changes, add or update sections in `docs/architecture` so they accurately describe the current system.
+- Keep examples, data flows, and diagrams in `docs/architecture` accurate with current behavior; when removing or simplifying functionality, prune or correct outdated documentation in the same change.
+- Treat missing or outdated architecture documentation as part of the work for any feature, refactor, or bugfix, not as a separate later task.
