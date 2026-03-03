@@ -17,7 +17,10 @@ export type ProviderFactory = (
 export interface ToolContext extends AppContext {
   agentId: string;
   sessionId: string;
+  /** Agent directory (identity files, workspace/). File paths are relative to this; use workspace/ for working files. */
   volumeRoot: string;
+  /** Default working directory for terminal; when set, terminal runs here when cwd is omitted. Usually the agent workspace. */
+  defaultCwd?: string;
   /** Used by smart_context tool for query extraction; absent in tests or when not provided by runner. */
   providerFactory?: ProviderFactory;
   /** Used by find_tool to resolve tools for an agent; set by runner to avoid circular dependency. */

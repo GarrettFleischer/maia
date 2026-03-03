@@ -1,43 +1,12 @@
+/**
+ * @fileoverview GET/POST /api/tasks — list and create tasks via task service.
+ * @module app/api/tasks/route
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { v4 as uuidv4 } from "uuid";
 import { ensureAppContext } from "@/instrumentation";
-import type { Task, TaskNote } from "@/lib/types";
-
-function rowToTask(r: Record<string, unknown>): Task {
-  return {
-    id: r.id as string,
-    title: r.title as string,
-    description: r.description as string,
-    status: r.status as Task["status"],
-    createdBy: r.created_by as string,
-    assignedTo: (r.assigned_to as string | null) ?? null,
-    createdAt: r.created_at as string,
-    updatedAt: r.updated_at as string,
-    notes: JSON.parse(r.notes as string) as TaskNote[],
-  };
-}
-
-export async function GET(req: NextRequest) {
-  const ctx = await ensureAppContext();
-  const { searchParams } = req.nextUrl;
-  const status = searchParams.get("status");
-  const assignedTo = searchParams.get("assignedTo");
-  const createdBy = searchParams.get("createdBy");
-
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-  if (status) { conditions.push("status = ?"); params.push(status); }
-  if (assignedTo) { conditions.push("assigned_to = ?"); params.push(assignedTo); }
-  if (createdBy) { conditions.push("created_by = ?"); params.push(createdBy); }
-
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const rows = ctx.db
-    .prepare(`SELECT * FROM tasks ${where} ORDER BY updated_at DESC`)
-    .all(...params) as Record<string, unknown>[];
-
-  return NextResponse.json({ tasks: rows.map(rowToTask) });
-}
+import { listTasks, createTask } from "@/lib/tasks";
+import { apiError } from "@/lib/api-response";
 
 const createSchema = z.object({
   title: z.string().min(1),
@@ -45,16 +14,45 @@ const createSchema = z.object({
   assignedTo: z.string().optional(),
 });
 
+export async function GET(req: NextRequest) {
+  try {
+    const ctx = await ensureAppContext();
+    const { searchParams } = req.nextUrl;
+    const status = searchParams.get("status") as "todo" | "in_progress" | "done" | null;
+    const assignedTo = searchParams.get("assignedTo") ?? undefined;
+    const createdBy = searchParams.get("createdBy") ?? undefined;
+
+    const filters = {
+      ...(status && { status }),
+      ...(assignedTo && { assignedTo }),
+      ...(createdBy && { createdBy }),
+    };
+    const tasks = listTasks(ctx, filters);
+    return NextResponse.json({ tasks });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return apiError("Invalid request", 400, "VALIDATION");
+    }
+    console.error("[GET /api/tasks]", err);
+    return apiError("Internal server error", 500);
+  }
+}
+
 export async function POST(req: NextRequest) {
-  const ctx = await ensureAppContext();
-  const body = createSchema.parse(await req.json());
-  const id = uuidv4();
-  const now = new Date().toISOString();
-  ctx.db.prepare(
-    `INSERT INTO tasks (id, title, description, status, created_by, assigned_to, created_at, updated_at, notes)
-     VALUES (?, ?, ?, 'todo', 'user', ?, ?, ?, '[]')`
-  ).run(id, body.title, body.description ?? "", body.assignedTo ?? null, now, now);
-  const row = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Record<string, unknown>;
-  ctx.events.emit({ event: "tasks_changed", data: {} });
-  return NextResponse.json({ task: rowToTask(row) }, { status: 201 });
+  try {
+    const ctx = await ensureAppContext();
+    const body = createSchema.parse(await req.json());
+    const task = createTask(ctx, {
+      title: body.title,
+      description: body.description,
+      assignedTo: body.assignedTo ?? null,
+    });
+    return NextResponse.json({ task }, { status: 201 });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return apiError("Invalid request body", 400, "VALIDATION");
+    }
+    console.error("[POST /api/tasks]", err);
+    return apiError("Internal server error", 500);
+  }
 }

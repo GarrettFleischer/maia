@@ -92,3 +92,13 @@ export function getDefaultAgentDir(): string {
 export function getDefaultMaiaDir(): string {
   return path.resolve(process.cwd(), "defaults", "maia");
 }
+
+/**
+ * Default global skills directory. Markdown skills here are copied into the root
+ * skills folder on first run when no skills exist yet.
+ * Resolved from project root: <cwd>/defaults/skills (MAIA_DATA_DIR does not affect this).
+ * @returns Absolute path to defaults/skills directory
+ */
+export function getDefaultSkillsDir(): string {
+  return path.resolve(process.cwd(), "defaults", "skills");
+}

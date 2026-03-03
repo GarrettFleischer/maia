@@ -52,6 +52,9 @@ package-lock.json
 /data/*.db*
 /data/workspace/
 
+# E2E test data (separate from dev data)
+/data-e2e/
+
 # Python virtual environments
 /venv/
 /.venv/

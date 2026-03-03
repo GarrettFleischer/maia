@@ -14,7 +14,7 @@ describe("SECURITY_PREAMBLE", () => {
     "NO DATA EXFILTRATION",
     "IDENTITY INTEGRITY",
     "INJECTION REPORTING",
-    "security_log tool",
+    "records injection events",
   ];
 
   it("contains all key security phrases", () => {

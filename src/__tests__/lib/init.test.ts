@@ -3,9 +3,11 @@
  * @module __tests__/lib/init.test
  */
 import { describe, it, expect, beforeEach } from "bun:test";
-import { makeTestContext } from "../helpers/fakes";
+import path from "path";
+import { makeTestContext, FakeFs } from "../helpers/fakes";
 import { initMaiaAgent } from "@/lib/init";
 import type { AppContext } from "@/lib/context";
+import { getDefaultSkillsDir, getSkillsDir } from "@/lib/data-dir";
 
 describe("initMaiaAgent", () => {
   let ctx: AppContext;
@@ -39,5 +41,43 @@ describe("initMaiaAgent", () => {
 
     const rows = ctx.db.prepare("SELECT id FROM agents WHERE id = 'maia'").all() as { id: string }[];
     expect(rows).toHaveLength(1);
+  });
+
+  it("seeds default skills into skills dir when none exist", () => {
+    const fs = new FakeFs();
+    const ctxWithFs = makeTestContext({ fs });
+    const defaultSkillsDir = getDefaultSkillsDir();
+    const skillsDir = getSkillsDir();
+    const defaultSkillPath = path.join(defaultSkillsDir, "memory-basics.md");
+    const defaultContent = "---\nname: memory\n---\n\nBody\n";
+
+    fs.seed(defaultSkillPath, defaultContent);
+    expect(fs.exists(skillsDir)).toBe(false);
+
+    initMaiaAgent(ctxWithFs);
+
+    const snapshot = fs.snapshot();
+    const copiedPath = path.join(skillsDir, "memory-basics.md");
+    expect(snapshot[copiedPath]).toBe(defaultContent);
+  });
+
+  it("does not copy default skills when skills already exist", () => {
+    const fs = new FakeFs();
+    const ctxWithFs = makeTestContext({ fs });
+    const defaultSkillsDir = getDefaultSkillsDir();
+    const skillsDir = getSkillsDir();
+    const defaultSkillPath = path.join(defaultSkillsDir, "memory-basics.md");
+    const defaultContent = "---\nname: memory\n---\n\nBody\n";
+    const existingSkillPath = path.join(skillsDir, "existing.md");
+    const existingContent = "Existing skill";
+
+    fs.seed(defaultSkillPath, defaultContent);
+    fs.seed(existingSkillPath, existingContent);
+
+    initMaiaAgent(ctxWithFs);
+
+    const snapshot = fs.snapshot();
+    expect(snapshot[existingSkillPath]).toBe(existingContent);
+    expect(snapshot[path.join(skillsDir, "memory-basics.md")]).toBeUndefined();
   });
 });

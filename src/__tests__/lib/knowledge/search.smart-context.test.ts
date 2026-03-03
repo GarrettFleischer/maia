@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from "bun:test";
 import { makeTestContext, FakeHttp, FakeResponse } from "@/__tests__/helpers/fakes";
+import { updateSettings } from "@/lib/settings";
 import { searchKnowledge, searchHistory } from "@/lib/knowledge/search";
 import { buildRawRetrievedContext } from "@/lib/agent/context-query";
 import type { EmbeddingAdapter } from "@/lib/knowledge/embedding";
@@ -40,6 +41,10 @@ describe("semantic search robustness when embeddings fail", () => {
     http.on("/api/embed", async () => new FakeResponse(500, "embed error"));
 
     const ctx: AppContext = makeTestContext({ http });
+    updateSettings(ctx, {
+      whitelistedModels: ["ollama/nomic-embed-text"],
+      embeddingModel: "ollama/nomic-embed-text",
+    });
     const { text, sources, contents } = await buildRawRetrievedContext(ctx, ["foo", "bar"]);
 
     expect(text).toBe("No relevant prior context found.");

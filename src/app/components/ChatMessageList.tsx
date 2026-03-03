@@ -34,7 +34,13 @@ export interface ToolCallDisplay {
 
 /** A regular message (user, agent, system), a standalone tool-call bubble, or a thinking (reasoning) bubble. */
 export type ChatMessageListItem =
-  | { role: "user" | "agent" | "system"; content: string; toolCalls?: ToolCallDisplay[] }
+  | {
+      role: "user" | "agent" | "system";
+      content: string;
+      toolCalls?: ToolCallDisplay[];
+      resolvedContent?: string;
+      roundIndex?: number;
+    }
   | { role: "tool"; tool: string; args: Record<string, unknown>; result?: unknown }
   | { role: "thinking"; content: string };
 
@@ -53,7 +59,7 @@ export interface ChatMessageListProps {
   onResendMessage?: (index: number, content: string) => void;
 }
 
-/** ExecResult shape from terminal_exec tool. */
+/** ExecResult shape from terminal_exec and powershell_exec tools. */
 interface ExecResultShape {
   stdout?: string;
   stderr?: string;
@@ -78,7 +84,7 @@ function ToolCallBubble({
 }: { tool: string; args: Record<string, unknown>; result?: unknown }) {
   const renderResult = () => {
     if (result === undefined) return null;
-    if (tool === "terminal_exec" && isExecResult(result)) {
+    if ((tool === "terminal_exec" || tool === "powershell_exec") && isExecResult(result)) {
       return (
         <div className="space-y-2">
           {result.stdout != null && result.stdout !== "" && (
@@ -137,7 +143,9 @@ function ToolCallBubble({
         </div>
         {result !== undefined && (
           <div>
-            {tool !== "terminal_exec" && <span className="text-zinc-500">result</span>}
+            {tool !== "terminal_exec" && tool !== "powershell_exec" && (
+              <span className="text-zinc-500">result</span>
+            )}
             {renderResult()}
           </div>
         )}
@@ -208,6 +216,18 @@ export default function ChatMessageList({
                   <MarkdownContent content={msg.content} className="text-red-200 [&_code]:bg-red-900/50 [&_pre]:bg-red-900/50" />
                 )}
               </div>
+              {msg.role === "user" &&
+                msg.resolvedContent &&
+                msg.resolvedContent.trim() !== msg.content.trim() && (
+                  <details className="mt-1 max-w-[80%] text-xs text-zinc-400">
+                    <summary className="cursor-pointer select-none">
+                      Resolved command{typeof msg.roundIndex === "number" ? ` (Round ${msg.roundIndex})` : ""}
+                    </summary>
+                    <div className="mt-1 whitespace-pre-wrap rounded-md bg-zinc-900/80 px-3 py-2 text-zinc-300">
+                      {msg.resolvedContent}
+                    </div>
+                  </details>
+                )}
               {msg.role === "user" && onResendMessage && (
                 <button
                   type="button"

@@ -4,7 +4,9 @@
  */
 import { describe, it, expect } from "bun:test";
 import type { SkillMetadata } from "@/lib/skills";
-import { matchSkillsToMessage } from "@/lib/skills/match";
+import { matchSkillsToMessage, selectSkillsWithModel } from "@/lib/skills/match";
+import type { ProviderFactory } from "@/lib/agent/context-query";
+import { makeTestContext } from "@/__tests__/helpers/fakes";
 import type { EmbeddingAdapter } from "@/lib/knowledge/embedding";
 
 const meta = (name: string, description: string, sourcePath: string): SkillMetadata => ({
@@ -107,5 +109,30 @@ describe("matchSkillsToMessage", () => {
     const ctx = {} as import("@/lib/context").AppContext;
     const result = await matchSkillsToMessage(ctx, [], "query", { embedder });
     expect(result).toEqual([]);
+  });
+});
+
+describe("selectSkillsWithModel", () => {
+  it("selects skills based on model JSON array of names", async () => {
+    const skills = [
+      meta("commit-changes", "Commit changes with conventional commit messages.", "/skills/commit.md"),
+      meta("deploy-app", "Deploy applications to production.", "/skills/deploy.md"),
+    ];
+    const ctx = makeTestContext();
+    const { updateSettings } = await import("@/lib/settings");
+    updateSettings(ctx, {
+      whitelistedModels: ["ollama/llama3.2"],
+      contextQueryModel: "ollama/llama3.2",
+    });
+    const providerFactory: ProviderFactory = () => ({
+      async complete(_messages, _tools, onToken) {
+        const out = '["deploy-app"]';
+        onToken(out);
+        return { content: out, toolCalls: [], stopped: true };
+      },
+    });
+    const result = await selectSkillsWithModel(ctx, "Please deploy the app", skills, providerFactory);
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("deploy-app");
   });
 });

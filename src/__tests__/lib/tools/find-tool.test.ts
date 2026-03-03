@@ -46,6 +46,19 @@ describe("find_tool", () => {
     expect(names.every((n) => typeof n === "string")).toBe(true);
   });
 
+  it("does not surface file management tools such as file_list in results", async () => {
+    const toolCtx = { ...ctx, agentId: "maia", sessionId: "s1", volumeRoot: "/tmp", getToolsForAgent };
+    const result = await findTool.execute(
+      { q: "list files", limit: 10 },
+      toolCtx
+    );
+    const names = (result as { name: string }[]).map((r) => r.name);
+    expect(names.includes("file_list")).toBe(false);
+    expect(names.includes("file_read")).toBe(false);
+    expect(names.includes("file_write")).toBe(false);
+    expect(names.includes("file_exists")).toBe(false);
+  });
+
   it("returns definitions with name, description, and parameters", async () => {
     const toolCtx = { ...ctx, agentId: "maia", sessionId: "s1", volumeRoot: "/tmp", getToolsForAgent };
     const result = await findTool.execute(

@@ -3,11 +3,16 @@
  * then runs Playwright E2E tests with that base URL. Used so E2E work even when 3000 is in use.
  * Ensures the dev server is killed when tests finish or the process exits (e.g. Ctrl+C).
  * @module scripts/start-e2e-server
+ * @note E2E runs with MAIA_DATA_DIR=data-e2e so tests use a separate DB and data folder and never overwrite real dev data.
  */
 
 import { execSync, spawn } from "child_process";
+import path from "path";
 import net from "net";
 import os from "os";
+
+/** E2E uses its own data dir so tests never overwrite real dev data. */
+const E2E_DATA_DIR = path.join(process.cwd(), "data-e2e");
 
 const PORT_MIN = 3000;
 const PORT_MAX = 3010;
@@ -111,7 +116,7 @@ async function main(): Promise<number> {
 
   const bun = process.execPath;
   const dev = spawn(bun, ["run", "dev", "--", "-p", String(port)], {
-    env: { ...process.env, PORT: String(port), E2E_TEST: "1" },
+    env: { ...process.env, PORT: String(port), E2E_TEST: "1", MAIA_DATA_DIR: E2E_DATA_DIR },
     stdio: ["ignore", "pipe", "pipe"],
     shell: false,
   });

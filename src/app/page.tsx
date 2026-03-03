@@ -15,7 +15,7 @@ import type { ChatMessageListItem } from "@/app/components/ChatMessageList";
 import ChatInputBar from "@/app/components/ChatInputBar";
 import ThreadList from "@/app/components/ThreadList";
 
-/** Map HistoryEntry from server to ChatMessageListItem (including tool_call as standalone tool bubble). */
+/** Map HistoryEntry from server to ChatMessageListItem (including tool_call as standalone tool bubble, thinking as reasoning bubble). */
 function entryToItem(entry: HistoryEntry): ChatMessageListItem {
   if (entry.role === "tool_call") {
     return {
@@ -25,9 +25,21 @@ function entryToItem(entry: HistoryEntry): ChatMessageListItem {
       result: entry.content || undefined,
     };
   }
+  if (entry.role === "thinking") {
+    return { role: "thinking", content: entry.content };
+  }
   const role: "user" | "agent" | "system" =
-    entry.role === "user" ? "user" : entry.role === "agent" ? "agent" : "system";
-  return { role, content: entry.content };
+    entry.role === "user"
+      ? "user"
+      : entry.role === "agent"
+        ? "agent"
+        : "system";
+  return {
+    role,
+    content: entry.content,
+    resolvedContent: entry.resolvedContent,
+    roundIndex: entry.roundIndex,
+  };
 }
 
 type SessionType = "user" | "agents";
@@ -42,14 +54,19 @@ interface ActiveSessionResponse {
 }
 
 /** Primary agent id for the current user thread (non-user participant); null when none or agent-only thread. */
-function primaryAgentFromParticipants(participants: string[] | undefined, type: SessionType): string | null {
+function primaryAgentFromParticipants(
+  participants: string[] | undefined,
+  type: SessionType,
+): string | null {
   if (type !== "user" || !participants?.length) return null;
   const other = participants.filter((p) => p !== "user")[0];
   return other ?? null;
 }
 
 /** Pre-resolved promise for tests when Next.js does not pass params/searchParams; avoids conditional use() call. */
-const RESOLVED_EMPTY = Promise.resolve({} as Record<string, string | string[] | undefined>);
+const RESOLVED_EMPTY = Promise.resolve(
+  {} as Record<string, string | string[] | undefined>,
+);
 
 /** Props for home page; params/searchParams are Promises in Next.js 15 and must be unwrapped with use(). */
 type HomePageProps = {
@@ -58,7 +75,10 @@ type HomePageProps = {
 };
 
 export default function Home(props: HomePageProps = {}) {
-  use(props.params ?? RESOLVED_EMPTY as Promise<Record<string, string | undefined>>);
+  use(
+    props.params ??
+      (RESOLVED_EMPTY as Promise<Record<string, string | undefined>>),
+  );
   use(props.searchParams ?? RESOLVED_EMPTY);
   const [messages, setMessages] = useState<ChatMessageListItem[]>([]);
   const [input, setInput] = useState("");
@@ -86,11 +106,16 @@ export default function Home(props: HomePageProps = {}) {
       body: JSON.stringify({ sessionId: id }),
     });
     if (!res.ok) return;
-    const data = (await fetch("/api/sessions/active").then((r) => r.json())) as ActiveSessionResponse;
+    const data = (await fetch("/api/sessions/active").then((r) =>
+      r.json(),
+    )) as ActiveSessionResponse;
     if (data.sessionId) setSessionId(data.sessionId);
     const type = data.session?.type ?? "user";
     if (data.session?.type) setSessionType(type);
-    const primary = primaryAgentFromParticipants(data.session?.participants, type);
+    const primary = primaryAgentFromParticipants(
+      data.session?.participants,
+      type,
+    );
     setCurrentAgentId(primary);
     const entries = data.session?.original ?? [];
     const items = entries.map(entryToItem);
@@ -108,7 +133,10 @@ export default function Home(props: HomePageProps = {}) {
         if (data.sessionId) setSessionId(data.sessionId);
         const type = data.session?.type ?? "user";
         if (data.session?.type) setSessionType(type);
-        const primary = primaryAgentFromParticipants(data.session?.participants, type);
+        const primary = primaryAgentFromParticipants(
+          data.session?.participants,
+          type,
+        );
         setCurrentAgentId(primary);
         currentAgentIdRef.current = primary;
         if (data.session?.original?.length) {
@@ -126,19 +154,32 @@ export default function Home(props: HomePageProps = {}) {
     const es = new EventSource("/api/events");
     es.addEventListener("message", (e: MessageEvent) => {
       try {
-        const payload = JSON.parse(e.data) as { sessionId: string; entry: HistoryEntry; participants: string[] };
+        const payload = JSON.parse(e.data) as {
+          sessionId: string;
+          entry: HistoryEntry;
+          participants: string[];
+        };
         const current = sessionIdRef.current;
-        if (payload.sessionId && payload.entry && current && payload.sessionId === current) {
+        if (
+          payload.sessionId &&
+          payload.entry &&
+          current &&
+          payload.sessionId === current
+        ) {
           // While our chat request is in flight, the stream is the source of truth; skip EventSource
           // echoes for user and tool_call so we don't duplicate bubbles.
-          if (loadingRef.current && (payload.entry.role === "user" || payload.entry.role === "tool_call")) {
+          if (
+            loadingRef.current &&
+            (payload.entry.role === "user" ||
+              payload.entry.role === "tool_call")
+          ) {
             return;
           }
           const item = entryToItem(payload.entry);
-          const contentLen = "content" in item ? (item.content?.length ?? 0) : 0;
+          const contentLen =
+            "content" in item ? (item.content?.length ?? 0) : 0;
           if (payload.entry.role === "agent") {
             setCurrentToken("");
-            if (loadingRef.current) return;
             if (contentLen === 0) return;
           }
           // Dedupe: server may echo user entry via EventSource after we added it optimistically.
@@ -146,7 +187,25 @@ export default function Home(props: HomePageProps = {}) {
             setMessages((prev) => {
               if (prev.length > 0) {
                 const last = prev[prev.length - 1];
-                if (last.role === "user" && "content" in last && last.content === payload.entry.content) {
+                if (
+                  last.role === "user" &&
+                  "content" in last &&
+                  last.content === payload.entry.content
+                ) {
+                  return prev;
+                }
+              }
+              return [...prev, item];
+            });
+          } else if (payload.entry.role === "agent") {
+            setMessages((prev) => {
+              if (prev.length > 0) {
+                const last = prev[prev.length - 1];
+                if (
+                  last.role === "agent" &&
+                  "content" in last &&
+                  last.content === payload.entry.content
+                ) {
                   return prev;
                 }
               }
@@ -169,113 +228,136 @@ export default function Home(props: HomePageProps = {}) {
   }, [messages, currentToken, currentThinking]);
 
   /** Send a message. If overrideContent is provided, uses that instead of input and does not clear input (used by re-send). */
-  const sendMessage = useCallback(async (overrideContent?: string) => {
-    const raw = overrideContent ?? input;
-    const text = (typeof raw === "string" ? raw : "").trim();
-    if (!text || loading) return;
+  const sendMessage = useCallback(
+    async (overrideContent?: string) => {
+      const raw = overrideContent ?? input;
+      const text = (typeof raw === "string" ? raw : "").trim();
+      if (!text || loading) return;
 
-    if (!overrideContent) setInput("");
-    setLoading(true);
-    setCurrentToken("");
-    setCurrentThinking("");
-    thinkingAccumulatorRef.current = "";
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
+      if (!overrideContent) setInput("");
+      setLoading(true);
+      setCurrentToken("");
+      setCurrentThinking("");
+      thinkingAccumulatorRef.current = "";
+      setMessages((prev) => [...prev, { role: "user", content: text }]);
 
-    try {
-      const resp = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          sessionId: sessionIdRef.current ?? undefined,
-          targetAgent: currentAgentIdRef.current ?? "maia",
-        }),
-      });
+      try {
+        const resp = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: text,
+            sessionId: sessionIdRef.current ?? undefined,
+            targetAgent: currentAgentIdRef.current ?? "maia",
+          }),
+        });
 
-      if (!resp.body) throw new Error("No response body");
+        if (!resp.body) throw new Error("No response body");
 
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulated = "";
-      let lineBuffer = "";
-      /** Only append agent message on first "done"; avoids second "done" appending with empty accumulated. */
-      let doneAppended = false;
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = "";
+        let lineBuffer = "";
+        /** Only append agent message on first "done"; avoids second "done" appending with empty accumulated. */
+        let doneAppended = false;
 
-      function flushThinking(): void {
-        if (thinkingAccumulatorRef.current.length > 0) {
-          const content = thinkingAccumulatorRef.current;
-          thinkingAccumulatorRef.current = "";
-          setCurrentThinking("");
-          setMessages((prev) => [...prev, { role: "thinking", content }]);
-        }
-      }
-
-      function processLine(line: string): void {
-        if (!line.startsWith("data: ")) return;
-        const data = line.slice(6);
-        let event: SSEEvent;
-        try {
-          event = JSON.parse(data);
-        } catch {
-          return;
-        }
-
-        if (event.type === "thinking") {
-          thinkingAccumulatorRef.current += event.content;
-          setCurrentThinking(thinkingAccumulatorRef.current);
-        } else if (event.type === "token") {
-          flushThinking();
-          accumulated += event.content;
-          setCurrentToken(accumulated);
-        } else if (event.type === "tool_call") {
-          flushThinking();
-          setMessages((prev) => [...prev, { role: "tool" as const, tool: event.tool, args: event.args }]);
-        } else if (event.type === "tool_result") {
-          setMessages((prev) => {
-            const idx = prev.findIndex((m) => m.role === "tool" && (m as { result?: unknown }).result === undefined);
-            if (idx === -1) return prev;
-            const item = prev[idx];
-            if (item.role !== "tool") return prev;
-            return [...prev.slice(0, idx), { ...item, result: event.result }, ...prev.slice(idx + 1)];
-          });
-        } else if (event.type === "done") {
-          flushThinking();
-          if (event.sessionId) setSessionId(event.sessionId);
-          const contentToAdd = accumulated;
-          if (!doneAppended && contentToAdd.length > 0) {
-            setMessages((prev) => [...prev, { role: "agent", content: contentToAdd }]);
-            doneAppended = true;
-            setCurrentToken("");
+        function flushThinking(): void {
+          if (thinkingAccumulatorRef.current.length > 0) {
+            const content = thinkingAccumulatorRef.current;
+            thinkingAccumulatorRef.current = "";
+            setCurrentThinking("");
+            setMessages((prev) => [...prev, { role: "thinking", content }]);
           }
-          accumulated = "";
-          setThreadListRefetch((n) => n + 1);
-        } else if (event.type === "error") {
-          setMessages((prev) => [...prev, { role: "system", content: `Error: ${event.message}` }]);
-          setCurrentToken("");
-          setCurrentThinking("");
-          thinkingAccumulatorRef.current = "";
-          accumulated = "";
         }
-      }
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        lineBuffer += decoder.decode(value, { stream: true });
-        const lines = lineBuffer.split("\n");
-        lineBuffer = lines.pop() ?? "";
-        for (const line of lines) processLine(line);
+        function processLine(line: string): void {
+          if (!line.startsWith("data: ")) return;
+          const data = line.slice(6);
+          let event: SSEEvent;
+          try {
+            event = JSON.parse(data);
+          } catch {
+            return;
+          }
+
+          if (event.type === "thinking") {
+            thinkingAccumulatorRef.current += event.content;
+            setCurrentThinking(thinkingAccumulatorRef.current);
+          } else if (event.type === "token") {
+            flushThinking();
+            accumulated += event.content;
+            setCurrentToken(accumulated);
+          } else if (event.type === "tool_call") {
+            flushThinking();
+            setMessages((prev) => [
+              ...prev,
+              { role: "tool" as const, tool: event.tool, args: event.args },
+            ]);
+          } else if (event.type === "tool_result") {
+            setMessages((prev) => {
+              const idx = prev.findIndex(
+                (m) =>
+                  m.role === "tool" &&
+                  (m as { result?: unknown }).result === undefined,
+              );
+              if (idx === -1) return prev;
+              const item = prev[idx];
+              if (item.role !== "tool") return prev;
+              return [
+                ...prev.slice(0, idx),
+                { ...item, result: event.result },
+                ...prev.slice(idx + 1),
+              ];
+            });
+          } else if (event.type === "done") {
+            flushThinking();
+            if (event.sessionId) setSessionId(event.sessionId);
+            const contentToAdd = accumulated;
+            if (!doneAppended && contentToAdd.length > 0) {
+              setMessages((prev) => [
+                ...prev,
+                { role: "agent", content: contentToAdd },
+              ]);
+              doneAppended = true;
+              setCurrentToken("");
+            }
+            accumulated = "";
+            setThreadListRefetch((n) => n + 1);
+          } else if (event.type === "error") {
+            setMessages((prev) => [
+              ...prev,
+              { role: "system", content: `Error: ${event.message}` },
+            ]);
+            setCurrentToken("");
+            setCurrentThinking("");
+            thinkingAccumulatorRef.current = "";
+            accumulated = "";
+          }
+        }
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lineBuffer += decoder.decode(value, { stream: true });
+          const lines = lineBuffer.split("\n");
+          lineBuffer = lines.pop() ?? "";
+          for (const line of lines) processLine(line);
+        }
+        if (lineBuffer.trim()) processLine(lineBuffer);
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "system",
+            content: `Connection error: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ]);
+      } finally {
+        setLoading(false);
       }
-      if (lineBuffer.trim()) processLine(lineBuffer);
-    } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "system", content: `Connection error: ${err instanceof Error ? err.message : String(err)}` },
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  }, [input, loading]);
+    },
+    [input, loading],
+  );
 
   /** Clear history after the given message index and re-post that message. */
   const handleResendMessage = useCallback(
@@ -292,7 +374,7 @@ export default function Home(props: HomePageProps = {}) {
       setMessages((prev) => prev.slice(0, index));
       await sendMessage(content);
     },
-    [loading, sessionId, sendMessage]
+    [loading, sessionId, sendMessage],
   );
 
   const handleSelectSession = useCallback(
@@ -300,7 +382,7 @@ export default function Home(props: HomePageProps = {}) {
       if (id === sessionId) return;
       loadSession(id);
     },
-    [sessionId, loadSession]
+    [sessionId, loadSession],
   );
 
   const handleNewThreadWithAgent = useCallback(
@@ -317,17 +399,20 @@ export default function Home(props: HomePageProps = {}) {
       setSessionType("user");
       setThreadListRefetch((n) => n + 1);
     },
-    [loadSession]
+    [loadSession],
   );
 
-  const handleThreadDeleted = useCallback((deletedId: string) => {
-    setThreadListRefetch((n) => n + 1);
-    if (deletedId === sessionId) {
-      setSessionId(null);
-      setMessages([]);
-      setCurrentAgentId(null);
-    }
-  }, [sessionId]);
+  const handleThreadDeleted = useCallback(
+    (deletedId: string) => {
+      setThreadListRefetch((n) => n + 1);
+      if (deletedId === sessionId) {
+        setSessionId(null);
+        setMessages([]);
+        setCurrentAgentId(null);
+      }
+    },
+    [sessionId],
+  );
 
   const isAgentOnlyThread = sessionType === "agents";
 
@@ -349,7 +434,8 @@ export default function Home(props: HomePageProps = {}) {
             <div className="px-4 py-6 space-y-4 max-w-3xl mx-auto w-full">
               {isAgentOnlyThread && (
                 <div className="rounded-lg bg-zinc-800/80 border border-zinc-700 px-4 py-2 text-sm text-zinc-400">
-                  Agent-to-agent thread (read-only). Switch to a user thread to send messages.
+                  Agent-to-agent thread (read-only). Switch to a user thread to
+                  send messages.
                 </div>
               )}
               <ChatMessageList
@@ -358,7 +444,9 @@ export default function Home(props: HomePageProps = {}) {
                 currentThinking={currentThinking}
                 loading={loading}
                 bottomRef={bottomRef}
-                onResendMessage={!isAgentOnlyThread ? handleResendMessage : undefined}
+                onResendMessage={
+                  !isAgentOnlyThread ? handleResendMessage : undefined
+                }
               />
             </div>
           </div>

@@ -39,13 +39,18 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [embedMaxContentLength, setEmbedMaxContentLength] = useState(4000);
   const [archiveDurationValue, setArchiveDurationValue] = useState(0);
   const [archiveDurationUnit, setArchiveDurationUnit] = useState<"seconds" | "minutes" | "hours" | "days" | "months" | "years">("days");
-  const [whitelistedModels, setWhitelistedModels] = useState<string[]>([]);
+  /** One row per model: id + params kept together so renaming does not lose params. */
+  const [modelEntries, setModelEntries] = useState<Array<{ id: string; params: ModelGenerationParams }>>([]);
   const [newModelInput, setNewModelInput] = useState("");
-  const [editingModel, setEditingModel] = useState<string | null>(null);
+  const [editingModelIndex, setEditingModelIndex] = useState<number | null>(null);
   const [editValue, setEditValue] = useState("");
   const [modelCapabilities, setModelCapabilities] = useState<Record<string, ModelCapabilities>>({});
-  const [modelParams, setModelParams] = useState<Record<string, ModelGenerationParams>>({});
-  const [expandedModelParams, setExpandedModelParams] = useState<string | null>(null);
+  /** Index of the row whose params are expanded (stable across renames). */
+  const [expandedModelIndex, setExpandedModelIndex] = useState<number | null>(null);
+  /** Set of model ids that are downloaded on Ollama (only ollama/* ids). */
+  const [downloadedOllamaModels, setDownloadedOllamaModels] = useState<Set<string>>(new Set());
+  /** Per-model download status for Ollama pull: idle, in-progress, or error. */
+  const [ollamaDownloadStatus, setOllamaDownloadStatus] = useState<Record<string, "idle" | "in-progress" | "error">>({});
   const [rebuildingEmbeddings, setRebuildingEmbeddings] = useState(false);
   const [buildingEmbeddings, setBuildingEmbeddings] = useState(false);
   const [rebuildResult, setRebuildResult] = useState<{ knowledgeIndexed: number; historyIndexed: number } | null>(null);
@@ -65,6 +70,8 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [skillDeleteConfirmId, setSkillDeleteConfirmId] = useState<string | null>(null);
   /** Snapshot of agent models when last loaded or saved; used to PATCH only changed agents on Save. */
   const initialAgentsRef = useRef<AgentDefinition[]>([]);
+  /** Active settings tab; panels use hidden so state is preserved when switching. */
+  const [activeTab, setActiveTab] = useState<"providers" | "models" | "context" | "agents" | "skills">("providers");
 
   useEffect(() => {
     Promise.all([
@@ -84,14 +91,32 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       setEmbedMaxContentLength(settingsData.embedMaxContentLength);
       setArchiveDurationValue(settingsData.archiveDurationValue);
       setArchiveDurationUnit(settingsData.archiveDurationUnit);
-      setWhitelistedModels(settingsData.whitelistedModels);
-      setModelParams(settingsData.modelParams ?? {});
+      setModelEntries(
+        (settingsData.whitelistedModels ?? []).map((id) => ({
+          id,
+          params: (settingsData.modelParams ?? {})[id] ?? {},
+        }))
+      );
       setAgents(agentsList);
       setModelCapabilities(capabilities);
       initialAgentsRef.current = agentsList;
       if (agentsList.length > 0 && !skillsAgentId) setSkillsAgentId(agentsList[0].id);
     });
   }, []);
+
+  /** Fetch which Ollama models are downloaded when whitelist or settings load. */
+  useEffect(() => {
+    const ollamaIds = modelEntries.map((e) => e.id).filter((id) => id.startsWith("ollama/"));
+    if (ollamaIds.length === 0) {
+      setDownloadedOllamaModels(new Set());
+      return;
+    }
+    const q = new URLSearchParams({ modelIds: ollamaIds.join(",") });
+    fetch(`/api/ollama/models?${q}`)
+      .then((r) => r.json())
+      .then((d: { downloaded?: string[] }) => setDownloadedOllamaModels(new Set(d.downloaded ?? [])))
+      .catch(() => setDownloadedOllamaModels(new Set()));
+  }, [modelEntries]);
 
   /** Fetch skills list when scope or agentId changes. */
   useEffect(() => {
@@ -112,6 +137,12 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
 
   const save = async () => {
     setSaving(true);
+    const whitelistedModels = modelEntries.map((e) => e.id);
+    const modelParams = Object.fromEntries(
+      modelEntries
+        .filter((e) => Object.keys(e.params).length > 0)
+        .map((e) => [e.id, e.params] as const)
+    );
     const body: Record<string, unknown> = {
       ollamaBaseUrl: ollamaUrl,
       contextQueryModel,
@@ -164,41 +195,54 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     if (braveAnswersApiKey) setBraveAnswersApiKey("");
   };
 
+  const whitelistedModels = modelEntries.map((e) => e.id);
+
   const addWhitelistModel = () => {
     const trimmed = newModelInput.trim();
     if (!trimmed || whitelistedModels.includes(trimmed)) return;
-    setWhitelistedModels((prev) => [...prev, trimmed]);
+    setModelEntries((prev) => [...prev, { id: trimmed, params: {} }]);
     setNewModelInput("");
   };
 
-  const removeWhitelistModel = (model: string) => {
-    setWhitelistedModels((prev) => prev.filter((m) => m !== model));
-    if (editingModel === model) {
-      setEditingModel(null);
+  const removeWhitelistModel = (index: number) => {
+    setModelEntries((prev) => prev.filter((_, i) => i !== index));
+    if (editingModelIndex === index) {
+      setEditingModelIndex(null);
       setEditValue("");
+    } else if (editingModelIndex != null && editingModelIndex > index) {
+      setEditingModelIndex(editingModelIndex - 1);
+    }
+    if (expandedModelIndex === index) {
+      setExpandedModelIndex(null);
+    } else if (expandedModelIndex != null && expandedModelIndex > index) {
+      setExpandedModelIndex(expandedModelIndex - 1);
     }
   };
 
-  const startEditWhitelistModel = (model: string) => {
-    setEditingModel(model);
-    setEditValue(model);
+  const startEditWhitelistModel = (index: number) => {
+    setEditingModelIndex(index);
+    setEditValue(modelEntries[index]!.id);
   };
 
   const cancelEditWhitelistModel = () => {
-    setEditingModel(null);
+    setEditingModelIndex(null);
     setEditValue("");
   };
 
   const saveEditWhitelistModel = () => {
-    if (editingModel == null) return;
+    if (editingModelIndex == null) return;
     const trimmed = editValue.trim();
     if (!trimmed) return;
-    const isDuplicate = whitelistedModels.some((m) => m !== editingModel && m === trimmed);
-    if (isDuplicate) return;
-    setWhitelistedModels((prev) =>
-      prev.map((m) => (m === editingModel ? trimmed : m))
+    const isDuplicate = modelEntries.some(
+      (e, i) => i !== editingModelIndex && e.id === trimmed
     );
-    setEditingModel(null);
+    if (isDuplicate) return;
+    setModelEntries((prev) =>
+      prev.map((e, i) =>
+        i === editingModelIndex ? { ...e, id: trimmed } : e
+      )
+    );
+    setEditingModelIndex(null);
     setEditValue("");
   };
 
@@ -299,18 +343,44 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     }
   };
 
-  /** Update or clear one model's generation params. Omit key to remove it. */
-  const updateModelParam = (modelId: string, update: Partial<ModelGenerationParams>) => {
-    setModelParams((prev) => {
-      const cur = prev[modelId] ?? {};
-      const merged = { ...cur, ...update };
+  /**
+   * Triggers an Ollama pull for the given model id; updates downloaded set on success or error status on failure.
+   * @param modelId - Full model id (e.g. "ollama/llama3.2")
+   */
+  const handleOllamaDownload = async (modelId: string) => {
+    setOllamaDownloadStatus((prev) => ({ ...prev, [modelId]: "in-progress" }));
+    try {
+      const res = await fetch("/api/ollama/pull", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId }),
+      });
+      const data = (await res.json()) as { ok?: boolean };
+      if (res.ok && data.ok) {
+        setDownloadedOllamaModels((prev) => new Set([...prev, modelId]));
+        setOllamaDownloadStatus((prev) => ({ ...prev, [modelId]: "idle" }));
+      } else {
+        setOllamaDownloadStatus((prev) => ({ ...prev, [modelId]: "error" }));
+      }
+    } catch {
+      setOllamaDownloadStatus((prev) => ({ ...prev, [modelId]: "error" }));
+    }
+  };
+
+  /** Update or clear one model row's generation params by index. Omit key to remove it. */
+  const updateModelParam = (index: number, update: Partial<ModelGenerationParams>) => {
+    setModelEntries((prev) => {
+      const entry = prev[index];
+      if (!entry) return prev;
+      const merged = { ...entry.params, ...update };
       const cleaned = Object.fromEntries(
         Object.entries(merged).filter(([, v]) => v !== undefined)
       ) as ModelGenerationParams;
-      if (Object.keys(cleaned).length === 0) {
-        const next = { ...prev }; delete next[modelId]; return next;
-      }
-      return { ...prev, [modelId]: cleaned };
+      return prev.map((e, i) =>
+        i === index
+          ? { ...e, params: Object.keys(cleaned).length > 0 ? cleaned : {} }
+          : e
+      );
     });
   };
 
@@ -332,6 +402,44 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
 
         {settings && (
           <>
+            <div
+              role="tablist"
+              aria-label="Settings sections"
+              className="flex flex-wrap gap-1 border-b border-zinc-800 pb-3"
+            >
+              {(["providers", "models", "context", "agents", "skills"] as const).filter((tab) =>
+                tab !== "agents" || agents.length > 0,
+              ).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab}
+                  aria-controls={`settings-tab-${tab}`}
+                  id={`tab-${tab}`}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-3 py-2 rounded-t-lg text-sm font-medium transition-colors ${
+                    activeTab === tab
+                      ? "bg-zinc-800 text-zinc-100 border border-b-0 border-zinc-700 -mb-px"
+                      : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
+                  }`}
+                >
+                  {tab === "providers" && "Providers"}
+                  {tab === "models" && "Models"}
+                  {tab === "context" && "Context & embedding"}
+                  {tab === "agents" && "Agents"}
+                  {tab === "skills" && "Skills"}
+                </button>
+              ))}
+            </div>
+
+            <div
+              id="settings-tab-providers"
+              role="tabpanel"
+              aria-labelledby="tab-providers"
+              hidden={activeTab !== "providers"}
+              className="space-y-6"
+            >
             <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
               <h2 className="font-medium text-sm text-zinc-300">AI Providers</h2>
 
@@ -403,7 +511,15 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                 />
               </div>
             </section>
+            </div>
 
+            <div
+              id="settings-tab-context"
+              role="tabpanel"
+              aria-labelledby="tab-context"
+              hidden={activeTab !== "context"}
+              className="space-y-6"
+            >
             <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
               <h2 className="font-medium text-sm text-zinc-300">Agent System</h2>
 
@@ -607,66 +723,253 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                 Files whose last-modified time is older than this duration are considered archived and excluded from knowledge_search by default. Agents can pass include_archived: true to include them. Results always include last_modified per file. Set to 0 to disable archiving.
               </p>
             </section>
+            </div>
 
+            <div
+              id="settings-tab-models"
+              role="tabpanel"
+              aria-labelledby="tab-models"
+              hidden={activeTab !== "models"}
+              className="space-y-6"
+            >
             <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
               <h2 className="font-medium text-sm text-zinc-300 mb-3">Whitelisted Models</h2>
+              <p className="text-xs text-zinc-500 -mt-1 mb-3">
+                Model id and optional generation params (e.g. temperature, top_p) are stored together so renaming a model keeps its params.
+                For Ollama models: green check = downloaded locally; click the download icon to pull missing models.
+              </p>
               <div className="space-y-2">
-                {whitelistedModels.map((m) => (
-                  <div key={m} className="flex items-center gap-2">
-                    {editingModel === m ? (
-                      <>
-                        <input
-                          type="text"
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") saveEditWhitelistModel();
-                            if (e.key === "Escape") cancelEditWhitelistModel();
-                          }}
-                          className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
-                          aria-label="Edit model name"
-                          autoFocus
-                        />
+                {modelEntries.map((entry, index) => {
+                  const isEditing = editingModelIndex === index;
+                  const isExpanded = expandedModelIndex === index;
+                  const params = entry.params;
+                  const optionsRecord = (params.options ?? {}) as Record<string, unknown>;
+                  const numCtxValue =
+                    typeof optionsRecord["num_ctx"] === "number" ? (optionsRecord["num_ctx"] as number) : undefined;
+                  const numCtxId = `settings-model-${index}-num-ctx`;
+                  return (
+                    <div key={`${entry.id}-${index}`} className="border border-zinc-800 rounded-lg overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/50">
+                        {isEditing ? (
+                          <>
+                            <input
+                              type="text"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveEditWhitelistModel();
+                                if (e.key === "Escape") cancelEditWhitelistModel();
+                              }}
+                              className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
+                              aria-label="Edit model name"
+                              autoFocus
+                            />
+                            <button
+                              type="button"
+                              onClick={saveEditWhitelistModel}
+                              className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
+                              aria-label="Save edit"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditWhitelistModel}
+                              className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
+                              aria-label="Cancel edit"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs font-mono text-zinc-400 bg-zinc-800 rounded px-2 py-1 flex-1 flex items-center gap-1.5">
+                              {entry.id}
+                              {entry.id.startsWith("ollama/") ? (
+                                downloadedOllamaModels.has(entry.id) ? (
+                                  <span
+                                    className="shrink-0 text-green-500"
+                                    title="Downloaded on Ollama"
+                                    aria-label={`Downloaded: ${entry.id}`}
+                                  >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                                      <polyline points="22 4 12 14.01 9 11.01" />
+                                    </svg>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOllamaDownload(entry.id)}
+                                    disabled={ollamaDownloadStatus[entry.id] === "in-progress"}
+                                    className="shrink-0 text-amber-500 hover:text-amber-400 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                                    aria-label={`Download ${entry.id}`}
+                                    title="Download model with Ollama"
+                                  >
+                                    {ollamaDownloadStatus[entry.id] === "in-progress" ? (
+                                      "Downloading…"
+                                    ) : (
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                        <polyline points="7 10 12 15 17 10" />
+                                        <line x1="12" y1="15" x2="12" y2="3" />
+                                      </svg>
+                                    )}
+                                  </button>
+                                )
+                              ) : null}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => startEditWhitelistModel(index)}
+                              className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
+                              aria-label={`Edit ${entry.id}`}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeWhitelistModel(index)}
+                              className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
+                              aria-label={`Remove ${entry.id}`}
+                            >
+                              Remove
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
-                          onClick={saveEditWhitelistModel}
-                          className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
-                          aria-label="Save edit"
+                          onClick={() => setExpandedModelIndex((prev) => (prev === index ? null : index))}
+                          className="text-xs text-zinc-500 hover:text-zinc-300 px-2 py-1 rounded shrink-0"
+                          aria-expanded={isExpanded}
+                          aria-label={isExpanded ? "Collapse params" : "Expand params"}
                         >
-                          Save
+                          {Object.keys(params).length > 0 ? `${Object.keys(params).length} param(s)` : "Params"}
                         </button>
-                        <button
-                          type="button"
-                          onClick={cancelEditWhitelistModel}
-                          className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
-                          aria-label="Cancel edit"
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-xs font-mono text-zinc-400 bg-zinc-800 rounded px-2 py-1 flex-1">{m}</span>
-                        <button
-                          type="button"
-                          onClick={() => startEditWhitelistModel(m)}
-                          className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
-                          aria-label={`Edit ${m}`}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeWhitelistModel(m)}
-                          className="text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded"
-                          aria-label={`Remove ${m}`}
-                        >
-                          Remove
-                        </button>
-                      </>
-                    )}
-                  </div>
-                ))}
+                      </div>
+                      {entry.id.startsWith("ollama/") && ollamaDownloadStatus[entry.id] === "error" && (
+                        <div className="px-3 pb-2">
+                          <span className="text-xs text-red-400">Download failed</span>
+                        </div>
+                      )}
+                      {isExpanded && (
+                        <div className="p-3 space-y-3 border-t border-zinc-800 bg-zinc-900/80">
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-xs text-zinc-500 mb-0.5">temperature</label>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min={0}
+                                max={2}
+                                value={num(params.temperature)}
+                                onChange={(e) => updateModelParam(index, { temperature: parseNum(e.target.value) })}
+                                placeholder="default"
+                                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-zinc-500 mb-0.5">top_p</label>
+                              <input
+                                type="number"
+                                step="0.05"
+                                min={0}
+                                max={1}
+                                value={num(params.top_p)}
+                                onChange={(e) => updateModelParam(index, { top_p: parseNum(e.target.value) })}
+                                placeholder="default"
+                                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-zinc-500 mb-0.5">top_k</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={num(params.top_k)}
+                                onChange={(e) => updateModelParam(index, { top_k: parseNum(e.target.value) })}
+                                placeholder="default"
+                                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-zinc-500 mb-0.5">min_p</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min={0}
+                                max={1}
+                                value={num(params.min_p)}
+                                onChange={(e) => updateModelParam(index, { min_p: parseNum(e.target.value) })}
+                                placeholder="default"
+                                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-zinc-500 mb-0.5">presence_penalty</label>
+                              <input
+                                type="number"
+                                step="0.1"
+                                value={num(params.presence_penalty)}
+                                onChange={(e) => updateModelParam(index, { presence_penalty: parseNum(e.target.value) })}
+                                placeholder="default"
+                                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-zinc-500 mb-0.5">repetition_penalty</label>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min={0}
+                                value={num(params.repetition_penalty)}
+                                onChange={(e) => updateModelParam(index, { repetition_penalty: parseNum(e.target.value) })}
+                                placeholder="default"
+                                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label htmlFor={numCtxId} className="block text-xs text-zinc-500 mb-0.5">
+                              Context window (num_ctx, tokens)
+                            </label>
+                            <input
+                              id={numCtxId}
+                              type="number"
+                              min={0}
+                              value={numCtxValue === undefined ? "" : String(numCtxValue)}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                const trimmed = raw.trim();
+                                const n = trimmed === "" ? undefined : Number(trimmed);
+                                const baseOptions = (params.options ?? {}) as Record<string, unknown>;
+                                const nextOptions: Record<string, unknown> = { ...baseOptions };
+                                if (n === undefined || Number.isNaN(n)) {
+                                  delete nextOptions["num_ctx"];
+                                } else {
+                                  nextOptions["num_ctx"] = n;
+                                }
+                                if (Object.keys(nextOptions).length === 0) {
+                                  updateModelParam(index, { options: undefined });
+                                } else {
+                                  updateModelParam(index, { options: nextOptions });
+                                }
+                              }}
+                              placeholder="e.g. 16384"
+                              className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                              aria-label="Context window (num_ctx, tokens)"
+                            />
+                            <p className="text-xs text-zinc-500 mt-0.5">
+                              Per-model context window in tokens. For Ollama, this sets options.num_ctx.
+                            </p>
+                          </div>
+                          <div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
                 <div className="flex gap-2 mt-2">
                   <input
                     type="text"
@@ -686,141 +989,15 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                 </div>
               </div>
             </section>
+            </div>
 
-            <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
-              <h2 className="font-medium text-sm text-zinc-300">Per-model parameters</h2>
-              <p className="text-xs text-zinc-500 -mt-1">
-                Optional generation params per model (e.g. temperature, top_p). Useful for models like Qwen3.5 with recommended settings.
-              </p>
-              {whitelistedModels.length === 0 ? (
-                <p className="text-xs text-zinc-500">Add models to the whitelist above to configure per-model parameters.</p>
-              ) : (
-                <div className="space-y-2">
-                  {whitelistedModels.map((modelId) => {
-                    const params = modelParams[modelId] ?? {};
-                    const isExpanded = expandedModelParams === modelId;
-                    return (
-                      <div key={modelId} className="border border-zinc-800 rounded-lg overflow-hidden">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedModelParams((prev) => (prev === modelId ? null : modelId))}
-                          className="w-full flex items-center justify-between px-3 py-2 text-left text-sm bg-zinc-800/50 hover:bg-zinc-800 transition-colors"
-                          aria-expanded={isExpanded}
-                        >
-                          <span className="font-mono text-zinc-300 truncate">{modelId}</span>
-                          <span className="text-zinc-500 text-xs">
-                            {Object.keys(params).length > 0 ? `${Object.keys(params).length} param(s)` : "Default"}
-                          </span>
-                        </button>
-                        {isExpanded && (
-                          <div className="p-3 space-y-3 border-t border-zinc-800 bg-zinc-900/80">
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="block text-xs text-zinc-500 mb-0.5">temperature</label>
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  min={0}
-                                  max={2}
-                                  value={num(params.temperature)}
-                                  onChange={(e) => updateModelParam(modelId, { temperature: parseNum(e.target.value) })}
-                                  placeholder="default"
-                                  className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs text-zinc-500 mb-0.5">top_p</label>
-                                <input
-                                  type="number"
-                                  step="0.05"
-                                  min={0}
-                                  max={1}
-                                  value={num(params.top_p)}
-                                  onChange={(e) => updateModelParam(modelId, { top_p: parseNum(e.target.value) })}
-                                  placeholder="default"
-                                  className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs text-zinc-500 mb-0.5">top_k</label>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  value={num(params.top_k)}
-                                  onChange={(e) => updateModelParam(modelId, { top_k: parseNum(e.target.value) })}
-                                  placeholder="default"
-                                  className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs text-zinc-500 mb-0.5">min_p</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min={0}
-                                  max={1}
-                                  value={num(params.min_p)}
-                                  onChange={(e) => updateModelParam(modelId, { min_p: parseNum(e.target.value) })}
-                                  placeholder="default"
-                                  className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs text-zinc-500 mb-0.5">presence_penalty</label>
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  value={num(params.presence_penalty)}
-                                  onChange={(e) => updateModelParam(modelId, { presence_penalty: parseNum(e.target.value) })}
-                                  placeholder="default"
-                                  className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs text-zinc-500 mb-0.5">repetition_penalty</label>
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  min={0}
-                                  value={num(params.repetition_penalty)}
-                                  onChange={(e) => updateModelParam(modelId, { repetition_penalty: parseNum(e.target.value) })}
-                                  placeholder="default"
-                                  className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
-                                />
-                              </div>
-                            </div>
-                            <div>
-                              <label className="block text-xs text-zinc-500 mb-0.5">Advanced (JSON options)</label>
-                              <textarea
-                                value={params.options ? JSON.stringify(params.options, null, 2) : ""}
-                                onChange={(e) => {
-                                  const s = e.target.value.trim();
-                                  if (!s) {
-                                    updateModelParam(modelId, { options: undefined });
-                                    return;
-                                  }
-                                  try {
-                                    const parsed = JSON.parse(s) as Record<string, unknown>;
-                                    updateModelParam(modelId, { options: parsed });
-                                  } catch {
-                                    // leave invalid JSON in place; user may be editing
-                                  }
-                                }}
-                                placeholder='{"num_ctx": 16384}'
-                                rows={2}
-                                className="w-full bg-zinc-800 rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
-                              />
-                              <p className="text-xs text-zinc-500 mt-0.5">Provider-specific options (e.g. Ollama num_ctx). Valid JSON object.</p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-
+            <div
+              id="settings-tab-agents"
+              role="tabpanel"
+              aria-labelledby="tab-agents"
+              hidden={activeTab !== "agents"}
+              className="space-y-6"
+            >
             {agents.length > 0 && (
               <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
                 <h2 className="font-medium text-sm text-zinc-300">Model assignment</h2>
@@ -875,7 +1052,15 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                 })}
               </section>
             )}
+            </div>
 
+            <div
+              id="settings-tab-skills"
+              role="tabpanel"
+              aria-labelledby="tab-skills"
+              hidden={activeTab !== "skills"}
+              className="space-y-6"
+            >
             <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
               <h2 className="font-medium text-sm text-zinc-300">Skills</h2>
               <p className="text-xs text-zinc-500 -mt-2">
@@ -1054,6 +1239,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                 </div>
               )}
             </section>
+            </div>
 
             <button
               onClick={save}

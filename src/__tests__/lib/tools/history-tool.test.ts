@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import { historyFindTool, historySearchAllTool, historyGetSessionTool } from "@/lib/tools/history-tool";
+import { historyFindTool, historySearchAllTool, historyGetSessionTool, chatReadTool } from "@/lib/tools/history-tool";
 import { makeTestContext } from "../../helpers/fakes";
 import { createSession, appendEntry } from "@/lib/history";
 import type { ToolContext } from "@/lib/tools/types";
@@ -134,5 +134,23 @@ describe("historyGetSessionTool", () => {
     expect(result.entries).toHaveLength(2);
     expect(result.entries[0]).toMatchObject({ index: 1, original: expect.objectContaining({ content: "b" }) });
     expect(result.entries[1]).toMatchObject({ index: 2, original: expect.objectContaining({ content: "c" }) });
+  });
+});
+
+describe("chatReadTool (round detail)", () => {
+  it("returns a markdown section for the requested number of rounds", async () => {
+    const ctx = makeTestContext();
+    const sessionId = createSession(ctx, ["user", "maia"]);
+    const ts = new Date().toISOString();
+    appendEntry(ctx, sessionId, { role: "user", content: "first", timestamp: ts });
+    appendEntry(ctx, sessionId, { role: "agent", content: "reply one", timestamp: ts });
+    appendEntry(ctx, sessionId, { role: "user", content: "second", timestamp: ts });
+    appendEntry(ctx, sessionId, { role: "agent", content: "reply two", timestamp: ts });
+    const toolCtx: ToolContext = { ...ctx, agentId: "a", sessionId, volumeRoot: "/w" };
+    const result = (await chatReadTool.execute({ n: 1 }, toolCtx)) as string;
+    expect(result).toContain("## Recent thread");
+    expect(result).toContain("second");
+    expect(result).toContain("reply two");
+    expect(result).not.toContain("first");
   });
 });

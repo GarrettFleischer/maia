@@ -39,9 +39,22 @@ export const findTool: Tool<z.infer<typeof findToolSchema>, ToolDefinition[]> = 
     const tools = ctx.getToolsForAgent ? ctx.getToolsForAgent(ctx.agentId) : [];
     if (tools.length === 0) return [];
 
+    const hiddenNames = new Set([
+      "file_read",
+      "file_write",
+      "file_append",
+      "file_delete",
+      "file_list",
+      "file_move",
+      "file_exists",
+      "directory_create",
+    ]);
+    const visibleTools = tools.filter((t) => !hiddenNames.has(t.name));
+    if (visibleTools.length === 0) return [];
+
     const settings = getSettings(ctx);
     const embedder = createEmbeddingAdapter(settings, ctx.http);
-    const texts = tools.map((t) => `${t.name} ${t.description}`);
+    const texts = visibleTools.map((t) => `${t.name} ${t.description}`);
     const embedBatch: (texts: string[]) => Promise<number[][]> =
       embedder.embedBatch ??
       (async (texts: string[]) => {
@@ -54,7 +67,7 @@ export const findTool: Tool<z.infer<typeof findToolSchema>, ToolDefinition[]> = 
       embedder.embed(args.q),
     ]);
 
-    const withScore = tools.map((t, i) => ({
+    const withScore = visibleTools.map((t, i) => ({
       tool: t,
       score: cosineSimilarity(queryEmbedding, toolEmbeddings[i] ?? []),
     }));

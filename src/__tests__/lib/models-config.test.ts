@@ -18,7 +18,10 @@ describe("models-config", () => {
   const originalDataDir = process.env.MAIA_DATA_DIR;
 
   beforeEach(() => {
-    const tmp = path.join(process.cwd(), "tmp-models-config-test-" + Math.random().toString(36).slice(2));
+    const tmp = path.join(
+      process.cwd(),
+      "tmp-models-config-test-" + Math.random().toString(36).slice(2),
+    );
     fs.mkdirSync(tmp, { recursive: true });
     process.env.MAIA_DATA_DIR = tmp;
   });
@@ -70,8 +73,13 @@ describe("models-config", () => {
       fs.writeFileSync(
         dataPath,
         JSON.stringify([
-          { provider: "ollama", name: "llama3.2", temperature: 0.7, top_p: 0.9 },
-        ])
+          {
+            provider: "ollama",
+            name: "llama3.2",
+            temperature: 0.7,
+            top_p: 0.9,
+          },
+        ]),
       );
       const { whitelistedModels, modelParams } = readModelsConfig();
       expect(whitelistedModels).toEqual(["ollama/llama3.2"]);

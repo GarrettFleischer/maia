@@ -37,7 +37,7 @@ describe("settings", () => {
       const s = getSettings(ctx);
       expect(s.openRouterApiKey).toBeUndefined();
       expect(s.embeddingModel).toBe("ollama/nomic-embed-text");
-      expect(s.embedMaxContentLength).toBe(4000);
+      expect(s.embedMaxContentLength).toBe(8192);
     });
 
     it("returns modelParams as empty object when missing", () => {
@@ -46,7 +46,7 @@ describe("settings", () => {
       fs.writeFileSync(
         dataPath,
         JSON.stringify([{ provider: "ollama", name: "nomic-embed-text" }]),
-        "utf-8"
+        "utf-8",
       );
       const s = getSettings(ctx);
       expect(s.modelParams).toEqual({});
@@ -104,7 +104,9 @@ describe("settings", () => {
       updateSettings(ctx, { braveSearchApiKey: "brave-secret-key" });
       const pub = getSettingsPublic(ctx);
       expect(pub.hasBraveKey).toBe(true);
-      expect(credentialGet(ctx, "BRAVE_SEARCH_API_KEY")).toBe("brave-secret-key");
+      expect(credentialGet(ctx, "BRAVE_SEARCH_API_KEY")).toBe(
+        "brave-secret-key",
+      );
     });
 
     it("exposes hasBraveAnswersKey = false when no Brave Answers credential in vault", () => {
@@ -116,7 +118,9 @@ describe("settings", () => {
       updateSettings(ctx, { braveAnswersApiKey: "brave-answers-secret" });
       const pub = getSettingsPublic(ctx);
       expect(pub.hasBraveAnswersKey).toBe(true);
-      expect(credentialGet(ctx, "BRAVE_ANSWERS_API_KEY")).toBe("brave-answers-secret");
+      expect(credentialGet(ctx, "BRAVE_ANSWERS_API_KEY")).toBe(
+        "brave-answers-secret",
+      );
     });
 
     it("includes contextReasoningEffort in public settings", () => {
@@ -160,25 +164,34 @@ describe("settings", () => {
 
     it("stores braveSearchApiKey in encrypted vault and hasBraveKey is true", () => {
       updateSettings(ctx, { braveSearchApiKey: "brave-vault-key" });
-      expect(credentialGet(ctx, "BRAVE_SEARCH_API_KEY")).toBe("brave-vault-key");
+      expect(credentialGet(ctx, "BRAVE_SEARCH_API_KEY")).toBe(
+        "brave-vault-key",
+      );
       expect(getSettingsPublic(ctx).hasBraveKey).toBe(true);
     });
 
     it("stores braveAnswersApiKey in encrypted vault and hasBraveAnswersKey is true", () => {
       updateSettings(ctx, { braveAnswersApiKey: "brave-answers-vault-key" });
-      expect(credentialGet(ctx, "BRAVE_ANSWERS_API_KEY")).toBe("brave-answers-vault-key");
+      expect(credentialGet(ctx, "BRAVE_ANSWERS_API_KEY")).toBe(
+        "brave-answers-vault-key",
+      );
       expect(getSettingsPublic(ctx).hasBraveAnswersKey).toBe(true);
     });
 
     it("updates embeddingModel when model is in whitelist", () => {
-      updateSettings(ctx, { whitelistedModels: ["ollama/nomic-embed-text-v2"], embeddingModel: "ollama/nomic-embed-text-v2" });
-      expect(getSettings(ctx).embeddingModel).toBe("ollama/nomic-embed-text-v2");
+      updateSettings(ctx, {
+        whitelistedModels: ["ollama/nomic-embed-text-v2"],
+        embeddingModel: "ollama/nomic-embed-text-v2",
+      });
+      expect(getSettings(ctx).embeddingModel).toBe(
+        "ollama/nomic-embed-text-v2",
+      );
     });
 
     it("throws when embeddingModel is not in whitelist", () => {
       updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"] });
       expect(() =>
-        updateSettings(ctx, { embeddingModel: "ollama/nomic-embed-text" })
+        updateSettings(ctx, { embeddingModel: "ollama/nomic-embed-text" }),
       ).toThrow(/Embedding model must be in whitelist/);
     });
 
@@ -202,7 +215,9 @@ describe("settings", () => {
     });
 
     it("persists modelParams only for whitelisted model ids", () => {
-      updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2", "openrouter/free"] });
+      updateSettings(ctx, {
+        whitelistedModels: ["ollama/llama3.2", "openrouter/free"],
+      });
       updateSettings(ctx, {
         modelParams: {
           "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 },
@@ -211,16 +226,23 @@ describe("settings", () => {
         },
       });
       const s = getSettings(ctx);
-      expect(s.modelParams["ollama/llama3.2"]).toEqual({ temperature: 0.6, top_p: 0.95 });
+      expect(s.modelParams["ollama/llama3.2"]).toEqual({
+        temperature: 0.6,
+        top_p: 0.95,
+      });
       expect(s.modelParams["openrouter/free"]).toEqual({ temperature: 0.7 });
       expect(s.modelParams["ollama/not-whitelisted"]).toBeUndefined();
     });
 
     it("getSettingsPublic includes modelParams", () => {
       updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"] });
-      updateSettings(ctx, { modelParams: { "ollama/llama3.2": { temperature: 0.6 } } });
+      updateSettings(ctx, {
+        modelParams: { "ollama/llama3.2": { temperature: 0.6 } },
+      });
       const pub = getSettingsPublic(ctx);
-      expect(pub.modelParams).toEqual({ "ollama/llama3.2": { temperature: 0.6 } });
+      expect(pub.modelParams).toEqual({
+        "ollama/llama3.2": { temperature: 0.6 },
+      });
     });
   });
 });

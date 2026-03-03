@@ -17,9 +17,18 @@ export function getModelsJsonPath(): string {
   return path.join(getDataDir(), MODELS_FILENAME);
 }
 
-/** Path to defaults/models.json (shipped template). */
+/**
+ * Candidate paths for defaults/models.json (shipped template).
+ * Tries cwd first (normal run from project root), then path relative to this module
+ * so the defaults file is found even when cwd is not the project root.
+ * @returns First path that exists, or the cwd-based path if none exist (caller may then write []).
+ */
 function getDefaultModelsJsonPath(): string {
-  return path.resolve(process.cwd(), "defaults", MODELS_FILENAME);
+  const fromCwd = path.resolve(process.cwd(), "defaults", MODELS_FILENAME);
+  if (fs.existsSync(fromCwd)) return fromCwd;
+  const fromModule = path.resolve(__dirname, "..", "..", "defaults", MODELS_FILENAME);
+  if (fs.existsSync(fromModule)) return fromModule;
+  return fromCwd;
 }
 
 /**

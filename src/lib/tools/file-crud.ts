@@ -2,9 +2,13 @@
  * @fileoverview File CRUD tools for workspace, knowledge base, and custom tools.
  * @module lib/tools/file-crud
  *
- * Paths starting with "knowledge/" resolve to the shared knowledge base (data/knowledge/).
- * Paths starting with "tools/" resolve to the custom tools directory (data/tools/).
- * Otherwise paths are relative to the agent workspace volume.
+ * Agent workflow: (1) Check the directory first — use file_list before any write.
+ * (2) Read before write — when editing an existing file, use file_read then file_write
+ * with the full new content. Tool descriptions are written so the LLM sees these requirements.
+ *
+ * Path roots: Paths are relative to your agent directory (agents/<id>/). Your working
+ * directory for saving files is the workspace: use the workspace/ prefix (e.g. workspace/notes.md).
+ * Paths starting with "knowledge/" or "tools/" resolve to the shared knowledge base or custom tools.
  */
 import { z } from "zod";
 import path from "path";
@@ -24,8 +28,8 @@ const TOOLS_PREFIX = "tools/";
  * - "knowledge" or "knowledge/..." -> data/knowledge/
  * - "tools" or "tools/..." -> data/tools/
  * - Otherwise resolve relative to volumeRoot and ensure it stays under volumeRoot.
- * @param userPath - Path from the tool (relative to workspace, or knowledge/..., or tools/...)
- * @param volumeRoot - Agent workspace root
+ * @param userPath - Path from the tool (relative to agent directory, or knowledge/..., or tools/...)
+ * @param volumeRoot - Agent directory (identity + workspace/); paths use workspace/ for working files
  * @returns Absolute path; throws if path escapes allowed roots
  */
 function resolvePath(userPath: string, volumeRoot: string): string {
@@ -101,8 +105,14 @@ function makeFileTool<TSchema extends z.ZodTypeAny>(
 
 export const fileReadTool = makeFileTool(
   "file_read",
-  "Read the contents of a file within the workspace volume. Example: file_read({ path: 'workspace/notes.md' }).",
-  z.object({ path: z.string().describe("Path relative to workspace root") }),
+  "Read the contents of a file. REQUIRED before editing: when modifying an existing file, call file_read first to get current content, then use file_write with the full new content. Do not call file_write without reading first if the file may already exist. Example: file_read({ path: 'workspace/notes.md' }).",
+  z.object({
+    path: z
+      .string()
+      .describe(
+        "Path relative to your agent directory; use workspace/ for your working files (e.g. workspace/notes.md)",
+      ),
+  }),
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
     const content = ctx.fs.readFile(full);
@@ -114,9 +124,13 @@ export const fileReadTool = makeFileTool(
 
 export const fileWriteTool = makeFileTool(
   "file_write",
-  "Write content to a file within the workspace volume. Creates or overwrites. Use file_list first to inspect the workspace and verify paths. Example: file_write({ path: 'workspace/notes.md', content: 'Hello' }).",
+  "Write or overwrite a file. REQUIRED: (1) Use file_list to check the directory first. (2) If the file may already exist and you are editing it, use file_read first, then file_write with the complete new content. Prefer this over terminal for writing files. Example: file_write({ path: 'workspace/notes.md', content: 'Hello' }).",
   z.object({
-    path: z.string().describe("Path relative to workspace root"),
+    path: z
+      .string()
+      .describe(
+        "Path relative to your agent directory; use workspace/ for your working files (e.g. workspace/notes.md)",
+      ),
     content: z.string().describe("Content to write"),
   }),
   async ({ path: p, content }, ctx) => {
@@ -124,14 +138,19 @@ export const fileWriteTool = makeFileTool(
     assertNotUnderRegisteredTool(full, ctx);
     ctx.fs.mkdirp(path.dirname(full));
     ctx.fs.writeFile(full, content);
+    return { ok: true, path: p };
   },
 );
 
 export const fileAppendTool = makeFileTool(
   "file_append",
-  "Append content to a file within the workspace volume. Use file_list first to inspect the workspace and verify the file exists. Example: file_append({ path: 'workspace/log.txt', content: '\\nNew line' }).",
+  "Append content to a file. REQUIRED: Use file_list to check the directory first; use file_exists or file_read to verify the file exists before appending. Example: file_append({ path: 'workspace/log.txt', content: '\\nNew line' }).",
   z.object({
-    path: z.string().describe("Path relative to workspace root"),
+    path: z
+      .string()
+      .describe(
+        "Path relative to your agent directory; use workspace/ for your working files",
+      ),
     content: z.string().describe("Content to append"),
   }),
   async ({ path: p, content }, ctx) => {
@@ -139,17 +158,25 @@ export const fileAppendTool = makeFileTool(
     assertNotUnderRegisteredTool(full, ctx);
     ctx.fs.mkdirp(path.dirname(full));
     ctx.fs.appendFile(full, content);
+    return { ok: true, path: p };
   },
 );
 
 export const fileDeleteTool = makeFileTool(
   "file_delete",
-  "Delete a file or empty directory within the workspace volume. Use file_list first to inspect the workspace and verify the path before deleting. Example: file_delete({ path: 'workspace/temp.txt' }).",
-  z.object({ path: z.string().describe("Path relative to workspace root") }),
+  "Delete a file or empty directory. REQUIRED: Use file_list to check the directory first and verify the exact path before deleting. Example: file_delete({ path: 'workspace/temp.txt' }).",
+  z.object({
+    path: z
+      .string()
+      .describe(
+        "Path relative to your agent directory; use workspace/ for your working files",
+      ),
+  }),
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
     assertNotUnderRegisteredTool(full, ctx);
     ctx.fs.deleteFile(full);
+    return { ok: true, path: p };
   },
 );
 
@@ -193,7 +220,7 @@ function listRecursive(
 
 export const fileListTool = makeFileTool(
   "file_list",
-  "List all files and folders in your workspace (your writable directory). No arguments; returns a recursive listing of everything under your workspace. Example: file_list({}).",
+  "List all files and folders under your agent directory (identity files and workspace/). Your working directory for saving files is workspace/—paths there appear as workspace/.... REQUIRED before any write: call file_list first to verify paths. Example: file_list({}).",
   z.object({}),
   async (_args, ctx) => {
     return listRecursive(ctx.fs, ctx.volumeRoot, ctx.volumeRoot, "");
@@ -202,10 +229,18 @@ export const fileListTool = makeFileTool(
 
 export const fileMoveTool = makeFileTool(
   "file_move",
-  "Move or rename a file within the workspace volume. Use file_list first to inspect the workspace and verify source/destination paths. Example: file_move({ from: 'workspace/old.md', to: 'workspace/new.md' }).",
+  "Move or rename a file. REQUIRED: Use file_list to check the directory first and verify both source and destination paths exist (or parent of destination). Example: file_move({ from: 'workspace/old.md', to: 'workspace/new.md' }).",
   z.object({
-    from: z.string().describe("Source path relative to workspace root"),
-    to: z.string().describe("Destination path relative to workspace root"),
+    from: z
+      .string()
+      .describe(
+        "Source path relative to your agent directory; use workspace/ for your files",
+      ),
+    to: z
+      .string()
+      .describe(
+        "Destination path relative to your agent directory; use workspace/ for your files",
+      ),
   }),
   async ({ from, to }, ctx) => {
     const fullFrom = resolvePath(from, ctx.volumeRoot);
@@ -214,13 +249,20 @@ export const fileMoveTool = makeFileTool(
     assertNotUnderRegisteredTool(fullTo, ctx);
     ctx.fs.mkdirp(path.dirname(fullTo));
     ctx.fs.rename(fullFrom, fullTo);
+    return { ok: true, from, to };
   },
 );
 
 export const fileExistsTool = makeFileTool(
   "file_exists",
-  "Check whether a file or directory exists within the workspace volume. Example: file_exists({ path: 'workspace/notes.md' }).",
-  z.object({ path: z.string().describe("Path relative to workspace root") }),
+  "Check whether a file or directory exists. Use before file_append or when you need to confirm a path from file_list. Example: file_exists({ path: 'workspace/notes.md' }).",
+  z.object({
+    path: z
+      .string()
+      .describe(
+        "Path relative to your agent directory; use workspace/ for your working files",
+      ),
+  }),
   async ({ path: p }, ctx) => {
     const full = resolvePath(p, ctx.volumeRoot);
     return ctx.fs.exists(full);
@@ -233,12 +275,12 @@ export const fileExistsTool = makeFileTool(
  */
 export const directoryCreateTool = makeFileTool(
   "directory_create",
-  "Create a directory within the workspace or knowledge base. Creates parent directories as needed. Use file_list first to inspect the workspace and verify the parent path. Use this instead of terminal_exec for mkdir. Example: directory_create({ path: 'workspace/docs' }).",
+  "Create a directory (and parents as needed). REQUIRED: Use file_list to check the directory first and verify the parent path. Prefer this over terminal for mkdir. Example: directory_create({ path: 'workspace/docs' }).",
   z.object({
     path: z
       .string()
       .describe(
-        "Directory path relative to workspace root, or under knowledge/ (e.g. knowledge/jurisdictions)",
+        "Directory path relative to your agent directory (e.g. workspace/docs) or under knowledge/ (e.g. knowledge/jurisdictions)",
       ),
   }),
   async ({ path: p }, ctx) => {

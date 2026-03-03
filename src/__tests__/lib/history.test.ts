@@ -226,6 +226,19 @@ describe("history", () => {
       expect(session?.original[0].toolName).toBe("file_read");
       expect(session?.original[0].toolArgs).toEqual({ path: "foo.txt" });
     });
+
+    it("stores thinking entries so they survive reload", () => {
+      const id = createSession(ctx);
+      appendEntry(ctx, id, {
+        role: "thinking",
+        content: "Let me consider the options first.",
+        timestamp: new Date().toISOString(),
+      });
+      const session = getSession(ctx, id);
+      expect(session?.original).toHaveLength(1);
+      expect(session?.original[0].role).toBe("thinking");
+      expect(session?.original[0].content).toBe("Let me consider the options first.");
+    });
   });
 
   // ─── updateSessionMeta ──────────────────────────────────────────────────────

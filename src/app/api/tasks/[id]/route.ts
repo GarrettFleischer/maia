@@ -1,21 +1,12 @@
+/**
+ * @fileoverview GET/PATCH/DELETE /api/tasks/[id] — get, update, delete a task via task service.
+ * @module app/api/tasks/[id]/route
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { ensureAppContext } from "@/instrumentation";
-import type { Task, TaskNote } from "@/lib/types";
-
-function rowToTask(r: Record<string, unknown>): Task {
-  return {
-    id: r.id as string,
-    title: r.title as string,
-    description: r.description as string,
-    status: r.status as Task["status"],
-    createdBy: r.created_by as string,
-    assignedTo: (r.assigned_to as string | null) ?? null,
-    createdAt: r.created_at as string,
-    updatedAt: r.updated_at as string,
-    notes: JSON.parse(r.notes as string) as TaskNote[],
-  };
-}
+import { getTask, updateTask, deleteTask } from "@/lib/tasks";
+import { apiError } from "@/lib/api-response";
 
 const patchSchema = z.object({
   status: z.enum(["todo", "in_progress", "done"]).optional(),
@@ -27,33 +18,29 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await ensureAppContext();
-  const { id } = await params;
-  const body = patchSchema.parse(await req.json());
+  try {
+    const ctx = await ensureAppContext();
+    const { id } = await params;
+    const body = patchSchema.parse(await req.json());
 
-  if (body.status === undefined && body.note === undefined && body.assignedTo === undefined) {
-    return NextResponse.json({ error: "At least one field required" }, { status: 400 });
+    if (body.status === undefined && body.note === undefined && body.assignedTo === undefined) {
+      return apiError("At least one field required", 400, "VALIDATION");
+    }
+
+    const task = updateTask(ctx, id, {
+      status: body.status,
+      note: body.note,
+      assignedTo: body.assignedTo,
+    });
+    if (!task) return apiError("Task not found", 404, "NOT_FOUND");
+    return NextResponse.json({ task });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return apiError("Invalid request body", 400, "VALIDATION");
+    }
+    console.error("[PATCH /api/tasks/[id]]", err);
+    return apiError("Internal server error", 500);
   }
-
-  const existing = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-  if (!existing) return NextResponse.json({ error: "Task not found" }, { status: 404 });
-
-  const now = new Date().toISOString();
-  const notes: TaskNote[] = JSON.parse(existing.notes as string);
-  if (body.note) {
-    notes.push({ agentId: "user", content: body.note, timestamp: now });
-  }
-
-  const newStatus = body.status ?? (existing.status as string);
-  const newAssignedTo = body.assignedTo !== undefined ? body.assignedTo : (existing.assigned_to as string | null);
-
-  ctx.db.prepare(
-    `UPDATE tasks SET status = ?, assigned_to = ?, notes = ?, updated_at = ? WHERE id = ?`
-  ).run(newStatus, newAssignedTo, JSON.stringify(notes), now, id);
-
-  const updated = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Record<string, unknown>;
-  ctx.events.emit({ event: "tasks_changed", data: {} });
-  return NextResponse.json({ task: rowToTask(updated) });
 }
 
 /**
@@ -63,13 +50,15 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await ensureAppContext();
-  const { id } = await params;
+  try {
+    const ctx = await ensureAppContext();
+    const { id } = await params;
 
-  const existing = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
-  if (!existing) return NextResponse.json({ error: "Task not found" }, { status: 404 });
-
-  ctx.db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
-  ctx.events.emit({ event: "tasks_changed", data: {} });
-  return new NextResponse(null, { status: 204 });
+    const deleted = deleteTask(ctx, id);
+    if (!deleted) return apiError("Task not found", 404, "NOT_FOUND");
+    return new NextResponse(null, { status: 204 });
+  } catch (err) {
+    console.error("[DELETE /api/tasks/[id]]", err);
+    return apiError("Internal server error", 500);
+  }
 }

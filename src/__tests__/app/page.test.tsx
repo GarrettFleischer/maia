@@ -80,6 +80,42 @@ describe("Home page", () => {
     expect(screen.getByText("Hi there!")).toBeInTheDocument();
   });
 
+  it("shows thinking bubbles when session has thinking entries (persisted after refresh)", async () => {
+    const sessionWithThinking = {
+      sessionId: "session-with-thinking",
+      session: {
+        ...sessionActiveWithMessages.session,
+        id: "session-with-thinking",
+        original: [
+          { id: "e1", role: "user" as const, content: "Hello", timestamp: new Date().toISOString() },
+          { id: "e2", role: "thinking" as const, content: "Let me consider the options first.", timestamp: new Date().toISOString() },
+          { id: "e3", role: "agent" as const, content: "Hi there!", timestamp: new Date().toISOString() },
+        ],
+      },
+    };
+    installFetchMock([
+      {
+        url: "/api/sessions/active",
+        handler: () => jsonResponse(sessionWithThinking),
+      },
+      {
+        url: "/api/sessions",
+        handler: () => jsonResponse({ sessions: [] }),
+      },
+      {
+        url: "/api/agents",
+        handler: () => jsonResponse(agentsEmpty),
+      },
+    ]);
+    await renderHome();
+    await waitFor(() => {
+      expect(screen.getByText("Hello")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Hi there!")).toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.getByText(/Let me consider the options first\./)).toBeInTheDocument();
+  });
+
   it("sends message and shows it in the list when user submits", async () => {
     installFetchMock([
       {

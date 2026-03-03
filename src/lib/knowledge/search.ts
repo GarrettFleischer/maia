@@ -64,6 +64,8 @@ export interface HistorySearchResult {
   content: string;
   isCompressed: boolean;
   score: number;
+  /** ISO timestamp when the entry was indexed (for recency boost). */
+  createdAt: string;
 }
 
 export interface SearchKnowledgeOptions {
@@ -73,6 +75,8 @@ export interface SearchKnowledgeOptions {
   includeArchived?: boolean;
   /** Current agent id (used when scope is "self"). */
   agentId?: string;
+  /** Precomputed query embedding; when provided, embedder.embed(query) is skipped. */
+  queryEmbedding?: number[];
 }
 
 /**
@@ -100,7 +104,8 @@ export async function searchKnowledge(
       : getArchiveCutoff(settings.archiveDurationValue, settings.archiveDurationUnit);
 
   try {
-    const queryEmbedding = await embedder.embed(query);
+    const queryEmbedding =
+      options.queryEmbedding ?? (await embedder.embed(query));
     const hits = store.searchKnowledge(queryEmbedding, limit, {
       pathPrefix,
       excludeArchivedBefore,
@@ -123,23 +128,27 @@ export async function searchKnowledge(
 
 /**
  * Semantic search over history entries. Returns top-k entries.
+ * @param queryEmbedding - Optional precomputed embedding; when provided, embedder.embed(query) is skipped.
  */
 export async function searchHistory(
   ctx: AppContext,
   embedder: EmbeddingAdapter,
   query: string,
-  limit = 5
+  limit = 5,
+  queryEmbedding?: number[]
 ): Promise<HistorySearchResult[]> {
   const store = createVectorStore(ctx.db);
   try {
-    const queryEmbedding = await embedder.embed(query);
-    const hits = store.searchHistory(queryEmbedding, limit);
+    const embedding =
+      queryEmbedding !== undefined ? queryEmbedding : await embedder.embed(query);
+    const hits = store.searchHistory(embedding, limit);
     return hits.map((h) => ({
       sessionId: h.sessionId,
       entryId: h.entryId,
       content: h.content,
       isCompressed: h.isCompressed,
       score: h.score,
+      createdAt: h.createdAt,
     }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

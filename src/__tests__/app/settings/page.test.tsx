@@ -98,6 +98,10 @@ describe("Settings page", () => {
     ]);
     await renderSettingsPage();
     await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Context & embedding" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Context & embedding" }));
+    await waitFor(() => {
       expect(screen.getByLabelText(/Embedding model/i)).toBeInTheDocument();
     });
     const embeddingSelect = screen.getByLabelText(/Embedding model/i) as HTMLSelectElement;
@@ -113,6 +117,56 @@ describe("Settings page", () => {
     expect(putBody.contextReasoningEffort).toBe(settingsPublic.contextReasoningEffort);
   });
 
+  it("shows a dedicated context window (num_ctx) param per model and persists it via options", async () => {
+    const modelId = settingsPublic.whitelistedModels[0]!;
+    const settingsWithNumCtx: typeof settingsPublic = {
+      ...settingsPublic,
+      modelParams: {
+        [modelId]: {
+          options: { num_ctx: 8192 },
+        },
+      },
+    };
+    let putBody: Record<string, unknown> = {};
+    installFetchMock([
+      {
+        url: "/api/settings",
+        handler: (_url, init) => {
+          if (init?.method === "PUT" && init.body) {
+            putBody = JSON.parse(init.body as string) as Record<string, unknown>;
+          }
+          return jsonResponse(settingsWithNumCtx);
+        },
+      },
+      { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
+    ]);
+    await renderSettingsPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Models" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    await waitFor(() => {
+      expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
+    });
+    const whitelistSection = screen.getByText("Whitelisted Models").closest("section");
+    expect(whitelistSection).toBeInTheDocument();
+    const paramsToggleButtons = within(whitelistSection!).getAllByRole("button", { name: /Params|param\(s\)|Expand params/i });
+    fireEvent.click(paramsToggleButtons[0]!);
+    const ctxInput = within(whitelistSection!).getByLabelText(/Context window \(num_ctx, tokens\)/i) as HTMLInputElement;
+    expect(ctxInput.value).toBe("8192");
+    fireEvent.change(ctxInput, { target: { value: "16000" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save Settings/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Saved ✓/)).toBeInTheDocument();
+    });
+    const sentModelParams = putBody.modelParams as Record<string, { options?: Record<string, unknown> }>;
+    expect(sentModelParams[modelId]).toBeDefined();
+    const options = sentModelParams[modelId]!.options as Record<string, unknown>;
+    expect(options.num_ctx).toBe(16000);
+  });
+
   it("allows editing a whitelisted model in place", async () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
@@ -121,6 +175,10 @@ describe("Settings page", () => {
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Models" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
@@ -143,6 +201,62 @@ describe("Settings page", () => {
     });
   });
 
+  // Advanced JSON options have been removed from the UI in favor of first-class parameters like context window.
+
+  it("keeps params with model when renaming: save sends params under new id", async () => {
+    const settingsWithParams: typeof settingsPublic = {
+      ...settingsPublic,
+      whitelistedModels: ["ollama/llama3.2", "openrouter/free"],
+      modelParams: {
+        "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 },
+        "openrouter/free": { temperature: 0.7 },
+      },
+    };
+    let putBody: Record<string, unknown> = {};
+    installFetchMock([
+      {
+        url: "/api/settings",
+        handler: (_url, init) => {
+          if (init?.method === "PUT" && init.body) {
+            putBody = JSON.parse(init.body as string) as Record<string, unknown>;
+          }
+          return jsonResponse(init?.method === "PUT" ? settingsPublic : settingsWithParams);
+        },
+      },
+      { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
+    ]);
+    await renderSettingsPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Models" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    await waitFor(() => {
+      expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Edit ollama\/llama3\.2/ }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Edit model name")).toHaveValue("ollama/llama3.2");
+    });
+    fireEvent.change(screen.getByLabelText("Edit model name"), { target: { value: "ollama/llama3.2-renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save edit" }));
+    await waitFor(() => {
+      const section = screen.getByText("Whitelisted Models").closest("section");
+      expect(within(section!).getByText("ollama/llama3.2-renamed")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save Settings/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Saved ✓/)).toBeInTheDocument();
+    });
+    const list = putBody.whitelistedModels as string[];
+    const params = putBody.modelParams as Record<string, { temperature?: number; top_p?: number }>;
+    expect(list).toContain("ollama/llama3.2-renamed");
+    expect(list).not.toContain("ollama/llama3.2");
+    expect(params["ollama/llama3.2-renamed"]).toEqual({ temperature: 0.6, top_p: 0.95 });
+    expect(params["openrouter/free"]).toEqual({ temperature: 0.7 });
+  });
+
   it("allows adding and removing whitelisted models and save sends updated list", async () => {
     let putBody: Record<string, unknown> = {};
     installFetchMock([
@@ -160,6 +274,10 @@ describe("Settings page", () => {
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Models" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
@@ -190,6 +308,10 @@ describe("Settings page", () => {
     ]);
     await renderSettingsPage();
     await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Agents" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    await waitFor(() => {
       expect(screen.getByText(/Model assignment|Agents & models/i)).toBeInTheDocument();
     });
     const maiaRow = screen.getByText("Maia (orchestrator)").closest("div");
@@ -208,11 +330,19 @@ describe("Settings page", () => {
     ]);
     await renderSettingsPage();
     await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Agents" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    await waitFor(() => {
       expect(screen.getByText(/Model assignment/i)).toBeInTheDocument();
     });
     const maiaSelect = screen.getByRole("combobox", { name: /Model for Maia/i }) as HTMLSelectElement;
     expect(maiaSelect.value).toBe(agentsList.agents[0].model);
     const firstWhitelist = settingsPublic.whitelistedModels[0];
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    await waitFor(() => {
+      expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`Edit ${firstWhitelist.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) }));
     await waitFor(() => {
       expect(screen.getByLabelText("Edit model name")).toHaveValue(firstWhitelist);
@@ -222,6 +352,10 @@ describe("Settings page", () => {
     await waitFor(() => {
       const section = screen.getByText("Whitelisted Models").closest("section");
       expect(within(section!).getByText("ollama/llama3.2-edited")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: /Model for Maia/i })).toBeInTheDocument();
     });
     const maiaSelectAfter = screen.getByRole("combobox", { name: /Model for Maia/i }) as HTMLSelectElement;
     expect(maiaSelectAfter.value).toBe(agentsList.agents[0].model);
@@ -260,6 +394,10 @@ describe("Settings page", () => {
     ]);
     await renderSettingsPage();
     await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Agents" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    await waitFor(() => {
       expect(screen.getByText(/Model assignment/i)).toBeInTheDocument();
     });
     const maiaSelect = screen.getByRole("combobox", { name: /Model for Maia/i });
@@ -291,9 +429,12 @@ describe("Settings page", () => {
     ]);
     await renderSettingsPage();
     await waitFor(() => {
-      expect(screen.getByText("Skills")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Skills" })).toBeInTheDocument();
     });
-    expect(screen.getByLabelText("Skills scope")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Skills scope")).toBeInTheDocument();
+    });
     expect(screen.getByRole("button", { name: /Add skill/i })).toBeInTheDocument();
   });
 
@@ -317,6 +458,10 @@ describe("Settings page", () => {
 
     await renderSettingsPage();
     await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Agents" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    await waitFor(() => {
       expect(screen.getByText(/Model assignment|Agents & models/i)).toBeInTheDocument();
     });
 
@@ -324,5 +469,67 @@ describe("Settings page", () => {
     expect(helperRow).toBeInTheDocument();
     const helperReasoningSelect = within(helperRow!).getByLabelText(/Reasoning effort for Helper/i) as HTMLSelectElement;
     expect(helperReasoningSelect.disabled).toBe(true);
+  });
+
+  it("shows Download button for undownloaded Ollama models and succeeds on click", async () => {
+    let pullBody: { modelId?: string } = {};
+    installFetchMock([
+      { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
+      { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
+      { url: "/api/ollama/models", handler: () => jsonResponse({ downloaded: [] }) },
+      {
+        url: "/api/ollama/pull",
+        handler: (url, init) => {
+          if (init?.body && typeof init.body === "string") {
+            pullBody = JSON.parse(init.body) as { modelId?: string };
+          }
+          return jsonResponse({ ok: true });
+        },
+      },
+    ]);
+    await renderSettingsPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Models" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    await waitFor(() => {
+      expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
+    });
+    const downloadButton = screen.getByRole("button", { name: /Download ollama\/llama3\.2/i });
+    expect(downloadButton).toBeInTheDocument();
+    fireEvent.click(downloadButton);
+    await waitFor(() => {
+      expect(pullBody.modelId).toBe("ollama/llama3.2");
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /Download ollama\/llama3\.2/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows Download failed when Ollama pull fails and keeps button for retry", async () => {
+    installFetchMock([
+      { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
+      { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
+      { url: "/api/ollama/models", handler: () => jsonResponse({ downloaded: [] }) },
+      { url: "/api/ollama/pull", handler: () => jsonResponse({ error: "Failed to pull model" }, 502) },
+    ]);
+    await renderSettingsPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Models" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    await waitFor(() => {
+      expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
+    });
+    const downloadButton = screen.getByRole("button", { name: /Download ollama\/llama3\.2/i });
+    fireEvent.click(downloadButton);
+    await waitFor(() => {
+      expect(screen.getByText("Download failed")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: /Download ollama\/llama3\.2/i })).toBeInTheDocument();
   });
 });

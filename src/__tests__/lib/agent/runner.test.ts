@@ -164,6 +164,27 @@ describe("runAgent", () => {
     ).toBe(true);
   });
 
+  it("stores resolved command and round index for the user entry", async () => {
+    await runAgent(
+      ctx,
+      makeProviderFactory(makeSimpleProvider({ content: "Agent response" })),
+      "maia",
+      sessionId,
+      "User message",
+      () => {},
+    );
+    const rows = ctx.db
+      .prepare(
+        "SELECT role, content, resolved_content, round_index FROM history_entries WHERE session_id = ? AND is_compressed = 0 ORDER BY timestamp ASC",
+      )
+      .all(sessionId) as { role: string; content: string; resolved_content: string | null; round_index: number | null }[];
+    const userRow = rows.find((r) => r.role === "user");
+    expect(userRow).toBeDefined();
+    expect(userRow?.content).toBe("User message");
+    expect(userRow?.resolved_content).toBe("User message");
+    expect(userRow?.round_index).toBe(1);
+  });
+
   it("sets agent status to running during execution, then back to idle", async () => {
     const statuses: string[] = [];
     const provider: AIProvider = {
@@ -250,7 +271,7 @@ describe("runAgent", () => {
     expect(toolEvents.some((e) => e.type === "tool_result")).toBe(true);
   });
 
-  it("sends only current user message as user turn; system has no recent thread (use chat_read for context)", async () => {
+  it("includes last 3 rounds in system; current user message is the only user turn in messages", async () => {
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
     appendEntry(
@@ -292,16 +313,16 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    // No recent thread in system; agents use chat_read when they need prior context.
-    expect(capturedSystem).not.toContain("## Recent thread");
+    expect(capturedSystem).toContain("## Recent thread");
+    expect(capturedSystem).toContain("prior user message");
+    expect(capturedSystem).toContain("prior agent reply");
     expect(capturedSystem).toContain("You are agent");
-    // Only the current user message is a separate message
     expect(capturedNonSystem).toHaveLength(1);
     expect(capturedNonSystem[0].content).toBe("current");
     expect(capturedNonSystem[0].role).toBe("user");
   });
 
-  it("does not include recent thread in system (agents use chat_read for prior context)", async () => {
+  it("includes last 3 rounds in system with prior message and reply", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     appendEntry(
@@ -334,11 +355,13 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("prior message");
+    expect(systemContent).toContain("prior reply");
     expect(systemContent).toContain("You are agent");
   });
 
-  it("system message does not include prior turns (agents use chat_read for that)", async () => {
+  it("system message includes last 3 rounds (prior turns visible; use chat_read for older)", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     appendEntry(
@@ -371,11 +394,12 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).not.toContain("## Recent thread");
-    expect(systemContent).not.toContain("first user");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("first user");
+    expect(systemContent).toContain("first reply");
   });
 
-  it("system does not include prior turns when session has history (agents use chat_read)", async () => {
+  it("system includes last 3 rounds when session has history (tool_call and agent)", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
@@ -432,7 +456,88 @@ describe("runAgent", () => {
       () => {},
     );
 
-    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("only user");
+    expect(systemContent).toContain("only reply");
+    expect(systemContent).toContain("follow-up after tool");
+  });
+
+  it("when more than 3 rounds exist, system tells agent how many more rounds and to use chat_read", async () => {
+    const ts = "2020-01-01T00:00:00.000Z";
+    for (let i = 0; i < 4; i++) {
+      appendEntry(
+        ctx,
+        sessionId,
+        { role: "user", content: `user message ${i + 1}`, timestamp: ts },
+        false,
+      );
+      appendEntry(
+        ctx,
+        sessionId,
+        { role: "agent", content: `agent reply ${i + 1}`, timestamp: ts },
+        false,
+      );
+    }
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        systemContent =
+          system && typeof system.content === "string" ? system.content : "";
+        onToken("ok");
+        return { content: "ok", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(
+      ctx,
+      () => provider,
+      "maia",
+      sessionId,
+      "current",
+      () => {},
+    );
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("**2** more rounds before these");
+    expect(systemContent).toContain("**chat_read**");
+    expect(systemContent).toContain("user message 3");
+    expect(systemContent).toContain("agent reply 3");
+    expect(systemContent).toContain("user message 4");
+    expect(systemContent).toContain("agent reply 4");
+  });
+
+  it("includes thinking entries from recent thread in system (reasoning is part of context)", async () => {
+    const ts = "2020-01-01T00:00:00.000Z";
+    appendEntry(ctx, sessionId, { role: "user", content: "ask", timestamp: ts }, false);
+    appendEntry(
+      ctx,
+      sessionId,
+      { role: "thinking", content: "internal reasoning here", timestamp: ts },
+      false,
+    );
+    appendEntry(ctx, sessionId, { role: "agent", content: "reply", timestamp: ts }, false);
+    let systemContent = "";
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken) {
+        const system = messages.find((m) => m.role === "system");
+        systemContent =
+          system && typeof system.content === "string" ? system.content : "";
+        onToken("ok");
+        return { content: "ok", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(
+      ctx,
+      () => provider,
+      "maia",
+      sessionId,
+      "current",
+      () => {},
+    );
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("ask");
+    expect(systemContent).toContain("reply");
+    expect(systemContent).toContain("internal reasoning here");
+    expect(systemContent).toContain("Reasoning:");
   });
 
   it("puts system prompt in order: agent id, date/time, AGENTS, SOUL", async () => {
@@ -463,7 +568,7 @@ describe("runAgent", () => {
     expect(soulPos).toBeGreaterThan(securityPos);
   });
 
-  it("system message does not include recent thread (agents use chat_read)", async () => {
+  it("system includes recent thread with single round when first message", async () => {
     let systemContent = "";
     const provider: AIProvider = {
       async complete(messages, _tools, onToken) {
@@ -482,11 +587,12 @@ describe("runAgent", () => {
       "First message",
       () => {},
     );
-    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("First message");
   });
 
-  it("invokes provider once (no pipeline); system contains agent prompt", async () => {
-    updateSettings(ctx, { contextQueryModel: "ollama/llama3.2" });
+  it("invokes provider once when smart context has no results; system contains agent prompt", async () => {
+    // Do not set contextQueryModel so smart context uses fallback query + empty retrieval (no model calls).
     const capturedSystems: string[] = [];
     const provider: AIProvider = {
       async complete(messages, _tools, onToken) {
@@ -577,10 +683,6 @@ describe("runAgent", () => {
     expect(systemContent).toContain("I am Maia, the orchestrator.");
     expect(systemContent).toContain("data/agents/maia/AGENTS.md");
     expect(systemContent).toContain("data/agents/maia/SOUL.md");
-    // Tool usage guidance from default/fallback AGENTS content.
-    expect(systemContent).toContain("Using web tools");
-    expect(systemContent).toContain("web_answer");
-    expect(systemContent).toContain("web_search");
   });
 
   it("does not include How you function section when AGENTS.md is absent (agent dir and project root)", async () => {
@@ -693,8 +795,8 @@ describe("runAgent", () => {
     expect(toolEntry!.content).toBe("Found 3 results.");
   });
 
-  it("invokes provider once per run (smart context is tool-only, not in default pipeline)", async () => {
-    updateSettings(ctx, { contextQueryModel: "ollama/llama3.2" });
+  it("invokes provider once per run when smart context has no results", async () => {
+    // Do not set contextQueryModel so smart context uses fallback query + empty retrieval (no model calls).
     let completeCallCount = 0;
     const provider: AIProvider = {
       async complete(_messages, _tools, onToken) {

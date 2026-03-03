@@ -7,18 +7,26 @@
 import path from "path";
 import { getSettings } from "../settings";
 import { getAgentIdentity, setAgentStatus } from "./identity";
-import { getSession, appendEntry, ensureSession } from "../history";
+import { getSession, getSessionRecent, getTotalUserRounds, appendEntry, ensureSession } from "../history";
 import { getToolsForAgent, getMinimalToolDefsForAgent } from "../tools/registry";
 import { SECURITY_PREAMBLE } from "../security/preamble";
 import { filterText } from "../security/injection-filter";
-import { transformContext, convertToLlm } from "./context-query";
+import {
+  transformContext,
+  convertToLlm,
+  formatRecentThreadTurns,
+  countUserRounds,
+  buildSmartContextBlock,
+  rewriteCommandWithContext,
+  type PriorResolvedCommand,
+} from "./context-query";
 import type { AppContext } from "../context";
 import type { CreateProviderOptions } from "../ai/factory";
 import type { AIProvider } from "../ai/types";
 import type { AgentLoopEvent, HistoryEntry, SSEEvent } from "../types";
 import type { Message } from "../ai/types";
 import type { ToolContext } from "../tools/types";
-import { getAgentDir } from "../data-dir";
+import { getAgentDir, getAgentWorkspace } from "../data-dir";
 import { getCurrentSystemDateTime } from "../date-time";
 import { getMatchedSkillsContent } from "../skills";
 import { completeOllamaJob, registerOllamaJob } from "../ollama/jobs";
@@ -178,6 +186,7 @@ async function _runLoop(
     agentId: agent.id,
     sessionId,
     volumeRoot: getAgentDir(agent.id),
+    defaultCwd: getAgentWorkspace(agent.id),
     providerFactory,
     getToolsForAgent,
   };
@@ -185,10 +194,40 @@ async function _runLoop(
   // Ensure session exists in this db (avoids FOREIGN KEY failure when session was created in another connection/process)
   ensureSession(ctx, sessionId, [agent.id], "agents");
 
-  // Store user message (original)
+  const contextProviderFactory = (model: string, c: AppContext) =>
+    providerFactory(model, c, { reasoningEffort: settings.contextReasoningEffort });
+
+  // Compute prior context-aware commands and current round index, then rewrite the command.
+  const existingSession = getSession(ctx, sessionId);
+  let currentRoundIndex = existingSession ? countUserRounds(existingSession) + 1 : 1;
+  const priorCommands: PriorResolvedCommand[] = [];
+  if (existingSession) {
+    let seenUserRounds = 0;
+    for (const entry of existingSession.original) {
+      if (entry.role === "user") {
+        seenUserRounds += 1;
+        const roundIndex = entry.roundIndex ?? seenUserRounds;
+        const resolvedCommand = entry.resolvedContent ?? entry.content;
+        priorCommands.push({ roundIndex, resolvedCommand });
+      }
+    }
+  }
+
+  const rewriteResult = await rewriteCommandWithContext(
+    ctx,
+    contextProviderFactory,
+    priorCommands,
+    currentRoundIndex,
+    userMessage,
+  );
+  const effectiveUserMessage = rewriteResult.resolvedCommand;
+
+  // Store user message with resolved command and round index
   const userEntry = appendEntry(ctx, sessionId, {
     role: "user",
     content: userMessage,
+    resolvedContent: effectiveUserMessage,
+    roundIndex: currentRoundIndex,
     timestamp: new Date().toISOString(),
   });
   emitEntryIfRequested(userEntry);
@@ -254,18 +293,53 @@ async function _runLoop(
     }
   }
 
-  // No recent thread or smart context in the prompt; agents use chat_read, chat_find, and smart_context when needed.
-  const recentThreadBlock = "";
-  const smartContextBlock = "";
+  // Include last 3 rounds automatically (thinking entries omitted—display only). Tell agent how many more rounds exist so they use chat_read when needed. Use getSessionRecent in the hot path to avoid loading full history.
+  const session = getSessionRecent(ctx, sessionId);
+  const AUTO_INCLUDE_ROUNDS = 3;
+  const totalRounds = getTotalUserRounds(ctx, sessionId);
+  const roundsBefore = Math.max(0, totalRounds - AUTO_INCLUDE_ROUNDS);
+  const lastThreeBlock =
+    session && session.original.length > 0
+      ? formatRecentThreadTurns(session, AUTO_INCLUDE_ROUNDS)
+      : "";
+  const roundsNote =
+    roundsBefore > 0
+      ? `**Context:** You are seeing the last ${AUTO_INCLUDE_ROUNDS} conversation rounds below (including reasoning). There are **${roundsBefore}** more rounds before these. Use the **chat_read** tool when you need earlier context.\n\n`
+      : "";
+  const recentThreadBlock = lastThreeBlock ? roundsNote + lastThreeBlock : "";
+  const [smartResult, skillsResult] = await Promise.all([
+    buildSmartContextBlock(
+      ctx,
+      contextProviderFactory,
+      effectiveUserMessage,
+      recentThreadBlock || undefined,
+    ),
+    getMatchedSkillsContent(ctx, agent.id, effectiveUserMessage, {
+      providerFactory: contextProviderFactory,
+    }),
+  ]);
 
-  const skillsContent = await getMatchedSkillsContent(ctx, agent.id, userMessage);
-  const systemPromptContent = buildSystemPrompt(ctx, agent, skillsContent);
+  const baseBlock =
+    smartResult.block || "## Smart context\n\nNo relevant prior context found.";
+  const sourcesSection =
+    "\n\n### Sources\n" +
+    (smartResult.sourceIds.length > 0
+      ? smartResult.sourceIds.map((id) => `- ${id}`).join("\n")
+      : "(none)");
+  const skillsSection =
+    "\n\n### Skills\n" +
+    (skillsResult.skillNames.length > 0
+      ? skillsResult.skillNames.map((n) => `- ${n}`).join("\n")
+      : "(none)");
+  const smartContextBlock = baseBlock + sourcesSection + skillsSection;
+
+  const systemPromptContent = buildSystemPrompt(ctx, agent, skillsResult.content);
   const combinedSystemContent = transformContext(
     recentThreadBlock,
     smartContextBlock,
     systemPromptContent,
   );
-  const messages: Message[] = convertToLlm(combinedSystemContent, userMessage, initialToolResult ?? undefined);
+  const messages: Message[] = convertToLlm(combinedSystemContent, effectiveUserMessage, initialToolResult ?? undefined);
 
   let agentResponseContent = "";
   const agentEntry: Omit<HistoryEntry, "id"> = {
@@ -276,6 +350,24 @@ async function _runLoop(
 
   /** When set, _runLoop returns this (final reply when no more tool calls). */
   const resultRef: { current: string | null } = { current: null };
+
+  /** Accumulated thinking (reasoning) text for the current turn; persisted when we flush before token/tool/done. */
+  const thinkingAccumulator = { current: "" };
+
+  /**
+   * Persists accumulated thinking to session history so it survives refresh/navigation.
+   * Does not emit via EventSource to avoid duplicating the bubble already shown from the stream.
+   */
+  function flushThinking(): void {
+    if (thinkingAccumulator.current.length === 0) return;
+    const content = thinkingAccumulator.current;
+    thinkingAccumulator.current = "";
+    appendEntry(ctx, sessionId, {
+      role: "thinking",
+      content,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   const DEBUG_SEP = "────────────────────────────────────────────────────────";
   const DEBUG_BLOCK = "════════════════════════════════════════════════════════";
@@ -298,6 +390,7 @@ async function _runLoop(
         onEvent({ type: "token", content: event.delta });
         break;
       case "message_end":
+        flushThinking();
         if (event.toolCalls.length === 0) {
           const finalContent = event.content || agentResponseContent;
           agentEntry.content = finalContent;
@@ -405,11 +498,15 @@ async function _runLoop(
       controllerRef.current = controller;
       const completeOptions = {
         ...(ollamaJobId ? { signal: controller.signal } : {}),
-        onThinkingToken: (delta: string) => onEvent({ type: "thinking", content: delta }),
+        onThinkingToken: (delta: string) => {
+          thinkingAccumulator.current += delta;
+          onEvent({ type: "thinking", content: delta });
+        },
       };
 
       handleAgentLoopEvent({ type: "message_start" });
       const response = await provider.complete(messages, toolDefs, (token) => {
+        flushThinking();
         handleAgentLoopEvent({ type: "message_update", delta: token });
       }, completeOptions);
 
@@ -528,18 +625,18 @@ async function _runLoop(
 
 /**
  * Fallback system instruction when AGENTS.md is missing or empty.
- * @note Kept in code so the app still runs without the file; content should match AGENTS.md security + guidance sections.
+ * @note Kept in code so the app still runs without the file. Mirrors the security
+ * preamble and minimal identity/context guidance; detailed operational behavior
+ * comes from dynamically loaded skills documented in defaults/skills.
  */
 const FALLBACK_SYSTEM_INSTRUCTIONS = [
   SECURITY_PREAMBLE,
   "",
   "## Identity and context",
-  "Your identity is in SOUL above. Memory and user facts live in the memory/ and user/ folders under your agent directory; use **knowledge_search** with scope (self, user, global) to retrieve them. Edit identity files (SOUL.md, AGENTS.md) and create fact files in memory/ and user/ via the **terminal** from your agent directory.",
+  "Your identity is in SOUL above. Memory and user facts live in the memory/ and user/ folders one level above your workspace (`~`), in the agent root. Use **knowledge_search** with scope (self, user, global) to retrieve them when needed.",
   "",
-  "## Using web tools",
-  "- For questions that can be answered from the web, prefer **web_answer** to get an AI-generated answer grounded in current web search.",
-  "- Use **web_search** when you specifically need raw links or you plan to open pages yourself using fetch_web_page or the browser tools (for example, when you need to inspect a specific page).",
-  "- Avoid calling both tools for the same simple factual question unless you need to verify sources or inspect pages directly.",
+  "## Skills and behavior",
+  "Most of your operational behavior (how you use memory, manage files, and call web tools) is defined in skills that may appear in a `## Active skills` section of this system prompt. Follow those skills alongside this security preamble and your SOUL.",
 ].join("\n");
 
 /**

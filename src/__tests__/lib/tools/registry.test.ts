@@ -7,6 +7,7 @@ import path from "path";
 import {
   getToolsForAgent,
   getToolByName,
+  getMinimalToolDefsForAgent,
   loadApprovedCustomTools,
   TOOL_REGISTRY,
 } from "@/lib/tools/registry";
@@ -33,7 +34,7 @@ describe("tool registry", () => {
       expect(otherNames.has("tool_deregister")).toBe(false);
     });
 
-    it("includes shared tools for both maia and non-maia", () => {
+    it("includes shared tools for both maia and non-maia; Maia shell is always available", () => {
       const maiaTools = getToolsForAgent("maia");
       const otherTools = getToolsForAgent("other");
 
@@ -45,11 +46,11 @@ describe("tool registry", () => {
   });
 
   describe("getToolByName", () => {
-    it("returns the terminal_exec tool when given terminal_exec", () => {
-      const tool = getToolByName("terminal_exec");
-      expect(tool).toBeDefined();
-      expect(tool?.name).toBe("terminal_exec");
-      expect(tool?.toDefinition).toBeDefined();
+    it("returns terminal_exec by name", () => {
+      const terminal = getToolByName("terminal_exec");
+      expect(terminal).toBeDefined();
+      expect(terminal?.name).toBe("terminal_exec");
+      expect(terminal?.toDefinition).toBeDefined();
     });
 
     it("returns undefined for unknown tool name", () => {
@@ -61,6 +62,20 @@ describe("tool registry", () => {
         const found = getToolByName(tool.name);
         expect(found).toBe(tool);
       }
+    });
+  });
+
+  describe("getMinimalToolDefsForAgent", () => {
+    it("hides file management tools from the minimal tool set", () => {
+      const defs = getMinimalToolDefsForAgent("maia");
+      const names = new Set(defs.map((d) => d.name));
+
+      expect(names.has("terminal_exec")).toBe(true);
+      expect(names.has("find_tool")).toBe(true);
+      expect(names.has("file_list")).toBe(false);
+      expect(names.has("file_read")).toBe(false);
+      expect(names.has("file_write")).toBe(false);
+      expect(names.has("file_exists")).toBe(false);
     });
   });
 

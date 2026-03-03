@@ -45,6 +45,8 @@ export interface HistoryHit {
   content: string;
   isCompressed: boolean;
   score: number;
+  /** ISO timestamp when the entry was indexed (for recency boost). */
+  createdAt: string;
 }
 
 /**
@@ -189,7 +191,7 @@ export function createVectorStore(db: DbAdapter) {
     searchHistory(queryEmbedding: number[], limit: number): HistoryHit[] {
       const rows = db
         .prepare(
-          "SELECT id, session_id, entry_id, content, embedding_json, is_compressed FROM history_vectors"
+          "SELECT id, session_id, entry_id, content, embedding_json, is_compressed, created_at FROM history_vectors"
         )
         .all() as {
         id: string;
@@ -198,6 +200,7 @@ export function createVectorStore(db: DbAdapter) {
         content: string;
         embedding_json: string;
         is_compressed: number;
+        created_at: string;
       }[];
       const withScore = rows.map((r) => ({
         ...r,
@@ -206,7 +209,7 @@ export function createVectorStore(db: DbAdapter) {
       // Collapse by entry_id: keep the hit with max score per entry
       const bestByEntry = new Map<
         string,
-        { id: string; session_id: string; entry_id: string; content: string; is_compressed: number; score: number }
+        { id: string; session_id: string; entry_id: string; content: string; is_compressed: number; score: number; created_at: string }
       >();
       for (const r of withScore) {
         const existing = bestByEntry.get(r.entry_id);
@@ -223,6 +226,7 @@ export function createVectorStore(db: DbAdapter) {
         content: r.content,
         isCompressed: r.is_compressed === 1,
         score: r.score,
+        createdAt: r.created_at,
       }));
     },
   };

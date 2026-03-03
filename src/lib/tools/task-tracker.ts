@@ -1,8 +1,11 @@
+/**
+ * @fileoverview Task tools: create, update, list, get tasks via the task service.
+ * @module lib/tools/task-tracker
+ */
 import { z } from "zod";
-import { v4 as uuidv4 } from "uuid";
 import { zodToJsonSchema } from "../zod-to-json";
 import type { Tool, ToolContext } from "./types";
-import type { Task, TaskNote } from "../types";
+import { listTasks, createTask, getTask, updateTask } from "../tasks";
 
 function makeTool<S extends z.ZodTypeAny>(
   name: string,
@@ -11,22 +14,11 @@ function makeTool<S extends z.ZodTypeAny>(
   execute: (args: z.infer<S>, ctx: ToolContext) => Promise<unknown>
 ): Tool<z.infer<S>> {
   return {
-    name, description, schema, execute,
+    name,
+    description,
+    schema,
+    execute,
     toDefinition: () => ({ name, description, parameters: zodToJsonSchema(schema) }),
-  };
-}
-
-function rowToTask(r: Record<string, unknown>): Task {
-  return {
-    id: r.id as string,
-    title: r.title as string,
-    description: r.description as string,
-    status: r.status as Task["status"],
-    createdBy: r.created_by as string,
-    assignedTo: (r.assigned_to as string | null) ?? null,
-    createdAt: r.created_at as string,
-    updatedAt: r.updated_at as string,
-    notes: JSON.parse(r.notes as string) as TaskNote[],
   };
 }
 
@@ -39,15 +31,12 @@ export const taskCreateTool = makeTool(
     assign: z.string().optional().describe("Agent ID to assign to"),
   }),
   async ({ title, desc, assign }, ctx) => {
-    const id = uuidv4();
-    const now = new Date().toISOString();
-    ctx.db.prepare(
-      `INSERT INTO tasks (id, title, description, status, created_by, assigned_to, created_at, updated_at, notes)
-       VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, '[]')`
-    ).run(id, title, desc ?? "", ctx.agentId, assign ?? null, now, now);
-    const row = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Record<string, unknown>;
-    ctx.events.emit({ event: "tasks_changed", data: {} });
-    return rowToTask(row);
+    return createTask(ctx, {
+      title,
+      description: desc,
+      assignedTo: assign ?? null,
+      createdBy: ctx.agentId,
+    });
   }
 );
 
@@ -64,27 +53,14 @@ export const taskUpdateTool = makeTool(
     if (status === undefined && note === undefined && assignedTo === undefined) {
       throw new Error("At least one of status, note, or assign must be provided");
     }
-
-    const existing = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown> | undefined;
-    if (!existing) throw new Error(`Task not found: ${taskId}`);
-
-    const now = new Date().toISOString();
-    const currentNotes: TaskNote[] = JSON.parse(existing.notes as string);
-
-    if (note) {
-      currentNotes.push({ agentId: ctx.agentId, content: note, timestamp: now });
-    }
-
-    const newStatus = status ?? (existing.status as string);
-    const newAssignedTo = assignedTo !== undefined ? assignedTo : (existing.assigned_to as string | null);
-
-    ctx.db.prepare(
-      `UPDATE tasks SET status = ?, assigned_to = ?, notes = ?, updated_at = ? WHERE id = ?`
-    ).run(newStatus, newAssignedTo, JSON.stringify(currentNotes), now, taskId);
-
-    const updated = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown>;
-    ctx.events.emit({ event: "tasks_changed", data: {} });
-    return rowToTask(updated);
+    const task = updateTask(ctx, taskId, {
+      status,
+      note,
+      assignedTo,
+      noteAgentId: ctx.agentId,
+    });
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    return task;
   }
 );
 
@@ -97,30 +73,15 @@ export const taskListTool = makeTool(
     created: z.string().optional().describe("Filter by creator agent"),
   }),
   async ({ status, assign: assignedTo, created: createdBy }, ctx) => {
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-
-    if (status !== undefined) {
-      conditions.push("status = ?");
-      params.push(status);
-    } else {
-      conditions.push("status != 'done'");
+    const tasks = listTasks(ctx, {
+      status,
+      assignedTo,
+      createdBy,
+    });
+    if (status === undefined) {
+      return tasks.filter((t) => t.status !== "done");
     }
-    if (assignedTo !== undefined) {
-      conditions.push("assigned_to = ?");
-      params.push(assignedTo);
-    }
-    if (createdBy !== undefined) {
-      conditions.push("created_by = ?");
-      params.push(createdBy);
-    }
-
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const rows = ctx.db
-      .prepare(`SELECT * FROM tasks ${where} ORDER BY updated_at DESC`)
-      .all(...params) as Record<string, unknown>[];
-
-    return rows.map(rowToTask);
+    return tasks;
   }
 );
 
@@ -131,9 +92,9 @@ export const taskGetTool = makeTool(
     id: z.string().describe("Task ID"),
   }),
   async ({ id: taskId }, ctx) => {
-    const row = ctx.db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown> | undefined;
-    if (!row) throw new Error(`Task not found: ${taskId}`);
-    return rowToTask(row);
+    const task = getTask(ctx, taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    return task;
   }
 );
 

@@ -100,6 +100,106 @@ describe("OpenRouterProvider", () => {
     expect(result.stopped).toBe(true);
   });
 
+  it("streams reasoning_details as thinking_delta (same as Ollama thinking)", async () => {
+    const thinkingTokens: string[] = [];
+    const contentTokens: string[] = [];
+    http.on("openrouter.ai", async () =>
+      streamResponse(200, [
+        "data: " +
+          JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  reasoning_details: [
+                    {
+                      type: "reasoning.text",
+                      text: "Let me think step by step.\n",
+                      format: "anthropic-claude-v1",
+                      index: 0,
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        "data: " +
+          JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  reasoning_details: [
+                    { type: "reasoning.text", text: "First I need to...", format: "anthropic-claude-v1", index: 1 },
+                  ],
+                },
+              },
+            ],
+          }),
+        "data: " +
+          JSON.stringify({
+            choices: [{ delta: { content: "The answer is 42." } }],
+          }),
+        "data: [DONE]",
+      ])
+    );
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      "sk-key",
+      ctx.http
+    );
+    const result = await provider.complete(
+      [{ role: "user", content: "What is 6*7?" }],
+      [],
+      (t) => contentTokens.push(t),
+      { onThinkingToken: (t) => thinkingTokens.push(t) }
+    );
+
+    expect(thinkingTokens).toEqual(["Let me think step by step.\n", "First I need to..."]);
+    expect(contentTokens).toEqual(["The answer is 42."]);
+    expect(result.content).toBe("The answer is 42.");
+    expect(result.stopped).toBe(true);
+  });
+
+  it("emits reasoning.summary as thinking_delta when present", async () => {
+    const thinkingTokens: string[] = [];
+    http.on("openrouter.ai", async () =>
+      streamResponse(200, [
+        "data: " +
+          JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  reasoning_details: [
+                    {
+                      type: "reasoning.summary",
+                      summary: "Analyzed the problem and chose an approach.",
+                      format: "anthropic-claude-v1",
+                      index: 0,
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        "data: [DONE]",
+      ])
+    );
+
+    const provider = new OpenRouterProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      "sk-key",
+      ctx.http
+    );
+    await provider.complete(
+      [{ role: "user", content: "Hi" }],
+      [],
+      () => {},
+      { onThinkingToken: (t) => thinkingTokens.push(t) }
+    );
+
+    expect(thinkingTokens).toEqual(["Analyzed the problem and chose an approach."]);
+  });
+
   it("accumulates streaming tool call deltas", async () => {
     http.on("openrouter.ai", async () =>
       streamResponse(200, [

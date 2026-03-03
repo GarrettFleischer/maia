@@ -167,6 +167,25 @@ export class OpenRouterProvider implements AIProvider {
         const delta = choices[0].delta as Record<string, unknown> | undefined;
         if (!delta) continue;
 
+        // Stream reasoning/thinking tokens (same as Ollama message.thinking). OpenRouter sends
+        // reasoning_details per chunk; emit thinking_delta for each text or summary segment.
+        const reasoningDetails = delta.reasoning_details as
+          | Array<{ type?: string; text?: string; summary?: string }>
+          | undefined;
+        if (Array.isArray(reasoningDetails)) {
+          for (const item of reasoningDetails) {
+            if (item.type === "reasoning.text" && typeof item.text === "string" && item.text) {
+              yield { type: "thinking_delta", delta: item.text };
+            } else if (
+              item.type === "reasoning.summary" &&
+              typeof item.summary === "string" &&
+              item.summary
+            ) {
+              yield { type: "thinking_delta", delta: item.summary };
+            }
+          }
+        }
+
         if (typeof delta.content === "string" && delta.content) {
           yield { type: "text_delta", delta: delta.content };
         }

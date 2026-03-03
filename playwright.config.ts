@@ -1,12 +1,17 @@
 /**
  * @fileoverview Playwright E2E test configuration. Uses PLAYWRIGHT_BASE_URL when set (e.g. by
  * scripts/start-e2e-server.ts, which finds a free port). Otherwise starts Next.js via webServer.
+ * E2E always uses a separate data dir (data-e2e) so tests never overwrite real dev data.
  * @module playwright.config
  */
 
+import path from "path";
 import { defineConfig, devices } from "@playwright/test";
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
+
+/** E2E uses its own data dir so tests never overwrite real dev data. */
+const E2E_DATA_DIR = path.join(process.cwd(), "data-e2e");
 
 export default defineConfig({
   testDir: "./e2e",
@@ -28,5 +33,6 @@ export default defineConfig({
         url: baseURL,
         timeout: 120_000,
         reuseExistingServer: !process.env.CI,
+        env: { ...process.env, MAIA_DATA_DIR: E2E_DATA_DIR },
       },
 });

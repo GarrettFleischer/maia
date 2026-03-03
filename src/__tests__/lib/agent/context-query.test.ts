@@ -8,14 +8,20 @@ import {
   extractSearchQueries,
   extractSearchQueriesFromContextAndCommand,
   buildRawRetrievedContext,
+  buildSmartContextBlock,
+  rewriteCommandWithContext,
+  type PriorResolvedCommand,
   filterRelevantSources,
   buildRawTextFromChunks,
   extractRelevantQuotes,
+  extractRelevantSpansByKeyword,
   cleanupQuotes,
   summarizeRetrievedContext,
+  countUserRounds,
   formatRecentThreadTurns,
   transformContext,
   convertToLlm,
+  buildContextAwareCommandsBlock,
 } from "@/lib/agent/context-query";
 import { makeTestContext, FakeResponse } from "@/__tests__/helpers/fakes";
 import { createVectorStore } from "@/lib/knowledge/vector-store";
@@ -299,6 +305,112 @@ describe("buildRawRetrievedContext", () => {
   });
 });
 
+// ─── buildSmartContextBlock ────────────────────────────────────────────────────
+
+describe("buildSmartContextBlock", () => {
+  it("returns empty string when retrieval returns no results", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, {
+      whitelistedModels: ["ollama/llama3.2", "ollama/nomic-embed-text"],
+      contextQueryModel: "ollama/llama3.2",
+      embeddingModel: "ollama/nomic-embed-text",
+    });
+    (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
+      "/api/embed",
+      async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.9]] }))
+    );
+    const provider = makeProvider('["user query topic"]');
+    const result = await buildSmartContextBlock(ctx, () => provider, "What did we decide?");
+    expect(result.block).toBe("");
+    expect(result.sourceIds).toEqual([]);
+  });
+
+  it("returns summarized block when retrieval has results", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, {
+      whitelistedModels: ["ollama/llama3.2", "ollama/nomic-embed-text"],
+      contextQueryModel: "ollama/llama3.2",
+      contextSummaryModel: "ollama/llama3.2",
+      embeddingModel: "ollama/nomic-embed-text",
+    });
+    (ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }).on(
+      "/api/embed",
+      async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.9, 0.1]] }))
+    );
+    const store = createVectorStore(ctx.db);
+    store.insertHistory("hv1", "sess-1", "entry-1", "We decided to use smart context.", [0.9, 0.1], false, new Date().toISOString());
+    const responses = [
+      '["decision", "outcome"]',
+      '["history:sess-1/entry-1"]',
+      "## Smart context\n\nWe decided to use smart context [history:sess-1/entry-1].",
+    ];
+    let idx = 0;
+    const provider: AIProvider = {
+      async complete(_messages, _tools, onToken) {
+        const out = responses[idx % responses.length] ?? "";
+        idx++;
+        onToken(out);
+        return { content: out, toolCalls: [], stopped: true };
+      },
+    };
+    const result = await buildSmartContextBlock(ctx, () => provider, "What did we decide?");
+    expect(result.block).toContain("## Smart context");
+    expect(result.block).toContain("history:sess-1/entry-1");
+    expect(result.sourceIds).toContain("history:sess-1/entry-1");
+  });
+});
+
+// ─── rewriteCommandWithContext ───────────────────────────────────────────────────
+
+describe("rewriteCommandWithContext", () => {
+  it("returns model-resolved command and round index when JSON is valid", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, {
+      whitelistedModels: ["ollama/llama3.2"],
+      contextQueryModel: "ollama/llama3.2",
+    });
+    const prior: PriorResolvedCommand[] = [
+      { roundIndex: 1, resolvedCommand: "Scan repository for TODO comments" },
+      { roundIndex: 2, resolvedCommand: "Open the README file" },
+    ];
+    const provider = makeProvider(
+      JSON.stringify({
+        roundIndex: 1,
+        resolvedCommand: "Scan the repository for TODO comments again and summarize them.",
+      }),
+    );
+    const result = await rewriteCommandWithContext(
+      ctx,
+      () => provider,
+      prior,
+      3,
+      "Do that again and summarize it.",
+      { delayMs: 0 },
+    );
+    expect(result.roundIndex).toBe(1);
+    expect(result.resolvedCommand).toContain("Scan the repository for TODO comments again");
+  });
+
+  it("falls back to current round and raw message when model output is invalid", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, {
+      whitelistedModels: ["ollama/llama3.2"],
+      contextQueryModel: "ollama/llama3.2",
+    });
+    const provider = makeProvider("this is not json at all");
+    const result = await rewriteCommandWithContext(
+      ctx,
+      () => provider,
+      [],
+      5,
+      "Original message",
+      { delayMs: 0 },
+    );
+    expect(result.roundIndex).toBe(5);
+    expect(result.resolvedCommand).toBe("Original message");
+  });
+});
+
 // ─── filterRelevantSources ─────────────────────────────────────────────────────
 
 describe("filterRelevantSources", () => {
@@ -464,6 +576,44 @@ describe("cleanupQuotes", () => {
   });
 });
 
+// ─── extractRelevantSpansByKeyword ────────────────────────────────────────────
+
+describe("extractRelevantSpansByKeyword", () => {
+  it("returns spans that contain keywords from user message", () => {
+    const sources = [{ type: "history" as const, id: "history:s1/e1" }];
+    const contents = ["First paragraph.\n\nSecond paragraph has deployment and config.\n\nThird is unrelated."];
+    const spans = extractRelevantSpansByKeyword("deployment config", [], sources, contents);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].sourceId).toBe("history:s1/e1");
+    expect(spans[0].text).toContain("deployment");
+    expect(spans[0].text).toContain("config");
+  });
+
+  it("returns spans that contain keywords from search queries", () => {
+    const sources = [{ type: "knowledge" as const, id: "knowledge:doc.md" }];
+    const contents = ["Intro.\n\nSection about GDPR and compliance.\n\nEnd."];
+    const spans = extractRelevantSpansByKeyword("", ["GDPR", "compliance"], sources, contents);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].text).toContain("GDPR");
+  });
+
+  it("returns empty when no keyword match", () => {
+    const sources = [{ type: "knowledge" as const, id: "knowledge:x.md" }];
+    const contents = ["Only unrelated content here."];
+    const spans = extractRelevantSpansByKeyword("deployment", [], sources, contents);
+    expect(spans).toHaveLength(0);
+  });
+
+  it("splits long paragraphs into matching sentences", () => {
+    const sources = [{ type: "knowledge" as const, id: "knowledge:long.md" }];
+    const sentence = "This sentence has the keyword. ".repeat(30);
+    const contents = [`No match here. ${sentence} No match at end.`];
+    const spans = extractRelevantSpansByKeyword("keyword", [], sources, contents);
+    expect(spans.length).toBeGreaterThan(0);
+    expect(spans.every((s) => s.text.includes("keyword"))).toBe(true);
+  });
+});
+
 // ─── extractRelevantQuotes ────────────────────────────────────────────────────
 
 describe("extractRelevantQuotes", () => {
@@ -608,13 +758,15 @@ describe("summarizeRetrievedContext", () => {
     expect(calledModels[0]).toBe("ollama/llama3.2");
   });
 
-  it("when contents provided returns focused-quote block and quotes array", async () => {
+  it("when contents provided uses keyword span extraction and returns focused-quote block and quotes array", async () => {
     const ctx = makeTestContext();
-    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"], contextSummaryModel: "ollama/llama3.2" });
-    const provider = makeProvider('[{"text": "exact quote from source"}]');
     const sources = [{ type: "knowledge" as const, id: "knowledge:doc.md" }];
     const contents = ["exact quote from source"];
-    const result = await summarizeRetrievedContext(ctx, () => provider, "raw", sources, { contents });
+    const result = await summarizeRetrievedContext(ctx, () => makeProvider("unused"), "raw", sources, {
+      contents,
+      userMessage: "find quote from source",
+      searchQueries: ["exact quote"],
+    });
     expect(typeof result).toBe("object");
     expect("block" in result && "quotes" in result).toBe(true);
     const { block, quotes } = result as { block: string; quotes: Array<{ sourceId: string; text: string }> };
@@ -623,6 +775,61 @@ describe("summarizeRetrievedContext", () => {
     expect(block).toContain("### Quoted sources");
     expect(quotes).toHaveLength(1);
     expect(quotes[0]).toEqual({ sourceId: "knowledge:doc.md", text: expect.stringContaining("exact quote") });
+  });
+});
+
+// ─── countUserRounds ───────────────────────────────────────────────────────────
+
+describe("countUserRounds", () => {
+  it("returns the number of user entries in the session", () => {
+    const ts = new Date().toISOString();
+    const session = makeSession([
+      { id: "e1", role: "user", content: "a", timestamp: ts },
+      { id: "e2", role: "agent", content: "b", timestamp: ts },
+      { id: "e3", role: "user", content: "c", timestamp: ts },
+    ]);
+    expect(countUserRounds(session)).toBe(2);
+  });
+
+  it("returns 0 for empty session", () => {
+    const session = makeSession([]);
+    expect(countUserRounds(session)).toBe(0);
+  });
+
+  it("does not count thinking or tool_call as rounds", () => {
+    const ts = new Date().toISOString();
+    const session = makeSession([
+      { id: "e1", role: "user", content: "a", timestamp: ts },
+      { id: "e2", role: "thinking", content: "reasoning", timestamp: ts },
+      { id: "e3", role: "tool_call", content: "x", toolName: "t", timestamp: ts },
+    ]);
+    expect(countUserRounds(session)).toBe(1);
+  });
+});
+
+// ─── buildContextAwareCommandsBlock ─────────────────────────────────────────────
+
+describe("buildContextAwareCommandsBlock", () => {
+  it("returns a list of rounds with resolved commands", () => {
+    const ts = new Date().toISOString();
+    const session = makeSession([
+      { id: "e1", role: "user", content: "raw 1", resolvedContent: "resolved 1", roundIndex: 1, timestamp: ts },
+      { id: "e2", role: "agent", content: "reply", timestamp: ts },
+      { id: "e3", role: "user", content: "raw 2", resolvedContent: "resolved 2", roundIndex: 2, timestamp: ts },
+    ]);
+    const block = buildContextAwareCommandsBlock(session);
+    expect(block).toContain("## Context-aware commands");
+    expect(block).toContain("Round 1: resolved 1");
+    expect(block).toContain("Round 2: resolved 2");
+  });
+
+  it("falls back to content and inferred round index when metadata missing", () => {
+    const ts = new Date().toISOString();
+    const session = makeSession([
+      { id: "e1", role: "user", content: "only raw", timestamp: ts },
+    ]);
+    const block = buildContextAwareCommandsBlock(session);
+    expect(block).toContain("Round 1: only raw");
   });
 });
 
@@ -687,6 +894,20 @@ describe("formatRecentThreadTurns", () => {
     const result = formatRecentThreadTurns(session, 3);
     expect(result).toContain("## Recent thread");
     expect(result).toContain("No recent turns");
+  });
+
+  it("when skipThinking true, omits thinking entries from output", () => {
+    const ts = new Date().toISOString();
+    const session = makeSession([
+      { id: "e1", role: "user", content: "user msg", timestamp: ts },
+      { id: "e2", role: "thinking", content: "internal reasoning", timestamp: ts },
+      { id: "e3", role: "agent", content: "agent reply", timestamp: ts },
+    ]);
+    const result = formatRecentThreadTurns(session, 2, { skipThinking: true });
+    expect(result).toContain("user msg");
+    expect(result).toContain("agent reply");
+    expect(result).not.toContain("internal reasoning");
+    expect(result).not.toContain("Reasoning:");
   });
 });
 

@@ -10,14 +10,17 @@ import type { DbAdapter } from "@/lib/context";
 const EXPECTED_TABLES = [
   "active_session",
   "agents",
+  "approved_tools",
   "credentials",
   "cron_jobs",
   "history_entries",
   "history_vectors",
   "knowledge_vectors",
+  "schema_version",
   "security_events",
   "sessions",
   "settings",
+  "tasks",
 ];
 
 function getTableNames(db: DbAdapter): string[] {

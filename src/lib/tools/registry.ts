@@ -20,6 +20,7 @@ import { yahooMailTools } from "./yahoo-mail";
 import { dateTimeTools } from "./datetime";
 import { customToolManagementTools } from "./custom-tools";
 import { threadManagementTools } from "./thread-management";
+import { fileCrudTools } from "./file-crud";
 import type { Tool, ToolRegistration } from "./types";
 import type { DbAdapter } from "../context";
 import { getDb } from "../db";
@@ -35,6 +36,7 @@ import { parseManifest, buildToolsFromManifest } from "./custom-tool-manifest";
 export const TOOL_REGISTRY: ToolRegistration[] = [
   { tool: findTool, maiaOnly: false },
   { tool: chainTool, maiaOnly: false },
+  ...fileCrudTools.map((tool) => ({ tool, maiaOnly: false })),
   { tool: terminalTool, maiaOnly: false },
   { tool: webSearchTool, maiaOnly: false },
   { tool: braveAnswersTool, maiaOnly: false },
@@ -129,6 +131,12 @@ const MAIA_MINIMAL_TOOL_NAMES = new Set([
   "agent_get",
 ]);
 
+/** Include terminal_exec Maia shell tool on all platforms. */
+function isToolAvailableForPlatform(toolName: string): boolean {
+  if (toolName === "terminal_exec") return true;
+  return true;
+}
+
 /**
  * @brief Get the list of tools available to a specific agent.
  * @param agentId Agent identifier; some tools are restricted to the special \"maia\" orchestrator.
@@ -136,7 +144,8 @@ const MAIA_MINIMAL_TOOL_NAMES = new Set([
  */
 export function getToolsForAgent(agentId: string): Tool[] {
   const staticTools = TOOL_REGISTRY.filter(
-    (reg) => !reg.maiaOnly || agentId === "maia",
+    (reg) =>
+      (!reg.maiaOnly || agentId === "maia") && isToolAvailableForPlatform(reg.tool.name),
   ).map((reg) => reg.tool);
   const customTools = getApprovedCustomTools();
   return [...staticTools, ...customTools];

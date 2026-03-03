@@ -17,4 +17,4 @@ export {
   matchSkillsToMessage,
   getMatchedSkillsContent,
 } from "./match";
-export type { MatchSkillsOptions } from "./match";
+export type { MatchSkillsOptions, GetMatchedSkillsResult } from "./match";

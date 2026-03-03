@@ -5,8 +5,12 @@
 
 export interface HistoryEntry {
   id: string;
-  role: "user" | "agent" | "tool_call" | "tool_result";
+  role: "user" | "agent" | "tool_call" | "tool_result" | "thinking";
   content: string;
+  /** Optional context-aware rewrite of the user's command for this round. */
+  resolvedContent?: string;
+  /** 1-based conversation round index (user message + following responses). */
+  roundIndex?: number;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   timestamp: string;

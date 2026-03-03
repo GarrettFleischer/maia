@@ -16,6 +16,7 @@ import {
   getToolsDir,
   getSkillsDir,
   getAgentSkillsDir,
+  getDefaultSkillsDir,
 } from "@/lib/data-dir";
 
 describe("data-dir", () => {
@@ -94,5 +95,10 @@ describe("data-dir", () => {
     process.env.MAIA_DATA_DIR = tmp;
     expect(getAgentSkillsDir("maia")).toBe(path.join(path.resolve(tmp), "agents", "maia", "skills"));
     expect(getAgentSkillsDir("agent-1")).toBe(path.join(path.resolve(tmp), "agents", "agent-1", "skills"));
+  });
+
+  it("getDefaultSkillsDir returns defaults/skills under project root", () => {
+    const expected = path.resolve(process.cwd(), "defaults", "skills");
+    expect(getDefaultSkillsDir()).toBe(expected);
   });
 });

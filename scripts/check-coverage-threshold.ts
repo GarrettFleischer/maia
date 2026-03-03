@@ -8,8 +8,8 @@
 import { spawnSync } from "child_process";
 import path from "path";
 
-const DEFAULT_LINES = 0.8;
-const DEFAULT_FUNCTIONS = 0.8;
+const DEFAULT_LINES = 0.9;
+const DEFAULT_FUNCTIONS = 0.9;
 
 const linesThreshold =
   typeof process.env.COVERAGE_LINES_THRESHOLD !== "undefined"
@@ -38,34 +38,37 @@ if (result.status !== 0) {
   process.exit(result.status);
 }
 
-// Parse "All files ... 95.85 ... 98.90" (Funcs %, Lines %) from the coverage table (may be on stdout or stderr)
-const line = combined.split(/\r?\n/).find((l) => l.includes("All files") && !l.includes("% Funcs"));
-const pctNumbers = line?.match(/\d+\.\d+/g);
-if (!pctNumbers || pctNumbers.length < 2) {
+// Parse "All files ... 95.85 ... 98.90" (Funcs %, Lines %) from the coverage
+// table (may be on stdout or stderr). Be tolerant of integer percentages and
+// optional '%' signs, and avoid depending on exact column widths.
+const allFilesMatch = combined.match(
+  /All files[^\n]*?(\d+(?:\.\d+)?)[^\n]*?(\d+(?:\.\d+)?)/,
+);
+if (!allFilesMatch) {
   console.error(
-    "check-coverage-threshold: could not find 'All files' line with two percentages in coverage output"
+    "check-coverage-threshold: could not find 'All files' line with two percentages in coverage output",
   );
   process.exit(1);
 }
 
-const functionsPct = Number(pctNumbers[0]) / 100;
-const linesPct = Number(pctNumbers[1]) / 100;
+const functionsPct = Number(allFilesMatch[1]) / 100;
+const linesPct = Number(allFilesMatch[2]) / 100;
 
 const failed: string[] = [];
 if (functionsPct < functionsThreshold) {
   failed.push(
-    `functions ${(functionsPct * 100).toFixed(2)}% < ${(functionsThreshold * 100).toFixed(0)}%`
+    `functions ${(functionsPct * 100).toFixed(2)}% < ${(functionsThreshold * 100).toFixed(0)}%`,
   );
 }
 if (linesPct < linesThreshold) {
   failed.push(
-    `lines ${(linesPct * 100).toFixed(2)}% < ${(linesThreshold * 100).toFixed(0)}%`
+    `lines ${(linesPct * 100).toFixed(2)}% < ${(linesThreshold * 100).toFixed(0)}%`,
   );
 }
 
 if (failed.length > 0) {
   console.error(
-    `Coverage threshold (overall app) not met: ${failed.join("; ")}`
+    `Coverage threshold (overall app) not met: ${failed.join("; ")}`,
   );
   process.exit(1);
 }

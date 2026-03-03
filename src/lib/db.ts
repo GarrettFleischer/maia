@@ -40,6 +40,8 @@ export function initSchema(db: DbAdapter): void {
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
       role TEXT NOT NULL,
       content TEXT NOT NULL,
+      resolved_content TEXT,
+      round_index INTEGER,
       tool_name TEXT,
       tool_args TEXT,
       timestamp TEXT NOT NULL,
@@ -136,60 +138,126 @@ export function initSchema(db: DbAdapter): void {
       approved_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+
     INSERT OR IGNORE INTO active_session (singleton, session_id) VALUES (1, NULL);
   `);
 
-  // Migration: add tool_name / tool_args to cron_jobs if missing (e.g. existing DBs created before cron-tool change)
-  const tableInfo = db.prepare("PRAGMA table_info(cron_jobs)").all() as {
-    name: string;
-  }[];
-  const hasToolName = tableInfo.some((c) => c.name === "tool_name");
-  const hasToolArgs = tableInfo.some((c) => c.name === "tool_args");
-  if (!hasToolName) {
-    db.exec(
-      "ALTER TABLE cron_jobs ADD COLUMN tool_name TEXT NOT NULL DEFAULT 'cron_echo'",
-    );
-  }
-  if (!hasToolArgs) {
-    db.exec(
-      "ALTER TABLE cron_jobs ADD COLUMN tool_args TEXT NOT NULL DEFAULT '{}'",
-    );
-    // Backfill legacy rows so they call cron_echo with task_description as message
-    db.exec(
-      "UPDATE cron_jobs SET tool_args = json_object('message', task_description) WHERE tool_args = '{}'",
-    );
+  // Seed schema_version only when empty (new DB); otherwise runMigrations uses existing version
+  const hasVersionRow = db
+    .prepare("SELECT 1 FROM schema_version LIMIT 1")
+    .get();
+  if (!hasVersionRow) {
+    db.prepare(
+      "INSERT INTO schema_version (version, applied_at) VALUES (0, datetime('now'))",
+    ).run();
   }
 
-  // Migration: add reasoning_effort to agents if missing (default medium)
-  const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as {
-    name: string;
-  }[];
-  if (!agentsInfo.some((c) => c.name === "reasoning_effort")) {
-    db.exec(
-      "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'medium'",
-    );
-  }
+  runMigrations(db);
 
   // Seed default settings if not present (whitelisted models live in data/models.json)
-  const defaults: Record<string, string> = {
-    heartbeatIntervalMinutes: "30",
-    ollamaBaseUrl: "http://localhost:11434",
-    ollamaApiKey: "",
-    openRouterApiKey: "",
-    embeddingModel: "ollama/nomic-embed-text",
-    embedMaxContentLength: "4000",
-    contextQueryModel: "",
-    contextSummaryModel: "",
-    contextRecentTurns: "3",
-    contextReasoningEffort: "medium",
-    archiveDurationValue: "0",
-    archiveDurationUnit: "days",
-  };
+  seedSettings(db);
 
-  const insert = db.prepare(
-    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-  );
-  for (const [key, value] of Object.entries(defaults)) {
-    insert.run(key, value);
+  function runMigrations(database: DbAdapter): void {
+    const row = database
+      .prepare("SELECT version FROM schema_version LIMIT 1")
+      .get() as { version: number } | undefined;
+    let currentVersion = row?.version ?? 0;
+
+    // Step 1: cron_jobs tool_name / tool_args
+    if (currentVersion < 1) {
+      const tableInfo = database
+        .prepare("PRAGMA table_info(cron_jobs)")
+        .all() as { name: string }[];
+      const hasToolName = tableInfo.some((c) => c.name === "tool_name");
+      const hasToolArgs = tableInfo.some((c) => c.name === "tool_args");
+      if (!hasToolName) {
+        database.exec(
+          "ALTER TABLE cron_jobs ADD COLUMN tool_name TEXT NOT NULL DEFAULT 'cron_echo'",
+        );
+      }
+      if (!hasToolArgs) {
+        database.exec(
+          "ALTER TABLE cron_jobs ADD COLUMN tool_args TEXT NOT NULL DEFAULT '{}'",
+        );
+        database.exec(
+          "UPDATE cron_jobs SET tool_args = json_object('message', task_description) WHERE tool_args = '{}'",
+        );
+      }
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 1, applied_at = datetime('now')",
+        )
+        .run();
+      currentVersion = 1;
+    }
+
+    // Step 2: agents reasoning_effort
+    if (currentVersion < 2) {
+      const agentsInfo = database
+        .prepare("PRAGMA table_info(agents)")
+        .all() as { name: string }[];
+      if (!agentsInfo.some((c) => c.name === "reasoning_effort")) {
+        database.exec(
+          "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'medium'",
+        );
+      }
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 2, applied_at = datetime('now')",
+        )
+        .run();
+      currentVersion = 2;
+    }
+
+    // Step 3: history_entries resolved_content and round_index
+    if (currentVersion < 3) {
+      const historyInfo = database
+        .prepare("PRAGMA table_info(history_entries)")
+        .all() as {
+        name: string;
+      }[];
+      if (!historyInfo.some((c) => c.name === "resolved_content")) {
+        database.exec(
+          "ALTER TABLE history_entries ADD COLUMN resolved_content TEXT",
+        );
+      }
+      if (!historyInfo.some((c) => c.name === "round_index")) {
+        database.exec(
+          "ALTER TABLE history_entries ADD COLUMN round_index INTEGER",
+        );
+      }
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 3, applied_at = datetime('now')",
+        )
+        .run();
+    }
+  }
+
+  function seedSettings(database: DbAdapter): void {
+    const defaults: Record<string, string> = {
+      heartbeatIntervalMinutes: "30",
+      ollamaBaseUrl: "http://localhost:11434",
+      ollamaApiKey: "",
+      openRouterApiKey: "",
+      embeddingModel: "ollama/nomic-embed-text",
+      embedMaxContentLength: "8192",
+      contextQueryModel: "",
+      contextSummaryModel: "",
+      contextRecentTurns: "3",
+      contextReasoningEffort: "medium",
+      archiveDurationValue: "0",
+      archiveDurationUnit: "days",
+    };
+    const insert = database.prepare(
+      "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+    );
+    for (const [key, value] of Object.entries(defaults)) {
+      insert.run(key, value);
+    }
   }
 }

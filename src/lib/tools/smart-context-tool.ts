@@ -16,6 +16,7 @@ import {
   buildRawTextFromChunks,
   summarizeRetrievedContext,
 } from "../agent/context-query";
+import { getMatchedSkillsContent } from "../skills";
 import type { Tool, ToolContext } from "./types";
 
 const schema = z.object({
@@ -50,18 +51,50 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
       command,
     );
 
+    const skillsQuery = [context, command].filter((value) => value && value.trim().length > 0).join("\n\n");
+    const skillsResult = await getMatchedSkillsContent(ctx, ctx.agentId, skillsQuery);
+
+    function buildBlockWithSourcesAndSkills(
+      summaryBlock: string,
+      sourceIds: string[],
+      skillNames: string[],
+      fullSkillsContent: string,
+    ): string {
+      const sourcesSection =
+        "\n\n### Sources\n" +
+        (sourceIds.length > 0 ? sourceIds.map((id) => `- ${id}`).join("\n") : "(none)");
+      const skillsSection =
+        "\n\n### Skills\n" +
+        (skillNames.length > 0 ? skillNames.map((n) => `- ${n}`).join("\n") : "(none)");
+      let out = summaryBlock.trimEnd() + sourcesSection + skillsSection;
+      if (fullSkillsContent && fullSkillsContent.trim()) {
+        out += "\n\n" + fullSkillsContent.trim();
+      }
+      return out;
+    }
+
     const { text: rawContext, sources, contents } = await buildRawRetrievedContext(ctx, queries);
 
     if (sources.length === 0) {
       return {
-        block: "## Smart context\n\nNo relevant prior context found.",
+        block: buildBlockWithSourcesAndSkills(
+          "## Smart context\n\nNo relevant prior context found.",
+          [],
+          skillsResult.skillNames,
+          skillsResult.content,
+        ),
         queries,
       };
     }
 
     if (!contextProviderFactory) {
       return {
-        block: `## Smart context\n\n${rawContext}`,
+        block: buildBlockWithSourcesAndSkills(
+          `## Smart context\n\n${rawContext}`,
+          sources.map((s) => s.id),
+          skillsResult.skillNames,
+          skillsResult.content,
+        ),
         queries,
       };
     }
@@ -76,7 +109,12 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
 
     if (filteredSources.length === 0) {
       return {
-        block: "## Smart context\n\nNo relevant prior context found.",
+        block: buildBlockWithSourcesAndSkills(
+          "## Smart context\n\nNo relevant prior context found.",
+          [],
+          skillsResult.skillNames,
+          skillsResult.content,
+        ),
         queries,
       };
     }
@@ -91,14 +129,21 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
       {
         contents: filteredContents,
         userMessage: command,
+        searchQueries: queries,
         allRetrievedSourceIds,
       },
     );
 
     const block = typeof summarizeResult === "string" ? summarizeResult : summarizeResult.block;
+    const sourceIds = filteredSources.map((s) => s.id);
 
     return {
-      block,
+      block: buildBlockWithSourcesAndSkills(
+        block,
+        sourceIds,
+        skillsResult.skillNames,
+        skillsResult.content,
+      ),
       queries,
     };
   },
