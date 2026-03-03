@@ -6,6 +6,25 @@ All endpoints are Next.js App Router API routes under `src/app/api/`.
 
 For the initial local-only version, no authentication is required. All API routes are accessible without credentials since the system runs locally.
 
+## Error responses
+
+JSON error responses use a standard shape so clients can parse them consistently:
+
+```typescript
+{
+  error: string;   // Human-readable message; always present
+  code?: string;   // Optional machine-readable code (e.g. "VALIDATION", "NOT_FOUND")
+}
+```
+
+Typical status codes:
+
+- **400** – Validation failed (e.g. invalid request body, missing required field). Use `error` to describe what is wrong.
+- **404** – Resource not found (e.g. task, session, agent by id).
+- **500** – Unexpected server error. Return a generic message; log the real error server-side. Do not expose internal details in the response.
+
+All API routes that can throw (Zod parse, `ensureAppContext`, domain, DB) should be wrapped in try/catch and return one of these responses instead of letting unhandled exceptions become a 500 with a stack trace.
+
 ## Chat
 
 ### `POST /api/chat`

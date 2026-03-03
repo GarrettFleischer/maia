@@ -1,5 +1,40 @@
 # Tool Architecture
 
+## Tools, registry, and context wiring
+
+The diagram below shows how tools are registered, how they receive a `ToolContext` built from `AppContext`, and where the main tool and domain code lives.
+
+```mermaid
+flowchart TD
+  registry["Tool Registry(src/lib/tools/registry.ts)"]
+  getTools["getToolsForAgent(agentId)"]
+  runner["src/lib/agent/runner.ts"]
+  toolCtx["ToolContext"]
+  appCtx["AppContext(src/lib/context.ts)"]
+  tools["Built-in tools(src/lib/tools/**)"]
+  custom["Custom tools(data/tools/<slug>)"]
+  db["DbAdapter"]
+  fs["FileSystemAdapter"]
+  http["HttpClient"]
+  vault["CredentialVault"]
+
+  runner --> getTools
+  getTools --> registry
+  registry --> tools
+  registry --> custom
+  runner --> toolCtx
+  toolCtx --> appCtx
+  appCtx --> db
+  appCtx --> fs
+  appCtx --> http
+  toolCtx --> vault
+  tools --> toolCtx
+```
+
+- **Registry**: `src/lib/tools/registry.ts` holds the list of built-in tools (with `maiaOnly` where applicable) and merges in approved custom tools from `data/tools/<slug>/manifest.json`. `getToolsForAgent(agentId)` returns the set of tools available to that agent.
+- **ToolContext**: Extends `AppContext` with `agentId`, `sessionId`, `volumeRoot`, `defaultCwd`, `providerFactory`, and `getToolsForAgent`. Built in `src/lib/agent/runner.ts` and passed to every tool’s `execute(args, context)`.
+- **AppContext**: Provides `db`, `fs`, `http`, `events`, `processRunner`, and optional sandbox/browser options. See [Backend and Domain](backend-and-domain.md).
+
 ## Tool Interface
 
 All tools implement a common interface that enables dependency injection and testability:
@@ -215,7 +250,7 @@ One browser **page per session** (keyed by `sessionId`). Use for multi-step agen
 `message_send` (to agent) behavior:
 
 1. Find existing session where participants are exactly `[callerAgentId, toAgentId]`.
-2. If not found, create new session in `data/history/agents/`.
+2. If not found, create a new session in the database (type `"agents"`) via `createSession`.
 3. Append message.
 4. Run target agent; when they reply, their response is looped back to the caller in the agent-agent session.
 5. **Automatic reply forwarding:** Each agent's reply is automatically fed to the other. No further message_send calls are needed—the conversation continues until one indicates they are done.
@@ -257,25 +292,19 @@ Full API in [PLAN.md — History Tool API](../PLAN.md#history-tool-api).
 | `agent_list`   | _(none)_            | `AgentDefinition[]` |
 | `agent_get`    | `agentId: string`   | `AgentDefinition`   |
 
-```typescript
-interface AgentCreateConfig {
-  name: string;
-  model: string; // must be in whitelistedModels
-  soul?: string; // initial SOUL.md content
-  memory?: string; // initial MEMORY.md content
-  goals?: string; // initial GOALS.md content
-  user?: string; // initial USER.md content
-  systemPromptExtra?: string; // additional system instructions
-}
-```
+The **agent_create** tool accepts:
+
+- `name: string`, `model: string` (required). Model must be in the whitelist (otherwise a default is used).
+- `soul?: string` — initial SOUL.md content; if omitted, defaults are copied from `defaults/agent/`.
+- `extra?: string` — additional system instructions (stored as `system_prompt_extra` in the DB).
 
 On creation:
 
-1. Validate model against whitelist.
+1. Validate model against whitelist (or use default).
 2. Generate a unique `agent_id`.
 3. Insert into `agents` DB table.
-4. Create `data/agents/<agent_id>/` directory.
-5. Write the four .md files with provided or default content.
+4. Create `data/agents/<agent_id>/` and copy default template files (e.g. SOUL.md, AGENTS.md) from `defaults/agent/`.
+5. If `soul` was provided, overwrite SOUL.md. Cron and task sync run after creation.
 
 ### `cron` — Job Scheduling (Maia only)
 

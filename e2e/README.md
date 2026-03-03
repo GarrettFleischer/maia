@@ -20,6 +20,6 @@ For interactive UI mode:
 bun run test:e2e:ui
 ```
 
-E2E tests hit the real app and API. Use a test-friendly environment (e.g. test DB or in-memory) so runs don’t corrupt dev data.
+E2E tests hit the real app and API. When started via `test:e2e` or Playwright's built-in webServer, the app runs with **MAIA_DATA_DIR=data-e2e**, so a separate DB and data folder are used and dev data is never overwritten. The `data-e2e/` directory is gitignored.
 
-To run Playwright against an already-running dev server (e.g. on port 3001), set the base URL and skip the script: `PLAYWRIGHT_BASE_URL=http://localhost:3001 bunx playwright test`.
+To run Playwright against an already-running dev server (e.g. on port 3001), set the base URL and skip the script: `PLAYWRIGHT_BASE_URL=http://localhost:3001 bunx playwright test`. That server will use whatever data dir it was started with (e.g. default `data/`).

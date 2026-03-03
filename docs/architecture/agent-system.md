@@ -48,58 +48,33 @@ Flow: `systemPromptContent` (agent ID → date/time → AGENTS with attribution 
 
 ## Agent Execution Loop
 
+The diagram below refines the ASCII flow into a Mermaid diagram that matches the implementation in `src/lib/agent/runner.ts`.
+
+```mermaid
+flowchart TD
+  triggerNode["Trigger(user/heartbeat/agent)"] --> loadAgent["LoadAgentDefinition"]
+  loadAgent --> validateModel["ValidateModelWhitelisted"]
+  validateModel -->|no| errorNode["Skip/BlockAgent"]
+  validateModel -->|yes| buildContext["BuildContext(system+identity+tools)"]
+  buildContext --> callLlm["CallLLM"]
+  callLlm --> parseResp["ParseResponse"]
+  parseResp -->|\"text only\"| finalText["FinalTextResponse"]
+  parseResp -->|\"tool calls\"| execTools["ExecuteTools"]
+  execTools --> appendResults["AppendToolResults"]
+  appendResults --> callLlm
+  finalText --> compress["CompressionAgent"]
+  compress --> storeHistory["StoreHistory(original+compressed)"]
+  storeHistory --> emitSse["EmitSSEEvent"]
 ```
-Trigger (user message | heartbeat | agent message)
-         │
-         ▼
-   Load agent definition (model, status)
-         │
-         ▼
-   Validate model is whitelisted ──── NO ──► Error: agent blocked
-         │
-        YES
-         │
-         ▼
-   Assemble context window:
-   - Agent ID, system date/time
-   - AGENTS.md (with attribution)
-   - SOUL.md (with attribution)
-   - Current message (original)
-   - Minimal tool definitions (find_tool, chat_read, chat_find, terminal; Maia gets agent-management tools)
-         │
-         ▼
-   Call AI provider
-         │
-         ▼
-   Parse response
-         │
-    ┌────┴────┐
-    │         │
-  Text    Tool calls
-    │         │
-    │         ▼
-    │    Execute tools (in sequence or parallel per AI decision)
-    │         │
-    │         ▼
-    │    Append tool results to context
-    │         │
-    │         ▼
-    │    Call AI again (agentic loop continues until no more tool calls)
-    │         │
-    └────┬────┘
-         │
-         ▼
-   Final text response
-         │
-         ▼
-   Run compression agent on new entries
-         │
-         ▼
-   Store compressed + original in session
-         │
-         ▼
-   Emit SSE event to UI
-```
+
+- **Trigger**: a user message (`/api/chat`), a heartbeat, or an agent-to-agent message.
+- **Load agent**: `getAgentIdentity(ctx, agentId)` plus settings from `getSettings(ctx)`.
+- **Validate model**: checks `settings.whitelistedModels` before running.
+- **Build context**: uses `buildSystemPrompt`, `formatRecentThreadTurns`, and `buildSmartContextBlock` to assemble system, recent history, and smart context.
+- **Call LLM**: uses a provider from `createProvider` with streaming callbacks for `thinking` and `token` events.
+- **Execute tools**: runs tools from `getToolsForAgent(agent.id)` via the tool registry.
+- **Store history**: appends user, tool, thinking, and agent entries to `history_entries` and schedules indexing.
+- **Emit SSE**: uses `ctx.events.emit` so `/api/events` can stream updates to the UI.
 
 ## Agent Communication
 
@@ -126,6 +101,21 @@ The user prefixes their message with `@agent_name`. The system:
 3. Routes the message to that agent's execution loop.
 4. The agent responds within the user session.
 
+```mermaid
+sequenceDiagram
+  participant User
+  participant Home as UI(/)
+  participant ChatAPI as /api/chat
+  participant Runner as AgentRunner
+
+  User->>Home: @agent_name message
+  Home->>ChatAPI: POST /api/chat { message, targetAgent }
+  ChatAPI->>Runner: runAgent(ctx, targetAgent, sessionId, message, onEvent)
+  Runner-->>ChatAPI: SSE events (thinking/token/tool_result/done)
+  ChatAPI-->>Home: text/event-stream
+  Home-->>User: Updated message list
+```
+
 ## Heartbeat and per-agent cron
 
 Every N minutes (configurable via `heartbeatIntervalMinutes`), a **heartbeat** runs that wakes **only Maia**. She receives:
@@ -134,6 +124,35 @@ Every N minutes (configurable via `heartbeatIntervalMinutes`), a **heartbeat** r
 - The current task board (unassigned and in-progress tasks), cron jobs table, and agents list.
 
 Maia does not wake other agents directly via the heartbeat. Instead, the system assigns **one cron job per active agent** (except Maia). Those jobs run at **staggered times** within the interval so agents do not overlap (e.g. at :05, :15, :25 for a 30-minute interval). When an agent’s cron fires, that agent is run with a reminder to review GOALS and assigned tasks, check MEMORY, and take action. The heartbeat thus coordinates via tasks and cron; agents run on their own schedule.
+
+```mermaid
+flowchart LR
+  settingsNode["Settings(heartbeatInterval)"]
+  cronJobs["cron_jobs table"]
+  cronScheduler["CronScheduler(src/lib/cron/service.ts)"]
+  heartbeatJob["builtin-heartbeat job"]
+  agentRunJobs["agent-run-<agent_id> jobs"]
+  maia["Maia agent"]
+  agents["Other agents"]
+
+  settingsNode --> cronScheduler
+  cronScheduler --> cronJobs
+  cronScheduler --> heartbeatJob
+  cronScheduler --> agentRunJobs
+
+  heartbeatJob --> maia
+  maia --> cronJobs
+  maia --> agents
+
+  agentRunJobs --> agents
+```
+
+- **Heartbeat job**:
+  - Implemented as a built-in cron job that runs an internal heartbeat tool.
+  - Wakes Maia, who inspects tasks and cron jobs and ensures every active agent has a staggered job.
+- **Per-agent jobs**:
+  - Generated as `agent-run-<agent_id>` cron jobs at staggered minutes.
+  - When they fire, they run the agent with a focused reminder to review tasks and memory.
 
 ## Maia — The Orchestrator
 

@@ -23,7 +23,7 @@ When building the prompt for an AI call:
 Token budget breakdown (example, 128k context model):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 System prompt + security preamble:       ~1,500 tokens
-Agent identity (4 .md files):           ~2,000 tokens
+Agent identity (SOUL.md, AGENTS.md, skills): ~2,000 tokens
 Compressed session history:             ~8,000 tokens  (would be ~40,000 uncompressed)
 Current message (original, full):       ~2,000 tokens
 Available tool definitions:             ~3,000 tokens
@@ -31,6 +31,30 @@ Available tool definitions:             ~3,000 tokens
 Total:                                 ~16,500 tokens
 Remaining for response:               ~111,500 tokens
 ```
+
+### Context assembly and code paths
+
+The flow below ties the token budget and context assembly to the modules that implement it. Session history (original and compressed) is read in `src/lib/history.ts`; system and recent-thread blocks are built in `src/lib/agent/context-query.ts` and used by `src/lib/agent/runner.ts`.
+
+```mermaid
+flowchart LR
+  session["Session(history_entries)"]
+  historyLib["src/lib/history.ts"]
+  contextQuery["src/lib/agent/context-query.ts"]
+  runner["src/lib/agent/runner.ts"]
+  llm["LLM"]
+
+  session --> historyLib
+  historyLib --> contextQuery
+  runner --> contextQuery
+  contextQuery --> runner
+  runner --> llm
+```
+
+- **Session / history**: `getSession(ctx, sessionId)` returns `{ original, compressed }` arrays. Recent turns are formatted with `formatRecentThreadTurns(session, n)` in `context-query.ts`.
+- **transformContext**: In `src/lib/agent/context-query.ts`, `transformContext(recentThreadBlock, smartContextBlock, systemPromptContent)` combines the blocks into a single system string.
+- **convertToLlm**: Same module; maps that system string plus the user message (and optional initial tool result) to the `Message[]` format for the provider.
+- **Runner**: `src/lib/agent/runner.ts` calls `buildSmartContextBlock`, `buildSystemPrompt`, `transformContext`, and `convertToLlm` when building the prompt for each LLM request.
 
 ## Compression Agent Behavior
 
