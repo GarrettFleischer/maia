@@ -1551,6 +1551,23 @@ export async function summarizeRetrievedContext(
   }
 }
 
+/** Max characters to show per source in the "Included in context" done output. */
+const SMART_CONTEXT_PREVIEW_MAX_LEN = 60;
+
+/**
+ * Builds a short display label for a source: first N characters of content, single line.
+ * @param content - Raw content for the source
+ * @param sourceId - Fallback when content is empty
+ * @returns One-line preview or the source id
+ */
+function sourcePreviewLabel(content: string, sourceId: string): string {
+  const oneLine = content.replace(/\s+/g, " ").trim();
+  if (!oneLine) return sourceId;
+  return oneLine.length <= SMART_CONTEXT_PREVIEW_MAX_LEN
+    ? oneLine
+    : `${oneLine.slice(0, SMART_CONTEXT_PREVIEW_MAX_LEN)}…`;
+}
+
 /**
  * Result of buildSmartContextBlock: the markdown block and the list of source IDs included.
  */
@@ -1559,6 +1576,8 @@ export interface BuildSmartContextResult {
   block: string;
   /** Source IDs that were included in the summary (history:..., knowledge:...). */
   sourceIds: string[];
+  /** Human-readable preview per source (same length as sourceIds); used for UI. */
+  sourceLabels: string[];
 }
 
 /**
@@ -1570,10 +1589,10 @@ export interface BuildSmartContextResult {
  * @param userMessage - Current user message (clarified) to base search queries on
  * @param clarifiedCommandsContext - Optional list of clarified commands for the chat (Round 1: ...\\nRound 2: ...) for disambiguation only
  * @param onProgress - Optional callback for live progress (phase, detail?, output?); output is the actual step result for tooltips.
- * @returns Object with block (markdown section or "") and sourceIds (IDs included in the summary)
- * @note When no model is configured or retrieval returns nothing, returns { block: "", sourceIds: [] }.
+ * @returns Object with block (markdown section or ""), sourceIds (IDs for citations), and sourceLabels (preview text for UI)
+ * @note When no model is configured or retrieval returns nothing, returns { block: "", sourceIds: [], sourceLabels: [] }.
  * @example
- * const { block, sourceIds } = await buildSmartContextBlock(ctx, providerFactory, userMessage, clarifiedCommandsBlock);
+ * const { block, sourceIds, sourceLabels } = await buildSmartContextBlock(ctx, providerFactory, userMessage, clarifiedCommandsBlock);
  * const combined = transformContext(recentThreadBlock, block, systemPromptContent);
  */
 export async function buildSmartContextBlock(
@@ -1640,7 +1659,7 @@ export async function buildSmartContextBlock(
       Date.now() - startTotal,
       "ms, 0 sources (no retrieval)",
     );
-    return { block: "", sourceIds: [] };
+    return { block: "", sourceIds: [], sourceLabels: [] };
   }
 
   const skipFilter =
@@ -1700,6 +1719,7 @@ export async function buildSmartContextBlock(
     return {
       block: "## Smart context\n\nNo relevant prior context found.",
       sourceIds: [],
+      sourceLabels: [],
     };
   }
 
@@ -1729,9 +1749,12 @@ export async function buildSmartContextBlock(
       ? summarizeResult
       : summarizeResult.block;
   const sourceIds = finalSources.map((s) => s.id);
+  const sourceLabels = finalContents.map((c, i) =>
+    sourcePreviewLabel(c, finalSources[i].id),
+  );
   onProgress?.("summary", undefined, block || "(empty)");
 
-  const doneOutput = `Included in context (${sourceIds.length} sources):\n${sourceIds.join("\n")}`;
+  const doneOutput = `Included in context (${sourceIds.length} sources):\n${sourceLabels.join("\n")}`;
   onProgress?.("done", `${sourceIds.length} sources`, doneOutput);
   agentDebug(
     "[Smart context] done in",
@@ -1740,7 +1763,7 @@ export async function buildSmartContextBlock(
     sourceIds.length,
     "sources",
   );
-  return { block, sourceIds };
+  return { block, sourceIds, sourceLabels };
 }
 
 /**

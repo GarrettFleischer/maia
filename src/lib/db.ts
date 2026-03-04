@@ -235,6 +235,31 @@ export function initSchema(db: DbAdapter): void {
           "UPDATE schema_version SET version = 3, applied_at = datetime('now')",
         )
         .run();
+      currentVersion = 3;
+    }
+
+    // Step 4: sessions smart context (single object per run for bubble persistence)
+    if (currentVersion < 4) {
+      const sessionsInfo = database
+        .prepare("PRAGMA table_info(sessions)")
+        .all() as { name: string }[];
+      if (!sessionsInfo.some((c) => c.name === "smart_context_run")) {
+        database.exec("ALTER TABLE sessions ADD COLUMN smart_context_run TEXT");
+      }
+      if (
+        !sessionsInfo.some(
+          (c) => c.name === "smart_context_after_message_index",
+        )
+      ) {
+        database.exec(
+          "ALTER TABLE sessions ADD COLUMN smart_context_after_message_index INTEGER",
+        );
+      }
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 4, applied_at = datetime('now')",
+        )
+        .run();
     }
   }
 

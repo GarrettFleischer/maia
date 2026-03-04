@@ -1,6 +1,11 @@
 import { v4 as uuidv4 } from "uuid";
 import type { AppContext } from "./context";
-import type { HistoryEntry, Session, SessionMeta } from "./types";
+import type {
+  HistoryEntry,
+  Session,
+  SessionMeta,
+  SmartContextRun,
+} from "./types";
 
 // -- Session CRUD --
 
@@ -138,10 +143,31 @@ export function getSession(ctx: AppContext, id: string): Session | null {
     )
     .all(id) as Record<string, unknown>[];
 
+  const meta = rowToMeta(row);
+  const smartContextRunRaw = row.smart_context_run as string | null | undefined;
+  const smartContextAfterMessageIndex = row.smart_context_after_message_index as
+    | number
+    | null
+    | undefined;
+  let smartContextRun: SmartContextRun | null | undefined;
+  if (smartContextRunRaw != null && smartContextRunRaw !== "") {
+    try {
+      smartContextRun = JSON.parse(smartContextRunRaw) as SmartContextRun;
+    } catch {
+      smartContextRun = null;
+    }
+  } else {
+    smartContextRun = null;
+  }
   return {
-    ...rowToMeta(row),
+    ...meta,
     original: original.map(rowToEntry),
     compressed: compressed.map(rowToEntry),
+    smartContextRun: smartContextRun ?? null,
+    smartContextAfterMessageIndex:
+      typeof smartContextAfterMessageIndex === "number"
+        ? smartContextAfterMessageIndex
+        : null,
   };
 }
 
@@ -179,11 +205,30 @@ export function getSessionRecent(
 
   const original = originalDesc.reverse().map(rowToEntry);
   const compressed = compressedDesc.reverse().map(rowToEntry);
-
+  const smartContextRunRaw = row.smart_context_run as string | null | undefined;
+  const smartContextAfterMessageIndex = row.smart_context_after_message_index as
+    | number
+    | null
+    | undefined;
+  let smartContextRun: SmartContextRun | null | undefined;
+  if (smartContextRunRaw != null && smartContextRunRaw !== "") {
+    try {
+      smartContextRun = JSON.parse(smartContextRunRaw) as SmartContextRun;
+    } catch {
+      smartContextRun = null;
+    }
+  } else {
+    smartContextRun = null;
+  }
   return {
     ...rowToMeta(row),
     original,
     compressed,
+    smartContextRun: smartContextRun ?? null,
+    smartContextAfterMessageIndex:
+      typeof smartContextAfterMessageIndex === "number"
+        ? smartContextAfterMessageIndex
+        : null,
   };
 }
 
@@ -225,6 +270,48 @@ export function updateSessionMeta(
   ctx.db
     .prepare(`UPDATE sessions SET ${parts.join(", ")} WHERE id = ?`)
     .run(...vals);
+}
+
+/**
+ * Updates the session's smart context run and after-message index.
+ * Persists a single object per run so the UI can restore phase bubbles on refresh.
+ * @param ctx - Application context
+ * @param sessionId - Session to update
+ * @param run - Full smart context run (phases + outputs)
+ * @param afterMessageIndex - Message index after which to show smart context
+ */
+export function updateSessionSmartContext(
+  ctx: AppContext,
+  sessionId: string,
+  run: SmartContextRun,
+  afterMessageIndex: number,
+): void {
+  ctx.db
+    .prepare(
+      `UPDATE sessions SET smart_context_run = ?, smart_context_after_message_index = ?, updated_at = ? WHERE id = ?`,
+    )
+    .run(
+      JSON.stringify(run),
+      afterMessageIndex,
+      new Date().toISOString(),
+      sessionId,
+    );
+}
+
+/**
+ * Clears the session's smart context (e.g. when history is truncated on re-send).
+ * @param ctx - Application context
+ * @param sessionId - Session to clear
+ */
+export function clearSessionSmartContext(
+  ctx: AppContext,
+  sessionId: string,
+): void {
+  ctx.db
+    .prepare(
+      `UPDATE sessions SET smart_context_run = NULL, smart_context_after_message_index = NULL, updated_at = ? WHERE id = ?`,
+    )
+    .run(new Date().toISOString(), sessionId);
 }
 
 /**
@@ -343,6 +430,7 @@ export function truncateHistoryAfterIndex(
   ctx.db
     .prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")
     .run(new Date().toISOString(), sessionId);
+  clearSessionSmartContext(ctx, sessionId);
 }
 
 // -- Fuzzy search --

@@ -13,6 +13,8 @@ import {
   getTotalUserRounds,
   appendEntry,
   ensureSession,
+  entriesForConversation,
+  updateSessionSmartContext,
 } from "../history";
 import {
   getToolsForAgent,
@@ -358,10 +360,32 @@ async function _runLoop(
   const { buildEmbeddings } = await import("../knowledge/rebuild-embeddings");
   await buildEmbeddings(ctx);
   const smartContextStart = Date.now();
+  const sessionForIndex = getSession(ctx, sessionId);
+  const conversationEntries = sessionForIndex
+    ? entriesForConversation(sessionForIndex.original)
+    : [];
+  const smartContextAfterMessageIndex = Math.max(
+    0,
+    conversationEntries.length - 1,
+  );
   const smartContextRunAccumulator: SmartContextRun = {
     phases: [],
     doneDetail: undefined,
   };
+  /**
+   * Persists the current smart context run to the session row so page refreshes
+   * can restore all phase bubbles (queries, retrieval, filter, summary, done).
+   * Single object updated in place per run.
+   */
+  function persistSmartContextRunPartial(): void {
+    if (smartContextRunAccumulator.phases.length === 0) return;
+    updateSessionSmartContext(
+      ctx,
+      sessionId,
+      smartContextRunAccumulator,
+      smartContextAfterMessageIndex,
+    );
+  }
   smartContextRunAccumulator.phases = [
     {
       phase: "clarified",
@@ -374,6 +398,7 @@ async function _runLoop(
     phase: "clarified",
     output: effectiveUserMessage,
   });
+  persistSmartContextRunPartial();
   const [smartResult, skillsResult] = await Promise.all([
     buildSmartContextBlock(
       ctx,
@@ -411,6 +436,7 @@ async function _runLoop(
             }
           }
           smartContextRunAccumulator.doneDetail = undefined;
+          persistSmartContextRunPartial();
         } else {
           const prev = smartContextRunAccumulator.phases;
           const last = prev[prev.length - 1];
@@ -429,6 +455,7 @@ async function _runLoop(
           if (phase === "done") {
             smartContextRunAccumulator.doneDetail = detail;
           }
+          persistSmartContextRunPartial();
         }
       },
     ),
@@ -444,11 +471,15 @@ async function _runLoop(
     skillCount > 0
       ? `${sourceCount} sources, ${skillCount} skills`
       : `${sourceCount} sources`;
+  const sourceList =
+    sourceCount > 0 && smartResult.sourceLabels?.length === sourceCount
+      ? smartResult.sourceLabels
+      : sourceCount > 0
+        ? smartResult.sourceIds
+        : ["(no sources)"];
   const combinedDoneOutputLines: string[] = [
     `Included in context (${sourceCount} sources):`,
-    ...(sourceCount > 0
-      ? smartResult.sourceIds.map((id) => id)
-      : ["(no sources)"]),
+    ...sourceList,
     "",
     `Active skills (${skillCount}):`,
     ...(skillCount > 0
@@ -490,11 +521,7 @@ async function _runLoop(
     smartContextRunAccumulator.phases.length > 0 &&
     smartContextRunAccumulator.doneDetail !== undefined
   ) {
-    appendEntry(ctx, sessionId, {
-      role: "smart_context",
-      content: JSON.stringify(smartContextRunAccumulator),
-      timestamp: new Date().toISOString(),
-    });
+    persistSmartContextRunPartial();
   }
   agentDebug(
     "[Smart context] runner: context + skills ready in",
@@ -537,6 +564,21 @@ async function _runLoop(
     effectiveUserMessage,
     initialToolResult ?? undefined,
   );
+
+  const fullPromptLines: string[] = [];
+  for (const m of messages) {
+    const role = m.role.toUpperCase();
+    fullPromptLines.push(`--- ${role} ---`);
+    fullPromptLines.push(m.content);
+    fullPromptLines.push("");
+  }
+  smartContextRunAccumulator.fullPrompt = fullPromptLines.join("\n").trimEnd();
+  if (
+    smartContextRunAccumulator.phases.length > 0 &&
+    smartContextRunAccumulator.doneDetail !== undefined
+  ) {
+    persistSmartContextRunPartial();
+  }
 
   let agentResponseContent = "";
   const agentEntry: Omit<HistoryEntry, "id"> = {

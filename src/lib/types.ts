@@ -31,6 +31,10 @@ export interface Session {
   type: "user" | "agents";
   original: HistoryEntry[];
   compressed: HistoryEntry[];
+  /** Preserved smart context run (phases + outputs). Single object per run; updated in place as phases complete. */
+  smartContextRun?: SmartContextRun | null;
+  /** Message index after which to show smart context (below the user message that triggered it). */
+  smartContextAfterMessageIndex?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -339,6 +343,8 @@ export interface SmartContextRun {
   }>;
   /** Set when phase "done" is received (e.g. "3 sources", "0 sources"). */
   doneDetail?: string;
+  /** Full prompt sent to the agent (system + user + optional tool), shown in the done phase detail. */
+  fullPrompt?: string;
 }
 
 // SSE event types
