@@ -21,10 +21,13 @@ import type { AppContext } from "../context";
  * Uses effective max length (Ollama context when available) and chunks long content into multiple vectors per entry.
  * Safe to call fire-and-forget; logs errors and does not throw.
  */
-export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promise<void> {
+export async function indexHistoryEntry(
+  ctx: AppContext,
+  entryId: string,
+): Promise<void> {
   const row = ctx.db
     .prepare(
-      "SELECT id, session_id, role, content, tool_name, tool_args, timestamp, is_compressed FROM history_entries WHERE id = ?"
+      "SELECT id, session_id, role, content, tool_name, tool_args, timestamp, is_compressed FROM history_entries WHERE id = ?",
     )
     .get(entryId) as
     | {
@@ -36,6 +39,10 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
     | undefined;
 
   if (!row) return;
+
+  // Skip UI-only entries (smart_context); not part of conversation search.
+  const role = (row as { role?: string }).role;
+  if (role === "smart_context") return;
 
   // Skip indexing empty content (e.g. compressed skip entries); nothing to embed and Ollama may return invalid shape.
   if (row.content.trim() === "") return;
@@ -49,12 +56,16 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
     const store = createVectorStore(ctx.db);
     const now = new Date().toISOString();
     if (chunks.length > 1) {
-      console.info(`[Embedding] Indexing entry ${row.id}: ${chunks.length} chunks`);
+      console.info(
+        `[Embedding] Indexing entry ${row.id}: ${chunks.length} chunks`,
+      );
     }
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       if (chunks.length > 1) {
-        console.info(`[Embedding] Entry ${row.id}: chunk ${i + 1}/${chunks.length}`);
+        console.info(
+          `[Embedding] Entry ${row.id}: chunk ${i + 1}/${chunks.length}`,
+        );
       }
       const embedding = await embedder.embed(chunk);
       store.insertHistory(
@@ -68,13 +79,20 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
       );
     }
     if (chunks.length > 1) {
-      console.info(`[Embedding] Indexed entry ${row.id}: ${chunks.length} chunks`);
+      console.info(
+        `[Embedding] Indexed entry ${row.id}: ${chunks.length} chunks`,
+      );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : "";
+    const cause =
+      err instanceof Error && err.cause instanceof Error
+        ? err.cause.message
+        : "";
     const causeCode =
-      err instanceof Error && err.cause && typeof (err.cause as { code?: string }).code === "string"
+      err instanceof Error &&
+      err.cause &&
+      typeof (err.cause as { code?: string }).code === "string"
         ? (err.cause as { code: string }).code
         : undefined;
     const isRefused =
@@ -82,6 +100,10 @@ export async function indexHistoryEntry(ctx: AppContext, entryId: string): Promi
       msg.includes("ECONNREFUSED") ||
       cause.includes("ECONNREFUSED");
     const hint = isRefused ? " (embedding service not running?)" : "";
-    console.error("History indexing skipped:", msg + hint, `(embedding model: ${settings.embeddingModel})`);
+    console.error(
+      "History indexing skipped:",
+      msg + hint,
+      `(embedding model: ${settings.embeddingModel})`,
+    );
   }
 }

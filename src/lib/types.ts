@@ -5,9 +5,15 @@
 
 export interface HistoryEntry {
   id: string;
-  role: "user" | "agent" | "tool_call" | "tool_result" | "thinking";
+  role:
+    | "user"
+    | "agent"
+    | "tool_call"
+    | "tool_result"
+    | "thinking"
+    | "smart_context";
   content: string;
-  /** Optional context-aware rewrite of the user's command for this round. */
+  /** Optional clarified command for this round (references and ambiguous terms only; meaning and structure preserved). */
   resolvedContent?: string;
   /** 1-based conversation round index (user message + following responses). */
   roundIndex?: number;
@@ -197,7 +203,13 @@ export interface Settings {
   /** Auto-archive: files with updated_at older than this duration are excluded from knowledge_search unless include_archived is true. Value (positive integer). */
   archiveDurationValue: number;
   /** Auto-archive duration unit. */
-  archiveDurationUnit: "seconds" | "minutes" | "hours" | "days" | "months" | "years";
+  archiveDurationUnit:
+    | "seconds"
+    | "minutes"
+    | "hours"
+    | "days"
+    | "months"
+    | "years";
   /** Per-model generation params (keys must be whitelisted model ids). */
   modelParams: Record<string, ModelGenerationParams>;
 }
@@ -227,7 +239,13 @@ export interface SettingsPublic {
   /** @see Settings.archiveDurationValue */
   archiveDurationValue: number;
   /** @see Settings.archiveDurationUnit */
-  archiveDurationUnit: "seconds" | "minutes" | "hours" | "days" | "months" | "years";
+  archiveDurationUnit:
+    | "seconds"
+    | "minutes"
+    | "hours"
+    | "days"
+    | "months"
+    | "years";
   /** @see Settings.modelParams */
   modelParams: Record<string, ModelGenerationParams>;
 }
@@ -270,8 +288,21 @@ export type AgentLoopEvent =
   | { type: "turn_start"; loopIndex: number }
   | { type: "message_start" }
   | { type: "message_update"; delta: string }
-  | { type: "message_end"; content: string; toolCalls: Array<{ id: string; name: string; args: Record<string, unknown> }> }
-  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
+  | {
+      type: "message_end";
+      content: string;
+      toolCalls: Array<{
+        id: string;
+        name: string;
+        args: Record<string, unknown>;
+      }>;
+    }
+  | {
+      type: "tool_execution_start";
+      toolCallId: string;
+      toolName: string;
+      args: Record<string, unknown>;
+    }
   | {
       type: "tool_execution_end";
       toolCallId: string;
@@ -285,23 +316,103 @@ export type AgentLoopEvent =
   | { type: "agent_end"; finalContent?: string }
   | { type: "agent_error"; message: string };
 
+/** Smart context pipeline phase for live progress in the chat UI. */
+export type SmartContextPhase =
+  | "clarified"
+  | "queries"
+  | "retrieval"
+  | "filter"
+  | "summary"
+  | "done";
+
+/**
+ * Preserved smart context run: phases seen this run plus final result detail.
+ * Stored in UI state and not cleared when the agent responds; replaced only when a new run starts.
+ */
+export interface SmartContextRun {
+  /** Phases completed or in progress, in order (queries → retrieval → filter → summary → done). */
+  phases: Array<{
+    phase: SmartContextPhase;
+    detail?: string;
+    /** Actual step output for hover tooltip (e.g. query list, source IDs, summary snippet). */
+    output?: string;
+  }>;
+  /** Set when phase "done" is received (e.g. "3 sources", "0 sources"). */
+  doneDetail?: string;
+}
+
 // SSE event types
 export type SSEEvent =
   | { type: "token"; content: string }
   | { type: "thinking"; content: string }
   | { type: "tool_call"; tool: string; args: Record<string, unknown> }
   | { type: "tool_result"; tool: string; result: unknown }
-  | { type: "done"; sessionId: string; compressed: HistoryEntry; original: HistoryEntry }
+  | {
+      type: "smart_context_phase";
+      phase: SmartContextPhase;
+      detail?: string;
+      /** Actual step output for hover tooltip. */
+      output?: string;
+    }
+  | {
+      type: "done";
+      sessionId: string;
+      compressed: HistoryEntry;
+      original: HistoryEntry;
+    }
   | { type: "error"; message: string };
 
 export type SystemSSEEvent =
-  | { event: "message"; data: { sessionId: string; entry: HistoryEntry; participants: string[] } }
+  | {
+      event: "message";
+      data: { sessionId: string; entry: HistoryEntry; participants: string[] };
+    }
   | { event: "session_created"; data: { session: SessionMeta } }
-  | { event: "session_updated"; data: { sessionId: string; name: string; description: string; tags: string[] } }
-  | { event: "agent_status"; data: { agentId: string; status: "idle" | "running" | "paused" } }
+  | {
+      event: "session_updated";
+      data: {
+        sessionId: string;
+        name: string;
+        description: string;
+        tags: string[];
+      };
+    }
+  | {
+      event: "agent_status";
+      data: { agentId: string; status: "idle" | "running" | "paused" };
+    }
   | { event: "heartbeat"; data: { timestamp: string } }
   | { event: "ping"; data: { timestamp: string } }
   | { event: "tasks_changed"; data: Record<string, never> }
-  | { event: "queue_changed"; data: { jobs: Array<{ tool: string; args: Record<string, unknown>; caller?: string; priority: number }> } }
-  | { event: "web_search_empty"; data: { reason: "captcha" | "no_results_parsed"; query: string } }
-  | { event: "cron_fired"; data: { jobId: string; agentId: string; timestamp: string } };
+  | {
+      event: "queue_changed";
+      data: {
+        jobs: Array<{
+          tool: string;
+          args: Record<string, unknown>;
+          caller?: string;
+          priority: number;
+        }>;
+      };
+    }
+  | {
+      event: "web_search_empty";
+      data: { reason: "captcha" | "no_results_parsed"; query: string };
+    }
+  | {
+      event: "cron_fired";
+      data: { jobId: string; agentId: string; timestamp: string };
+    }
+  | {
+      event: "question";
+      data: {
+        sessionId: string;
+        requestId: string;
+        questions: Array<{
+          id: string;
+          prompt: string;
+          choices?: string[];
+          allowOther: boolean;
+        }>;
+      };
+    };

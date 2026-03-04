@@ -1,18 +1,33 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "../zod-to-json";
-import { searchEntries, searchAcrossSessions, getSession } from "../history";
-import { formatRecentThreadTurns } from "../agent/context-query";
+import {
+  entriesForConversation,
+  searchEntries,
+  searchAcrossSessions,
+  getSession,
+} from "../history";
+import {
+  formatRecentThreadTurns,
+  formatRoundsByIndex,
+} from "../agent/context-query";
 import type { Tool, ToolContext } from "./types";
 
 function makeTool<S extends z.ZodTypeAny>(
   name: string,
   description: string,
   schema: S,
-  execute: (args: z.infer<S>, ctx: ToolContext) => Promise<unknown>
+  execute: (args: z.infer<S>, ctx: ToolContext) => Promise<unknown>,
 ): Tool<z.infer<S>> {
   return {
-    name, description, schema, execute,
-    toDefinition: () => ({ name, description, parameters: zodToJsonSchema(schema) }),
+    name,
+    description,
+    schema,
+    execute,
+    toDefinition: () => ({
+      name,
+      description,
+      parameters: zodToJsonSchema(schema),
+    }),
   };
 }
 
@@ -23,7 +38,8 @@ export const historyFindTool = makeTool(
     q: z.string().describe("Search query"),
     mode: z.enum(["compressed", "original", "both"]).optional(),
   }),
-  async ({ q: query, mode }, ctx) => searchEntries(ctx, query, ctx.sessionId, mode)
+  async ({ q: query, mode }, ctx) =>
+    searchEntries(ctx, query, ctx.sessionId, mode),
 );
 
 export const historySearchAllTool = makeTool(
@@ -35,9 +51,12 @@ export const historySearchAllTool = makeTool(
     mode: z.enum(["compressed", "original", "both"]).optional(),
   }),
   async ({ q: query, tags, mode }, ctx) => {
-    const tagList = tags?.split(",").map((t) => t.trim()).filter(Boolean);
+    const tagList = tags
+      ?.split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
     return searchAcrossSessions(ctx, query, mode, tagList);
-  }
+  },
 );
 
 /**
@@ -52,7 +71,7 @@ function resolveRequestedIndices(
   indexes: number[] | undefined,
   rangeStart: number | undefined,
   rangeEnd: number | undefined,
-  length: number
+  length: number,
 ): number[] | null {
   if (length === 0) return null;
   const maxIndex = length - 1;
@@ -60,7 +79,7 @@ function resolveRequestedIndices(
     const set = new Set(
       indexes
         .filter((i) => Number.isInteger(i) && i >= 0 && i <= maxIndex)
-        .sort((a, b) => a - b)
+        .sort((a, b) => a - b),
     );
     return [...set];
   }
@@ -80,16 +99,35 @@ export const historyGetSessionTool = makeTool(
   "Get session history. By default returns the full session. Pass indexes or start/end range. Example: history_get_session({ id: 's1', start: 0, end: 4 }).",
   z.object({
     id: z.string().describe("Session ID"),
-    mode: z.enum(["compressed", "original", "both"]).optional().describe("Layer: original, compressed, or both"),
-    indexes: z.array(z.number().int().min(0)).optional().describe("Turn indices"),
-    start: z.number().int().min(0).optional().describe("Range start (inclusive)"),
+    mode: z
+      .enum(["compressed", "original", "both"])
+      .optional()
+      .describe("Layer: original, compressed, or both"),
+    indexes: z
+      .array(z.number().int().min(0))
+      .optional()
+      .describe("Turn indices"),
+    start: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe("Range start (inclusive)"),
     end: z.number().int().min(0).optional().describe("Range end (inclusive)"),
   }),
-  async ({ id: sessionId, mode, indexes, start: rangeStart, end: rangeEnd }, ctx) => {
+  async (
+    { id: sessionId, mode, indexes, start: rangeStart, end: rangeEnd },
+    ctx,
+  ) => {
     const session = getSession(ctx, sessionId);
     if (!session) return null;
     const length = session.original.length;
-    const indices = resolveRequestedIndices(indexes, rangeStart, rangeEnd, length);
+    const indices = resolveRequestedIndices(
+      indexes,
+      rangeStart,
+      rangeEnd,
+      length,
+    );
     const includeOriginal = mode !== "compressed";
     const includeCompressed = mode === "compressed" || mode === "both";
 
@@ -100,26 +138,62 @@ export const historyGetSessionTool = makeTool(
     }
 
     const entries = indices.map((index) => {
-      const row: { index: number; original?: typeof session.original[0]; compressed?: typeof session.compressed[0] } = { index };
-      if (includeOriginal && session.original[index]) row.original = session.original[index];
-      if (includeCompressed && session.compressed[index]) row.compressed = session.compressed[index];
+      const row: {
+        index: number;
+        original?: (typeof session.original)[0];
+        compressed?: (typeof session.compressed)[0];
+      } = { index };
+      if (includeOriginal && session.original[index])
+        row.original = session.original[index];
+      if (includeCompressed && session.compressed[index])
+        row.compressed = session.compressed[index];
       return row;
     });
     return { sessionId, mode: mode ?? "both", entries };
-  }
+  },
 );
 
 export const chatReadTool = makeTool(
   "chat_read",
-  "Return the last N user/agent conversation rounds (user message + agent reply pairs) from the current session. Use this to get prior context when you need it instead of having it in every prompt. Example: chat_read({ n: 5 }).",
+  "Return full context for specific conversation rounds from the current session. You must specify which round(s) you need by 1-based round number. By default reasoning/thinking entries are omitted; set include_reasoning to true to include the agent's reasoning for those rounds. The current (most recent) round is excluded so you only get prior context. Example: chat_read({ rounds: [1, 2] }) or chat_read({ rounds: [3], include_reasoning: true }).",
   z.object({
-    n: z.number().int().min(1).max(50).optional().describe("Rounds to return (default 5)"),
+    rounds: z
+      .array(z.number().int().min(1))
+      .min(1)
+      .describe(
+        "1-based round number(s) to read (e.g. [1, 2, 5]). Current round is excluded.",
+      ),
+    include_reasoning: z
+      .boolean()
+      .optional()
+      .describe(
+        "When true, include reasoning/thinking entries for each round; omit for shorter context",
+      ),
   }),
-  async ({ n: steps = 5 }, ctx) => {
+  async (
+    { rounds: requestedRounds, include_reasoning: includeReasoning = false },
+    ctx,
+  ) => {
     const session = getSession(ctx, ctx.sessionId);
     if (!session) return "No session or no recent turns.";
-    return formatRecentThreadTurns(session, steps);
-  }
+    const entries = entriesForConversation(session.original);
+    const totalUserRounds = entries.filter((e) => e.role === "user").length;
+    if (totalUserRounds === 0) return "No prior turns in this session.";
+    const currentRoundIndex = totalUserRounds;
+    const priorRounds = requestedRounds.filter(
+      (r) => r >= 1 && r < currentRoundIndex,
+    );
+    if (priorRounds.length === 0) {
+      return (
+        "No prior rounds in that range. Current round is " +
+        currentRoundIndex +
+        ". Request round numbers less than that (e.g. rounds: [1, 2])."
+      );
+    }
+    return formatRoundsByIndex(session, priorRounds, {
+      skipThinking: !includeReasoning,
+    });
+  },
 );
 
 export const historyTools: Tool[] = [

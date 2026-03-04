@@ -7,8 +7,17 @@
 import path from "path";
 import { getSettings } from "../settings";
 import { getAgentIdentity, setAgentStatus } from "./identity";
-import { getSession, getSessionRecent, getTotalUserRounds, appendEntry, ensureSession } from "../history";
-import { getToolsForAgent, getMinimalToolDefsForAgent } from "../tools/registry";
+import {
+  getSession,
+  getSessionRecent,
+  getTotalUserRounds,
+  appendEntry,
+  ensureSession,
+} from "../history";
+import {
+  getToolsForAgent,
+  getMinimalToolDefsForAgent,
+} from "../tools/registry";
 import { SECURITY_PREAMBLE } from "../security/preamble";
 import { filterText } from "../security/injection-filter";
 import {
@@ -17,13 +26,19 @@ import {
   formatRecentThreadTurns,
   countUserRounds,
   buildSmartContextBlock,
+  buildRecentRoundDetail,
   rewriteCommandWithContext,
   type PriorResolvedCommand,
 } from "./context-query";
 import type { AppContext } from "../context";
 import type { CreateProviderOptions } from "../ai/factory";
 import type { AIProvider } from "../ai/types";
-import type { AgentLoopEvent, HistoryEntry, SSEEvent } from "../types";
+import type {
+  AgentLoopEvent,
+  HistoryEntry,
+  SmartContextRun,
+  SSEEvent,
+} from "../types";
 import type { Message } from "../ai/types";
 import type { ToolContext } from "../tools/types";
 import { getAgentDir, getAgentWorkspace } from "../data-dir";
@@ -34,7 +49,11 @@ import { enqueue } from "../queue/llm-queue";
 import { runWithAgentContext, agentDebug, agentError } from "./agent-logger";
 
 export type SSECallback = (event: SSEEvent) => void;
-export type ProviderFactory = (model: string, ctx: AppContext, options?: CreateProviderOptions) => AIProvider;
+export type ProviderFactory = (
+  model: string,
+  ctx: AppContext,
+  options?: CreateProviderOptions,
+) => AIProvider;
 
 /**
  * Canonical type for functions that run an agent with a message and return the reply.
@@ -72,7 +91,6 @@ export interface RunAgentOptions {
    */
   smartContextViaQueue?: boolean;
 }
-
 
 /**
  * Schedules history indexing for one entry. When we're already inside a queue job (smartContextViaQueue false),
@@ -132,19 +150,17 @@ export async function runAgent(
   setAgentStatus(ctx, agentId, "running");
 
   try {
-    return await runWithAgentContext(
-      { id: agent.id, name: agent.name },
-      () =>
-        _runLoop(
-          ctx,
-          providerFactory,
-          agent,
-          sessionId,
-          userMessage,
-          onEvent,
-          settings,
-          options,
-        ),
+    return await runWithAgentContext({ id: agent.id, name: agent.name }, () =>
+      _runLoop(
+        ctx,
+        providerFactory,
+        agent,
+        sessionId,
+        userMessage,
+        onEvent,
+        settings,
+        options,
+      ),
     );
   } finally {
     setAgentStatus(ctx, agentId, "idle");
@@ -177,7 +193,9 @@ async function _runLoop(
     }
   }
 
-  const provider = providerFactory(agent.model, ctx, { reasoningEffort: agent.reasoningEffort });
+  const provider = providerFactory(agent.model, ctx, {
+    reasoningEffort: agent.reasoningEffort,
+  });
   const tools = getToolsForAgent(agent.id);
   const toolDefs = getMinimalToolDefsForAgent(agent.id);
 
@@ -195,12 +213,17 @@ async function _runLoop(
   ensureSession(ctx, sessionId, [agent.id], "agents");
 
   const contextProviderFactory = (model: string, c: AppContext) =>
-    providerFactory(model, c, { reasoningEffort: settings.contextReasoningEffort });
+    providerFactory(model, c, {
+      reasoningEffort: settings.contextReasoningEffort,
+    });
 
   // Compute prior context-aware commands and current round index, then rewrite the command.
   const existingSession = getSession(ctx, sessionId);
-  let currentRoundIndex = existingSession ? countUserRounds(existingSession) + 1 : 1;
+  let currentRoundIndex = existingSession
+    ? countUserRounds(existingSession) + 1
+    : 1;
   const priorCommands: PriorResolvedCommand[] = [];
+  let conversationTopic: string | undefined;
   if (existingSession) {
     let seenUserRounds = 0;
     for (const entry of existingSession.original) {
@@ -211,14 +234,29 @@ async function _runLoop(
         priorCommands.push({ roundIndex, resolvedCommand });
       }
     }
+    // Derive a short discussion topic from the last agent message for clarified-command context.
+    const lastAgent = [...existingSession.original]
+      .reverse()
+      .find((e) => e.role === "agent");
+    if (lastAgent?.content) {
+      const maxTopicLen = 200;
+      conversationTopic =
+        lastAgent.content.length <= maxTopicLen
+          ? lastAgent.content.trim()
+          : lastAgent.content.trim().slice(0, maxTopicLen).trim() + "…";
+    }
   }
 
+  const recentRoundDetail = existingSession
+    ? buildRecentRoundDetail(existingSession)
+    : "";
   const rewriteResult = await rewriteCommandWithContext(
     ctx,
     contextProviderFactory,
     priorCommands,
     currentRoundIndex,
     userMessage,
+    { conversationTopic, recentRoundDetail: recentRoundDetail || undefined },
   );
   const effectiveUserMessage = rewriteResult.resolvedCommand;
 
@@ -246,7 +284,9 @@ async function _runLoop(
         if (parsed.success) {
           const result = await tool.execute(parsed.data, toolContext);
           const resultStr =
-            typeof result === "string" ? result : JSON.stringify(result ?? null);
+            typeof result === "string"
+              ? result
+              : JSON.stringify(result ?? null);
           const filtered = filterText(resultStr, `tool:${toolName}`);
           appendEntry(ctx, sessionId, {
             role: "tool_call",
@@ -300,24 +340,167 @@ async function _runLoop(
   const roundsBefore = Math.max(0, totalRounds - AUTO_INCLUDE_ROUNDS);
   const lastThreeBlock =
     session && session.original.length > 0
-      ? formatRecentThreadTurns(session, AUTO_INCLUDE_ROUNDS)
+      ? formatRecentThreadTurns(session, AUTO_INCLUDE_ROUNDS, {
+          skipThinking: true,
+        })
       : "";
   const roundsNote =
     roundsBefore > 0
-      ? `**Context:** You are seeing the last ${AUTO_INCLUDE_ROUNDS} conversation rounds below (including reasoning). There are **${roundsBefore}** more rounds before these. Use the **chat_read** tool when you need earlier context.\n\n`
+      ? `**Context:** You are seeing the last ${AUTO_INCLUDE_ROUNDS} conversation rounds below. There are **${roundsBefore}** more rounds before these. Use the **chat_read** tool with specific round numbers (e.g. rounds: [1, 2]) when you need full context for those rounds.\n\n`
       : "";
   const recentThreadBlock = lastThreeBlock ? roundsNote + lastThreeBlock : "";
+  // Clarified commands only (no full rounds) for query extraction; agent can use chat_read(rounds: [n]) for full context.
+  const clarifiedCommandsBlock = [
+    ...priorCommands.map((c) => `Round ${c.roundIndex}: ${c.resolvedCommand}`),
+    `Round ${currentRoundIndex}: ${effectiveUserMessage}`,
+  ].join("\n");
+  // Ensure data and history embeddings are current before smart context retrieval.
+  const { buildEmbeddings } = await import("../knowledge/rebuild-embeddings");
+  await buildEmbeddings(ctx);
+  const smartContextStart = Date.now();
+  const smartContextRunAccumulator: SmartContextRun = {
+    phases: [],
+    doneDetail: undefined,
+  };
+  smartContextRunAccumulator.phases = [
+    {
+      phase: "clarified",
+      detail: undefined,
+      output: effectiveUserMessage,
+    },
+  ];
+  onEvent({
+    type: "smart_context_phase",
+    phase: "clarified",
+    output: effectiveUserMessage,
+  });
   const [smartResult, skillsResult] = await Promise.all([
     buildSmartContextBlock(
       ctx,
       contextProviderFactory,
       effectiveUserMessage,
-      recentThreadBlock || undefined,
+      clarifiedCommandsBlock,
+      (phase, detail, output) => {
+        onEvent({
+          type: "smart_context_phase",
+          phase,
+          ...(detail !== undefined && { detail }),
+          ...(output !== undefined && { output }),
+        });
+        if (phase === "queries") {
+          const prev = smartContextRunAccumulator.phases;
+          const last = prev[prev.length - 1];
+          if (last?.phase === "queries") {
+            // Same phase sent again (e.g. with output) - update in place so UI shows output
+            smartContextRunAccumulator.phases[prev.length - 1] = {
+              phase,
+              detail,
+              output,
+            };
+          } else {
+            const hasClarified =
+              smartContextRunAccumulator.phases[0]?.phase === "clarified";
+            if (hasClarified) {
+              smartContextRunAccumulator.phases.push({
+                phase,
+                detail,
+                output,
+              });
+            } else {
+              smartContextRunAccumulator.phases = [{ phase, detail, output }];
+            }
+          }
+          smartContextRunAccumulator.doneDetail = undefined;
+        } else {
+          const prev = smartContextRunAccumulator.phases;
+          const last = prev[prev.length - 1];
+          const isNewPhase = !last || last.phase !== phase || prev.length < 6;
+          if (isNewPhase) {
+            smartContextRunAccumulator.phases.push({ phase, detail, output });
+          } else {
+            smartContextRunAccumulator.phases[
+              smartContextRunAccumulator.phases.length - 1
+            ] = {
+              phase,
+              detail,
+              output,
+            };
+          }
+          if (phase === "done") {
+            smartContextRunAccumulator.doneDetail = detail;
+          }
+        }
+      },
     ),
     getMatchedSkillsContent(ctx, agent.id, effectiveUserMessage, {
       providerFactory: contextProviderFactory,
     }),
   ]);
+  // Enhance the final done phase with active skills so the UI and persisted run
+  // show both included sources and skills in the smart context result.
+  const sourceCount = smartResult.sourceIds.length;
+  const skillCount = skillsResult.skillNames.length;
+  const combinedDoneDetail =
+    skillCount > 0
+      ? `${sourceCount} sources, ${skillCount} skills`
+      : `${sourceCount} sources`;
+  const combinedDoneOutputLines: string[] = [
+    `Included in context (${sourceCount} sources):`,
+    ...(sourceCount > 0
+      ? smartResult.sourceIds.map((id) => id)
+      : ["(no sources)"]),
+    "",
+    `Active skills (${skillCount}):`,
+    ...(skillCount > 0
+      ? skillsResult.skillNames.map((name) => `- ${name}`)
+      : ["(none)"]),
+  ];
+  const combinedDoneOutput = combinedDoneOutputLines.join("\n");
+
+  onEvent({
+    type: "smart_context_phase",
+    phase: "done",
+    detail: combinedDoneDetail,
+    output: combinedDoneOutput,
+  });
+
+  // Keep SmartContextRun in sync with the enhanced done phase (overwrite the last
+  // done phase when present so UI and persisted history see the same detail/output).
+  {
+    const prev = smartContextRunAccumulator.phases;
+    const last = prev[prev.length - 1];
+    const isNewPhase = !last || last.phase !== "done" || prev.length < 6;
+    if (isNewPhase) {
+      smartContextRunAccumulator.phases.push({
+        phase: "done",
+        detail: combinedDoneDetail,
+        output: combinedDoneOutput,
+      });
+    } else {
+      smartContextRunAccumulator.phases[prev.length - 1] = {
+        phase: "done",
+        detail: combinedDoneDetail,
+        output: combinedDoneOutput,
+      };
+    }
+    smartContextRunAccumulator.doneDetail = combinedDoneDetail;
+  }
+
+  if (
+    smartContextRunAccumulator.phases.length > 0 &&
+    smartContextRunAccumulator.doneDetail !== undefined
+  ) {
+    appendEntry(ctx, sessionId, {
+      role: "smart_context",
+      content: JSON.stringify(smartContextRunAccumulator),
+      timestamp: new Date().toISOString(),
+    });
+  }
+  agentDebug(
+    "[Smart context] runner: context + skills ready in",
+    Date.now() - smartContextStart,
+    "ms",
+  );
 
   const baseBlock =
     smartResult.block || "## Smart context\n\nNo relevant prior context found.";
@@ -333,13 +516,27 @@ async function _runLoop(
       : "(none)");
   const smartContextBlock = baseBlock + sourcesSection + skillsSection;
 
-  const systemPromptContent = buildSystemPrompt(ctx, agent, skillsResult.content);
+  const systemPromptContent = buildSystemPrompt(
+    ctx,
+    agent,
+    skillsResult.content,
+  );
+  // Do not pass last 3 rounds into the final prompt; smart context already retrieves relevant prior context.
+  // Optional one-line note so the agent knows to use chat_read for earlier context when needed.
+  const contextNote =
+    totalRounds > AUTO_INCLUDE_ROUNDS
+      ? "Use the **chat_read** tool with specific round numbers (e.g. rounds: [1, 2]) when you need earlier conversation context; pass include_reasoning: true to include the agent's reasoning for those rounds.\n\n"
+      : "";
   const combinedSystemContent = transformContext(
-    recentThreadBlock,
+    contextNote,
     smartContextBlock,
     systemPromptContent,
   );
-  const messages: Message[] = convertToLlm(combinedSystemContent, effectiveUserMessage, initialToolResult ?? undefined);
+  const messages: Message[] = convertToLlm(
+    combinedSystemContent,
+    effectiveUserMessage,
+    initialToolResult ?? undefined,
+  );
 
   let agentResponseContent = "";
   const agentEntry: Omit<HistoryEntry, "id"> = {
@@ -370,7 +567,8 @@ async function _runLoop(
   }
 
   const DEBUG_SEP = "────────────────────────────────────────────────────────";
-  const DEBUG_BLOCK = "════════════════════════════════════════════════════════";
+  const DEBUG_BLOCK =
+    "════════════════════════════════════════════════════════";
 
   /**
    * Handles pi-style agent loop events: persistence (appendEntry, scheduleHistoryIndex) and SSE (onEvent).
@@ -381,7 +579,9 @@ async function _runLoop(
       case "agent_start":
         break;
       case "turn_start":
-        agentDebug(`\n${DEBUG_BLOCK}\n  REQUEST START (loop ${event.loopIndex})\n${DEBUG_BLOCK}`);
+        agentDebug(
+          `\n${DEBUG_BLOCK}\n  REQUEST START (loop ${event.loopIndex})\n${DEBUG_BLOCK}`,
+        );
         break;
       case "message_start":
         break;
@@ -400,7 +600,9 @@ async function _runLoop(
           scheduleHistoryIndex(ctx, storedEntry.id, options, (err) =>
             agentError("History index (agent entry) failed:", err),
           );
-          agentDebug(`${DEBUG_SEP}\n  END OF TURN (done, no more tool calls)\n${DEBUG_BLOCK}\n`);
+          agentDebug(
+            `${DEBUG_SEP}\n  END OF TURN (done, no more tool calls)\n${DEBUG_BLOCK}\n`,
+          );
           onEvent({
             type: "done",
             sessionId,
@@ -425,7 +627,10 @@ async function _runLoop(
         onEvent({
           type: "tool_result",
           tool: event.toolName,
-          result: event.resultForSSE !== undefined ? event.resultForSSE : event.content,
+          result:
+            event.resultForSSE !== undefined
+              ? event.resultForSSE
+              : event.content,
         });
         break;
       }
@@ -472,27 +677,36 @@ async function _runLoop(
       loopCount++;
       handleAgentLoopEvent({ type: "turn_start", loopIndex: loopCount });
 
-    /** @note Debug: log prompt with clear SYSTEM / CONTEXT / QUERY separation; content with real newlines. */
-    const roles = messages.map((m) => m.role).join(", ");
-    const lengths = messages.map((m) => (typeof m.content === "string" ? m.content.length : 0));
-    agentDebug("[LLM request] Roles: [%s]. Content lengths: [%s]", roles, lengths.join(", "));
-    messages.forEach((m, i) => {
-      const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-      const label =
-        m.role === "system"
-          ? "SYSTEM (context + instructions)"
-          : m.role === "user"
-            ? "USER (query)"
-            : String(m.role).toUpperCase();
-      const truncated =
-        content.length > DEBUG_MESSAGE_MAX_LEN
-          ? content.slice(0, DEBUG_MESSAGE_MAX_LEN) +
-            "\n\n... [truncated, total " +
-            content.length +
-            " chars]"
-          : content;
-      agentDebug("\n--- MESSAGE " + (i + 1) + ": " + label + " ---\n" + truncated);
-    });
+      /** @note Debug: log prompt with clear SYSTEM / CONTEXT / QUERY separation; content with real newlines. */
+      const roles = messages.map((m) => m.role).join(", ");
+      const lengths = messages.map((m) =>
+        typeof m.content === "string" ? m.content.length : 0,
+      );
+      agentDebug(
+        "[LLM request] Roles: [%s]. Content lengths: [%s]",
+        roles,
+        lengths.join(", "),
+      );
+      messages.forEach((m, i) => {
+        const content =
+          typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        const label =
+          m.role === "system"
+            ? "SYSTEM (context + instructions)"
+            : m.role === "user"
+              ? "USER (query)"
+              : String(m.role).toUpperCase();
+        const truncated =
+          content.length > DEBUG_MESSAGE_MAX_LEN
+            ? content.slice(0, DEBUG_MESSAGE_MAX_LEN) +
+              "\n\n... [truncated, total " +
+              content.length +
+              " chars]"
+            : content;
+        agentDebug(
+          "\n--- MESSAGE " + (i + 1) + ": " + label + " ---\n" + truncated,
+        );
+      });
 
       const controller = new AbortController();
       controllerRef.current = controller;
@@ -505,123 +719,137 @@ async function _runLoop(
       };
 
       handleAgentLoopEvent({ type: "message_start" });
-      const response = await provider.complete(messages, toolDefs, (token) => {
-        flushThinking();
-        handleAgentLoopEvent({ type: "message_update", delta: token });
-      }, completeOptions);
+      const response = await provider.complete(
+        messages,
+        toolDefs,
+        (token) => {
+          flushThinking();
+          handleAgentLoopEvent({ type: "message_update", delta: token });
+        },
+        completeOptions,
+      );
 
-    agentDebug(`\n${DEBUG_SEP}\n  LLM RESPONSE\n${DEBUG_SEP}`);
-    agentDebug("stopped:", response.stopped, "toolCalls:", response.toolCalls?.length ?? 0);
-    if (response.content) {
-      agentDebug("\n--- RESPONSE CONTENT ---\n" + response.content);
-    }
-    if (response.toolCalls?.length) {
-      agentDebug("\n--- TOOL CALLS ---", JSON.stringify(response.toolCalls, null, 2));
-    }
+      agentDebug(`\n${DEBUG_SEP}\n  LLM RESPONSE\n${DEBUG_SEP}`);
+      agentDebug(
+        "stopped:",
+        response.stopped,
+        "toolCalls:",
+        response.toolCalls?.length ?? 0,
+      );
+      if (response.content) {
+        agentDebug("\n--- RESPONSE CONTENT ---\n" + response.content);
+      }
+      if (response.toolCalls?.length) {
+        agentDebug(
+          "\n--- TOOL CALLS ---",
+          JSON.stringify(response.toolCalls, null, 2),
+        );
+      }
 
-    // Emit message_end; handler persists and sets resultRef when no tool calls
-    handleAgentLoopEvent({
-      type: "message_end",
-      content: response.content || agentResponseContent,
-      toolCalls: response.toolCalls,
-    });
-    if (resultRef.current !== null) {
-      return resultRef.current;
-    }
-
-    // Execute tool calls
-    const toolResults: Message[] = [];
-    for (const tc of response.toolCalls) {
+      // Emit message_end; handler persists and sets resultRef when no tool calls
       handleAgentLoopEvent({
-        type: "tool_execution_start",
-        toolCallId: tc.id,
-        toolName: tc.name,
-        args: tc.args,
+        type: "message_end",
+        content: response.content || agentResponseContent,
+        toolCalls: response.toolCalls,
       });
-
-      const tool = tools.find((t) => t.name === tc.name);
-      if (!tool) {
-        const errorResult = `Unknown tool: ${tc.name}`;
-        const contentStr = JSON.stringify({ error: errorResult });
-        handleAgentLoopEvent({
-          type: "tool_execution_end",
-          toolCallId: tc.id,
-          toolName: tc.name,
-          content: contentStr,
-          toolArgs: tc.args,
-          resultForSSE: { error: errorResult },
-        });
-        toolResults.push({
-          role: "tool",
-          content: contentStr,
-          toolCallId: tc.id,
-          toolName: tc.name,
-        });
-        continue;
+      if (resultRef.current !== null) {
+        return resultRef.current;
       }
 
-      try {
-        const parsed = tool.schema.parse(tc.args);
-        const result = await tool.execute(parsed, toolContext);
-        const resultStr =
-          typeof result === "string" ? result : JSON.stringify(result ?? null);
-        const filtered = filterText(resultStr ?? "", `tool:${tc.name}`);
+      // Execute tool calls
+      const toolResults: Message[] = [];
+      for (const tc of response.toolCalls) {
         handleAgentLoopEvent({
-          type: "tool_execution_end",
+          type: "tool_execution_start",
           toolCallId: tc.id,
           toolName: tc.name,
-          content: filtered.text,
-          toolArgs: tc.args,
+          args: tc.args,
         });
-        toolResults.push({
-          role: "tool",
-          content: filtered.text,
-          toolCallId: tc.id,
-          toolName: tc.name,
-        });
-      } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        const contentStr = JSON.stringify({ error: errorMsg });
-        handleAgentLoopEvent({
-          type: "tool_execution_end",
-          toolCallId: tc.id,
-          toolName: tc.name,
-          content: contentStr,
-          toolArgs: tc.args,
-          resultForSSE: { error: errorMsg },
-        });
-        toolResults.push({
-          role: "tool",
-          content: contentStr,
-          toolCallId: tc.id,
-          toolName: tc.name,
-        });
+
+        const tool = tools.find((t) => t.name === tc.name);
+        if (!tool) {
+          const errorResult = `Unknown tool: ${tc.name}`;
+          const contentStr = JSON.stringify({ error: errorResult });
+          handleAgentLoopEvent({
+            type: "tool_execution_end",
+            toolCallId: tc.id,
+            toolName: tc.name,
+            content: contentStr,
+            toolArgs: tc.args,
+            resultForSSE: { error: errorResult },
+          });
+          toolResults.push({
+            role: "tool",
+            content: contentStr,
+            toolCallId: tc.id,
+            toolName: tc.name,
+          });
+          continue;
+        }
+
+        try {
+          const parsed = tool.schema.parse(tc.args);
+          const result = await tool.execute(parsed, toolContext);
+          const resultStr =
+            typeof result === "string"
+              ? result
+              : JSON.stringify(result ?? null);
+          const filtered = filterText(resultStr ?? "", `tool:${tc.name}`);
+          handleAgentLoopEvent({
+            type: "tool_execution_end",
+            toolCallId: tc.id,
+            toolName: tc.name,
+            content: filtered.text,
+            toolArgs: tc.args,
+          });
+          toolResults.push({
+            role: "tool",
+            content: filtered.text,
+            toolCallId: tc.id,
+            toolName: tc.name,
+          });
+        } catch (err: unknown) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          const contentStr = JSON.stringify({ error: errorMsg });
+          handleAgentLoopEvent({
+            type: "tool_execution_end",
+            toolCallId: tc.id,
+            toolName: tc.name,
+            content: contentStr,
+            toolArgs: tc.args,
+            resultForSSE: { error: errorMsg },
+          });
+          toolResults.push({
+            role: "tool",
+            content: contentStr,
+            toolCallId: tc.id,
+            toolName: tc.name,
+          });
+        }
       }
+
+      handleAgentLoopEvent({ type: "turn_end" });
+
+      // Append assistant response + tool results to messages, loop again
+      messages.push({
+        role: "assistant",
+        content: response.content || agentResponseContent,
+      });
+      messages.push(...toolResults);
+      agentResponseContent = "";
     }
 
-    handleAgentLoopEvent({ type: "turn_end" });
-
-    // Append assistant response + tool results to messages, loop again
-    messages.push({
-      role: "assistant",
-      content: response.content || agentResponseContent,
-    });
-    messages.push(...toolResults);
-    agentResponseContent = "";
-  }
-
-  if (loopCount >= MAX_LOOPS) {
-    handleAgentLoopEvent({
-      type: "agent_error",
-      message: "Agent reached maximum tool call loop limit",
-    });
-  }
-  return resultRef.current ?? "";
+    if (loopCount >= MAX_LOOPS) {
+      handleAgentLoopEvent({
+        type: "agent_error",
+        message: "Agent reached maximum tool call loop limit",
+      });
+    }
+    return resultRef.current ?? "";
   } finally {
     if (ollamaJobId) completeOllamaJob(ollamaJobId);
   }
 }
-
 
 /**
  * Fallback system instruction when AGENTS.md is missing or empty.
@@ -676,14 +904,12 @@ function buildSystemPrompt(
   skillsContent?: string,
 ): string {
   const agentsContent =
-    (agent.agentsMd && agent.agentsMd.trim())
+    agent.agentsMd && agent.agentsMd.trim()
       ? agent.agentsMd.trim()
       : readAgentsMd(ctx);
 
   const systemInstructions =
-    agentsContent !== ""
-      ? agentsContent
-      : FALLBACK_SYSTEM_INSTRUCTIONS;
+    agentsContent !== "" ? agentsContent : FALLBACK_SYSTEM_INSTRUCTIONS;
 
   const { iso, local, timezone } = getCurrentSystemDateTime();
   const systemTimeSectionLines = [
@@ -717,4 +943,3 @@ function buildSystemPrompt(
   }
   return parts.join("\n");
 }
-

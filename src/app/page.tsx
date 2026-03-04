@@ -7,15 +7,18 @@
  */
 
 import { use, useState, useRef, useEffect, useCallback } from "react";
-import type { SSEEvent } from "@/lib/types";
+import type { SSEEvent, SmartContextRun } from "@/lib/types";
 import type { HistoryEntry } from "@/lib/types";
 import AppHeader from "@/app/components/AppHeader";
 import ChatMessageList from "@/app/components/ChatMessageList";
 import type { ChatMessageListItem } from "@/app/components/ChatMessageList";
 import ChatInputBar from "@/app/components/ChatInputBar";
 import ThreadList from "@/app/components/ThreadList";
+import QuestionFormModal, {
+  type QuestionItem,
+} from "@/app/components/QuestionFormModal";
 
-/** Map HistoryEntry from server to ChatMessageListItem (including tool_call as standalone tool bubble, thinking as reasoning bubble). */
+/** Map HistoryEntry from server to ChatMessageListItem (including tool_call as standalone tool bubble, thinking as reasoning bubble). Do not pass smart_context entries. */
 function entryToItem(entry: HistoryEntry): ChatMessageListItem {
   if (entry.role === "tool_call") {
     return {
@@ -88,8 +91,23 @@ export default function Home(props: HomePageProps = {}) {
   const [loading, setLoading] = useState(false);
   const [currentToken, setCurrentToken] = useState("");
   const [currentThinking, setCurrentThinking] = useState("");
+  /** Preserved smart context run (phases + result). Not cleared when tokens/done arrive; replaced when next run starts. */
+  const [smartContextRun, setSmartContextRun] =
+    useState<SmartContextRun | null>(null);
+  /** Message index after which to show smart context (below the user message that triggered it). */
+  const [smartContextAfterMessageIndex, setSmartContextAfterMessageIndex] =
+    useState<number | null>(null);
   const [threadListRefetch, setThreadListRefetch] = useState(0);
+  const [userIsAtBottom, setUserIsAtBottom] = useState(true);
+  /** When the agent calls ask_user, we show this modal until the user submits answers. */
+  const [pendingQuestion, setPendingQuestion] = useState<{
+    sessionId: string;
+    requestId: string;
+    questions: QuestionItem[];
+  } | null>(null);
+  const userIsAtBottomRef = useRef(true);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   const loadingRef = useRef(false);
   const currentAgentIdRef = useRef<string | null>(null);
@@ -117,9 +135,43 @@ export default function Home(props: HomePageProps = {}) {
       type,
     );
     setCurrentAgentId(primary);
-    const entries = data.session?.original ?? [];
-    const items = entries.map(entryToItem);
-    setMessages(items);
+    const original = data.session?.original ?? [];
+    const conversationEntries = original.filter(
+      (e) => e.role !== "smart_context",
+    );
+    setMessages(conversationEntries.map(entryToItem));
+    const smartContextEntry = original
+      .filter((e) => e.role === "smart_context")
+      .pop();
+    if (smartContextEntry) {
+      try {
+        setSmartContextRun(
+          JSON.parse(smartContextEntry.content) as SmartContextRun,
+        );
+        const lastScIdx = original.findLastIndex(
+          (e) => e.role === "smart_context",
+        );
+        const lastUserIdxBeforeSc =
+          lastScIdx >= 0
+            ? original.findLastIndex(
+                (e, i) => i < lastScIdx && e.role === "user",
+              )
+            : -1;
+        const afterIndex =
+          lastUserIdxBeforeSc >= 0
+            ? original
+                .slice(0, lastUserIdxBeforeSc + 1)
+                .filter((e) => e.role !== "smart_context").length - 1
+            : null;
+        setSmartContextAfterMessageIndex(afterIndex ?? null);
+      } catch {
+        setSmartContextRun(null);
+        setSmartContextAfterMessageIndex(null);
+      }
+    } else {
+      setSmartContextRun(null);
+      setSmartContextAfterMessageIndex(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -140,11 +192,49 @@ export default function Home(props: HomePageProps = {}) {
         setCurrentAgentId(primary);
         currentAgentIdRef.current = primary;
         if (data.session?.original?.length) {
-          const loaded = data.session.original.map(entryToItem);
+          const original = data.session.original;
+          const conversationEntries = original.filter(
+            (e: HistoryEntry) => e.role !== "smart_context",
+          );
+          const loaded = conversationEntries.map(entryToItem);
           setMessages((prev) => {
             if (prev.length > 0) return prev; // avoid overwriting streamed messages if fetch completes late
             return loaded;
           });
+          const smartContextEntry = original
+            .filter((e: HistoryEntry) => e.role === "smart_context")
+            .pop();
+          if (smartContextEntry) {
+            try {
+              setSmartContextRun(
+                JSON.parse(smartContextEntry.content) as SmartContextRun,
+              );
+              const lastScIdx = original.findLastIndex(
+                (e: HistoryEntry) => e.role === "smart_context",
+              );
+              const lastUserIdxBeforeSc =
+                lastScIdx >= 0
+                  ? original.findLastIndex(
+                      (e: HistoryEntry, i: number) =>
+                        i < lastScIdx && e.role === "user",
+                    )
+                  : -1;
+              const afterIndex =
+                lastUserIdxBeforeSc >= 0
+                  ? original
+                      .slice(0, lastUserIdxBeforeSc + 1)
+                      .filter((e: HistoryEntry) => e.role !== "smart_context")
+                      .length - 1
+                  : null;
+              setSmartContextAfterMessageIndex(afterIndex ?? null);
+            } catch {
+              setSmartContextRun(null);
+              setSmartContextAfterMessageIndex(null);
+            }
+          } else {
+            setSmartContextRun(null);
+            setSmartContextAfterMessageIndex(null);
+          }
         }
       })
       .catch(() => {});
@@ -166,13 +256,19 @@ export default function Home(props: HomePageProps = {}) {
           current &&
           payload.sessionId === current
         ) {
-          // While our chat request is in flight, the stream is the source of truth; skip EventSource
-          // echoes for user and tool_call so we don't duplicate bubbles.
-          if (
-            loadingRef.current &&
-            (payload.entry.role === "user" ||
-              payload.entry.role === "tool_call")
-          ) {
+          // While our chat request is in flight, skip EventSource tool_call echoes to avoid duplicate bubbles.
+          // For user entries we still apply server data (resolvedContent, roundIndex) to the optimistic message.
+          if (loadingRef.current && payload.entry.role === "tool_call") {
+            return;
+          }
+          if (payload.entry.role === "smart_context") {
+            try {
+              setSmartContextRun(
+                JSON.parse(payload.entry.content) as SmartContextRun,
+              );
+            } catch {
+              setSmartContextRun(null);
+            }
             return;
           }
           const item = entryToItem(payload.entry);
@@ -182,7 +278,8 @@ export default function Home(props: HomePageProps = {}) {
             setCurrentToken("");
             if (contentLen === 0) return;
           }
-          // Dedupe: server may echo user entry via EventSource after we added it optimistically.
+          // Dedupe or merge: server may echo user entry via EventSource after we added it optimistically.
+          // When the last message is the same user content, merge resolvedContent and roundIndex so the clarified command shows without refresh.
           if (payload.entry.role === "user") {
             setMessages((prev) => {
               if (prev.length > 0) {
@@ -192,6 +289,23 @@ export default function Home(props: HomePageProps = {}) {
                   "content" in last &&
                   last.content === payload.entry.content
                 ) {
+                  const resolvedContent = payload.entry.resolvedContent;
+                  const roundIndex = payload.entry.roundIndex;
+                  if (
+                    resolvedContent !== undefined ||
+                    roundIndex !== undefined
+                  ) {
+                    return [
+                      ...prev.slice(0, -1),
+                      {
+                        ...last,
+                        ...(resolvedContent !== undefined && {
+                          resolvedContent,
+                        }),
+                        ...(roundIndex !== undefined && { roundIndex }),
+                      },
+                    ];
+                  }
                   return prev;
                 }
               }
@@ -219,13 +333,48 @@ export default function Home(props: HomePageProps = {}) {
         // ignore non-message or malformed
       }
     });
+    es.addEventListener("question", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as {
+          sessionId: string;
+          requestId: string;
+          questions: QuestionItem[];
+        };
+        if (data.sessionId && data.requestId && Array.isArray(data.questions)) {
+          const current = sessionIdRef.current;
+          if (current && data.sessionId === current) {
+            setPendingQuestion({
+              sessionId: data.sessionId,
+              requestId: data.requestId,
+              questions: data.questions,
+            });
+          }
+        }
+      } catch {
+        // ignore malformed
+      }
+    });
     es.addEventListener("ping", () => {});
     return () => es.close();
   }, []);
 
+  /** Threshold in px: user is "at bottom" when within this distance of the bottom. */
+  const SCROLL_AT_BOTTOM_THRESHOLD = 80;
+
+  const handleScrollContainerScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    const atBottom =
+      scrollTop + clientHeight >= scrollHeight - SCROLL_AT_BOTTOM_THRESHOLD;
+    userIsAtBottomRef.current = atBottom;
+    setUserIsAtBottom(atBottom);
+  }, []);
+
   useEffect(() => {
+    if (!userIsAtBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, currentToken, currentThinking]);
+  }, [messages, currentToken, currentThinking, userIsAtBottom]);
 
   /** Send a message. If overrideContent is provided, uses that instead of input and does not clear input (used by re-send). */
   const sendMessage = useCallback(
@@ -239,7 +388,13 @@ export default function Home(props: HomePageProps = {}) {
       setCurrentToken("");
       setCurrentThinking("");
       thinkingAccumulatorRef.current = "";
-      setMessages((prev) => [...prev, { role: "user", content: text }]);
+      setSmartContextRun(null);
+      setSmartContextAfterMessageIndex(null);
+      setMessages((prev) => {
+        const newIndex = prev.length;
+        setSmartContextAfterMessageIndex(newIndex);
+        return [...prev, { role: "user", content: text }];
+      });
 
       try {
         const resp = await fetch("/api/chat", {
@@ -280,7 +435,28 @@ export default function Home(props: HomePageProps = {}) {
             return;
           }
 
-          if (event.type === "thinking") {
+          if (event.type === "smart_context_phase") {
+            setSmartContextRun((prev) => {
+              const phase = event.phase;
+              const detail = event.detail;
+              const output = event.output;
+              const prevPhases = prev?.phases ?? [];
+              const last = prevPhases[prevPhases.length - 1];
+              const isNewPhase = !last || last.phase !== phase;
+              const phaseEntry = isNewPhase
+                ? { phase, detail, output }
+                : {
+                    phase,
+                    detail: detail ?? last.detail,
+                    output: output ?? last.output,
+                  };
+              const phases = isNewPhase
+                ? [...prevPhases, phaseEntry]
+                : [...prevPhases.slice(0, -1), phaseEntry];
+              const doneDetail = phase === "done" ? detail : prev?.doneDetail;
+              return { phases, doneDetail };
+            });
+          } else if (event.type === "thinking") {
             thinkingAccumulatorRef.current += event.content;
             setCurrentThinking(thinkingAccumulatorRef.current);
           } else if (event.type === "token") {
@@ -430,7 +606,12 @@ export default function Home(props: HomePageProps = {}) {
         />
 
         <div className="flex flex-col flex-1 min-w-0">
-          <div className="chat-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+          <div
+            ref={scrollContainerRef}
+            className="chat-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+            onScroll={handleScrollContainerScroll}
+            data-testid="chat-scroll-container"
+          >
             <div className="px-4 py-6 space-y-4 max-w-3xl mx-auto w-full">
               {isAgentOnlyThread && (
                 <div className="rounded-lg bg-zinc-800/80 border border-zinc-700 px-4 py-2 text-sm text-zinc-400">
@@ -443,6 +624,8 @@ export default function Home(props: HomePageProps = {}) {
                 currentToken={currentToken}
                 currentThinking={currentThinking}
                 loading={loading}
+                smartContextRun={smartContextRun}
+                smartContextAfterMessageIndex={smartContextAfterMessageIndex}
                 bottomRef={bottomRef}
                 onResendMessage={
                   !isAgentOnlyThread ? handleResendMessage : undefined
@@ -461,6 +644,15 @@ export default function Home(props: HomePageProps = {}) {
           )}
         </div>
       </div>
+
+      {pendingQuestion && (
+        <QuestionFormModal
+          requestId={pendingQuestion.requestId}
+          sessionId={pendingQuestion.sessionId}
+          questions={pendingQuestion.questions}
+          onSubmitted={() => setPendingQuestion(null)}
+        />
+      )}
     </div>
   );
 }

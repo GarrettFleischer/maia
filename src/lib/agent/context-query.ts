@@ -15,10 +15,12 @@ import {
   type KnowledgeSearchResult,
 } from "../knowledge/search";
 import { createEmbeddingAdapter } from "../knowledge/embedding";
+import { createVectorStore } from "../knowledge/vector-store";
 import type { AppContext } from "../context";
 import type { AIProvider } from "../ai/types";
 import type { Message } from "../ai/types";
-import type { Session } from "../types";
+import { entriesForConversation } from "../history";
+import type { Session, SmartContextPhase } from "../types";
 import { agentDebug } from "./agent-logger";
 
 /** Per-query result limits used when building raw context. */
@@ -55,10 +57,17 @@ const DEBUG_SECTION_MAX_LEN = 1200;
  * @param body - Content to log (newlines render as actual line breaks)
  * @param maxLen - Truncate body to this length (default DEBUG_SECTION_MAX_LEN)
  */
-function logDebugSection(title: string, body: string, maxLen = DEBUG_SECTION_MAX_LEN): void {
+function logDebugSection(
+  title: string,
+  body: string,
+  maxLen = DEBUG_SECTION_MAX_LEN,
+): void {
   const truncated =
     body.length > maxLen
-      ? body.slice(0, maxLen) + "\n\n... [truncated, total " + body.length + " chars]"
+      ? body.slice(0, maxLen) +
+        "\n\n... [truncated, total " +
+        body.length +
+        " chars]"
       : body;
   agentDebug("\n--- " + title + " ---\n" + truncated);
 }
@@ -104,8 +113,8 @@ export interface ContextSource {
 }
 
 const QUERY_EXTRACTION_PROMPT = `You are a search query extraction assistant.
-You may be given recent conversation context and the current user message. Use the conversation ONLY as context to resolve references (e.g. "that", "it", "the bug we discussed")—do NOT base queries on topics from previous messages.
-Generate 1–3 short search queries ONLY from the most recent user message: what the user is asking for right now. Avoid generic phrases; use specific terms that will match relevant history and knowledge. Output ONLY a JSON array of short search query strings (no prose, no code fences, no markdown).
+You will be given the clarified commands for this chat (each round's resolved user message) and the current user message. Use the clarified commands ONLY as context to resolve references (e.g. "that", "it", "the bug we discussed")—do NOT base queries on topics from previous messages.
+Generate 1–3 short search queries ONLY from the current user message: what the user is asking for right now. Avoid generic phrases; use specific terms that will match relevant history and knowledge. Output ONLY a JSON array of short search query strings (no prose, no code fences, no markdown).
 Each query should target a different relevant topic from the current request so that semantic search over past conversations and a knowledge base returns the most relevant results.
 Example output: ["topic one", "topic two"]`;
 
@@ -147,33 +156,81 @@ export interface RewriteCommandResult {
 export interface RewriteCommandOptions extends RateLimitRetryOptions {
   /** When true, logs SYSTEM/USER/RESULT sections for debugging. */
   debug?: boolean;
+  /**
+   * Optional concrete content from the most recent round (e.g. terminal commands, tool args, agent excerpt).
+   * Used so the model can inline the actual referent (e.g. "bun run dev") instead of "the commands you were trying to run earlier".
+   */
+  recentRoundDetail?: string;
 }
 
-const REWRITE_COMMAND_PROMPT = `You are a context-aware command rewriting assistant.
+const REWRITE_COMMAND_PROMPT = `You are an assistant that clarifies ambiguous terms and resolves references in user messages.
 You will be given:
-- A list of prior context-aware user commands with their round indices.
+- A list of prior user commands with their round indices.
 - The current raw user message for a new round.
+- Optionally, "Current discussion context" describing what the conversation is about.
+- Optionally, "Recent round detail" with concrete content from the prior round (e.g. terminal commands run, tool arguments, agent output excerpts).
 
 Your job is to:
-1. Decide which prior round (if any) the user is referring to.
-2. Rewrite the current user message into a single, explicit, self-contained command that does not rely on pronouns like "that", "it", or vague references.
+1. Decide which prior round (if any) the user is referring to (for roundIndex).
+2. Produce a clarified version of the current message that:
+   - Resolves pronouns and vague references ("that", "it", "those commands", "the error") by including the ACTUAL specific content from the conversation. Do NOT replace with vague phrases like "the commands you were trying to run earlier" or "that thing earlier". Instead, inline the exact referent: the actual terminal command (e.g. \`bun run dev\`), the actual error text, the actual option or value mentioned in the prior round. Use "Recent round detail" when provided to find that content.
+   - Clarifies ambiguous terms in place (e.g. define jargon, disambiguate) without changing the user's structure or wording elsewhere.
+   - Preserves the user's meaning, tone, and structure. Do NOT rewrite, restructure, paraphrase, or convert the message into a different form (e.g. do NOT turn narrative into bullet points or action items).
+   - When "Current discussion context" is provided and the user's message clearly refers to that discussion, you MAY prefix the clarified message with a short parenthetical, e.g. (Referring to the tech stack for the directory website) <rest of clarified message>. This helps readers understand the scope. Omit the prefix when the message is self-contained or the context is obvious.
 
 Output STRICTLY a JSON object with the following shape and NOTHING else:
-{"roundIndex": <number>, "resolvedCommand": "<rewritten command>"}
+{"roundIndex": <number>, "resolvedCommand": "<clarified message>"}
 
 Rules:
 - roundIndex must be a positive integer corresponding to one of the prior rounds, or the current round index provided in the prompt when the user is not clearly referring to an earlier round.
-- resolvedCommand must be a non-empty string.
+- resolvedCommand must be a non-empty string. When the user refers to something from a prior round (e.g. "those commands", "that error"), resolvedCommand must contain the actual quoted or inlined content (e.g. the real command, the real error message), not a placeholder like "the commands you were trying to run earlier". If nothing is ambiguous or referential, return the message unchanged or with minimal edits. Any optional (Referring to ...) prefix is part of resolvedCommand.
 - Do not include explanations, comments, or markdown. Only output the JSON object.`;
 
 /**
- * @brief Rewrite the current user message into a context-aware command using prior resolved commands.
+ * Builds a short excerpt of the most recent round's concrete content (tool calls with args, agent output)
+ * so the rewrite model can inline actual referents (e.g. terminal command "bun run dev") into the clarified message.
+ * @param session - Current session (original entries)
+ * @returns Multi-line string describing the last round's tool calls and agent output, or empty string if none
+ */
+export function buildRecentRoundDetail(session: Session): string {
+  const entries = entriesForConversation(session.original);
+  const lastUserIdx = [...entries]
+    .reverse()
+    .findIndex((e) => e.role === "user");
+  if (lastUserIdx < 0) return "";
+  const startIdx = entries.length - 1 - lastUserIdx + 1; // first entry after the last user message
+  if (startIdx >= entries.length) return "";
+  const lines: string[] = [];
+  const maxAgentExcerpt = 400;
+  for (let i = startIdx; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.role === "tool_call" && e.toolName) {
+      const args =
+        e.toolArgs && Object.keys(e.toolArgs).length > 0
+          ? " " + JSON.stringify(e.toolArgs)
+          : "";
+      lines.push(`Tool ${e.toolName}:${args}`);
+    } else if (e.role === "agent" && e.content) {
+      const excerpt =
+        e.content.length <= maxAgentExcerpt
+          ? e.content.trim()
+          : e.content.trim().slice(0, maxAgentExcerpt).trim() + "…";
+      lines.push(`Agent: ${excerpt}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * @brief Clarify references and ambiguous terms in the current user message using prior resolved commands.
  * @param ctx Application context (settings, http).
  * @param providerFactory Factory to create AI provider for the contextQueryModel.
  * @param priorCommands List of prior resolved commands with round indices (ordered oldest→newest).
  * @param currentRoundIndex 1-based index for the current round.
  * @param rawMessage Raw user message for the current round.
- * @param options Optional retry/debug options.
+ * @param options Optional retry/debug options, conversationTopic, and recentRoundDetail.
+ * @param options.conversationTopic Optional short description of what the conversation is about (e.g. last agent message excerpt). When set, the model may prefix resolvedCommand with "(Referring to ...)".
+ * @param options.recentRoundDetail Optional concrete content from the last round (e.g. tool commands, agent excerpt) so the model can inline actual referents.
  * @returns Parsed RewriteCommandResult; on failure falls back to { roundIndex: currentRoundIndex, resolvedCommand: rawMessage }.
  */
 export async function rewriteCommandWithContext(
@@ -182,10 +239,11 @@ export async function rewriteCommandWithContext(
   priorCommands: PriorResolvedCommand[],
   currentRoundIndex: number,
   rawMessage: string,
-  options?: RewriteCommandOptions,
+  options?: RewriteCommandOptions & { conversationTopic?: string },
 ): Promise<RewriteCommandResult> {
   const settings = getSettings(ctx);
   const model = settings.contextQueryModel;
+  const conversationTopic = options?.conversationTopic?.trim();
 
   const fallback: RewriteCommandResult = {
     roundIndex: currentRoundIndex,
@@ -193,7 +251,9 @@ export async function rewriteCommandWithContext(
   };
 
   if (!model || !settings.whitelistedModels.includes(model)) {
-    agentDebug("[Smart context] rewriteCommandWithContext: skipped (no model or not whitelisted), using fallback");
+    agentDebug(
+      "[Smart context] rewriteCommandWithContext: skipped (no model or not whitelisted), using fallback",
+    );
     return fallback;
   }
 
@@ -208,16 +268,36 @@ export async function rewriteCommandWithContext(
   }
   lines.push("");
   lines.push(`Current round index: ${currentRoundIndex}`);
+  if (conversationTopic) {
+    lines.push("Current discussion context:");
+    lines.push(conversationTopic);
+    lines.push("");
+  }
+  const recentRoundDetail = options?.recentRoundDetail?.trim();
+  if (recentRoundDetail) {
+    lines.push(
+      "Recent round detail (use this to inline specific content when resolving references, e.g. exact commands or errors):",
+    );
+    lines.push(recentRoundDetail);
+    lines.push("");
+  }
   lines.push("Current raw user message:");
   lines.push(rawMessage);
 
   const userContent = lines.join("\n");
 
+  const startRewrite = Date.now();
   try {
     const provider = providerFactory(model, ctx);
     if (options?.debug) {
-      logDebugSection("SYSTEM PROMPT (rewrite command)", REWRITE_COMMAND_PROMPT);
-      logDebugSection("USER / QUERY (prior commands + current message)", userContent);
+      logDebugSection(
+        "SYSTEM PROMPT (rewrite command)",
+        REWRITE_COMMAND_PROMPT,
+      );
+      logDebugSection(
+        "USER / QUERY (prior commands + current message)",
+        userContent,
+      );
     }
     const messages: Message[] = [
       { role: "system", content: REWRITE_COMMAND_PROMPT },
@@ -231,7 +311,9 @@ export async function rewriteCommandWithContext(
     } catch {
       const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
-        agentDebug("[Smart context] rewriteCommandWithContext: no JSON object in response, using fallback");
+        agentDebug(
+          "[Smart context] rewriteCommandWithContext: no JSON object in response, using fallback",
+        );
         return fallback;
       }
       parsed = JSON.parse(jsonMatch[0]);
@@ -240,27 +322,53 @@ export async function rewriteCommandWithContext(
     if (
       !parsed ||
       typeof parsed !== "object" ||
-      typeof (parsed as { resolvedCommand?: unknown }).resolvedCommand !== "string" ||
+      typeof (parsed as { resolvedCommand?: unknown }).resolvedCommand !==
+        "string" ||
       typeof (parsed as { roundIndex?: unknown }).roundIndex !== "number"
     ) {
-      agentDebug("[Smart context] rewriteCommandWithContext: parsed object missing fields, using fallback");
+      agentDebug(
+        "[Smart context] rewriteCommandWithContext: parsed object missing fields, using fallback",
+      );
       return fallback;
     }
 
-    const resolvedCommand = ((parsed as { resolvedCommand: string }).resolvedCommand || rawMessage).trim();
-    const roundIndex = (parsed as { roundIndex: number }).roundIndex || currentRoundIndex;
+    const resolvedCommand = (
+      (parsed as { resolvedCommand: string }).resolvedCommand || rawMessage
+    ).trim();
+    const roundIndex =
+      (parsed as { roundIndex: number }).roundIndex || currentRoundIndex;
 
     if (!resolvedCommand) {
-      agentDebug("[Smart context] rewriteCommandWithContext: empty resolvedCommand, using fallback");
+      agentDebug(
+        "[Smart context] rewriteCommandWithContext: empty resolvedCommand, using fallback",
+      );
       return fallback;
     }
 
-    const safeRoundIndex = Number.isInteger(roundIndex) && roundIndex > 0 ? roundIndex : currentRoundIndex;
+    const safeRoundIndex =
+      Number.isInteger(roundIndex) && roundIndex > 0
+        ? roundIndex
+        : currentRoundIndex;
     const result: RewriteCommandResult = {
       roundIndex: safeRoundIndex,
       resolvedCommand,
     };
 
+    const elapsed = Date.now() - startRewrite;
+    const changed = resolvedCommand.trim() !== rawMessage.trim();
+    if (changed) {
+      agentDebug(
+        "[Smart context] rewriteCommandWithContext: clarified in",
+        elapsed,
+        "ms (resolvedCommand differs from raw)",
+      );
+    } else {
+      agentDebug(
+        "[Smart context] rewriteCommandWithContext:",
+        elapsed,
+        "ms (unchanged)",
+      );
+    }
     if (options?.debug) {
       logDebugSection("RESULT (rewrite command)", JSON.stringify(result));
     }
@@ -268,10 +376,15 @@ export async function rewriteCommandWithContext(
     return result;
   } catch (e) {
     if (isRateLimitError(e)) {
-      agentDebug("[Smart context] rewriteCommandWithContext: rate limit after retries, using fallback");
+      agentDebug(
+        "[Smart context] rewriteCommandWithContext: rate limit after retries, using fallback",
+      );
     } else {
       const msg = e instanceof Error ? e.message : String(e);
-      agentDebug("[Smart context] rewriteCommandWithContext: error, using fallback", msg);
+      agentDebug(
+        "[Smart context] rewriteCommandWithContext: error, using fallback",
+        msg,
+      );
     }
     return fallback;
   }
@@ -283,9 +396,14 @@ export async function rewriteCommandWithContext(
  * @param messages - Messages to send
  * @returns Response content string, or throws on error
  */
-async function callCheapModel(provider: AIProvider, messages: Message[]): Promise<string> {
+async function callCheapModel(
+  provider: AIProvider,
+  messages: Message[],
+): Promise<string> {
   let raw = "";
-  const result = await provider.complete(messages, [], (token) => { raw += token; });
+  const result = await provider.complete(messages, [], (token) => {
+    raw += token;
+  });
   return result.content || raw;
 }
 
@@ -313,7 +431,9 @@ async function callCheapModelWithRetry(
       if (!isRateLimitError(e) || attempt === maxRetries) {
         throw e;
       }
-      agentDebug(`[Smart context] rate limit (429), sleeping ${delayMs}ms then retry (attempt ${attempt + 1}/${maxRetries + 1})`);
+      agentDebug(
+        `[Smart context] rate limit (429), sleeping ${delayMs}ms then retry (attempt ${attempt + 1}/${maxRetries + 1})`,
+      );
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
@@ -321,15 +441,15 @@ async function callCheapModelWithRetry(
 }
 
 /**
- * Sends the user message (and optional recent conversation) to the contextQueryModel and returns
+ * Sends the user message and optional clarified-commands context to the contextQueryModel and returns
  * a deduplicated array of search query strings. Queries are derived only from the current user
- * message; recent conversation is used as context for disambiguation (e.g. resolving "that",
- * "it") but queries are not based on previous messages. Falls back to [userMessage] if the
- * model returns invalid JSON, an empty array, or throws.
+ * message; clarified commands are used only for disambiguation (e.g. resolving "that", "it").
+ * Does not take full round content—only the list of clarified commands for the chat. Use
+ * chat_read with specific round numbers when full context for a round is needed.
  * @param ctx - Application context
  * @param providerFactory - Factory to create an AI provider for a given model
  * @param userMessage - The current user message (queries are based on this only)
- * @param recentConversation - Optional formatted recent thread turns for context only (disambiguation)
+ * @param clarifiedCommandsContext - Optional list of clarified commands for the chat (e.g. "Round 1: ...\\nRound 2: ...") for disambiguation only
  * @param retryOptions - Optional 429 retry config (tests can pass rateLimitDelayMs: 0)
  * @returns Non-empty deduplicated array of search query strings
  */
@@ -337,7 +457,7 @@ export async function extractSearchQueries(
   ctx: AppContext,
   providerFactory: ProviderFactory,
   userMessage: string,
-  recentConversation?: string,
+  clarifiedCommandsContext?: string,
   retryOptions?: RateLimitRetryOptions,
 ): Promise<string[]> {
   const settings = getSettings(ctx);
@@ -346,26 +466,34 @@ export async function extractSearchQueries(
   const fallback = [userMessage.slice(0, 500)];
 
   if (!model || !settings.whitelistedModels.includes(model)) {
-    agentDebug("[Smart context] extractSearchQueries: skipped (no model or not whitelisted), using fallback");
+    agentDebug(
+      "[Smart context] extractSearchQueries: skipped (no model or not whitelisted), using fallback",
+    );
     return fallback;
   }
 
   const userContent =
-    recentConversation && recentConversation.trim().length > 0
-      ? `Recent conversation:\n\n${recentConversation.trim()}\n\nCurrent user message:\n${userMessage}`
+    clarifiedCommandsContext && clarifiedCommandsContext.trim().length > 0
+      ? `Clarified commands for this chat:\n\n${clarifiedCommandsContext.trim()}\n\nCurrent user message:\n${userMessage}`
       : userMessage;
 
   try {
     const provider = providerFactory(model, ctx);
     agentDebug("[Smart context] extractSearchQueries: sending to model");
     logDebugSection("SYSTEM PROMPT", QUERY_EXTRACTION_PROMPT);
-    logDebugSection("USER / QUERY (context + current message)", userContent);
+    logDebugSection(
+      "USER / QUERY (clarified commands + current message)",
+      userContent,
+    );
     const messages: Message[] = [
       { role: "system", content: QUERY_EXTRACTION_PROMPT },
       { role: "user", content: userContent },
     ];
     const raw = await callCheapModelWithRetry(provider, messages, retryOptions);
-    agentDebug("[Smart context] extractSearchQueries: raw response length", raw.length);
+    agentDebug(
+      "[Smart context] extractSearchQueries: raw response length",
+      raw.length,
+    );
 
     // Try to parse the whole response first (expected: a top-level JSON array).
     // If that fails, look for the first top-level array in the text (handles code fences etc.).
@@ -376,38 +504,69 @@ export async function extractSearchQueries(
     } catch {
       const jsonMatch = trimmed.match(/\[[\s\S]*?\]/);
       if (!jsonMatch) {
-        const rawSnippet = raw.length > FALLBACK_RAW_LOG_MAX_LEN ? raw.slice(0, FALLBACK_RAW_LOG_MAX_LEN) + " [truncated]" : raw;
-        agentDebug("[Smart context] extractSearchQueries: no JSON array in response, using fallback. raw length:", raw.length, "snippet:", rawSnippet);
+        const rawSnippet =
+          raw.length > FALLBACK_RAW_LOG_MAX_LEN
+            ? raw.slice(0, FALLBACK_RAW_LOG_MAX_LEN) + " [truncated]"
+            : raw;
+        agentDebug(
+          "[Smart context] extractSearchQueries: no JSON array in response, using fallback. raw length:",
+          raw.length,
+          "snippet:",
+          rawSnippet,
+        );
         return fallback;
       }
       parsed = JSON.parse(jsonMatch[0]);
     }
 
     if (!Array.isArray(parsed)) {
-      const rawSnippet = raw.length > FALLBACK_RAW_LOG_MAX_LEN ? raw.slice(0, FALLBACK_RAW_LOG_MAX_LEN) + " [truncated]" : raw;
-      agentDebug("[Smart context] extractSearchQueries: response not an array, using fallback. raw length:", raw.length, "snippet:", rawSnippet);
+      const rawSnippet =
+        raw.length > FALLBACK_RAW_LOG_MAX_LEN
+          ? raw.slice(0, FALLBACK_RAW_LOG_MAX_LEN) + " [truncated]"
+          : raw;
+      agentDebug(
+        "[Smart context] extractSearchQueries: response not an array, using fallback. raw length:",
+        raw.length,
+        "snippet:",
+        rawSnippet,
+      );
       return fallback;
     }
 
-    const queries = [...new Set(
-      (parsed as unknown[])
-        .filter((q): q is string => typeof q === "string")
-        .map((q) => q.trim())
-        .filter((q) => q.length > 0)
-    )];
+    const queries = [
+      ...new Set(
+        (parsed as unknown[])
+          .filter((q): q is string => typeof q === "string")
+          .map((q) => q.trim())
+          .filter((q) => q.length > 0),
+      ),
+    ];
 
     if (queries.length === 0) {
-      const rawSnippet = raw.length > FALLBACK_RAW_LOG_MAX_LEN ? raw.slice(0, FALLBACK_RAW_LOG_MAX_LEN) + " [truncated]" : raw;
-      agentDebug("[Smart context] extractSearchQueries: empty queries after parse, using fallback. raw length:", raw.length, "snippet:", rawSnippet);
+      const rawSnippet =
+        raw.length > FALLBACK_RAW_LOG_MAX_LEN
+          ? raw.slice(0, FALLBACK_RAW_LOG_MAX_LEN) + " [truncated]"
+          : raw;
+      agentDebug(
+        "[Smart context] extractSearchQueries: empty queries after parse, using fallback. raw length:",
+        raw.length,
+        "snippet:",
+        rawSnippet,
+      );
       return fallback;
     }
     return queries;
   } catch (e) {
     if (isRateLimitError(e)) {
-      agentDebug("[Smart context] extractSearchQueries: rate limit (429) after retries, using fallback");
+      agentDebug(
+        "[Smart context] extractSearchQueries: rate limit (429) after retries, using fallback",
+      );
     } else {
       const msg = e instanceof Error ? e.message : String(e);
-      agentDebug("[Smart context] extractSearchQueries: error, using fallback", msg);
+      agentDebug(
+        "[Smart context] extractSearchQueries: error, using fallback",
+        msg,
+      );
     }
     return fallback;
   }
@@ -436,7 +595,9 @@ export async function extractSearchQueriesFromContextAndCommand(
   ].filter(Boolean);
 
   if (!providerFactory) {
-    agentDebug("[Smart context] extractSearchQueriesFromContextAndCommand: no providerFactory, using fallback");
+    agentDebug(
+      "[Smart context] extractSearchQueriesFromContextAndCommand: no providerFactory, using fallback",
+    );
     return fallback.length > 0 ? fallback : ["search"];
   }
 
@@ -444,7 +605,9 @@ export async function extractSearchQueriesFromContextAndCommand(
   const model = settings.contextQueryModel;
 
   if (!model || !settings.whitelistedModels.includes(model)) {
-    agentDebug("[Smart context] extractSearchQueriesFromContextAndCommand: skipped (no model or not whitelisted), using fallback");
+    agentDebug(
+      "[Smart context] extractSearchQueriesFromContextAndCommand: skipped (no model or not whitelisted), using fallback",
+    );
     return fallback;
   }
 
@@ -452,7 +615,9 @@ export async function extractSearchQueriesFromContextAndCommand(
 
   try {
     const provider = providerFactory(model, ctx);
-    agentDebug("[Smart context] extractSearchQueriesFromContextAndCommand: sending to model");
+    agentDebug(
+      "[Smart context] extractSearchQueriesFromContextAndCommand: sending to model",
+    );
     logDebugSection("SYSTEM PROMPT", CONTEXT_COMMAND_QUERY_PROMPT);
     logDebugSection("USER / QUERY (context + command)", userContent);
     const messages: Message[] = [
@@ -460,7 +625,10 @@ export async function extractSearchQueriesFromContextAndCommand(
       { role: "user", content: userContent },
     ];
     const raw = await callCheapModelWithRetry(provider, messages, retryOptions);
-    agentDebug("[Smart context] extractSearchQueriesFromContextAndCommand: raw response length", raw.length);
+    agentDebug(
+      "[Smart context] extractSearchQueriesFromContextAndCommand: raw response length",
+      raw.length,
+    );
 
     const trimmed = raw.trim();
     let parsed: unknown;
@@ -469,14 +637,18 @@ export async function extractSearchQueriesFromContextAndCommand(
     } catch {
       const jsonMatch = trimmed.match(/\[[\s\S]*?\]/);
       if (!jsonMatch) {
-        agentDebug("[Smart context] extractSearchQueriesFromContextAndCommand: no JSON array, using fallback");
+        agentDebug(
+          "[Smart context] extractSearchQueriesFromContextAndCommand: no JSON array, using fallback",
+        );
         return fallback;
       }
       parsed = JSON.parse(jsonMatch[0]);
     }
 
     if (!Array.isArray(parsed)) {
-      agentDebug("[Smart context] extractSearchQueriesFromContextAndCommand: response not array, using fallback");
+      agentDebug(
+        "[Smart context] extractSearchQueriesFromContextAndCommand: response not array, using fallback",
+      );
       return fallback;
     }
 
@@ -490,16 +662,23 @@ export async function extractSearchQueriesFromContextAndCommand(
     ];
 
     if (queries.length === 0) {
-      agentDebug("[Smart context] extractSearchQueriesFromContextAndCommand: empty queries, using fallback");
+      agentDebug(
+        "[Smart context] extractSearchQueriesFromContextAndCommand: empty queries, using fallback",
+      );
       return fallback;
     }
     return queries;
   } catch (e) {
     if (isRateLimitError(e)) {
-      agentDebug("[Smart context] extractSearchQueriesFromContextAndCommand: rate limit after retries, using fallback");
+      agentDebug(
+        "[Smart context] extractSearchQueriesFromContextAndCommand: rate limit after retries, using fallback",
+      );
     } else {
       const msg = e instanceof Error ? e.message : String(e);
-      agentDebug("[Smart context] extractSearchQueriesFromContextAndCommand: error, using fallback", msg);
+      agentDebug(
+        "[Smart context] extractSearchQueriesFromContextAndCommand: error, using fallback",
+        msg,
+      );
     }
     return fallback;
   }
@@ -517,7 +696,12 @@ export async function buildRawRetrievedContext(
   ctx: AppContext,
   queries: string[],
   options?: { historyLimit?: number; knowledgeLimit?: number },
-): Promise<{ text: string; sources: ContextSource[]; contents: string[]; maxScore: number }> {
+): Promise<{
+  text: string;
+  sources: ContextSource[];
+  contents: string[];
+  maxScore: number;
+}> {
   const settings = getSettings(ctx);
   const embedder = createEmbeddingAdapter(settings, ctx.http);
   const historyLimit = options?.historyLimit ?? HISTORY_LIMIT_PER_QUERY;
@@ -526,20 +710,44 @@ export async function buildRawRetrievedContext(
   const seenHistoryKeys = new Set<string>();
   const seenKnowledgeKeys = new Set<string>();
 
-  const historyEntries: Array<{ sessionId: string; entryId: string; content: string; isCompressed: boolean; score: number; createdAt: string }> = [];
-  const knowledgeEntries: Array<{ path: string; content: string; score: number }> = [];
+  const historyEntries: Array<{
+    sessionId: string;
+    entryId: string;
+    content: string;
+    isCompressed: boolean;
+    score: number;
+    createdAt: string;
+  }> = [];
+  const knowledgeEntries: Array<{
+    path: string;
+    content: string;
+    score: number;
+  }> = [];
   const sources: ContextSource[] = [];
 
-  const debugPerQuery: Array<{ query: string; historyHits: number; knowledgeHits: number }> = [];
+  const debugPerQuery: Array<{
+    query: string;
+    historyHits: number;
+    knowledgeHits: number;
+  }> = [];
 
   const perQueryResults = await Promise.all(
     queries.map(async (query, i) => {
-      agentDebug("[Smart context] buildRawRetrievedContext: searching query", i + 1, "of", queries.length, query);
+      agentDebug(
+        "[Smart context] buildRawRetrievedContext: searching query",
+        i + 1,
+        "of",
+        queries.length,
+        query,
+      );
       try {
         const queryEmbedding = await embedder.embed(query);
         const [histHits, knowledgeHits] = await Promise.all([
           searchHistory(ctx, embedder, query, historyLimit, queryEmbedding),
-          searchKnowledge(ctx, embedder, query, knowledgeLimit, { scope: "global", queryEmbedding }),
+          searchKnowledge(ctx, embedder, query, knowledgeLimit, {
+            scope: "global",
+            queryEmbedding,
+          }),
         ]);
         return { query, histHits, knowledgeHits };
       } catch (err) {
@@ -548,13 +756,21 @@ export async function buildRawRetrievedContext(
           "[Smart context] buildRawRetrievedContext: query failed, skipping",
           { query, error: msg },
         );
-        return { query, histHits: [] as HistorySearchResult[], knowledgeHits: [] as KnowledgeSearchResult[] };
+        return {
+          query,
+          histHits: [] as HistorySearchResult[],
+          knowledgeHits: [] as KnowledgeSearchResult[],
+        };
       }
     }),
   );
 
   for (const { query, histHits, knowledgeHits } of perQueryResults) {
-    debugPerQuery.push({ query, historyHits: histHits.length, knowledgeHits: knowledgeHits.length });
+    debugPerQuery.push({
+      query,
+      historyHits: histHits.length,
+      knowledgeHits: knowledgeHits.length,
+    });
     for (const hit of histHits) {
       const key = `${hit.sessionId}/${hit.entryId}`;
       if (!seenHistoryKeys.has(key)) {
@@ -581,13 +797,35 @@ export async function buildRawRetrievedContext(
     knowledgeEntries.length,
   );
 
+  if (knowledgeEntries.length === 0) {
+    const store = createVectorStore(ctx.db);
+    const knowledgePathCount = store.getAllKnowledgePaths().length;
+    if (knowledgePathCount === 0) {
+      agentDebug(
+        "[Smart context] Knowledge base is empty. Index data/ files in Settings (Embeddings) so semantic search can find them.",
+      );
+    } else {
+      agentDebug(
+        "[Smart context] Knowledge base has",
+        knowledgePathCount,
+        "documents but no semantic matches for this query.",
+      );
+    }
+  }
+
   if (historyEntries.length === 0 && knowledgeEntries.length === 0) {
-    return { text: "No relevant prior context found.", sources: [], contents: [], maxScore: 0 };
+    return {
+      text: "No relevant prior context found.",
+      sources: [],
+      contents: [],
+      maxScore: 0,
+    };
   }
 
   const queryTerms = [...new Set(queries.flatMap((q) => extractKeywords(q)))];
   const hasKeywordMatch = (content: string): boolean =>
-    queryTerms.length > 0 && queryTerms.some((t) => content.toLowerCase().includes(t));
+    queryTerms.length > 0 &&
+    queryTerms.some((t) => content.toLowerCase().includes(t));
 
   for (const h of historyEntries) {
     if (hasKeywordMatch(h.content)) {
@@ -600,12 +838,15 @@ export async function buildRawRetrievedContext(
     }
   }
   if (historyEntries.length >= 2) {
-    const createdDates = historyEntries.map((h) => new Date(h.createdAt).getTime());
+    const createdDates = historyEntries.map((h) =>
+      new Date(h.createdAt).getTime(),
+    );
     const minT = Math.min(...createdDates);
     const maxT = Math.max(...createdDates);
     const range = maxT - minT || 1;
     for (const h of historyEntries) {
-      const normalizedRecency = (new Date(h.createdAt).getTime() - minT) / range;
+      const normalizedRecency =
+        (new Date(h.createdAt).getTime() - minT) / range;
       h.score *= 1 + RECENCY_BOOST_FACTOR * normalizedRecency;
     }
   }
@@ -646,7 +887,10 @@ export async function buildRawRetrievedContext(
  * @example
  * const text = buildRawTextFromChunks(sources, contents);
  */
-export function buildRawTextFromChunks(sources: ContextSource[], contents: string[]): string {
+export function buildRawTextFromChunks(
+  sources: ContextSource[],
+  contents: string[],
+): string {
   if (sources.length === 0 || contents.length === 0) {
     return "No relevant prior context found.";
   }
@@ -715,7 +959,9 @@ export async function filterRelevantSources(
   const model = settings.contextQueryModel;
 
   if (!model || !settings.whitelistedModels.includes(model)) {
-    agentDebug("[Smart context] filterRelevantSources: skipped (no query model or not whitelisted)");
+    agentDebug(
+      "[Smart context] filterRelevantSources: skipped (no query model or not whitelisted)",
+    );
     return { sources, contents };
   }
 
@@ -765,7 +1011,10 @@ Examples:
     ];
 
     const raw = await callCheapModelWithRetry(provider, messages, retryOptions);
-    agentDebug("[Smart context] filterRelevantSources: raw response length", raw.length);
+    agentDebug(
+      "[Smart context] filterRelevantSources: raw response length",
+      raw.length,
+    );
 
     const trimmed = raw.trim();
     let parsed: unknown;
@@ -804,15 +1053,19 @@ Examples:
       return { sources, contents };
     }
 
-    const ids = [...new Set(
-      (parsed as unknown[])
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0),
-    )];
+    const ids = [
+      ...new Set(
+        (parsed as unknown[])
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0),
+      ),
+    ];
 
     if (ids.length === 0) {
-      agentDebug("[Smart context] filterRelevantSources: model returned an empty id list; treating as no relevant sources");
+      agentDebug(
+        "[Smart context] filterRelevantSources: model returned an empty id list; treating as no relevant sources",
+      );
       return { sources: [], contents: [] };
     }
 
@@ -839,10 +1092,15 @@ Examples:
     return { sources: filteredSources, contents: filteredContents };
   } catch (e) {
     if (isRateLimitError(e)) {
-      agentDebug("[Smart context] filterRelevantSources: rate limit (429) after retries, returning all sources");
+      agentDebug(
+        "[Smart context] filterRelevantSources: rate limit (429) after retries, returning all sources",
+      );
     } else {
       const msg = e instanceof Error ? e.message : String(e);
-      agentDebug("[Smart context] filterRelevantSources: error, returning all sources", msg);
+      agentDebug(
+        "[Smart context] filterRelevantSources: error, returning all sources",
+        msg,
+      );
     }
     return { sources, contents };
   }
@@ -896,7 +1154,8 @@ export function cleanupQuotes(
       const isSubstring = deduped.some((d) => d.includes(s) && d !== s);
       const isSuperset = deduped.some((d) => s.includes(d) && s !== d);
       if (isSubstring) continue;
-      if (isSuperset) deduped = deduped.filter((d) => !s.includes(d) || s === d);
+      if (isSuperset)
+        deduped = deduped.filter((d) => !s.includes(d) || s === d);
       deduped.push(s);
     }
 
@@ -924,7 +1183,11 @@ export function cleanupQuotes(
  * @param overlap Chars to overlap between consecutive chunks.
  * @returns Array of chunk strings.
  */
-function chunkContent(content: string, chunkSize: number, overlap: number): string[] {
+function chunkContent(
+  content: string,
+  chunkSize: number,
+  overlap: number,
+): string[] {
   if (content.length <= chunkSize) return [content];
   const chunks: string[] = [];
   let start = 0;
@@ -1042,7 +1305,9 @@ export async function extractRelevantQuotes(
   const settings = getSettings(ctx);
   const model = settings.contextSummaryModel || settings.contextQueryModel;
   if (!model || !settings.whitelistedModels.includes(model)) {
-    agentDebug("[Smart context] extractRelevantQuotes: no model or not whitelisted");
+    agentDebug(
+      "[Smart context] extractRelevantQuotes: no model or not whitelisted",
+    );
     return [];
   }
 
@@ -1064,7 +1329,11 @@ export async function extractRelevantQuotes(
           { role: "system", content: QUOTE_EXTRACTION_PROMPT },
           { role: "user", content: userContent },
         ];
-        const raw = await callCheapModelWithRetry(provider, messages, retryOptions);
+        const raw = await callCheapModelWithRetry(
+          provider,
+          messages,
+          retryOptions,
+        );
         const trimmed = raw.trim();
         let parsed: unknown;
         try {
@@ -1076,7 +1345,11 @@ export async function extractRelevantQuotes(
         }
         const arr = Array.isArray(parsed) ? parsed : [parsed];
         for (const item of arr) {
-          if (item && typeof item === "object" && typeof (item as { text?: unknown }).text === "string") {
+          if (
+            item &&
+            typeof item === "object" &&
+            typeof (item as { text?: unknown }).text === "string"
+          ) {
             const text = ((item as { text: string }).text as string).trim();
             if (text.length > 0) allQuotes.push({ sourceId: source.id, text });
           }
@@ -1117,10 +1390,18 @@ export function buildFocusedContextBlock(
     lines.push("");
   }
   lines.push("### Quoted sources");
-  lines.push(quotedSourceIds.length > 0 ? quotedSourceIds.map((id) => `- ${id}`).join("\n") : "(none)");
+  lines.push(
+    quotedSourceIds.length > 0
+      ? quotedSourceIds.map((id) => `- ${id}`).join("\n")
+      : "(none)",
+  );
   lines.push("");
   lines.push("### Additional sources (retrieved but not quoted)");
-  lines.push(additionalSourceIds.length > 0 ? additionalSourceIds.map((id) => `- ${id}`).join("\n") : "(none)");
+  lines.push(
+    additionalSourceIds.length > 0
+      ? additionalSourceIds.map((id) => `- ${id}`).join("\n")
+      : "(none)",
+  );
   return lines.join("\n").trim();
 }
 
@@ -1160,25 +1441,49 @@ export async function summarizeRetrievedContext(
   const allRetrievedSourceIds = options?.allRetrievedSourceIds ?? [];
 
   if (contents != null && contents.length === sources.length) {
-    agentDebug("[Smart context] summarizeRetrievedContext: using keyword span extraction (focused quotes)");
-    const rawSpans = extractRelevantSpansByKeyword(userMessage, searchQueries, sources, contents);
-    agentDebug("[Smart context] keyword span extraction: raw spans count", rawSpans.length);
+    agentDebug(
+      "[Smart context] summarizeRetrievedContext: using keyword span extraction (focused quotes)",
+    );
+    const rawSpans = extractRelevantSpansByKeyword(
+      userMessage,
+      searchQueries,
+      sources,
+      contents,
+    );
+    agentDebug(
+      "[Smart context] keyword span extraction: raw spans count",
+      rawSpans.length,
+    );
     const contentMap = new Map<string, string>();
-    for (let i = 0; i < sources.length; i++) contentMap.set(sources[i].id, contents[i] ?? "");
+    for (let i = 0; i < sources.length; i++)
+      contentMap.set(sources[i].id, contents[i] ?? "");
     const quotes = cleanupQuotes(rawSpans, contentMap);
     const quotedSourceIds = [...new Set(quotes.map((q) => q.sourceId))];
-    const additionalSourceIds = allRetrievedSourceIds.filter((id) => !quotedSourceIds.includes(id));
+    const additionalSourceIds = allRetrievedSourceIds.filter(
+      (id) => !quotedSourceIds.includes(id),
+    );
     if (quotes.length === 0) {
       const fallbackBlock = `## Smart context\n\nNo relevant spans found. Raw context:\n\n${rawText}`;
-      agentDebug("[Smart context] keyword span extraction: no spans after cleanup, using raw context fallback");
+      agentDebug(
+        "[Smart context] keyword span extraction: no spans after cleanup, using raw context fallback",
+      );
       logDebugSection("RESULT (keyword span extraction)", fallbackBlock);
       return {
         block: fallbackBlock,
         quotes: [],
       };
     }
-    const block = buildFocusedContextBlock(quotes, quotedSourceIds, additionalSourceIds);
-    agentDebug("[Smart context] keyword span extraction: result length", block.length, "quotes count", quotes.length);
+    const block = buildFocusedContextBlock(
+      quotes,
+      quotedSourceIds,
+      additionalSourceIds,
+    );
+    agentDebug(
+      "[Smart context] keyword span extraction: result length",
+      block.length,
+      "quotes count",
+      quotes.length,
+    );
     logDebugSection("RESULT (keyword span extraction)", block);
     return { block, quotes };
   }
@@ -1187,15 +1492,29 @@ export async function summarizeRetrievedContext(
   const model = settings.contextSummaryModel || settings.contextQueryModel;
 
   if (!model || !settings.whitelistedModels.includes(model)) {
-    agentDebug("[Smart context] summarizeRetrievedContext: no summary model, returning raw");
+    agentDebug(
+      "[Smart context] summarizeRetrievedContext: no summary model, returning raw",
+    );
     return `## Smart context\n\n${rawText}`;
   }
 
-  agentDebug("[Smart context] summarizeRetrievedContext: using model", model, "sources count", sources.length);
+  agentDebug(
+    "[Smart context] summarizeRetrievedContext: using model",
+    model,
+    "sources count",
+    sources.length,
+  );
   const sourceList = sources.map((s) => `- ${s.id}`).join("\n");
   const systemContent = `${SUMMARIZE_PROMPT_PREFIX}\n${sourceList}`;
-  agentDebug("[Smart context] Summarizer: sending", rawText.length, "chars of retrieved content in user message");
-  logDebugSection("SYSTEM (instructions + source IDs for citations)", systemContent);
+  agentDebug(
+    "[Smart context] Summarizer: sending",
+    rawText.length,
+    "chars of retrieved content in user message",
+  );
+  logDebugSection(
+    "SYSTEM (instructions + source IDs for citations)",
+    systemContent,
+  );
   logDebugSection("USER MESSAGE (retrieved content to summarize)", rawText);
 
   try {
@@ -1204,17 +1523,29 @@ export async function summarizeRetrievedContext(
       { role: "system", content: systemContent },
       { role: "user", content: rawText },
     ];
-    const result = await callCheapModelWithRetry(provider, messages, retryOptions);
+    const result = await callCheapModelWithRetry(
+      provider,
+      messages,
+      retryOptions,
+    );
     const out = result.trim() || `## Smart context\n\n${rawText}`;
-    agentDebug("[Smart context] summarizeRetrievedContext: result length", out.length);
+    agentDebug(
+      "[Smart context] summarizeRetrievedContext: result length",
+      out.length,
+    );
     logDebugSection("RESULT (summary)", out);
     return out;
   } catch (e) {
     if (isRateLimitError(e)) {
-      agentDebug("[Smart context] summarizeRetrievedContext: rate limit (429) after retries, returning raw context");
+      agentDebug(
+        "[Smart context] summarizeRetrievedContext: rate limit (429) after retries, returning raw context",
+      );
     } else {
       const msg = e instanceof Error ? e.message : String(e);
-      agentDebug("[Smart context] summarizeRetrievedContext: error, returning raw", msg);
+      agentDebug(
+        "[Smart context] summarizeRetrievedContext: error, returning raw",
+        msg,
+      );
     }
     return `## Smart context\n\n${rawText}`;
   }
@@ -1232,50 +1563,152 @@ export interface BuildSmartContextResult {
 
 /**
  * Builds the smart context block for the agent system prompt: extract queries from the user
- * message (and optional recent conversation), retrieves history and knowledge, filters and
- * summarizes with citations. Used by the agent runner to inject relevant context upfront.
+ * message (and optional clarified-commands context), retrieves history and knowledge, filters and
+ * summarizes with citations. Uses only clarified commands for the chat for query context, not full rounds.
  * @param ctx - Application context
  * @param providerFactory - Factory to create an AI provider (for query extraction, filtering, summarization)
- * @param userMessage - Current user message to base search queries on
- * @param recentConversation - Optional formatted recent thread for disambiguation (e.g. "that", "it")
+ * @param userMessage - Current user message (clarified) to base search queries on
+ * @param clarifiedCommandsContext - Optional list of clarified commands for the chat (Round 1: ...\\nRound 2: ...) for disambiguation only
+ * @param onProgress - Optional callback for live progress (phase, detail?, output?); output is the actual step result for tooltips.
  * @returns Object with block (markdown section or "") and sourceIds (IDs included in the summary)
  * @note When no model is configured or retrieval returns nothing, returns { block: "", sourceIds: [] }.
  * @example
- * const { block, sourceIds } = await buildSmartContextBlock(ctx, providerFactory, userMessage, recentThreadBlock);
+ * const { block, sourceIds } = await buildSmartContextBlock(ctx, providerFactory, userMessage, clarifiedCommandsBlock);
  * const combined = transformContext(recentThreadBlock, block, systemPromptContent);
  */
 export async function buildSmartContextBlock(
   ctx: AppContext,
   providerFactory: ProviderFactory,
   userMessage: string,
-  recentConversation?: string,
+  clarifiedCommandsContext?: string,
+  onProgress?: (
+    phase: SmartContextPhase,
+    detail?: string,
+    output?: string,
+  ) => void,
 ): Promise<BuildSmartContextResult> {
-  const rawQueries = await extractSearchQueries(ctx, providerFactory, userMessage, recentConversation);
+  const startTotal = Date.now();
+  agentDebug("[Smart context] start");
+  onProgress?.("queries");
+
+  let t0 = Date.now();
+  const rawQueries = await extractSearchQueries(
+    ctx,
+    providerFactory,
+    userMessage,
+    clarifiedCommandsContext,
+  );
   const queries = rawQueries.slice(0, MAX_QUERIES_CAP);
-  const { text: rawContext, sources, contents, maxScore } = await buildRawRetrievedContext(ctx, queries);
+  agentDebug("[Smart context] phase queries:", Date.now() - t0, "ms");
+  onProgress?.(
+    "queries",
+    undefined,
+    queries.length > 0 ? queries.join("\n") : "(no queries extracted)",
+  );
+
+  onProgress?.("retrieval");
+  t0 = Date.now();
+  const {
+    text: rawContext,
+    sources,
+    contents,
+    maxScore,
+  } = await buildRawRetrievedContext(ctx, queries);
+  agentDebug(
+    "[Smart context] phase retrieval:",
+    Date.now() - t0,
+    "ms",
+    sources.length,
+    "sources",
+  );
+  const retrievalOutput =
+    sources.length > 0
+      ? `Found ${sources.length} source(s):\n${sources.map((s) => s.id).join("\n")}`
+      : "Searched history and knowledge. No matches. (Ensure embedding model is set in Settings and data/ files are indexed.)";
+  onProgress?.("retrieval", undefined, retrievalOutput);
+
   if (sources.length === 0) {
+    onProgress?.(
+      "filter",
+      "skipped",
+      "No sources to filter (retrieval returned none).",
+    );
+    onProgress?.("summary", undefined, "(no content to summarize)");
+    onProgress?.("done", "0 sources", "No prior context found.");
+    agentDebug(
+      "[Smart context] done in",
+      Date.now() - startTotal,
+      "ms, 0 sources (no retrieval)",
+    );
     return { block: "", sourceIds: [] };
   }
+
   const skipFilter =
     sources.length <= SKIP_FILTER_SOURCE_COUNT_THRESHOLD ||
-    (maxScore >= SKIP_FILTER_MAX_SCORE_THRESHOLD && sources.length <= HIGH_SCORE_SOURCE_CAP);
+    (maxScore >= SKIP_FILTER_MAX_SCORE_THRESHOLD &&
+      sources.length <= HIGH_SCORE_SOURCE_CAP);
   let finalSources: ContextSource[];
   let finalContents: string[];
   if (skipFilter) {
     finalSources = sources;
     finalContents = contents;
+    const filterSkippedOutput = `Skipped (${sources.length} sources, high score or under threshold). Kept:\n${finalSources.map((s) => s.id).join("\n")}`;
+    onProgress?.("filter", "skipped", filterSkippedOutput);
+    agentDebug(
+      "[Smart context] phase filter: skipped (source count or score threshold)",
+    );
   } else {
-    const filtered = await filterRelevantSources(ctx, providerFactory, userMessage, sources, contents);
+    onProgress?.("filter");
+    t0 = Date.now();
+    const filtered = await filterRelevantSources(
+      ctx,
+      providerFactory,
+      userMessage,
+      sources,
+      contents,
+    );
     finalSources = filtered.sources;
     finalContents = filtered.contents;
+    agentDebug(
+      "[Smart context] phase filter:",
+      Date.now() - t0,
+      "ms",
+      sources.length,
+      "->",
+      finalSources.length,
+      "sources",
+    );
+    const filterOutput = `${sources.length} → ${finalSources.length} sources kept:\n${finalSources.map((s) => s.id).join("\n")}`;
+    onProgress?.("filter", undefined, filterOutput);
   }
   if (finalSources.length === 0) {
+    onProgress?.(
+      "summary",
+      undefined,
+      "(all filtered out, nothing to summarize)",
+    );
+    onProgress?.(
+      "done",
+      "0 sources",
+      "All sources filtered out; no prior context included.",
+    );
+    agentDebug(
+      "[Smart context] done in",
+      Date.now() - startTotal,
+      "ms, 0 sources (all filtered out)",
+    );
     return {
       block: "## Smart context\n\nNo relevant prior context found.",
       sourceIds: [],
     };
   }
-  const filteredRawContext = buildRawTextFromChunks(finalSources, finalContents);
+
+  onProgress?.("summary");
+  t0 = Date.now();
+  const filteredRawContext = buildRawTextFromChunks(
+    finalSources,
+    finalContents,
+  );
   const allRetrievedSourceIds = sources.map((s) => s.id);
   const summarizeResult = await summarizeRetrievedContext(
     ctx,
@@ -1289,8 +1722,24 @@ export async function buildSmartContextBlock(
       allRetrievedSourceIds,
     },
   );
-  const block = typeof summarizeResult === "string" ? summarizeResult : summarizeResult.block;
+  agentDebug("[Smart context] phase summary:", Date.now() - t0, "ms");
+
+  const block =
+    typeof summarizeResult === "string"
+      ? summarizeResult
+      : summarizeResult.block;
   const sourceIds = finalSources.map((s) => s.id);
+  onProgress?.("summary", undefined, block || "(empty)");
+
+  const doneOutput = `Included in context (${sourceIds.length} sources):\n${sourceIds.join("\n")}`;
+  onProgress?.("done", `${sourceIds.length} sources`, doneOutput);
+  agentDebug(
+    "[Smart context] done in",
+    Date.now() - startTotal,
+    "ms",
+    sourceIds.length,
+    "sources",
+  );
   return { block, sourceIds };
 }
 
@@ -1301,7 +1750,9 @@ export async function buildSmartContextBlock(
  * @returns Number of entries with role "user" in session.original
  */
 export function countUserRounds(session: Session): number {
-  return session.original.filter((e) => e.role === "user").length;
+  return entriesForConversation(session.original).filter(
+    (e) => e.role === "user",
+  ).length;
 }
 
 /**
@@ -1310,7 +1761,9 @@ export function countUserRounds(session: Session): number {
  * @returns Markdown block listing rounds and their resolved commands, or a no-context message when empty
  */
 export function buildContextAwareCommandsBlock(session: Session): string {
-  const userEntries = session.original.filter((e) => e.role === "user");
+  const userEntries = entriesForConversation(session.original).filter(
+    (e) => e.role === "user",
+  );
   if (userEntries.length === 0) {
     return "## Context-aware commands\n\nNo prior user commands in this session.";
   }
@@ -1332,6 +1785,93 @@ export interface FormatRecentThreadOptions {
 }
 
 /**
+ * Formats specific rounds by 1-based round index. Used by chat_read when the agent requests full context for given rounds.
+ * @param session - Current session
+ * @param roundIndexes - 1-based round numbers to include (e.g. [1, 2, 5])
+ * @param options - Optional: skipThinking to exclude thinking entries
+ * @returns Formatted markdown section string for the requested rounds, or a no-context message
+ */
+export function formatRoundsByIndex(
+  session: Session,
+  roundIndexes: number[],
+  options?: FormatRecentThreadOptions,
+): string {
+  if (roundIndexes.length === 0) {
+    return "## Chat read\n\nNo rounds requested. Pass rounds: [1, 2, ...] with the specific round number(s) you need.";
+  }
+  const entries = entriesForConversation(session.original);
+  const skipThinking = options?.skipThinking === true;
+  const source = skipThinking
+    ? entries.filter((e) => e.role !== "thinking")
+    : entries;
+  if (source.length === 0) {
+    return "## Chat read\n\nNo turns in this session.";
+  }
+  const wantSet = new Set(
+    roundIndexes.filter((r) => Number.isInteger(r) && r >= 1),
+  );
+  if (wantSet.size === 0) {
+    return "## Chat read\n\nNo valid round numbers. Use 1-based round indices (e.g. rounds: [1, 2]).";
+  }
+  let seenUserRounds = 0;
+  const roundToEntryIndices: Map<number, number[]> = new Map();
+  for (let i = 0; i < source.length; i++) {
+    const e = source[i];
+    if (e.role === "user") {
+      seenUserRounds += 1;
+      const roundIndex = e.roundIndex ?? seenUserRounds;
+      if (!roundToEntryIndices.has(roundIndex)) {
+        roundToEntryIndices.set(roundIndex, []);
+      }
+      roundToEntryIndices.get(roundIndex)!.push(i);
+    } else {
+      const lastRound = seenUserRounds;
+      if (lastRound >= 1) {
+        const roundIndex = lastRound;
+        if (!roundToEntryIndices.has(roundIndex)) {
+          roundToEntryIndices.set(roundIndex, []);
+        }
+        roundToEntryIndices.get(roundIndex)!.push(i);
+      }
+    }
+  }
+  const sortedWanted = [...wantSet].sort((a, b) => a - b);
+  const lines: string[] = ["## Chat read", ""];
+  for (const roundIndex of sortedWanted) {
+    const indices = roundToEntryIndices.get(roundIndex);
+    if (!indices || indices.length === 0) continue;
+    lines.push(`### Round ${roundIndex}`);
+    for (const idx of indices) {
+      const entry = source[idx];
+      const label =
+        entry.role === "user"
+          ? "**User:**"
+          : entry.role === "agent"
+            ? "**Assistant:**"
+            : entry.role === "thinking"
+              ? "**Reasoning:**"
+              : `**Tool (${entry.toolName ?? "unknown"}):**`;
+      if (
+        entry.role === "tool_call" &&
+        entry.toolArgs != null &&
+        Object.keys(entry.toolArgs).length > 0
+      ) {
+        lines.push(
+          `${label}\nArguments: ${JSON.stringify(entry.toolArgs)}\nResult: ${entry.content}`,
+        );
+      } else {
+        lines.push(`${label}\n${entry.content}`);
+      }
+    }
+    lines.push("");
+  }
+  return (
+    lines.join("\n").trimEnd() ||
+    "## Chat read\n\nNo matching rounds in this session."
+  );
+}
+
+/**
  * Formats the last `count` rounds from session.original as a labeled markdown section.
  * A "round" is anchored by a user message; the section includes that user message and all entries up to the next round or end.
  * Includes tool arguments and results for tool_call entries.
@@ -1345,10 +1885,12 @@ export function formatRecentThreadTurns(
   count: number,
   options?: FormatRecentThreadOptions,
 ): string {
-  const entries = session.original;
+  const entries = entriesForConversation(session.original);
   const turns = Math.max(1, count);
   const skipThinking = options?.skipThinking === true;
-  const source = skipThinking ? entries.filter((e) => e.role !== "thinking") : entries;
+  const source = skipThinking
+    ? entries.filter((e) => e.role !== "thinking")
+    : entries;
 
   if (source.length === 0) {
     const heading = `## Recent thread (last ${turns} turns)`;
@@ -1374,24 +1916,24 @@ export function formatRecentThreadTurns(
   const heading = `## Recent thread (last ${turns} turns)`;
 
   const formatted = take.map((entry) => {
-      const label =
-        entry.role === "user"
-          ? "**User:**"
-          : entry.role === "agent"
-            ? "**Assistant:**"
-            : entry.role === "thinking"
-              ? "**Reasoning:**"
-              : `**Tool (${entry.toolName ?? "unknown"}):**`;
+    const label =
+      entry.role === "user"
+        ? "**User:**"
+        : entry.role === "agent"
+          ? "**Assistant:**"
+          : entry.role === "thinking"
+            ? "**Reasoning:**"
+            : `**Tool (${entry.toolName ?? "unknown"}):**`;
 
-      if (
-        entry.role === "tool_call" &&
-        entry.toolArgs != null &&
-        Object.keys(entry.toolArgs).length > 0
-      ) {
-        return `${label}\nArguments: ${JSON.stringify(entry.toolArgs)}\nResult: ${entry.content}`;
-      }
-      return `${label}\n${entry.content}`;
-    });
+    if (
+      entry.role === "tool_call" &&
+      entry.toolArgs != null &&
+      Object.keys(entry.toolArgs).length > 0
+    ) {
+      return `${label}\nArguments: ${JSON.stringify(entry.toolArgs)}\nResult: ${entry.content}`;
+    }
+    return `${label}\n${entry.content}`;
+  });
 
   return `${heading}\n\n${formatted.join("\n\n")}`;
 }
@@ -1414,7 +1956,9 @@ export function transformContext(
   smartContextBlock: string,
   systemPromptContent: string,
 ): string {
-  const contextBlocks = [recentThreadBlock, smartContextBlock].filter(Boolean).join("\n\n");
+  const contextBlocks = [recentThreadBlock, smartContextBlock]
+    .filter(Boolean)
+    .join("\n\n");
   return contextBlocks + CONTEXT_SYSTEM_SEP + systemPromptContent;
 }
 

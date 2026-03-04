@@ -37,8 +37,11 @@ export async function compressEntry(
   ctx: AppContext,
   provider: AIProvider | null,
   entry: HistoryEntry,
-  sessionId: string
+  sessionId: string,
 ): Promise<HistoryEntry> {
+  if (entry.role === "smart_context") {
+    return entry;
+  }
   if (!provider) {
     // No compression provider available — store as-is
     return appendEntry(ctx, sessionId, entry, true);
@@ -57,9 +60,14 @@ export async function compressEntry(
   let raw = "";
   try {
     const result = await Promise.race([
-      provider.complete(messages, [], (token) => { raw += token; }),
+      provider.complete(messages, [], (token) => {
+        raw += token;
+      }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Compression timeout")), COMPRESSION_TIMEOUT_MS)
+        setTimeout(
+          () => reject(new Error("Compression timeout")),
+          COMPRESSION_TIMEOUT_MS,
+        ),
       ),
     ]);
     raw = result.content || raw;
@@ -68,18 +76,28 @@ export async function compressEntry(
   }
 
   // Parse JSON from response; support optional skip (store empty content to preserve history)
-  let compressed: { content?: string; role?: string; tags?: string[]; skip?: boolean };
+  let compressed: {
+    content?: string;
+    role?: string;
+    tags?: string[];
+    skip?: boolean;
+  };
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    compressed = jsonMatch ? JSON.parse(jsonMatch[0]) : { content: entry.content, role: entry.role };
+    compressed = jsonMatch
+      ? JSON.parse(jsonMatch[0])
+      : { content: entry.content, role: entry.role };
   } catch {
     compressed = { content: entry.content, role: entry.role };
   }
 
   const shouldSkip =
     compressed.skip === true ||
-    (typeof compressed.content === "string" && compressed.content.trim() === "");
-  const contentToStore = shouldSkip ? "" : (compressed.content?.trim() || entry.content);
+    (typeof compressed.content === "string" &&
+      compressed.content.trim() === "");
+  const contentToStore = shouldSkip
+    ? ""
+    : compressed.content?.trim() || entry.content;
 
   const compressedEntry: Omit<HistoryEntry, "id"> = {
     role: (compressed.role as HistoryEntry["role"]) || entry.role,
@@ -93,7 +111,9 @@ export async function compressEntry(
   if (compressed.tags?.length) {
     const existing = getSession(ctx, sessionId);
     if (existing) {
-      const merged = Array.from(new Set([...existing.tags, ...compressed.tags]));
+      const merged = Array.from(
+        new Set([...existing.tags, ...compressed.tags]),
+      );
       updateSessionMeta(ctx, sessionId, { tags: merged });
     }
   }

@@ -247,6 +247,18 @@ export function deleteSession(ctx: AppContext, id: string): boolean {
   return true;
 }
 
+/**
+ * Returns only entries that are part of the conversation (excludes smart_context and other UI-only entries).
+ * Use when building prompts, counting rounds, or formatting thread/rounds for the agent.
+ * @param entries - Full history entries (e.g. session.original)
+ * @returns Entries with role user, agent, tool_call, tool_result, thinking
+ */
+export function entriesForConversation(
+  entries: HistoryEntry[],
+): HistoryEntry[] {
+  return entries.filter((e) => e.role !== "smart_context");
+}
+
 // -- Entry management --
 
 export function appendEntry(

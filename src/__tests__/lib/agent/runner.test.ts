@@ -3,7 +3,7 @@
  * @module __tests__/lib/agent/runner.test
  */
 import path from "path";
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, spyOn } from "bun:test";
 import { runAgent } from "@/lib/agent/runner";
 import { registerLlmQueueHandlers } from "@/lib/queue/llm-queue-handlers";
 import {
@@ -177,7 +177,12 @@ describe("runAgent", () => {
       .prepare(
         "SELECT role, content, resolved_content, round_index FROM history_entries WHERE session_id = ? AND is_compressed = 0 ORDER BY timestamp ASC",
       )
-      .all(sessionId) as { role: string; content: string; resolved_content: string | null; round_index: number | null }[];
+      .all(sessionId) as {
+      role: string;
+      content: string;
+      resolved_content: string | null;
+      round_index: number | null;
+    }[];
     const userRow = rows.find((r) => r.role === "user");
     expect(userRow).toBeDefined();
     expect(userRow?.content).toBe("User message");
@@ -271,7 +276,7 @@ describe("runAgent", () => {
     expect(toolEvents.some((e) => e.type === "tool_result")).toBe(true);
   });
 
-  it("includes last 3 rounds in system; current user message is the only user turn in messages", async () => {
+  it("system prompt omits last 3 rounds (smart context used instead); current user message is the only user turn in messages", async () => {
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
     appendEntry(
@@ -313,16 +318,14 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(capturedSystem).toContain("## Recent thread");
-    expect(capturedSystem).toContain("prior user message");
-    expect(capturedSystem).toContain("prior agent reply");
+    expect(capturedSystem).not.toContain("## Recent thread");
     expect(capturedSystem).toContain("You are agent");
     expect(capturedNonSystem).toHaveLength(1);
     expect(capturedNonSystem[0].content).toBe("current");
     expect(capturedNonSystem[0].role).toBe("user");
   });
 
-  it("includes last 3 rounds in system with prior message and reply", async () => {
+  it("system prompt omits last 3 rounds with prior message and reply", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     appendEntry(
@@ -355,13 +358,11 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).toContain("## Recent thread");
-    expect(systemContent).toContain("prior message");
-    expect(systemContent).toContain("prior reply");
+    expect(systemContent).not.toContain("## Recent thread");
     expect(systemContent).toContain("You are agent");
   });
 
-  it("system message includes last 3 rounds (prior turns visible; use chat_read for older)", async () => {
+  it("system message omits last 3 rounds (smart context and chat_read used for prior context)", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     appendEntry(
@@ -394,12 +395,11 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).toContain("## Recent thread");
-    expect(systemContent).toContain("first user");
-    expect(systemContent).toContain("first reply");
+    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("You are agent");
   });
 
-  it("system includes last 3 rounds when session has history (tool_call and agent)", async () => {
+  it("system omits last 3 rounds when session has history (tool_call and agent)", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
@@ -456,13 +456,11 @@ describe("runAgent", () => {
       () => {},
     );
 
-    expect(systemContent).toContain("## Recent thread");
-    expect(systemContent).toContain("only user");
-    expect(systemContent).toContain("only reply");
-    expect(systemContent).toContain("follow-up after tool");
+    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("You are agent");
   });
 
-  it("when more than 3 rounds exist, system tells agent how many more rounds and to use chat_read", async () => {
+  it("when more than 3 rounds exist, system includes chat_read note (no verbatim recent thread)", async () => {
     const ts = "2020-01-01T00:00:00.000Z";
     for (let i = 0; i < 4; i++) {
       appendEntry(
@@ -496,25 +494,31 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).toContain("## Recent thread");
-    expect(systemContent).toContain("**2** more rounds before these");
+    expect(systemContent).not.toContain("## Recent thread");
     expect(systemContent).toContain("**chat_read**");
-    expect(systemContent).toContain("user message 3");
-    expect(systemContent).toContain("agent reply 3");
-    expect(systemContent).toContain("user message 4");
-    expect(systemContent).toContain("agent reply 4");
+    expect(systemContent).toContain("You are agent");
   });
 
-  it("includes thinking entries from recent thread in system (reasoning is part of context)", async () => {
+  it("system omits recent thread (no verbatim thinking or prior turns in system)", async () => {
     const ts = "2020-01-01T00:00:00.000Z";
-    appendEntry(ctx, sessionId, { role: "user", content: "ask", timestamp: ts }, false);
+    appendEntry(
+      ctx,
+      sessionId,
+      { role: "user", content: "ask", timestamp: ts },
+      false,
+    );
     appendEntry(
       ctx,
       sessionId,
       { role: "thinking", content: "internal reasoning here", timestamp: ts },
       false,
     );
-    appendEntry(ctx, sessionId, { role: "agent", content: "reply", timestamp: ts }, false);
+    appendEntry(
+      ctx,
+      sessionId,
+      { role: "agent", content: "reply", timestamp: ts },
+      false,
+    );
     let systemContent = "";
     const provider: AIProvider = {
       async complete(messages, _tools, onToken) {
@@ -533,11 +537,8 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).toContain("## Recent thread");
-    expect(systemContent).toContain("ask");
-    expect(systemContent).toContain("reply");
-    expect(systemContent).toContain("internal reasoning here");
-    expect(systemContent).toContain("Reasoning:");
+    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("You are agent");
   });
 
   it("puts system prompt in order: agent id, date/time, AGENTS, SOUL", async () => {
@@ -568,7 +569,7 @@ describe("runAgent", () => {
     expect(soulPos).toBeGreaterThan(securityPos);
   });
 
-  it("system includes recent thread with single round when first message", async () => {
+  it("system omits recent thread when first message (no prior rounds)", async () => {
     let systemContent = "";
     const provider: AIProvider = {
       async complete(messages, _tools, onToken) {
@@ -587,8 +588,8 @@ describe("runAgent", () => {
       "First message",
       () => {},
     );
-    expect(systemContent).toContain("## Recent thread");
-    expect(systemContent).toContain("First message");
+    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("You are agent");
   });
 
   it("invokes provider once when smart context has no results; system contains agent prompt", async () => {
@@ -814,6 +815,88 @@ describe("runAgent", () => {
       () => {},
     );
     expect(completeCallCount).toBe(1);
+  });
+
+  it("runs data embeddings (buildEmbeddings) before smart context so retrieval sees current knowledge and history", async () => {
+    const rebuildMod = await import("@/lib/knowledge/rebuild-embeddings");
+    const buildSpy = spyOn(rebuildMod, "buildEmbeddings").mockResolvedValue({
+      knowledgeIndexed: 0,
+      knowledgeRemoved: 0,
+      historyIndexed: 0,
+    });
+    const provider: AIProvider = {
+      async complete(_messages, _tools, onToken) {
+        onToken("Reply");
+        return { content: "Reply", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(
+      ctx,
+      makeProviderFactory(provider),
+      "maia",
+      sessionId,
+      "Hello",
+      () => {},
+    );
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+    expect(buildSpy.mock.calls[0][0]).toBe(ctx);
+    buildSpy.mockRestore();
+  });
+
+  it("includes active skills in the final smart context done phase output", async () => {
+    seedIdentityFiles(ctx.fs as FakeFs, "maia");
+
+    const contextQueryMod = await import("@/lib/agent/context-query");
+    const smartBlockSpy = spyOn(
+      contextQueryMod,
+      "buildSmartContextBlock",
+    ).mockResolvedValue({
+      block: "## Smart context\n\nSummary here.",
+      sourceIds: ["history:s1/entry-1", "knowledge:docs/guide.md"],
+    });
+
+    const skillsMod = await import("@/lib/skills");
+    const skillsSpy = spyOn(
+      skillsMod,
+      "getMatchedSkillsContent",
+    ).mockResolvedValue({
+      content: "## Active skills\n\n### deploy-app\n\nDeploy instructions.",
+      skillNames: ["deploy-app"],
+    });
+
+    const eventsForRun: SSEEvent[] = [];
+
+    await runAgent(
+      ctx,
+      makeProviderFactory(makeSimpleProvider({ content: "ok" })),
+      "maia",
+      sessionId,
+      "hi",
+      (e) => {
+        eventsForRun.push(e);
+      },
+    );
+
+    const donePhases = eventsForRun.filter(
+      (e) => e.type === "smart_context_phase" && e.phase === "done",
+    ) as Array<
+      Extract<SSEEvent, { type: "smart_context_phase"; phase: "done" }>
+    >;
+
+    expect(donePhases.length).toBeGreaterThan(0);
+    const lastDone = donePhases[donePhases.length - 1]!;
+
+    expect(lastDone.detail).toBeDefined();
+    expect(lastDone.detail).toContain("sources");
+    expect(lastDone.detail?.toLowerCase()).toContain("skill");
+
+    expect(typeof lastDone.output).toBe("string");
+    const out = String(lastDone.output);
+    expect(out).toContain("Active skills");
+    expect(out).toContain("deploy-app");
+
+    smartBlockSpy.mockRestore();
+    skillsSpy.mockRestore();
   });
 
   it("includes AGENTS.md from agent dir as full system command when present", async () => {

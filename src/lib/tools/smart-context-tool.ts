@@ -20,7 +20,9 @@ import { getMatchedSkillsContent } from "../skills";
 import type { Tool, ToolContext } from "./types";
 
 const schema = z.object({
-  ctx: z.string().describe("What to base search on (e.g. user question, prior discussion)"),
+  ctx: z
+    .string()
+    .describe("What to base search on (e.g. user question, prior discussion)"),
   cmd: z.string().describe("What you want to accomplish with this search"),
 });
 
@@ -41,7 +43,9 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
 
     const contextProviderFactory = providerFactory
       ? (model: string, c: AppContext) =>
-          providerFactory(model, c, { reasoningEffort: settings.contextReasoningEffort })
+          providerFactory(model, c, {
+            reasoningEffort: settings.contextReasoningEffort,
+          })
       : undefined;
 
     const queries = await extractSearchQueriesFromContextAndCommand(
@@ -51,8 +55,15 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
       command,
     );
 
-    const skillsQuery = [context, command].filter((value) => value && value.trim().length > 0).join("\n\n");
-    const skillsResult = await getMatchedSkillsContent(ctx, ctx.agentId, skillsQuery);
+    const skillsQuery = [context, command]
+      .filter((value) => value && value.trim().length > 0)
+      .join("\n\n");
+    const skillsResult = await getMatchedSkillsContent(
+      ctx,
+      ctx.agentId,
+      skillsQuery,
+      { providerFactory: contextProviderFactory },
+    );
 
     function buildBlockWithSourcesAndSkills(
       summaryBlock: string,
@@ -62,10 +73,14 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
     ): string {
       const sourcesSection =
         "\n\n### Sources\n" +
-        (sourceIds.length > 0 ? sourceIds.map((id) => `- ${id}`).join("\n") : "(none)");
+        (sourceIds.length > 0
+          ? sourceIds.map((id) => `- ${id}`).join("\n")
+          : "(none)");
       const skillsSection =
         "\n\n### Skills\n" +
-        (skillNames.length > 0 ? skillNames.map((n) => `- ${n}`).join("\n") : "(none)");
+        (skillNames.length > 0
+          ? skillNames.map((n) => `- ${n}`).join("\n")
+          : "(none)");
       let out = summaryBlock.trimEnd() + sourcesSection + skillsSection;
       if (fullSkillsContent && fullSkillsContent.trim()) {
         out += "\n\n" + fullSkillsContent.trim();
@@ -73,7 +88,11 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
       return out;
     }
 
-    const { text: rawContext, sources, contents } = await buildRawRetrievedContext(ctx, queries);
+    const {
+      text: rawContext,
+      sources,
+      contents,
+    } = await buildRawRetrievedContext(ctx, queries);
 
     if (sources.length === 0) {
       return {
@@ -99,13 +118,14 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
       };
     }
 
-    const { sources: filteredSources, contents: filteredContents } = await filterRelevantSources(
-      ctx,
-      contextProviderFactory,
-      command,
-      sources,
-      contents,
-    );
+    const { sources: filteredSources, contents: filteredContents } =
+      await filterRelevantSources(
+        ctx,
+        contextProviderFactory,
+        command,
+        sources,
+        contents,
+      );
 
     if (filteredSources.length === 0) {
       return {
@@ -119,7 +139,10 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
       };
     }
 
-    const filteredRawContext = buildRawTextFromChunks(filteredSources, filteredContents);
+    const filteredRawContext = buildRawTextFromChunks(
+      filteredSources,
+      filteredContents,
+    );
     const allRetrievedSourceIds = sources.map((s) => s.id);
     const summarizeResult = await summarizeRetrievedContext(
       ctx,
@@ -134,7 +157,10 @@ export const smartContextTool: Tool<z.infer<typeof schema>> = {
       },
     );
 
-    const block = typeof summarizeResult === "string" ? summarizeResult : summarizeResult.block;
+    const block =
+      typeof summarizeResult === "string"
+        ? summarizeResult
+        : summarizeResult.block;
     const sourceIds = filteredSources.map((s) => s.id);
 
     return {

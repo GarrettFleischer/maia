@@ -7,6 +7,7 @@ import { webResearchTool } from "./web-research";
 import { fetchWebPageTool } from "./fetch-web-page";
 import { browserTools } from "./browser-tools";
 import { messagingTools } from "./messaging";
+import { askUserTool } from "./ask-user-tool";
 import { historyTools } from "./history-tool";
 import { knowledgeTools } from "./knowledge-tool";
 import { findTool } from "./find-tool";
@@ -46,6 +47,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
     ? browserTools.map((tool) => ({ tool, maiaOnly: false }))
     : []),
   ...messagingTools.map((tool) => ({ tool, maiaOnly: false })),
+  { tool: askUserTool, maiaOnly: false },
   ...historyTools.map((tool) => ({ tool, maiaOnly: false })),
   ...knowledgeTools.map((tool) => ({ tool, maiaOnly: false })),
   { tool: smartContextTool, maiaOnly: false },
@@ -145,7 +147,8 @@ function isToolAvailableForPlatform(toolName: string): boolean {
 export function getToolsForAgent(agentId: string): Tool[] {
   const staticTools = TOOL_REGISTRY.filter(
     (reg) =>
-      (!reg.maiaOnly || agentId === "maia") && isToolAvailableForPlatform(reg.tool.name),
+      (!reg.maiaOnly || agentId === "maia") &&
+      isToolAvailableForPlatform(reg.tool.name),
   ).map((reg) => reg.tool);
   const customTools = getApprovedCustomTools();
   return [...staticTools, ...customTools];
@@ -157,7 +160,9 @@ export function getToolsForAgent(agentId: string): Tool[] {
  * @param agentId - Agent id (maia gets additional agent-management tools in the minimal set).
  * @returns Tool definitions for the minimal set only.
  */
-export function getMinimalToolDefsForAgent(agentId: string): import("../ai/types").ToolDefinition[] {
+export function getMinimalToolDefsForAgent(
+  agentId: string,
+): import("../ai/types").ToolDefinition[] {
   const tools = getToolsForAgent(agentId);
   const names = new Set(MINIMAL_DEFAULT_TOOL_NAMES);
   if (agentId === "maia") {

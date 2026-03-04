@@ -4,20 +4,39 @@
  */
 
 import { describe, it, expect, afterEach } from "bun:test";
-import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  within,
+  act,
+} from "@testing-library/react";
 import SettingsPage from "@/app/settings/page";
-import { installFetchMock, restoreFetch, jsonResponse } from "@/__tests__/helpers/fetch-mock";
-import { settingsPublic, agentsList, modelCapabilitiesFixture } from "@/__tests__/helpers/fixtures";
+import {
+  installFetchMock,
+  restoreFetch,
+  jsonResponse,
+} from "@/__tests__/helpers/fetch-mock";
+import {
+  settingsPublic,
+  agentsList,
+  modelCapabilitiesFixture,
+} from "@/__tests__/helpers/fixtures";
 
 /** Resolved promises so client pages don't suspend in tests (Next.js 15 passes these at runtime). */
 const TEST_PARAMS = Promise.resolve({} as Record<string, string | undefined>);
-const TEST_SEARCH_PARAMS = Promise.resolve({} as Record<string, string | string[] | undefined>);
+const TEST_SEARCH_PARAMS = Promise.resolve(
+  {} as Record<string, string | string[] | undefined>,
+);
 
 /** Renders SettingsPage and flushes React Suspense (use() with promises) so content appears. */
 async function renderSettingsPage() {
   let result: ReturnType<typeof render>;
   await act(async () => {
-    result = render(<SettingsPage params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />);
+    result = render(
+      <SettingsPage params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />,
+    );
   });
   await act(async () => {
     await Promise.resolve();
@@ -32,11 +51,17 @@ describe("Settings page", () => {
 
   it("shows loading state until settings are fetched", async () => {
     installFetchMock([
-      { url: "/api/settings", handler: () => new Promise(() => {}), // never resolves
+      {
+        url: "/api/settings",
+        handler: () => new Promise(() => {}), // never resolves
       },
-      { url: "/api/agents", handler: () => new Promise(() => {}), // never resolves
+      {
+        url: "/api/agents",
+        handler: () => new Promise(() => {}), // never resolves
       },
-      { url: "/api/model-capabilities", handler: () => new Promise(() => {}), // never resolves
+      {
+        url: "/api/model-capabilities",
+        handler: () => new Promise(() => {}), // never resolves
       },
     ]);
     await renderSettingsPage();
@@ -47,32 +72,50 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
       expect(screen.getByText("Ollama Base URL")).toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue(settingsPublic.ollamaBaseUrl)).toBeInTheDocument();
-    expect(screen.getByLabelText("Smart context query model")).toBeInTheDocument();
-    expect(screen.getByLabelText("Smart context reasoning effort")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Save Settings/i })).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue(settingsPublic.ollamaBaseUrl),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Smart context query model"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Smart context reasoning effort"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Save Settings/i }),
+    ).toBeInTheDocument();
   });
 
   it("shows Saved feedback after save", async () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
-      expect(screen.getByDisplayValue(settingsPublic.ollamaBaseUrl)).toBeInTheDocument();
+      expect(
+        screen.getByDisplayValue(settingsPublic.ollamaBaseUrl),
+      ).toBeInTheDocument();
     });
     const ollamaInput = screen.getByDisplayValue(settingsPublic.ollamaBaseUrl);
-    fireEvent.change(ollamaInput, { target: { value: "http://localhost:11435" } });
+    fireEvent.change(ollamaInput, {
+      target: { value: "http://localhost:11435" },
+    });
     const saveButton = screen.getByRole("button", { name: /Save Settings/i });
     fireEvent.click(saveButton);
     await waitFor(() => {
@@ -87,24 +130,34 @@ describe("Settings page", () => {
         url: "/api/settings",
         handler: (_url, init) => {
           if (init?.method === "PUT" && init.body) {
-            putBody = JSON.parse(init.body as string) as Record<string, unknown>;
+            putBody = JSON.parse(init.body as string) as Record<
+              string,
+              unknown
+            >;
           }
           return jsonResponse(settingsPublic);
         },
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "Context & embedding" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("tab", { name: "Context & embedding" }),
+      ).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole("tab", { name: "Context & embedding" }));
     await waitFor(() => {
       expect(screen.getByLabelText(/Embedding model/i)).toBeInTheDocument();
     });
-    const embeddingSelect = screen.getByLabelText(/Embedding model/i) as HTMLSelectElement;
+    const embeddingSelect = screen.getByLabelText(
+      /Embedding model/i,
+    ) as HTMLSelectElement;
     expect(embeddingSelect.tagName).toBe("SELECT");
     expect(embeddingSelect.value).toBe(settingsPublic.embeddingModel);
     const saveButton = screen.getByRole("button", { name: /Save Settings/i });
@@ -114,7 +167,9 @@ describe("Settings page", () => {
     });
     expect(putBody.whitelistedModels).toEqual(settingsPublic.whitelistedModels);
     expect(putBody.embeddingModel).toBe(settingsPublic.embeddingModel);
-    expect(putBody.contextReasoningEffort).toBe(settingsPublic.contextReasoningEffort);
+    expect(putBody.contextReasoningEffort).toBe(
+      settingsPublic.contextReasoningEffort,
+    );
   });
 
   it("shows a dedicated context window (num_ctx) param per model and persists it via options", async () => {
@@ -133,13 +188,19 @@ describe("Settings page", () => {
         url: "/api/settings",
         handler: (_url, init) => {
           if (init?.method === "PUT" && init.body) {
-            putBody = JSON.parse(init.body as string) as Record<string, unknown>;
+            putBody = JSON.parse(init.body as string) as Record<
+              string,
+              unknown
+            >;
           }
           return jsonResponse(settingsWithNumCtx);
         },
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
@@ -150,20 +211,33 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
-    const whitelistSection = screen.getByText("Whitelisted Models").closest("section");
+    const whitelistSection = screen
+      .getByText("Whitelisted Models")
+      .closest("section");
     expect(whitelistSection).toBeInTheDocument();
-    const paramsToggleButtons = within(whitelistSection!).getAllByRole("button", { name: /Params|param\(s\)|Expand params/i });
+    const paramsToggleButtons = within(whitelistSection!).getAllByRole(
+      "button",
+      { name: /Params|param\(s\)|Expand params/i },
+    );
     fireEvent.click(paramsToggleButtons[0]!);
-    const ctxInput = within(whitelistSection!).getByLabelText(/Context window \(num_ctx, tokens\)/i) as HTMLInputElement;
+    const ctxInput = within(whitelistSection!).getByLabelText(
+      /Context window \(num_ctx, tokens\)/i,
+    ) as HTMLInputElement;
     expect(ctxInput.value).toBe("8192");
     fireEvent.change(ctxInput, { target: { value: "16000" } });
     fireEvent.click(screen.getByRole("button", { name: /Save Settings/i }));
     await waitFor(() => {
       expect(screen.getByText(/Saved ✓/)).toBeInTheDocument();
     });
-    const sentModelParams = putBody.modelParams as Record<string, { options?: Record<string, unknown> }>;
+    const sentModelParams = putBody.modelParams as Record<
+      string,
+      { options?: Record<string, unknown> }
+    >;
     expect(sentModelParams[modelId]).toBeDefined();
-    const options = sentModelParams[modelId]!.options as Record<string, unknown>;
+    const options = sentModelParams[modelId]!.options as Record<
+      string,
+      unknown
+    >;
     expect(options.num_ctx).toBe(16000);
   });
 
@@ -171,7 +245,10 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
@@ -183,9 +260,19 @@ describe("Settings page", () => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
     const firstModel = settingsPublic.whitelistedModels[0];
-    const whitelistSectionForEdit = screen.getByText("Whitelisted Models").closest("section");
-    expect(within(whitelistSectionForEdit!).getByText(firstModel)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Edit ${firstModel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) }));
+    const whitelistSectionForEdit = screen
+      .getByText("Whitelisted Models")
+      .closest("section");
+    expect(
+      within(whitelistSectionForEdit!).getByText(firstModel),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: new RegExp(
+          `Edit ${firstModel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+        ),
+      }),
+    );
     await waitFor(() => {
       const editInput = screen.getByLabelText("Edit model name");
       expect(editInput).toHaveValue(firstModel);
@@ -194,10 +281,16 @@ describe("Settings page", () => {
     fireEvent.change(editInput, { target: { value: "ollama/edited-model" } });
     fireEvent.click(screen.getByRole("button", { name: "Save edit" }));
     await waitFor(() => {
-      const whitelistSection = screen.getByText("Whitelisted Models").closest("section");
+      const whitelistSection = screen
+        .getByText("Whitelisted Models")
+        .closest("section");
       expect(whitelistSection).toBeInTheDocument();
-      expect(within(whitelistSection!).getByText("ollama/edited-model")).toBeInTheDocument();
-      expect(within(whitelistSection!).queryByText(firstModel)).not.toBeInTheDocument();
+      expect(
+        within(whitelistSection!).getByText("ollama/edited-model"),
+      ).toBeInTheDocument();
+      expect(
+        within(whitelistSection!).queryByText(firstModel),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -218,13 +311,21 @@ describe("Settings page", () => {
         url: "/api/settings",
         handler: (_url, init) => {
           if (init?.method === "PUT" && init.body) {
-            putBody = JSON.parse(init.body as string) as Record<string, unknown>;
+            putBody = JSON.parse(init.body as string) as Record<
+              string,
+              unknown
+            >;
           }
-          return jsonResponse(init?.method === "PUT" ? settingsPublic : settingsWithParams);
+          return jsonResponse(
+            init?.method === "PUT" ? settingsPublic : settingsWithParams,
+          );
         },
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
@@ -235,25 +336,39 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: /Edit ollama\/llama3\.2/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Edit ollama\/llama3\.2/ }),
+    );
     await waitFor(() => {
-      expect(screen.getByLabelText("Edit model name")).toHaveValue("ollama/llama3.2");
+      expect(screen.getByLabelText("Edit model name")).toHaveValue(
+        "ollama/llama3.2",
+      );
     });
-    fireEvent.change(screen.getByLabelText("Edit model name"), { target: { value: "ollama/llama3.2-renamed" } });
+    fireEvent.change(screen.getByLabelText("Edit model name"), {
+      target: { value: "ollama/llama3.2-renamed" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Save edit" }));
     await waitFor(() => {
       const section = screen.getByText("Whitelisted Models").closest("section");
-      expect(within(section!).getByText("ollama/llama3.2-renamed")).toBeInTheDocument();
+      expect(
+        within(section!).getByText("ollama/llama3.2-renamed"),
+      ).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole("button", { name: /Save Settings/i }));
     await waitFor(() => {
       expect(screen.getByText(/Saved ✓/)).toBeInTheDocument();
     });
     const list = putBody.whitelistedModels as string[];
-    const params = putBody.modelParams as Record<string, { temperature?: number; top_p?: number }>;
+    const params = putBody.modelParams as Record<
+      string,
+      { temperature?: number; top_p?: number }
+    >;
     expect(list).toContain("ollama/llama3.2-renamed");
     expect(list).not.toContain("ollama/llama3.2");
-    expect(params["ollama/llama3.2-renamed"]).toEqual({ temperature: 0.6, top_p: 0.95 });
+    expect(params["ollama/llama3.2-renamed"]).toEqual({
+      temperature: 0.6,
+      top_p: 0.95,
+    });
     expect(params["openrouter/free"]).toEqual({ temperature: 0.7 });
   });
 
@@ -264,13 +379,19 @@ describe("Settings page", () => {
         url: "/api/settings",
         handler: (_url, init) => {
           if (init?.method === "PUT" && init.body) {
-            putBody = JSON.parse(init.body as string) as Record<string, unknown>;
+            putBody = JSON.parse(init.body as string) as Record<
+              string,
+              unknown
+            >;
           }
           return jsonResponse(settingsPublic);
         },
       },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
@@ -281,14 +402,25 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
-    const whitelistSectionAddRemove = screen.getByText("Whitelisted Models").closest("section");
-    const addInput = within(whitelistSectionAddRemove!).getByPlaceholderText(/Add model/i);
+    const whitelistSectionAddRemove = screen
+      .getByText("Whitelisted Models")
+      .closest("section");
+    const addInput = within(whitelistSectionAddRemove!).getByPlaceholderText(
+      /Add model/i,
+    );
     fireEvent.change(addInput, { target: { value: "ollama/qwen2.5-coder" } });
-    fireEvent.click(within(whitelistSectionAddRemove!).getByRole("button", { name: "Add" }));
+    fireEvent.click(
+      within(whitelistSectionAddRemove!).getByRole("button", { name: "Add" }),
+    );
     await waitFor(() => {
-      expect(within(whitelistSectionAddRemove!).getByText("ollama/qwen2.5-coder")).toBeInTheDocument();
+      expect(
+        within(whitelistSectionAddRemove!).getByText("ollama/qwen2.5-coder"),
+      ).toBeInTheDocument();
     });
-    const removeButtons = within(whitelistSectionAddRemove!).getAllByRole("button", { name: /Remove/i });
+    const removeButtons = within(whitelistSectionAddRemove!).getAllByRole(
+      "button",
+      { name: /Remove/i },
+    );
     fireEvent.click(removeButtons[0]);
     fireEvent.click(screen.getByRole("button", { name: /Save Settings/i }));
     await waitFor(() => {
@@ -303,7 +435,10 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
@@ -312,11 +447,15 @@ describe("Settings page", () => {
     });
     fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
     await waitFor(() => {
-      expect(screen.getByText(/Model assignment|Agents & models/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Model assignment|Agents & models/i),
+      ).toBeInTheDocument();
     });
     const maiaRow = screen.getByText("Maia (orchestrator)").closest("div");
     expect(maiaRow).toBeInTheDocument();
-    expect(screen.getByLabelText(/Reasoning effort for Maia/i)).toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/Reasoning effort for Maia/i),
+    ).toBeInTheDocument();
     const selects = screen.getAllByRole("combobox");
     expect(selects.length).toBeGreaterThanOrEqual(2);
   });
@@ -325,7 +464,10 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
@@ -336,29 +478,109 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(screen.getByText(/Model assignment/i)).toBeInTheDocument();
     });
-    const maiaSelect = screen.getByRole("combobox", { name: /Model for Maia/i }) as HTMLSelectElement;
+    const maiaSelect = screen.getByRole("combobox", {
+      name: /Model for Maia/i,
+    }) as HTMLSelectElement;
     expect(maiaSelect.value).toBe(agentsList.agents[0].model);
     const firstWhitelist = settingsPublic.whitelistedModels[0];
     fireEvent.click(screen.getByRole("tab", { name: "Models" }));
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Edit ${firstWhitelist.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: new RegExp(
+          `Edit ${firstWhitelist.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+        ),
+      }),
+    );
     await waitFor(() => {
-      expect(screen.getByLabelText("Edit model name")).toHaveValue(firstWhitelist);
+      expect(screen.getByLabelText("Edit model name")).toHaveValue(
+        firstWhitelist,
+      );
     });
-    fireEvent.change(screen.getByLabelText("Edit model name"), { target: { value: "ollama/llama3.2-edited" } });
+    fireEvent.change(screen.getByLabelText("Edit model name"), {
+      target: { value: "ollama/llama3.2-edited" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Save edit" }));
     await waitFor(() => {
       const section = screen.getByText("Whitelisted Models").closest("section");
-      expect(within(section!).getByText("ollama/llama3.2-edited")).toBeInTheDocument();
+      expect(
+        within(section!).getByText("ollama/llama3.2-edited"),
+      ).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: /Model for Maia/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("combobox", { name: /Model for Maia/i }),
+      ).toBeInTheDocument();
     });
-    const maiaSelectAfter = screen.getByRole("combobox", { name: /Model for Maia/i }) as HTMLSelectElement;
+    const maiaSelectAfter = screen.getByRole("combobox", {
+      name: /Model for Maia/i,
+    }) as HTMLSelectElement;
     expect(maiaSelectAfter.value).toBe(agentsList.agents[0].model);
+  });
+
+  it("shows a checkmark prefix for available models in model selection dropdowns", async () => {
+    const ollamaModelId =
+      settingsPublic.whitelistedModels.find((id) => id.startsWith("ollama/")) ??
+      "ollama/llama3.2";
+    const settingsWithQueryAndEmbeddingModel: typeof settingsPublic = {
+      ...settingsPublic,
+      contextQueryModel: ollamaModelId,
+      embeddingModel: ollamaModelId,
+    };
+    installFetchMock([
+      {
+        url: "/api/settings",
+        handler: () => jsonResponse(settingsWithQueryAndEmbeddingModel),
+      },
+      { url: "/api/agents", handler: () => jsonResponse(agentsList) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
+      {
+        url: "/api/ollama/models",
+        handler: () => jsonResponse({ downloaded: [ollamaModelId] }),
+      },
+    ]);
+    await renderSettingsPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("tab", { name: "Context & embedding" }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Context & embedding" }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Embedding model/i)).toBeInTheDocument();
+    });
+    const embeddingSelect = screen.getByLabelText(
+      /Embedding model/i,
+    ) as HTMLSelectElement;
+    const embeddingOptions = Array.from(embeddingSelect.options);
+    const embeddingModelOption = embeddingOptions.find(
+      (o) => o.value === ollamaModelId,
+    );
+    expect(embeddingModelOption).toBeDefined();
+    expect(embeddingModelOption!.textContent).toContain(`✓ ${ollamaModelId}`);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: /Model for Maia/i }),
+      ).toBeInTheDocument();
+    });
+    const maiaSelectForCheckmark = screen.getByRole("combobox", {
+      name: /Model for Maia/i,
+    }) as HTMLSelectElement;
+    const maiaOptions = Array.from(maiaSelectForCheckmark.options);
+    const downloadedOption = maiaOptions.find((o) => o.value === ollamaModelId);
+    if (downloadedOption) {
+      expect(downloadedOption.textContent).toContain(`✓ ${ollamaModelId}`);
+    }
   });
 
   it("does not PATCH agent when model dropdown is changed; applies on Save after settings PUT", async () => {
@@ -382,14 +604,22 @@ describe("Settings page", () => {
         handler: (url, init) => {
           if (init?.method === "PATCH" && init.body) {
             patchUrl = url;
-            patchBody = JSON.parse(init.body as string) as Record<string, unknown>;
+            patchBody = JSON.parse(init.body as string) as Record<
+              string,
+              unknown
+            >;
             callOrder.push("PATCH-maia");
           }
-          return jsonResponse({ agent: { ...agentsList.agents[0], model: "ollama/qwen2.5-coder" } });
+          return jsonResponse({
+            agent: { ...agentsList.agents[0], model: "ollama/qwen2.5-coder" },
+          });
         },
       },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
@@ -400,7 +630,9 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(screen.getByText(/Model assignment/i)).toBeInTheDocument();
     });
-    const maiaSelect = screen.getByRole("combobox", { name: /Model for Maia/i });
+    const maiaSelect = screen.getByRole("combobox", {
+      name: /Model for Maia/i,
+    });
     fireEvent.change(maiaSelect, { target: { value: "ollama/qwen2.5-coder" } });
     await waitFor(() => {
       expect(maiaSelect).toHaveValue("ollama/qwen2.5-coder");
@@ -414,8 +646,12 @@ describe("Settings page", () => {
     });
     expect(putCalled).toBe(true);
     expect(patchUrl).toContain("api/agents/maia");
-    expect((patchBody as { model?: string }).model).toBe("ollama/qwen2.5-coder");
-    expect((patchBody as { reasoningEffort?: string }).reasoningEffort).toBe(agentsList.agents[0].reasoningEffort);
+    expect((patchBody as { model?: string }).model).toBe(
+      "ollama/qwen2.5-coder",
+    );
+    expect((patchBody as { reasoningEffort?: string }).reasoningEffort).toBe(
+      agentsList.agents[0].reasoningEffort,
+    );
     expect(callOrder.indexOf("PUT")).toBe(0);
     expect(callOrder.indexOf("PATCH-maia")).toBeGreaterThan(0);
   });
@@ -424,7 +660,10 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
     await renderSettingsPage();
@@ -435,7 +674,9 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(screen.getByLabelText("Skills scope")).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /Add skill/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Add skill/i }),
+    ).toBeInTheDocument();
   });
 
   it("disables reasoning effort dropdown when model does not support reasoning", async () => {
@@ -452,7 +693,10 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse(agentsList) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(overriddenCapabilities) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(overriddenCapabilities),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
     ]);
 
@@ -462,12 +706,16 @@ describe("Settings page", () => {
     });
     fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
     await waitFor(() => {
-      expect(screen.getByText(/Model assignment|Agents & models/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Model assignment|Agents & models/i),
+      ).toBeInTheDocument();
     });
 
     const helperRow = screen.getByText("Helper").closest("div");
     expect(helperRow).toBeInTheDocument();
-    const helperReasoningSelect = within(helperRow!).getByLabelText(/Reasoning effort for Helper/i) as HTMLSelectElement;
+    const helperReasoningSelect = within(helperRow!).getByLabelText(
+      /Reasoning effort for Helper/i,
+    ) as HTMLSelectElement;
     expect(helperReasoningSelect.disabled).toBe(true);
   });
 
@@ -476,9 +724,15 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
-      { url: "/api/ollama/models", handler: () => jsonResponse({ downloaded: [] }) },
+      {
+        url: "/api/ollama/models",
+        handler: () => jsonResponse({ downloaded: [] }),
+      },
       {
         url: "/api/ollama/pull",
         handler: (url, init) => {
@@ -497,14 +751,18 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
-    const downloadButton = screen.getByRole("button", { name: /Download ollama\/llama3\.2/i });
+    const downloadButton = screen.getByRole("button", {
+      name: /Download ollama\/llama3\.2/i,
+    });
     expect(downloadButton).toBeInTheDocument();
     fireEvent.click(downloadButton);
     await waitFor(() => {
       expect(pullBody.modelId).toBe("ollama/llama3.2");
     });
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: /Download ollama\/llama3\.2/i })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /Download ollama\/llama3\.2/i }),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -512,10 +770,26 @@ describe("Settings page", () => {
     installFetchMock([
       { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
       { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
-      { url: "/api/model-capabilities", handler: () => jsonResponse(modelCapabilitiesFixture) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
       { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
-      { url: "/api/ollama/models", handler: () => jsonResponse({ downloaded: [] }) },
-      { url: "/api/ollama/pull", handler: () => jsonResponse({ error: "Failed to pull model" }, 502) },
+      {
+        url: "/api/ollama/models",
+        handler: () => jsonResponse({ downloaded: [] }),
+      },
+      {
+        url: "/api/ollama/pull",
+        handler: () =>
+          jsonResponse(
+            {
+              error:
+                'pull model manifest: 400: {"error":"The specified tag is not available in the repository. Please use another tag or \\"latest\\""}',
+            },
+            400,
+          ),
+      },
     ]);
     await renderSettingsPage();
     await waitFor(() => {
@@ -525,11 +799,19 @@ describe("Settings page", () => {
     await waitFor(() => {
       expect(screen.getByText("Whitelisted Models")).toBeInTheDocument();
     });
-    const downloadButton = screen.getByRole("button", { name: /Download ollama\/llama3\.2/i });
+    const downloadButton = screen.getByRole("button", {
+      name: /Download ollama\/llama3\.2/i,
+    });
     fireEvent.click(downloadButton);
     await waitFor(() => {
-      expect(screen.getByText("Download failed")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          /The specified tag is not available in the repository/i,
+        ),
+      ).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /Download ollama\/llama3\.2/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Download ollama\/llama3\.2/i }),
+    ).toBeInTheDocument();
   });
 });

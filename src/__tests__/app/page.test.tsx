@@ -3,10 +3,21 @@
  * @module __tests__/app/page.test
  */
 
-import { describe, it, expect, afterEach } from "bun:test";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { describe, it, expect, afterEach, beforeEach } from "bun:test";
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  act,
+} from "@testing-library/react";
 import Home from "@/app/page";
-import { installFetchMock, restoreFetch, jsonResponse, streamResponse } from "@/__tests__/helpers/fetch-mock";
+import {
+  installFetchMock,
+  restoreFetch,
+  jsonResponse,
+  streamResponse,
+} from "@/__tests__/helpers/fetch-mock";
 import {
   sessionActiveEmpty,
   sessionActiveWithMessages,
@@ -15,15 +26,43 @@ import {
   agentsList,
 } from "@/__tests__/helpers/fixtures";
 
+type EventCallback = (event: MessageEvent) => void;
+
+let lastEventSource: FakeEventSource | null = null;
+
+/**
+ * @brief Minimal EventSource stub for tests that captures listeners so we can emit message events.
+ */
+class FakeEventSource {
+  listeners: Record<string, EventCallback[]> = {};
+
+  constructor(_url: string) {
+    lastEventSource = this;
+  }
+
+  addEventListener(type: string, cb: EventCallback): void {
+    if (!this.listeners[type]) {
+      this.listeners[type] = [];
+    }
+    this.listeners[type]!.push(cb);
+  }
+
+  close(): void {}
+}
+
 /** Resolved promises so client pages don't suspend in tests (Next.js 15 passes these at runtime). */
 const TEST_PARAMS = Promise.resolve({} as Record<string, string | undefined>);
-const TEST_SEARCH_PARAMS = Promise.resolve({} as Record<string, string | string[] | undefined>);
+const TEST_SEARCH_PARAMS = Promise.resolve(
+  {} as Record<string, string | string[] | undefined>,
+);
 
 /** Renders Home and flushes React Suspense (use() with promises) so content appears. */
 async function renderHome() {
   let result: ReturnType<typeof render>;
   await act(async () => {
-    result = render(<Home params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />);
+    result = render(
+      <Home params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />,
+    );
   });
   await act(async () => {
     await Promise.resolve();
@@ -55,7 +94,9 @@ describe("Home page", () => {
     await waitFor(() => {
       expect(screen.getByText(/Welcome to Maia/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/Your personal AI agent system/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Your personal AI agent system/i),
+    ).toBeInTheDocument();
   });
 
   it("shows messages when session has history", async () => {
@@ -87,9 +128,24 @@ describe("Home page", () => {
         ...sessionActiveWithMessages.session,
         id: "session-with-thinking",
         original: [
-          { id: "e1", role: "user" as const, content: "Hello", timestamp: new Date().toISOString() },
-          { id: "e2", role: "thinking" as const, content: "Let me consider the options first.", timestamp: new Date().toISOString() },
-          { id: "e3", role: "agent" as const, content: "Hi there!", timestamp: new Date().toISOString() },
+          {
+            id: "e1",
+            role: "user" as const,
+            content: "Hello",
+            timestamp: new Date().toISOString(),
+          },
+          {
+            id: "e2",
+            role: "thinking" as const,
+            content: "Let me consider the options first.",
+            timestamp: new Date().toISOString(),
+          },
+          {
+            id: "e3",
+            role: "agent" as const,
+            content: "Hi there!",
+            timestamp: new Date().toISOString(),
+          },
         ],
       },
     };
@@ -113,7 +169,9 @@ describe("Home page", () => {
     });
     expect(screen.getByText("Hi there!")).toBeInTheDocument();
     expect(screen.getByText("Thinking")).toBeInTheDocument();
-    expect(screen.getByText(/Let me consider the options first\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Let me consider the options first\./),
+    ).toBeInTheDocument();
   });
 
   it("sends message and shows it in the list when user submits", async () => {
@@ -134,7 +192,9 @@ describe("Home page", () => {
         url: "/api/chat",
         handler: () =>
           streamResponse([
-            "data: " + JSON.stringify({ type: "done", sessionId: "new-session" }) + "\n\n",
+            "data: " +
+              JSON.stringify({ type: "done", sessionId: "new-session" }) +
+              "\n\n",
           ]),
       },
     ]);
@@ -151,9 +211,83 @@ describe("Home page", () => {
     });
   });
 
+  it("clears smart context bubbles when re-sending the related user message", async () => {
+    const sessionWithSmartContext = {
+      sessionId: "session-1",
+      session: {
+        ...sessionActiveWithMessages.session,
+        original: [
+          ...sessionActiveWithMessages.session.original,
+          {
+            id: "sc1",
+            role: "smart_context" as const,
+            content: JSON.stringify({
+              phases: [
+                {
+                  phase: "clarified" as const,
+                  detail: null,
+                  output: "Clarified v1",
+                },
+                { phase: "done" as const, detail: "1 sources" },
+              ],
+              doneDetail: "1 sources",
+            }),
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      },
+    };
+    installFetchMock([
+      {
+        url: "/api/sessions/active",
+        handler: () => jsonResponse(sessionWithSmartContext),
+      },
+      {
+        url: "/api/sessions",
+        handler: () => jsonResponse({ sessions: [] }),
+      },
+      {
+        url: "/api/agents",
+        handler: () => jsonResponse(agentsEmpty),
+      },
+      {
+        url: "/api/chat",
+        handler: () =>
+          streamResponse([
+            "data: " +
+              JSON.stringify({
+                type: "done",
+                sessionId: "session-1",
+              }) +
+              "\n\n",
+          ]),
+      },
+      {
+        url: /\/api\/sessions\/session-1\/history\/truncate/,
+        handler: () => jsonResponse({}),
+      },
+    ]);
+    await renderHome();
+    await waitFor(() => {
+      expect(screen.getByText("Hello")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Smart context")).toBeInTheDocument();
+    const resendButton = screen.getByRole("button", {
+      name: "Re-send this message",
+    });
+    fireEvent.click(resendButton);
+    await waitFor(() => {
+      expect(screen.queryByText("Smart context")).toBeNull();
+    });
+  });
+
   // TODO: In test env the /api/chat request body sometimes lacks targetAgent (timing/body capture).
   it.skip("sends targetAgent in chat request when session has non-maia participant", async () => {
-    let chatBody: { message?: string; sessionId?: string; targetAgent?: string } = {};
+    let chatBody: {
+      message?: string;
+      sessionId?: string;
+      targetAgent?: string;
+    } = {};
     installFetchMock([
       {
         url: "/api/sessions/active",
@@ -172,13 +306,19 @@ describe("Home page", () => {
         handler: (_url, init) => {
           try {
             const bodyStr =
-              typeof init?.body === "string" ? init.body : init?.body != null ? String(init.body) : "{}";
+              typeof init?.body === "string"
+                ? init.body
+                : init?.body != null
+                  ? String(init.body)
+                  : "{}";
             chatBody = JSON.parse(bodyStr) as typeof chatBody;
           } catch {
             // ignore
           }
           return streamResponse([
-            "data: " + JSON.stringify({ type: "done", sessionId: "session-custom" }) + "\n\n",
+            "data: " +
+              JSON.stringify({ type: "done", sessionId: "session-custom" }) +
+              "\n\n",
           ]);
         },
       },
@@ -213,7 +353,9 @@ describe("Home page", () => {
         handler: (url, init) => {
           if (init?.method === "POST" && init?.body) {
             try {
-              sessionsPostBody = JSON.parse(init.body as string) as typeof sessionsPostBody;
+              sessionsPostBody = JSON.parse(
+                init.body as string,
+              ) as typeof sessionsPostBody;
             } catch {
               // ignore
             }
@@ -230,18 +372,165 @@ describe("Home page", () => {
         url: "/api/chat",
         handler: () =>
           streamResponse([
-            "data: " + JSON.stringify({ type: "done", sessionId: "new-session" }) + "\n\n",
+            "data: " +
+              JSON.stringify({ type: "done", sessionId: "new-session" }) +
+              "\n\n",
           ]),
       },
     ]);
     await renderHome();
-    await waitFor(() => expect(screen.getByText(/Welcome to Maia/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Welcome to Maia/i)).toBeInTheDocument(),
+    );
     screen.getByRole("button", { name: /new thread/i }).click();
     await waitFor(() => expect(screen.getByText("Helper")).toBeInTheDocument());
     screen.getByText("Helper").click();
     await waitFor(() => {
       expect(sessionsPostBody.participants).toEqual(["user", "agent-2"]);
       expect(sessionsPostBody.type).toBe("user");
+    });
+  });
+
+  describe("auto-scroll behavior", () => {
+    let originalEventSource: typeof EventSource | undefined;
+
+    beforeEach(() => {
+      originalEventSource = (
+        globalThis as unknown as { EventSource?: typeof EventSource }
+      ).EventSource;
+      (
+        globalThis as unknown as { EventSource?: typeof EventSource }
+      ).EventSource = FakeEventSource as unknown as typeof EventSource;
+    });
+
+    afterEach(() => {
+      (
+        globalThis as unknown as { EventSource?: typeof EventSource }
+      ).EventSource = originalEventSource as typeof EventSource;
+    });
+
+    it("does not auto-scroll when user has scrolled up and new content arrives", async () => {
+      installFetchMock([
+        {
+          url: "/api/sessions/active",
+          handler: () => jsonResponse(sessionActiveWithMessages),
+        },
+        { url: "/api/sessions", handler: () => jsonResponse({ sessions: [] }) },
+        { url: "/api/agents", handler: () => jsonResponse(agentsEmpty) },
+      ]);
+      const scrollIntoViewCalls: unknown[] = [];
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function (...args: unknown[]) {
+        scrollIntoViewCalls.push(args);
+        return originalScrollIntoView.apply(
+          this,
+          args as Parameters<Element["scrollIntoView"]>,
+        );
+      };
+
+      await renderHome();
+      await waitFor(() =>
+        expect(screen.getByText("Hello")).toBeInTheDocument(),
+      );
+      const scrollContainer = document.querySelector(
+        "[data-testid=chat-scroll-container]",
+      );
+      expect(scrollContainer).toBeInstanceOf(HTMLDivElement);
+      const scrollCountAfterLoad = scrollIntoViewCalls.length;
+
+      await act(async () => {
+        const el = scrollContainer as HTMLDivElement;
+        el.scrollTop = 0;
+        Object.defineProperty(el, "scrollHeight", {
+          value: 1000,
+          configurable: true,
+        });
+        Object.defineProperty(el, "clientHeight", {
+          value: 400,
+          configurable: true,
+        });
+        scrollContainer?.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      const es = lastEventSource;
+      expect(es).not.toBeNull();
+      const payload = {
+        sessionId: "session-1",
+        entry: {
+          id: "e3",
+          role: "agent",
+          content: "New agent reply",
+          timestamp: new Date().toISOString(),
+        },
+        participants: ["user", "maia"],
+      };
+      await act(async () => {
+        for (const cb of es?.listeners["message"] ?? []) {
+          cb({ data: JSON.stringify(payload) } as MessageEvent);
+        }
+      });
+      await waitFor(() =>
+        expect(screen.getByText("New agent reply")).toBeInTheDocument(),
+      );
+
+      expect(scrollIntoViewCalls.length).toBe(scrollCountAfterLoad);
+
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    it("auto-scrolls when user is at bottom and new content arrives", async () => {
+      installFetchMock([
+        {
+          url: "/api/sessions/active",
+          handler: () => jsonResponse(sessionActiveWithMessages),
+        },
+        { url: "/api/sessions", handler: () => jsonResponse({ sessions: [] }) },
+        { url: "/api/agents", handler: () => jsonResponse(agentsEmpty) },
+      ]);
+      const scrollIntoViewCalls: unknown[] = [];
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function (...args: unknown[]) {
+        scrollIntoViewCalls.push(args);
+        return originalScrollIntoView.apply(
+          this,
+          args as Parameters<Element["scrollIntoView"]>,
+        );
+      };
+
+      await renderHome();
+      await waitFor(() =>
+        expect(screen.getByText("Hello")).toBeInTheDocument(),
+      );
+      const scrollCountAfterLoad = scrollIntoViewCalls.length;
+      expect(scrollCountAfterLoad).toBeGreaterThanOrEqual(1);
+
+      const es = lastEventSource;
+      expect(es).not.toBeNull();
+      const payload = {
+        sessionId: "session-1",
+        entry: {
+          id: "e3",
+          role: "agent",
+          content: "Another reply",
+          timestamp: new Date().toISOString(),
+        },
+        participants: ["user", "maia"],
+      };
+      await act(async () => {
+        for (const cb of es?.listeners["message"] ?? []) {
+          cb({ data: JSON.stringify(payload) } as MessageEvent);
+        }
+      });
+      await waitFor(() =>
+        expect(screen.getByText("Another reply")).toBeInTheDocument(),
+      );
+
+      expect(scrollIntoViewCalls.length).toBeGreaterThan(scrollCountAfterLoad);
+
+      Element.prototype.scrollIntoView = originalScrollIntoView;
     });
   });
 });
