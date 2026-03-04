@@ -6,7 +6,7 @@
  * @module app/page
  */
 
-import { use, useState, useRef, useEffect, useCallback } from "react";
+import { use, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { SSEEvent, SmartContextRun } from "@/lib/types";
 import type { HistoryEntry } from "@/lib/types";
 import AppHeader from "@/app/components/AppHeader";
@@ -14,13 +14,33 @@ import ChatMessageList from "@/app/components/ChatMessageList";
 import type { ChatMessageListItem } from "@/app/components/ChatMessageList";
 import ChatInputBar from "@/app/components/ChatInputBar";
 import ThreadList from "@/app/components/ThreadList";
-import QuestionFormModal, {
-  type QuestionItem,
-} from "@/app/components/QuestionFormModal";
+import type { QuestionItem } from "@/app/components/QuestionFormModal";
 
 /** Map HistoryEntry from server to ChatMessageListItem (including tool_call as standalone tool bubble, thinking as reasoning bubble). Do not pass smart_context entries. */
 function entryToItem(entry: HistoryEntry): ChatMessageListItem {
   if (entry.role === "tool_call") {
+    if (entry.toolName === "ask_user") {
+      try {
+        const parsed = JSON.parse(entry.content) as {
+          questions?: QuestionItem[];
+          answers?: Record<string, string>;
+        };
+        if (
+          Array.isArray(parsed.questions) &&
+          parsed.answers &&
+          typeof parsed.answers === "object"
+        ) {
+          return {
+            role: "user_input",
+            questions: parsed.questions,
+            status: "answered",
+            answers: parsed.answers,
+          };
+        }
+      } catch {
+        // Fall through to generic tool bubble when content is not valid JSON.
+      }
+    }
     return {
       role: "tool",
       tool: entry.toolName ?? "",
@@ -53,6 +73,10 @@ interface ActiveSessionResponse {
     original: HistoryEntry[];
     type?: SessionType;
     participants?: string[];
+    /** Smart context run (single object per run); used to restore phase bubbles on refresh. */
+    smartContextRun?: SmartContextRun | null;
+    /** Message index after which to show smart context. */
+    smartContextAfterMessageIndex?: number | null;
   };
 }
 
@@ -99,12 +123,10 @@ export default function Home(props: HomePageProps = {}) {
     useState<number | null>(null);
   const [threadListRefetch, setThreadListRefetch] = useState(0);
   const [userIsAtBottom, setUserIsAtBottom] = useState(true);
-  /** When the agent calls ask_user, we show this modal until the user submits answers. */
-  const [pendingQuestion, setPendingQuestion] = useState<{
-    sessionId: string;
-    requestId: string;
-    questions: QuestionItem[];
-  } | null>(null);
+  /** When set, user is editing a previous message at this index; next send replaces history after it. */
+  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(
+    null,
+  );
   const userIsAtBottomRef = useRef(true);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -140,38 +162,12 @@ export default function Home(props: HomePageProps = {}) {
       (e) => e.role !== "smart_context",
     );
     setMessages(conversationEntries.map(entryToItem));
-    const smartContextEntry = original
-      .filter((e) => e.role === "smart_context")
-      .pop();
-    if (smartContextEntry) {
-      try {
-        setSmartContextRun(
-          JSON.parse(smartContextEntry.content) as SmartContextRun,
-        );
-        const lastScIdx = original.findLastIndex(
-          (e) => e.role === "smart_context",
-        );
-        const lastUserIdxBeforeSc =
-          lastScIdx >= 0
-            ? original.findLastIndex(
-                (e, i) => i < lastScIdx && e.role === "user",
-              )
-            : -1;
-        const afterIndex =
-          lastUserIdxBeforeSc >= 0
-            ? original
-                .slice(0, lastUserIdxBeforeSc + 1)
-                .filter((e) => e.role !== "smart_context").length - 1
-            : null;
-        setSmartContextAfterMessageIndex(afterIndex ?? null);
-      } catch {
-        setSmartContextRun(null);
-        setSmartContextAfterMessageIndex(null);
-      }
-    } else {
-      setSmartContextRun(null);
-      setSmartContextAfterMessageIndex(null);
-    }
+    const run = data.session?.smartContextRun ?? null;
+    const afterIndex = data.session?.smartContextAfterMessageIndex ?? null;
+    setSmartContextRun(run);
+    setSmartContextAfterMessageIndex(
+      typeof afterIndex === "number" ? afterIndex : null,
+    );
   }, []);
 
   useEffect(() => {
@@ -201,41 +197,13 @@ export default function Home(props: HomePageProps = {}) {
             if (prev.length > 0) return prev; // avoid overwriting streamed messages if fetch completes late
             return loaded;
           });
-          const smartContextEntry = original
-            .filter((e: HistoryEntry) => e.role === "smart_context")
-            .pop();
-          if (smartContextEntry) {
-            try {
-              setSmartContextRun(
-                JSON.parse(smartContextEntry.content) as SmartContextRun,
-              );
-              const lastScIdx = original.findLastIndex(
-                (e: HistoryEntry) => e.role === "smart_context",
-              );
-              const lastUserIdxBeforeSc =
-                lastScIdx >= 0
-                  ? original.findLastIndex(
-                      (e: HistoryEntry, i: number) =>
-                        i < lastScIdx && e.role === "user",
-                    )
-                  : -1;
-              const afterIndex =
-                lastUserIdxBeforeSc >= 0
-                  ? original
-                      .slice(0, lastUserIdxBeforeSc + 1)
-                      .filter((e: HistoryEntry) => e.role !== "smart_context")
-                      .length - 1
-                  : null;
-              setSmartContextAfterMessageIndex(afterIndex ?? null);
-            } catch {
-              setSmartContextRun(null);
-              setSmartContextAfterMessageIndex(null);
-            }
-          } else {
-            setSmartContextRun(null);
-            setSmartContextAfterMessageIndex(null);
-          }
         }
+        const run = data.session?.smartContextRun ?? null;
+        const afterIndex = data.session?.smartContextAfterMessageIndex ?? null;
+        setSmartContextRun(run);
+        setSmartContextAfterMessageIndex(
+          typeof afterIndex === "number" ? afterIndex : null,
+        );
       })
       .catch(() => {});
   }, []);
@@ -343,11 +311,16 @@ export default function Home(props: HomePageProps = {}) {
         if (data.sessionId && data.requestId && Array.isArray(data.questions)) {
           const current = sessionIdRef.current;
           if (current && data.sessionId === current) {
-            setPendingQuestion({
-              sessionId: data.sessionId,
-              requestId: data.requestId,
-              questions: data.questions,
-            });
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "user_input",
+                requestId: data.requestId,
+                sessionId: data.sessionId,
+                questions: data.questions,
+                status: "pending",
+              },
+            ]);
           }
         }
       } catch {
@@ -376,7 +349,10 @@ export default function Home(props: HomePageProps = {}) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, currentToken, currentThinking, userIsAtBottom]);
 
-  /** Send a message. If overrideContent is provided, uses that instead of input and does not clear input (used by re-send). */
+  /**
+   * Send a message. If overrideContent is provided, uses that instead of input and does not clear input.
+   * When editingMessageIndex is set, clears history after that message before sending the (possibly edited) text.
+   */
   const sendMessage = useCallback(
     async (overrideContent?: string) => {
       const raw = overrideContent ?? input;
@@ -390,10 +366,38 @@ export default function Home(props: HomePageProps = {}) {
       thinkingAccumulatorRef.current = "";
       setSmartContextRun(null);
       setSmartContextAfterMessageIndex(null);
+      const isEditing = editingMessageIndex != null;
+      const editIndex = editingMessageIndex;
+      setEditingMessageIndex(null);
+
+      if (isEditing && sessionIdRef.current && typeof editIndex === "number") {
+        try {
+          const truncateRes = await fetch(
+            `/api/sessions/${sessionIdRef.current}/history/truncate`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ keepThroughIndex: editIndex - 1 }),
+            },
+          );
+          if (!truncateRes.ok) {
+            setLoading(false);
+            return;
+          }
+        } catch {
+          setLoading(false);
+          return;
+        }
+      }
+
       setMessages((prev) => {
-        const newIndex = prev.length;
+        const base =
+          isEditing && typeof editIndex === "number"
+            ? prev.slice(0, editIndex)
+            : prev;
+        const newIndex = base.length;
         setSmartContextAfterMessageIndex(newIndex);
-        return [...prev, { role: "user", content: text }];
+        return [...base, { role: "user", content: text }];
       });
 
       try {
@@ -532,25 +536,32 @@ export default function Home(props: HomePageProps = {}) {
         setLoading(false);
       }
     },
-    [input, loading],
+    [input, loading, editingMessageIndex],
   );
 
-  /** Clear history after the given message index and re-post that message. */
-  const handleResendMessage = useCallback(
-    async (index: number, content: string) => {
+  /** Start editing a previous user message by loading its content into the input. */
+  const handleEditMessage = useCallback(
+    (index: number, content: string) => {
       if (loading) return;
-      if (sessionId) {
-        const res = await fetch(`/api/sessions/${sessionId}/history/truncate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ keepThroughIndex: index - 1 }),
-        });
-        if (!res.ok) return;
-      }
-      setMessages((prev) => prev.slice(0, index));
-      await sendMessage(content);
+      setEditingMessageIndex(index);
+      setInput(content);
+      setSmartContextRun(null);
+      setSmartContextAfterMessageIndex(null);
     },
-    [loading, sessionId, sendMessage],
+    [loading],
+  );
+
+  const handleUserInputAnswered = useCallback(
+    (requestId: string, answers: Record<string, string>) => {
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.role === "user_input" && msg.requestId === requestId
+            ? { ...msg, status: "answered", answers }
+            : msg,
+        ),
+      );
+    },
+    [],
   );
 
   const handleSelectSession = useCallback(
@@ -592,6 +603,31 @@ export default function Home(props: HomePageProps = {}) {
 
   const isAgentOnlyThread = sessionType === "agents";
 
+  /** Single list for ChatMessageList: conversation items + smart context at the right index; user messages get conversationIndex for edit/truncate. */
+  const displayMessages = useMemo(() => {
+    const list: ChatMessageListItem[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const item = messages[i];
+      if (item.role === "user") {
+        list.push({ ...item, conversationIndex: i });
+      } else {
+        list.push(item);
+      }
+      if (
+        smartContextRun != null &&
+        typeof smartContextAfterMessageIndex === "number" &&
+        i === smartContextAfterMessageIndex
+      ) {
+        list.push({
+          role: "smart_context",
+          run: smartContextRun,
+          loading,
+        });
+      }
+    }
+    return list;
+  }, [messages, smartContextRun, smartContextAfterMessageIndex, loading]);
+
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
       <AppHeader subtitle="AI Agent System" />
@@ -620,16 +656,15 @@ export default function Home(props: HomePageProps = {}) {
                 </div>
               )}
               <ChatMessageList
-                messages={messages}
+                messages={displayMessages}
                 currentToken={currentToken}
                 currentThinking={currentThinking}
                 loading={loading}
-                smartContextRun={smartContextRun}
-                smartContextAfterMessageIndex={smartContextAfterMessageIndex}
                 bottomRef={bottomRef}
-                onResendMessage={
-                  !isAgentOnlyThread ? handleResendMessage : undefined
+                onEditMessage={
+                  !isAgentOnlyThread ? handleEditMessage : undefined
                 }
+                onUserInputAnswered={handleUserInputAnswered}
               />
             </div>
           </div>
@@ -644,15 +679,6 @@ export default function Home(props: HomePageProps = {}) {
           )}
         </div>
       </div>
-
-      {pendingQuestion && (
-        <QuestionFormModal
-          requestId={pendingQuestion.requestId}
-          sessionId={pendingQuestion.sessionId}
-          questions={pendingQuestion.questions}
-          onSubmitted={() => setPendingQuestion(null)}
-        />
-      )}
     </div>
   );
 }

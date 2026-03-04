@@ -33,14 +33,37 @@ const questionSchema = z.object({
     ),
 });
 
+const questionsArraySchema = z
+  .array(questionSchema)
+  .min(1)
+  .max(20)
+  .describe(
+    "List of questions; each can have choices and allowOther for custom input",
+  );
+
+/** Schema for the tool definition (array only; no transform) so JSON Schema can be generated. */
+const askUserDefinitionSchema = z.object({
+  questions: questionsArraySchema,
+});
+
 const askUserSchema = z.object({
-  questions: z
-    .array(questionSchema)
-    .min(1)
-    .max(20)
-    .describe(
-      "List of questions; each can have choices and allowOther for custom input",
-    ),
+  questions: z.union([
+    questionsArraySchema,
+    z.string().transform((s, ctx) => {
+      try {
+        const parsed: unknown = JSON.parse(s);
+        return questionsArraySchema.parse(parsed);
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          fatal: true,
+          message:
+            "questions must be an array of question objects, or a JSON string of that array",
+        });
+        return [] as z.infer<typeof questionsArraySchema>;
+      }
+    }),
+  ]),
 });
 
 export const askUserTool: Tool<z.infer<typeof askUserSchema>, AskUserResult> = {
@@ -52,7 +75,7 @@ export const askUserTool: Tool<z.infer<typeof askUserSchema>, AskUserResult> = {
     name: "ask_user",
     description:
       "Ask the user one or more questions. Each question can have predefined choices and an 'Other' option for custom input. The UI shows a form; when the user submits, returns the original questions and their answers. Use when you need user input to proceed.",
-    parameters: zodToJsonSchema(askUserSchema),
+    parameters: zodToJsonSchema(askUserDefinitionSchema),
   }),
   async execute(args, ctx): Promise<AskUserResult> {
     const questionsInput: AskUserQuestionInput[] = args.questions.map((q) => ({

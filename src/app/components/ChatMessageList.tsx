@@ -1,15 +1,18 @@
 /**
- * @fileoverview Presentational message list for the chat UI (welcome state, bubbles, streaming, loading).
+ * @fileoverview Presentational message list for the chat UI with universal bubble rendering.
  * @module app/components/ChatMessageList
  *
- * @brief Renders welcome state, message bubbles (with markdown for agent/system), streaming token bubble,
- * smart context phase bubbles (UI-only, excluded from round selection), and loading indicator.
+ * @brief Receives a single messages array (ChatMessageListItem[]) and renders one bubble per item by
+ * dispatching on item.role (user, agent, system, tool, thinking, smart_context, user_input). Extensible:
+ * new bubble types add one role variant and one branch in the loop. No special-case props per type.
  */
 
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { SmartContextPhase, SmartContextRun } from "@/lib/types";
+import { QuestionForm } from "@/app/components/QuestionFormModal";
+import type { QuestionItem } from "@/app/components/QuestionFormModal";
 
 /** Ordered smart context phases for live bubble display. Not part of message/round list. */
 const SMART_CONTEXT_PHASES: { id: SmartContextPhase; label: string }[] = [
@@ -197,11 +200,22 @@ function SmartContextPhaseBubbles({
               Close
             </button>
           </div>
-          <div
-            className="smart-context-detail-scroll max-h-64 overflow-auto px-3 py-2 text-xs text-teal-100 whitespace-pre-wrap"
-            tabIndex={0}
-          >
-            {selectedPhaseData?.output ?? "(no output for this run)"}
+          <div className="flex flex-col" tabIndex={0}>
+            <div className="smart-context-detail-scroll max-h-64 overflow-auto px-3 py-2 text-xs text-teal-100 whitespace-pre-wrap">
+              {selectedPhaseData?.output ?? "(no output for this run)"}
+            </div>
+            {selectedPhaseId === "done" &&
+              run.fullPrompt != null &&
+              run.fullPrompt !== "" && (
+                <>
+                  <div className="px-3 pt-2 text-xs font-medium text-teal-300 border-t border-teal-800/60">
+                    Full prompt sent to agent
+                  </div>
+                  <div className="smart-context-detail-scroll max-h-96 overflow-auto px-3 py-2 text-xs text-teal-100 whitespace-pre-wrap font-mono">
+                    {run.fullPrompt}
+                  </div>
+                </>
+              )}
           </div>
         </div>
       )}
@@ -239,7 +253,7 @@ export interface ToolCallDisplay {
   result?: unknown;
 }
 
-/** A regular message (user, agent, system), a standalone tool-call bubble, or a thinking (reasoning) bubble. */
+/** A regular message (user, agent, system), a standalone tool-call bubble, a thinking (reasoning) bubble, smart context, or an inline user-input bubble. */
 export type ChatMessageListItem =
   | {
       role: "user" | "agent" | "system";
@@ -247,6 +261,8 @@ export type ChatMessageListItem =
       toolCalls?: ToolCallDisplay[];
       resolvedContent?: string;
       roundIndex?: number;
+      /** Conversation index of this message (for edit/truncate); set for user messages when list includes smart context. */
+      conversationIndex?: number;
     }
   | {
       role: "tool";
@@ -254,10 +270,29 @@ export type ChatMessageListItem =
       args: Record<string, unknown>;
       result?: unknown;
     }
-  | { role: "thinking"; content: string };
+  | { role: "thinking"; content: string }
+  | {
+      role: "smart_context";
+      run: SmartContextRun;
+      /** Whether this run is still in progress (shows active phase). */
+      loading?: boolean;
+    }
+  | {
+      role: "user_input";
+      /** Request id for the pending question (undefined for history-only answered items). */
+      requestId?: string;
+      /** Session id for the current thread (used when submitting answers). */
+      sessionId?: string;
+      /** Questions to show (id, prompt, optional choices, allowOther). */
+      questions: QuestionItem[];
+      /** Pending questions render the interactive form; answered render read-only Q&A. */
+      status: "pending" | "answered";
+      /** Answers keyed by question id when status is answered. */
+      answers?: Record<string, string>;
+    };
 
 export interface ChatMessageListProps {
-  /** List of messages to show. */
+  /** List of messages to show (conversation + smart context items in display order). */
   messages: ChatMessageListItem[];
   /** Current streaming token text (shown in a bubble with cursor). */
   currentToken: string;
@@ -265,14 +300,21 @@ export interface ChatMessageListProps {
   currentThinking?: string;
   /** Whether a request is in progress (shows loading dots when true and no currentToken/currentThinking). */
   loading: boolean;
-  /** Preserved smart context run (phases + result). Shown when set; not cleared when agent responds. */
-  smartContextRun?: SmartContextRun | null;
-  /** When set, smart context is rendered right after the message at this index (below the user message that triggered it). */
-  smartContextAfterMessageIndex?: number | null;
   /** Ref for the scroll anchor at the bottom. */
   bottomRef?: React.RefObject<HTMLDivElement | null>;
-  /** When set, user messages show a re-send button; called with (index, content) to clear history after that message and re-post. */
-  onResendMessage?: (index: number, content: string) => void;
+  /**
+   * When set, user messages show an Edit button. Called with (conversationIndex, content)
+   * so the parent can truncate history after that message and post the edited content.
+   */
+  onEditMessage?: (conversationIndex: number, content: string) => void;
+  /**
+   * Called when a pending user_input bubble successfully submits answers.
+   * Used by the page to mark the corresponding message as answered in state.
+   */
+  onUserInputAnswered?: (
+    requestId: string,
+    answers: Record<string, string>,
+  ) => void;
 }
 
 /** ExecResult shape from terminal_exec and powershell_exec tools. */
@@ -405,7 +447,7 @@ function ThinkingBubble({
         </span>
       </summary>
       <div className="px-4 pb-3 pt-0 text-xs font-mono border-t border-amber-800/60">
-        <div className="mt-0.5 p-2 rounded bg-zinc-900/80 text-amber-200/90 overflow-x-auto whitespace-pre-wrap break-all">
+        <div className="mt-0.5 p-2 rounded bg-zinc-900/80 text-amber-200/90 max-h-64 overflow-auto whitespace-pre-wrap break-all">
           {content}
           {streaming && (
             <span
@@ -419,22 +461,71 @@ function ThinkingBubble({
   );
 }
 
+/**
+ * Inline bubble for ask_user-style questions. In pending mode it renders the shared QuestionForm;
+ * in answered mode it renders a read-only Q&A summary.
+ */
+function UserInputBubble({
+  item,
+  onAnswered,
+}: {
+  item: Extract<ChatMessageListItem, { role: "user_input" }>;
+  onAnswered?: (requestId: string, answers: Record<string, string>) => void;
+}) {
+  if (item.status === "pending" && item.requestId && item.sessionId) {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed bg-zinc-800 text-zinc-100">
+          <div className="mb-2 text-xs uppercase tracking-wide text-zinc-400">
+            Answer the agent&apos;s questions
+          </div>
+          <QuestionForm
+            requestId={item.requestId}
+            sessionId={item.sessionId}
+            questions={item.questions}
+            onSubmitted={(answers) => {
+              if (onAnswered) {
+                onAnswered(item.requestId as string, answers);
+              }
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed bg-zinc-800 text-zinc-100">
+        <div className="mb-2 text-xs uppercase tracking-wide text-zinc-400">
+          User input
+        </div>
+        <div className="space-y-3">
+          {item.questions.map((q) => (
+            <div key={q.id} className="text-xs">
+              <div className="font-medium text-zinc-200">{q.prompt}</div>
+              <div className="mt-0.5 text-zinc-300">
+                {item.answers && q.id in item.answers
+                  ? item.answers[q.id]
+                  : "—"}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatMessageList({
   messages,
   currentToken,
   currentThinking = "",
   loading,
-  smartContextRun,
-  smartContextAfterMessageIndex,
   bottomRef,
-  onResendMessage,
+  onEditMessage,
+  onUserInputAnswered,
 }: ChatMessageListProps) {
-  const showSmartContextInPlace =
-    smartContextRun != null &&
-    typeof smartContextAfterMessageIndex === "number";
-  const showSmartContextAtBottom =
-    smartContextRun != null && !showSmartContextInPlace;
-
   return (
     <>
       {messages.length === 0 && (
@@ -484,17 +575,27 @@ export default function ChatMessageList({
                     </div>
                   </details>
                 )}
-              {msg.role === "user" && onResendMessage && (
+              {msg.role === "user" && onEditMessage && (
                 <button
                   type="button"
-                  onClick={() => onResendMessage(i, msg.content)}
+                  onClick={() =>
+                    onEditMessage(msg.conversationIndex ?? i, msg.content)
+                  }
                   disabled={loading}
                   className="mt-1 text-xs text-zinc-500 hover:text-violet-400 disabled:opacity-50"
-                  aria-label="Re-send this message"
+                  aria-label="Edit this message"
                 >
-                  Re-send
+                  Edit
                 </button>
               )}
+            </div>
+          ) : msg.role === "smart_context" ? (
+            <div className="flex flex-col items-start gap-2">
+              <span className="text-xs text-zinc-500">Smart context</span>
+              <SmartContextPhaseBubbles
+                run={msg.run}
+                loading={msg.loading ?? false}
+              />
             </div>
           ) : msg.role === "tool" ? (
             <div className="flex justify-start">
@@ -508,6 +609,8 @@ export default function ChatMessageList({
             <div className="flex justify-start">
               <ThinkingBubble content={msg.content} />
             </div>
+          ) : msg.role === "user_input" ? (
+            <UserInputBubble item={msg} onAnswered={onUserInputAnswered} />
           ) : (
             <>
               {msg.content ? (
@@ -528,24 +631,8 @@ export default function ChatMessageList({
               ))}
             </>
           )}
-          {i === smartContextAfterMessageIndex && showSmartContextInPlace && (
-            <div className="flex flex-col items-start gap-2">
-              <span className="text-xs text-zinc-500">Smart context</span>
-              <SmartContextPhaseBubbles
-                run={smartContextRun}
-                loading={loading}
-              />
-            </div>
-          )}
         </div>
       ))}
-
-      {showSmartContextAtBottom && smartContextRun ? (
-        <div className="flex flex-col items-start gap-2">
-          <span className="text-xs text-zinc-500">Smart context</span>
-          <SmartContextPhaseBubbles run={smartContextRun} loading={loading} />
-        </div>
-      ) : null}
 
       {currentThinking ? (
         <div className="flex justify-start">

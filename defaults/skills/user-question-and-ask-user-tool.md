@@ -22,17 +22,19 @@ This is useful when:
 
 ## How to call `ask_user`
 
-Call `ask_user` with an array of questions, each shaped like:
+**Important:** Pass `questions` as a **JSON array of objects**, not as a string. The tool expects the `questions` argument to be an array; do not stringify it.
 
-- `id` — A short, stable key (for example, `\"env\"`, `\"framework\"`, `\"scope\"`).
+Each question object has:
+
+- `id` — A short, stable key (for example, `"env"`, `"framework"`, `"scope"`).
 - `prompt` — What you want to ask the user in plain language.
-- `choices?` — Optional array of options (for example, `['staging', 'production']`).
+- `choices?` — Optional array of option strings (for example, `["staging", "production"]`).
 - `allowOther?` — Optional boolean:
   - When `true` and `choices` exist, the user sees an **Other** field for a custom answer.
   - When omitted and `choices` exist, `allowOther` defaults to **true**.
   - When no `choices` are provided, the question is treated as **free text**.
 
-Example (single question with choices and Other):
+Correct tool call (single question with choices):
 
 ```json
 {
@@ -47,7 +49,7 @@ Example (single question with choices and Other):
 }
 ```
 
-Example (multiple questions, including free-text):
+Correct tool call (multiple questions):
 
 ```json
 {
@@ -66,6 +68,8 @@ Example (multiple questions, including free-text):
   ]
 }
 ```
+
+Wrong: do **not** pass `questions` as a string (e.g. a JSON string of the array). Pass the array directly.
 
 The result from `ask_user` will look like:
 

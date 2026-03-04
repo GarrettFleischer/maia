@@ -21,18 +21,29 @@ export interface QuestionFormModalProps {
   sessionId: string;
   /** Questions to show (id, prompt, optional choices, allowOther). */
   questions: QuestionItem[];
-  /** Called after answers are submitted successfully. */
-  onSubmitted: () => void;
+  /**
+   * Called after answers are submitted successfully.
+   * The inline user-input bubble uses the answers; the modal can ignore them.
+   */
+  onSubmitted: (answers: Record<string, string>) => void;
 }
 
 const OTHER_VALUE = "__other__";
 
-export default function QuestionFormModal({
+/**
+ * Shared question form used by both the fullscreen modal and inline chat bubbles.
+ */
+export function QuestionForm({
   requestId,
   sessionId,
   questions,
   onSubmitted,
-}: QuestionFormModalProps) {
+}: {
+  requestId: string;
+  sessionId: string;
+  questions: QuestionItem[];
+  onSubmitted?: (answers: Record<string, string>) => void;
+}) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [otherValues, setOtherValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -87,7 +98,9 @@ export default function QuestionFormModal({
           (data as { error?: string }).error ?? "Failed to submit",
         );
       }
-      onSubmitted();
+      if (onSubmitted) {
+        onSubmitted({ ...answers });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to submit answers");
     } finally {
@@ -95,6 +108,107 @@ export default function QuestionFormModal({
     }
   };
 
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
+      <div className="px-5 py-4 space-y-5 overflow-y-auto flex-1">
+        {questions.map((q) => (
+          <div key={q.id}>
+            <label
+              htmlFor={`q-${q.id}`}
+              className="block text-sm font-medium text-zinc-300 mb-2"
+            >
+              {q.prompt}
+            </label>
+            {q.choices && q.choices.length > 0 ? (
+              <div className="space-y-2">
+                {q.choices.map((choice) => (
+                  <label
+                    key={choice}
+                    className="flex items-center gap-2 cursor-pointer"
+                  >
+                    <input
+                      type="radio"
+                      name={q.id}
+                      value={choice}
+                      checked={answers[q.id] === choice}
+                      onChange={() => handleChange(q.id, choice)}
+                      className="rounded border-zinc-600 bg-zinc-800 text-violet-600 focus:ring-violet-600"
+                    />
+                    <span className="text-zinc-200">{choice}</span>
+                  </label>
+                ))}
+                {q.allowOther && (
+                  <div className="pl-6 flex flex-col gap-1">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name={q.id}
+                        value={OTHER_VALUE}
+                        checked={
+                          answers[q.id] != null &&
+                          answers[q.id].startsWith("Other:")
+                        }
+                        onChange={() => handleChange(q.id, OTHER_VALUE)}
+                        className="rounded border-zinc-600 bg-zinc-800 text-violet-600 focus:ring-violet-600"
+                      />
+                      <span className="text-zinc-200">Other</span>
+                    </label>
+                    {(answers[q.id] == null ||
+                      answers[q.id].startsWith("Other:")) && (
+                      <input
+                        type="text"
+                        value={
+                          otherValues[q.id] ??
+                          answers[q.id]?.replace(/^Other:\s*/, "") ??
+                          ""
+                        }
+                        onChange={(e) =>
+                          handleOtherChange(q.id, e.target.value)
+                        }
+                        placeholder="Your answer…"
+                        className="mt-1 rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 border border-zinc-700 focus:outline-none focus:ring-2 focus:ring-violet-600"
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <input
+                id={`q-${q.id}`}
+                type="text"
+                value={answers[q.id] ?? ""}
+                onChange={(e) => handleChange(q.id, e.target.value)}
+                placeholder="Your answer…"
+                className="w-full rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 border border-zinc-700 focus:outline-none focus:ring-2 focus:ring-violet-600"
+              />
+            )}
+          </div>
+        ))}
+      </div>
+      {error && (
+        <div className="px-5 py-2 text-sm text-red-400" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="px-5 py-4 border-t border-zinc-700 flex justify-end">
+        <button
+          type="submit"
+          disabled={submitting}
+          className="rounded-xl bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-700 disabled:text-zinc-500 px-4 py-2 text-sm font-medium text-white transition-colors"
+        >
+          {submitting ? "Submitting…" : "Submit answers"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export default function QuestionFormModal({
+  requestId,
+  sessionId,
+  questions,
+  onSubmitted,
+}: QuestionFormModalProps) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
@@ -111,97 +225,12 @@ export default function QuestionFormModal({
             Answer the agent&apos;s questions
           </h2>
         </div>
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
-          <div className="px-5 py-4 space-y-5 overflow-y-auto flex-1">
-            {questions.map((q) => (
-              <div key={q.id}>
-                <label
-                  htmlFor={`q-${q.id}`}
-                  className="block text-sm font-medium text-zinc-300 mb-2"
-                >
-                  {q.prompt}
-                </label>
-                {q.choices && q.choices.length > 0 ? (
-                  <div className="space-y-2">
-                    {q.choices.map((choice) => (
-                      <label
-                        key={choice}
-                        className="flex items-center gap-2 cursor-pointer"
-                      >
-                        <input
-                          type="radio"
-                          name={q.id}
-                          value={choice}
-                          checked={answers[q.id] === choice}
-                          onChange={() => handleChange(q.id, choice)}
-                          className="rounded border-zinc-600 bg-zinc-800 text-violet-600 focus:ring-violet-600"
-                        />
-                        <span className="text-zinc-200">{choice}</span>
-                      </label>
-                    ))}
-                    {q.allowOther && (
-                      <div className="pl-6 flex flex-col gap-1">
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="radio"
-                            name={q.id}
-                            value={OTHER_VALUE}
-                            checked={
-                              answers[q.id] != null &&
-                              answers[q.id].startsWith("Other:")
-                            }
-                            onChange={() => handleChange(q.id, OTHER_VALUE)}
-                            className="rounded border-zinc-600 bg-zinc-800 text-violet-600 focus:ring-violet-600"
-                          />
-                          <span className="text-zinc-200">Other</span>
-                        </label>
-                        {(answers[q.id] == null ||
-                          answers[q.id].startsWith("Other:")) && (
-                          <input
-                            type="text"
-                            value={
-                              otherValues[q.id] ??
-                              answers[q.id]?.replace(/^Other:\s*/, "") ??
-                              ""
-                            }
-                            onChange={(e) =>
-                              handleOtherChange(q.id, e.target.value)
-                            }
-                            placeholder="Your answer…"
-                            className="mt-1 rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 border border-zinc-700 focus:outline-none focus:ring-2 focus:ring-violet-600"
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <input
-                    id={`q-${q.id}`}
-                    type="text"
-                    value={answers[q.id] ?? ""}
-                    onChange={(e) => handleChange(q.id, e.target.value)}
-                    placeholder="Your answer…"
-                    className="w-full rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 border border-zinc-700 focus:outline-none focus:ring-2 focus:ring-violet-600"
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-          {error && (
-            <div className="px-5 py-2 text-sm text-red-400" role="alert">
-              {error}
-            </div>
-          )}
-          <div className="px-5 py-4 border-t border-zinc-700 flex justify-end">
-            <button
-              type="submit"
-              disabled={submitting}
-              className="rounded-xl bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-700 disabled:text-zinc-500 px-4 py-2 text-sm font-medium text-white transition-colors"
-            >
-              {submitting ? "Submitting…" : "Submit answers"}
-            </button>
-          </div>
-        </form>
+        <QuestionForm
+          requestId={requestId}
+          sessionId={sessionId}
+          questions={questions}
+          onSubmitted={onSubmitted}
+        />
       </div>
     </div>
   );
