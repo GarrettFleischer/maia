@@ -84,5 +84,41 @@ describe("parseCommandLine", () => {
       { type: ">", target: "out.txt" },
     ]);
   });
-});
 
+  it("@brief parses heredoc (<<'EOF' ... EOF) so body is not treated as redirect target or argv", () => {
+    const cmd = `cat > directory_project_plan.md <<'EOF'
+# Directory Website Project Plan
+
+Great! Building a revenue‑generating directory site.
+EOF`;
+    const parsed = parseCommandLine(cmd, {
+      env: {},
+      cwdLogical: "~",
+    });
+
+    expect(parsed.commands).toHaveLength(1);
+    expect(parsed.commands[0]!.argv).toEqual(["cat"]);
+
+    const redirects = parsed.commands[0]!.redirects;
+    expect(redirects).toHaveLength(2);
+
+    const outRedirect = redirects.find((r) => r.type === ">");
+    expect(outRedirect).toBeDefined();
+    expect(outRedirect!.target).toBe("directory_project_plan.md");
+
+    const heredocRedirect = redirects.find((r) => r.type === "heredoc");
+    expect(heredocRedirect).toBeDefined();
+    if (heredocRedirect?.type === "heredoc") {
+      expect(heredocRedirect.delimiter).toBe("EOF");
+      expect(heredocRedirect.body).toBe(
+        "# Directory Website Project Plan\n\nGreat! Building a revenue‑generating directory site.\n",
+      );
+    }
+
+    for (const r of redirects) {
+      if ("target" in r && typeof r.target === "string") {
+        expect(r.target).not.toMatch(/\n/);
+      }
+    }
+  });
+});

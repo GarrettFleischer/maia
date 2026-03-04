@@ -23,7 +23,10 @@ describe("POST /api/ollama/pull", () => {
     updateSettings(ctx, { ollamaBaseUrl: "http://localhost:11434" });
     ctx.http.on("/api/pull", async (_url, init) => {
       if (init?.body && typeof init.body === "string") {
-        pullBody = JSON.parse(init.body) as { model?: string; stream?: boolean };
+        pullBody = JSON.parse(init.body) as {
+          model?: string;
+          stream?: boolean;
+        };
       }
       return new FakeResponse(200, "{}");
     });
@@ -85,7 +88,10 @@ describe("POST /api/ollama/pull", () => {
   it("returns 502 when Ollama pull responds with non-2xx status", async () => {
     const ctx = makeTestContext();
     updateSettings(ctx, { ollamaBaseUrl: "http://localhost:11434" });
-    ctx.http.on("/api/pull", async () => new FakeResponse(500, "Internal Server Error"));
+    ctx.http.on(
+      "/api/pull",
+      async () => new FakeResponse(500, "Internal Server Error"),
+    );
     _setTestContext(ctx);
 
     const req = createNextRequest("http://localhost/api/ollama/pull", {
@@ -98,5 +104,34 @@ describe("POST /api/ollama/pull", () => {
     expect(res.status).toBe(502);
     const body = (await res.json()) as { error: string };
     expect(typeof body.error).toBe("string");
+  });
+
+  it("returns 400 with detailed error when Ollama indicates invalid tag in error body", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { ollamaBaseUrl: "http://localhost:11434" });
+    ctx.http.on("/api/pull", async () => {
+      const errorPayload = JSON.stringify({
+        error:
+          'pull model manifest: 400: {"error":"The specified tag is not available in the repository. Please use another tag or \\"latest\\""}',
+      });
+      return new FakeResponse(500, errorPayload);
+    });
+    _setTestContext(ctx);
+
+    const req = createNextRequest("http://localhost/api/ollama/pull", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        modelId: "ollama/hf.co/unsloth/gpt-oss-20b-GGUF:UD-Q3_K_XL",
+      }),
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain(
+      "The specified tag is not available in the repository",
+    );
   });
 });

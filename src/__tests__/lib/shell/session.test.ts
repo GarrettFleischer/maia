@@ -85,6 +85,52 @@ describe("ShellSession", () => {
     expect(typeof lsRes.stdout).toBe("string");
   });
 
+  it("@brief treats ls -la / ls -l etc. as listing cwd (ignores Unix-style options)", async () => {
+    const session = makeSessionWithFakeFs();
+
+    await session.runLine("touch a.txt");
+    const lsPlain = await session.runLine("ls");
+    const lsLa = await session.runLine("ls -la");
+    const lsL = await session.runLine("ls -l");
+
+    expect(lsLa.exitCode).toBe(0);
+    expect(lsL.exitCode).toBe(0);
+    expect(lsLa.stdout.trim().split(/\s+/).sort().join(" ")).toBe(
+      lsPlain.stdout.trim().split(/\s+/).sort().join(" "),
+    );
+    expect(lsL.stdout.trim().split(/\s+/).sort().join(" ")).toBe(
+      lsPlain.stdout.trim().split(/\s+/).sort().join(" "),
+    );
+  });
+
+  it("@brief cd with options uses first path operand (e.g. cd -L ~/projects)", async () => {
+    const session = makeSessionWithFakeFs();
+
+    const res = await session.runLine("cd -L ~/projects && pwd");
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout.trim()).toBe("~/projects");
+  });
+
+  it("@brief touch with options uses path operand (e.g. touch -a file)", async () => {
+    const session = makeSessionWithFakeFs();
+
+    const touchRes = await session.runLine("touch -a from_touch.txt");
+    expect(touchRes.exitCode).toBe(0);
+
+    const catRes = await session.runLine("cat from_touch.txt");
+    expect(catRes.exitCode).toBe(0);
+    expect(catRes.stdout).toBe("");
+  });
+
+  it("@brief cat with options reads path operands (e.g. cat -n file)", async () => {
+    const session = makeSessionWithFakeFs();
+
+    await session.runLine("echo hello world | cat > greet.txt");
+    const res = await session.runLine("cat -n greet.txt");
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout.trim()).toBe("hello world");
+  });
+
   it("@brief supports simple pipelines with echo and cat", async () => {
     const session = makeSessionWithFakeFs();
 
@@ -92,5 +138,22 @@ describe("ShellSession", () => {
     expect(res.exitCode).toBe(0);
     expect(res.stdout.trim()).toBe("foo");
   });
-});
 
+  it("@brief parses and executes heredoc (cat > file <<'EOF' ... EOF) without treating body as path", async () => {
+    const session = makeSessionWithFakeFs();
+    const cmd = `cat > directory_project_plan.md <<'EOF'
+# Directory Website Project Plan
+
+Great! Building a revenue‑generating directory site.
+EOF`;
+    const runRes = await session.runLine(cmd);
+    expect(runRes.exitCode).toBe(0);
+    expect(runRes.stderr).toBe("");
+
+    const readRes = await session.runLine("cat directory_project_plan.md");
+    expect(readRes.exitCode).toBe(0);
+    expect(readRes.stdout).toBe(
+      "# Directory Website Project Plan\n\nGreat! Building a revenue‑generating directory site.\n",
+    );
+  });
+});

@@ -5,14 +5,25 @@
  * @module lib/shell/parser
  */
 
-export type RedirectType = ">" | ">>" | "<";
+export type RedirectType = ">" | ">>" | "<" | "heredoc";
 
-export interface Redirect {
-  /** Redirection operator type. */
-  type: RedirectType;
-  /** Target path or descriptor token following the operator. */
+/** File redirection: >, >>, <. */
+export interface FileRedirect {
+  type: ">" | ">>" | "<";
+  /** Target path following the operator. */
   target: string;
 }
+
+/** Heredoc redirection: <<'DELIM' or <<DELIM with body up to line DELIM. */
+export interface HeredocRedirect {
+  type: "heredoc";
+  /** Delimiter word (e.g. "EOF"). */
+  delimiter: string;
+  /** Literal body from the line after the delimiter line through the line before the closing delimiter. */
+  body: string;
+}
+
+export type Redirect = FileRedirect | HeredocRedirect;
 
 export interface ParsedCommand {
   /** Argument vector for the command (argv[0] is the program name). */
@@ -38,6 +49,103 @@ export interface ParseOptions {
   cwdLogical: string;
 }
 
+const HEREDOC_PLACEHOLDER_PREFIX = "\u0000HEREDOC";
+const HEREDOC_PLACEHOLDER_SUFFIX = "\u0000";
+
+function isHeredocPlaceholder(token: string): token is string {
+  return (
+    token.startsWith(HEREDOC_PLACEHOLDER_PREFIX) &&
+    token.endsWith(HEREDOC_PLACEHOLDER_SUFFIX)
+  );
+}
+
+function heredocPlaceholderIndex(token: string): number {
+  const inner = token.slice(
+    HEREDOC_PLACEHOLDER_PREFIX.length,
+    token.length - HEREDOC_PLACEHOLDER_SUFFIX.length,
+  );
+  const n = parseInt(inner, 10);
+  return Number.isNaN(n) ? -1 : n;
+}
+
+/**
+ * @brief Extract heredoc regions (<<'DELIM' or <<DELIM ... DELIM) from input.
+ * Replaces each heredoc with a placeholder so tokenizer sees a single token.
+ * @param input Raw command line string.
+ * @returns Modified input and list of { delimiter, body } for each heredoc.
+ */
+function extractHeredocs(input: string): {
+  input: string;
+  heredocs: { delimiter: string; body: string }[];
+} {
+  const heredocs: { delimiter: string; body: string }[] = [];
+  let result = input;
+  let i = 0;
+  while (i < result.length) {
+    if (result[i] === "'") {
+      i += 1;
+      while (i < result.length && result[i] !== "'") i += 1;
+      if (i < result.length) i += 1;
+      continue;
+    }
+    if (result.slice(i, i + 2) === "<<") {
+      const heredocStart = i;
+      i += 2;
+      let delimiter: string;
+      let bodyStart: number;
+      if (result[i] === "'") {
+        i += 1;
+        const delimStart = i;
+        while (i < result.length && result[i] !== "'") i += 1;
+        delimiter = result.slice(delimStart, i);
+        if (i < result.length) i += 1;
+        const nl = result.indexOf("\n", i);
+        bodyStart = nl === -1 ? result.length : nl + 1;
+      } else {
+        const delimStart = i;
+        while (
+          i < result.length &&
+          result[i] !== " " &&
+          result[i] !== "\t" &&
+          result[i] !== "\n"
+        )
+          i += 1;
+        delimiter = result.slice(delimStart, i).trim();
+        while (i < result.length && (result[i] === " " || result[i] === "\t"))
+          i += 1;
+        if (result[i] === "\n") i += 1;
+        bodyStart = i;
+      }
+      const fromBody = result.slice(bodyStart);
+      const lines = fromBody.split("\n");
+      let j = 0;
+      for (; j < lines.length; j++) {
+        if (lines[j] === delimiter) break;
+      }
+      if (j >= lines.length) {
+        i = heredocStart + 1;
+        continue;
+      }
+      const bodyLines = lines.slice(0, j);
+      const body = bodyLines.length > 0 ? bodyLines.join("\n") + "\n" : "";
+      const bodyLength = body.length;
+      const endOfHeredoc = bodyStart + bodyLength + delimiter.length + 1;
+      const placeholder = `${HEREDOC_PLACEHOLDER_PREFIX}${heredocs.length}${HEREDOC_PLACEHOLDER_SUFFIX}`;
+      heredocs.push({ delimiter, body });
+      result =
+        result.slice(0, heredocStart) +
+        " " +
+        placeholder +
+        " " +
+        result.slice(endOfHeredoc);
+      i = heredocStart + placeholder.length + 2;
+    } else {
+      i += 1;
+    }
+  }
+  return { input: result, heredocs };
+}
+
 /**
  * @brief Parse a bash-like command line into a pipeline of commands.
  * @param input Raw command line string.
@@ -48,7 +156,8 @@ export function parseCommandLine(
   input: string,
   options: ParseOptions,
 ): ParsedPipeline {
-  const tokens = tokenize(input, options.env);
+  const { input: input2, heredocs } = extractHeredocs(input);
+  const tokens = tokenize(input2, options.env);
   const commands: ParsedCommand[] = [];
 
   let current: ParsedCommand = { argv: [], redirects: [] };
@@ -62,10 +171,19 @@ export function parseCommandLine(
       i += 1;
       continue;
     }
+    if (isHeredocPlaceholder(tok)) {
+      const idx = heredocPlaceholderIndex(tok);
+      if (idx >= 0 && idx < heredocs.length) {
+        const { delimiter, body } = heredocs[idx]!;
+        current.redirects.push({ type: "heredoc", delimiter, body });
+      }
+      i += 1;
+      continue;
+    }
     if (tok === ">" || tok === ">>" || tok === "<") {
       const target = tokens[i + 1];
       if (target == null) break;
-      current.redirects.push({ type: tok as RedirectType, target });
+      current.redirects.push({ type: tok as FileRedirect["type"], target });
       i += 2;
       continue;
     }
@@ -205,14 +323,18 @@ function expandEnv(
   let name = "";
   while (i < input.length) {
     const ch = input[i]!;
-    if ((ch >= "A" && ch <= "Z") || (ch >= "a" && ch <= "z") || (ch >= "0" && ch <= "9") || ch === "_") {
+    if (
+      (ch >= "A" && ch <= "Z") ||
+      (ch >= "a" && ch <= "z") ||
+      (ch >= "0" && ch <= "9") ||
+      ch === "_"
+    ) {
       name += ch;
       i += 1;
       continue;
     }
     break;
   }
-  const value = name.length > 0 ? env[name] ?? "" : "$";
+  const value = name.length > 0 ? (env[name] ?? "") : "$";
   return { value, nextIndex: i };
 }
-

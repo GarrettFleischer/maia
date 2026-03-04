@@ -114,6 +114,10 @@ export class ShellSession {
     let stdout = "";
     let stderr = "";
     let exitCode = 0;
+    const cmdIndex = (c: (typeof parsed.commands)[number]) =>
+      parsed.commands.indexOf(c);
+    const nextCmd = (c: (typeof parsed.commands)[number]) =>
+      parsed.commands[cmdIndex(c) + 1];
 
     for (const cmd of parsed.commands) {
       if (cmd.argv.length === 0) continue;
@@ -121,7 +125,8 @@ export class ShellSession {
       const args = cmd.argv.slice(1);
 
       if (name === "cd") {
-        const target = args[0] ?? "~";
+        const pathArgs = this.pathOperands(args);
+        const target = pathArgs[0] ?? "~";
         // For now treat logical paths directly; resolution to host is handled by fs.
         if (target === "~") {
           this.cwd = "~";
@@ -137,12 +142,16 @@ export class ShellSession {
       }
 
       if (name === "echo") {
-        stdout += `${args.join(" ")}\n`;
+        const isPipedToCat = nextCmd(cmd)?.argv[0] === "cat";
+        if (!isPipedToCat) {
+          stdout += `${args.join(" ")}\n`;
+        }
         continue;
       }
 
       if (name === "touch") {
-        const target = args[0];
+        const pathArgs = this.pathOperands(args);
+        const target = pathArgs[0];
         if (!target) {
           stderr += "touch: missing file operand\n";
           exitCode = 1;
@@ -154,28 +163,43 @@ export class ShellSession {
       }
 
       if (name === "ls") {
-        const logicalDir = args[0] ? this.resolveLogicalPath(args[0]) : this.cwd;
+        const pathArgs = this.pathOperands(args);
+        const logicalDir = pathArgs[0]
+          ? this.resolveLogicalPath(pathArgs[0])
+          : this.cwd;
         const entries = this.fs.listDir(logicalDir);
         stdout += `${entries.join(" ")}\n`;
         continue;
       }
 
       if (name === "cat") {
-        for (const file of args) {
-          const logicalPath = this.resolveLogicalPath(file);
-          const content = this.fs.readFile(logicalPath);
+        const heredocRedirect = cmd.redirects.find((r) => r.type === "heredoc");
+        const outRedirect = cmd.redirects.find((r) => r.type === ">");
+        let content = "";
+        if (heredocRedirect?.type === "heredoc") {
+          content = heredocRedirect.body;
+        } else if (
+          parsed.commands.length === 2 &&
+          parsed.commands[0]!.argv[0] === "echo" &&
+          name === "cat"
+        ) {
+          content = parsed.commands[0]!.argv.slice(1).join(" ") + "\n";
+        } else {
+          const pathArgs = this.pathOperands(args);
+          for (const file of pathArgs) {
+            const logicalPath = this.resolveLogicalPath(file);
+            content += this.fs.readFile(logicalPath);
+          }
+        }
+        if (content.length > 0 && !content.endsWith("\n")) {
+          content += "\n";
+        }
+        if (outRedirect?.type === ">") {
+          const logicalPath = this.resolveLogicalPath(outRedirect.target);
+          this.fs.writeFile(logicalPath, content);
+        } else {
           stdout += content;
         }
-        if (!stdout.endsWith("\n")) {
-          stdout += "\n";
-        }
-        continue;
-      }
-
-      // Simple pipeline support for "echo foo | cat" style commands.
-      if (parsed.commands.length === 2 && parsed.commands[0]!.argv[0] === "echo" && name === "cat") {
-        const piped = parsed.commands[0]!.argv.slice(1).join(" ");
-        stdout += `${piped}\n`;
         continue;
       }
 
@@ -184,6 +208,16 @@ export class ShellSession {
     }
 
     return { stdout, stderr, exitCode };
+  }
+
+  /**
+   * @brief Arguments that are path operands (non-option). Use for built-ins that
+   * take paths so Unix-style options like -l, -a are ignored.
+   * @param args Raw argv after the command name.
+   * @returns Args that do not look like options (do not start with -).
+   */
+  private pathOperands(args: string[]): string[] {
+    return args.filter((a) => !a.startsWith("-"));
   }
 
   /**
@@ -198,4 +232,3 @@ export class ShellSession {
     return `${this.cwd.replace(/\/$/, "")}/${token}`;
   }
 }
-
