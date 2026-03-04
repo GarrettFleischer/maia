@@ -97,19 +97,19 @@ Application logging uses a small **logging facade** in `src/lib/logger.ts` with 
 
 ## Summary
 
-| Concern            | Where it runs              | Key modules / config        |
-|-------------------|----------------------------|-----------------------------|
-| HTTP / API        | Next.js server             | `src/app/api/**`            |
-| DB                | Same process, SQLite file  | `src/lib/db.ts`, `AppContext` |
-| LLM queue         | Same process, timer + tick| `src/lib/queue/llm-queue.ts`, `instrumentation-node.ts` |
-| Cron              | Same process, node-cron    | `src/lib/cron/service.ts`, `heartbeat.ts` |
-| Terminal commands | Docker container (optional)| `docker-compose.yml`, `processRunner` |
-| External APIs     | Same process, HTTP client  | `AppContext.http`, `src/lib/ai/**`, tools |
+| Concern           | Where it runs               | Key modules / config                                    |
+| ----------------- | --------------------------- | ------------------------------------------------------- |
+| HTTP / API        | Next.js server              | `src/app/api/**`                                        |
+| DB                | Same process, SQLite file   | `src/lib/db.ts`, `AppContext`                           |
+| LLM queue         | Same process, timer + tick  | `src/lib/queue/llm-queue.ts`, `instrumentation-node.ts` |
+| Cron              | Same process, node-cron     | `src/lib/cron/service.ts`, `heartbeat.ts`               |
+| Terminal commands | Docker container (optional) | `docker-compose.yml`, `processRunner`                   |
+| External APIs     | Same process, HTTP client   | `AppContext.http`, `src/lib/ai/**`, tools               |
 
 For request-level and data flow details, see [Backend and Domain](backend-and-domain.md), [Request Flows](request-flows.md), and [System Overview](system-overview.md).
 
 ## Performance considerations
 
-- **Agent turn hot path:** The runner loads only the last N history entries for the recent-thread block via `getSessionRecent(ctx, sessionId)` (see `src/lib/history.ts`) instead of loading the full session, so long threads do not pull entire history into memory. Smart context and skills are fetched in parallel (`Promise.all([buildSmartContextBlock(...), getMatchedSkillsContent(...)])`) to reduce time-to-first-token.
+- **Agent turn hot path:** Before building smart context, the runner runs `buildEmbeddings(ctx)` so knowledge files and unindexed history are embedded and retrieval sees current data. The runner then loads only the last N history entries for the recent-thread block via `getSessionRecent(ctx, sessionId)` (see `src/lib/history.ts`) instead of loading the full session, so long threads do not pull entire history into memory. Smart context and skills are fetched in parallel (`Promise.all([buildSmartContextBlock(...), getMatchedSkillsContent(...)])`) to reduce time-to-first-token.
 - **Queue:** A single worker processes one job at a time (by design for rate limits and ordering). Queue depth is the natural backpressure; long-running jobs (e.g. `runAgent`) block others. Embedding jobs have higher priority so indexing can keep up.
 - **I/O cost:** The main I/O costs are embedding and vector search (smart context, history indexing) and LLM calls. Embedding failures degrade to empty context and are logged; they do not fail the request.

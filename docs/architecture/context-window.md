@@ -8,10 +8,10 @@ Large language models have a finite context window. In a long-running agentic sy
 
 Every exchange is stored in two forms:
 
-| Layer | Description | Token Cost |
-|-------|-------------|------------|
-| **Original** | Verbatim content — full user message, full AI response, full tool results | High |
-| **Compressed** | Semantically equivalent, stripped of all non-essential language | Low (~10-30% of original) |
+| Layer          | Description                                                               | Token Cost                |
+| -------------- | ------------------------------------------------------------------------- | ------------------------- |
+| **Original**   | Verbatim content — full user message, full AI response, full tool results | High                      |
+| **Compressed** | Semantically equivalent, stripped of all non-essential language           | Low (~10-30% of original) |
 
 The same array index in `compressed[]` and `original[]` always refer to the same exchange.
 
@@ -51,10 +51,10 @@ flowchart LR
   runner --> llm
 ```
 
-- **Session / history**: `getSession(ctx, sessionId)` returns `{ original, compressed }` arrays. Recent turns are formatted with `formatRecentThreadTurns(session, n)` in `context-query.ts`.
-- **transformContext**: In `src/lib/agent/context-query.ts`, `transformContext(recentThreadBlock, smartContextBlock, systemPromptContent)` combines the blocks into a single system string.
+- **Session / history**: `getSession(ctx, sessionId)` returns `{ original, compressed }` arrays. Search query extraction uses only the **clarified commands** for the chat (Round 1: …, Round 2: …), not full rounds; the agent uses **chat_read** with specific round numbers (e.g. `rounds: [1, 2]`) when it needs full context for those rounds. The last N rounds are still formatted with `formatRecentThreadTurns(session, n)` for the visible recent-thread block in the system prompt; they are not passed into query extraction.
+- **transformContext**: In `src/lib/agent/context-query.ts`, `transformContext(recentThreadBlock, smartContextBlock, systemPromptContent)` combines the blocks into a single system string. The runner passes a recent-thread block (last N rounds) plus a note to use **chat_read** with specific round numbers when more rounds exist; prior context is also supplied via the smart context block.
 - **convertToLlm**: Same module; maps that system string plus the user message (and optional initial tool result) to the `Message[]` format for the provider.
-- **Runner**: `src/lib/agent/runner.ts` calls `buildSmartContextBlock`, `buildSystemPrompt`, `transformContext`, and `convertToLlm` when building the prompt for each LLM request.
+- **Runner**: `src/lib/agent/runner.ts` runs `buildEmbeddings(ctx)` (knowledge index + history refresh) **before** smart context so retrieval sees current data; then calls `buildSmartContextBlock`, `buildSystemPrompt`, `transformContext`, and `convertToLlm` when building the prompt for each LLM request.
 
 ## Compression Agent Behavior
 
@@ -80,20 +80,21 @@ EXCHANGE TO COMPRESS:
 
 ### What gets compressed
 
-| Content Type | Before | After |
-|---|---|---|
-| User greeting | "Hey Maia, hope you're doing well! Could you possibly help me set up a new Python project?" | "User: set up new Python project" |
-| Agent affirmation | "Of course! I'd be happy to help you get started. Let me think through what we'll need..." | *(removed entirely)* |
-| File operation | Full file contents echoed back in confirmation | `file_write: /workspace/main.py [success]` |
-| Error | Full stack trace in prose | `error: ModuleNotFoundError 'requests' at main.py:3` |
-| Code | Preserved verbatim | Preserved verbatim |
-| Decision | "After considering the options, I think we should go with approach B because it aligns better with our architecture and will be easier to maintain in the long run." | `decision: approach B (architecture alignment)` |
+| Content Type      | Before                                                                                                                                                               | After                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| User greeting     | "Hey Maia, hope you're doing well! Could you possibly help me set up a new Python project?"                                                                          | "User: set up new Python project"                    |
+| Agent affirmation | "Of course! I'd be happy to help you get started. Let me think through what we'll need..."                                                                           | _(removed entirely)_                                 |
+| File operation    | Full file contents echoed back in confirmation                                                                                                                       | `file_write: /workspace/main.py [success]`           |
+| Error             | Full stack trace in prose                                                                                                                                            | `error: ModuleNotFoundError 'requests' at main.py:3` |
+| Code              | Preserved verbatim                                                                                                                                                   | Preserved verbatim                                   |
+| Decision          | "After considering the options, I think we should go with approach B because it aligns better with our architecture and will be easier to maintain in the long run." | `decision: approach B (architecture alignment)`      |
 
 ## Searching History
 
 The `find()` and `get()` functions use fuzzy string matching against compressed content by default. Because compressed entries are structured (key-value, bullet points), search is more precise than searching prose.
 
 Fuzzy matching implementation:
+
 - Tokenize the query into keywords
 - Score each entry by keyword coverage
 - Return entries above a configurable threshold score
@@ -101,6 +102,7 @@ Fuzzy matching implementation:
 ## Session Tags
 
 The compression agent also assigns tags to the session. Tags are:
+
 - Technology names: `python`, `docker`, `sqlite`
 - Domain: `file-management`, `web-scraping`, `code-generation`
 - Status: `in-progress`, `completed`, `blocked`

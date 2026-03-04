@@ -69,7 +69,13 @@ Most API routes follow a common pattern:
   - Defines a `runAgentFn` wrapper that calls `runAgent(ctx, createProvider, agentId, sessionId, message, () => {}, options)`.
   - Calls `initMessagingService(ctx, runAgentFn)` so tools like `message_send` work in this process.
   - Calls `runAgent(ctx, createProvider, agentId, sessionId, body.message, send, { emitHistoryEntries: true, queueCaller: "user" })`.
-  - Streams `thinking`, `token`, `tool_call`, `tool_result`, and `done` events to the browser.
+  - Streams `smart_context_phase`, `thinking`, `token`, `tool_call`, `tool_result`, and `done` events to the browser.
+
+**Smart context and prompt:** The agent system prompt no longer includes the last N conversation rounds verbatim; relevant prior context is supplied via the smart context pipeline. Query extraction uses only the **clarified commands** for the chat (not full round content); the agent can use the **chat_read** tool with specific round numbers (e.g. `rounds: [1, 2]`) when it needs full context for those rounds. Smart context progress is streamed as `smart_context_phase` events (queries, retrieval, filter, summary, done) so the client can show live status (e.g. "Extracting queries…", "Done (5 sources)").
+
+**Clarified command:** The runner rewrites the user message with a context model to resolve references and ambiguous terms; the clarified message **includes the actual context** (e.g. the exact terminal command, error text) when the user refers to "those commands" or "that error", not vague phrases like "the commands you were trying to run earlier". The model receives optional "Recent round detail" (tool calls, agent excerpt) to inline. The server emits the user history entry (with `resolvedContent` and `roundIndex`) via the event bus; the client merges this into the optimistically added user bubble so the clarified command appears in the UI without a refresh.
+
+**Rounds and reasoning:** The **chat_read** tool requires specific 1-based round number(s) (e.g. `chat_read({ rounds: [1, 2] })`); it does not take "last N rounds". By default reasoning/thinking entries are omitted; the agent can pass `include_reasoning: true` to include the agent's reasoning for those rounds.
 
 The full lifecycle for a chat request looks like this:
 
@@ -87,10 +93,10 @@ sequenceDiagram
   ApiRoute->>Domain: history.createSession / setActiveSessionId
   Domain->>DB: INSERT/UPDATE sessions, history_entries
   ApiRoute->>Domain: runAgent(ctx, createProvider, agentId, sessionId, message, onEvent)
-  Domain->>Domain: Agent loop (tools, smart context, compression)
+  Domain->>Domain: buildEmbeddings (knowledge + history index) then agent loop (tools, smart context, compression)
   Domain->>DB: Persist history entries (user, thinking, tool_call, agent)
   Domain->>AppCtx: events.emit({ event: "message", data: {...} })
-  Domain-->>ApiRoute: SSEEvent stream (token, tool_call, tool_result, done)
+  Domain-->>ApiRoute: SSEEvent stream (smart_context_phase, token, tool_call, tool_result, done)
   ApiRoute-->>Browser: text/event-stream
 ```
 
@@ -182,7 +188,7 @@ Key modules:
       - History appends (`appendEntry`) and indexing jobs (`scheduleHistoryIndex` via `queue/llm-queue.ts`).
     - Emits SSE-like events (`AgentLoopEvent`) consumed by API routes via the `onEvent` callback.
 
-- **Tools (`src/lib/tools/**`)**
+- **Tools (`src/lib/tools/**`)\*\*
   - Implementations of the tool interface documented in `docs/architecture/tools.md`:
     - File tools (workspace, knowledge, tools).
     - Terminal and pipeline tools.
@@ -199,18 +205,18 @@ Key modules:
     - History indexing jobs (`indexHistoryEntry`).
     - Smart-context background operations.
 
-- **Cron (`src/lib/cron/**`)**
+- **Cron (`src/lib/cron/**`)\*\*
   - `service.ts`:
     - `startCronScheduler(ctx, runAgentFn)` loads `cron_jobs` from DB and schedules them with `node-cron`.
     - Heartbeat job and per-agent run jobs.
   - `describe.ts`:
     - `describeCronSchedule` and `getNextCronRun` used by `/api/cron/jobs`.
 
-- **Knowledge and embeddings (`src/lib/knowledge/**`)**
+- **Knowledge and embeddings (`src/lib/knowledge/**`)\*\*
   - Knowledge base (files under `data/knowledge/`), history vectors (`history_vectors`), and vector search.
   - Utilities for building smart context and semantic search surfaces.
 
-- **Security (`src/lib/security/**`)**
+- **Security (`src/lib/security/**`)\*\*
   - `injection-filter.ts` – sanitizes untrusted text before exposing it to the LLM.
   - `credential-vault.ts` – encrypts/decrypts credentials via the `credentials` table.
   - Records security events in `security_events`.
@@ -219,18 +225,18 @@ Key modules:
 
 The table below links a sample of key routes to the domain modules they primarily invoke.
 
-| Route / File | Primary domain modules | Notes |
-| ------------ | ---------------------- | ----- |
+| Route / File                              | Primary domain modules                                                                                   | Notes                                                                                               |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `/api/chat` (`src/app/api/chat/route.ts`) | `src/lib/history.ts`, `src/lib/agent/runner.ts`, `src/lib/ai/factory.ts`, `src/lib/messaging-service.ts` | Streams SSE events while running an agent with `runAgent`. Uses history helpers to manage sessions. |
-| `/api/sessions/*` | `src/lib/history.ts` | Lists, creates, and updates sessions; fetches compressed/original history. |
-| `/api/history/search` | `src/lib/history.ts` | Performs fuzzy search across sessions via `searchAcrossSessions`. |
-| `/api/tasks` | `src/lib/tasks.ts` | CRUD over tasks via task service; service uses `ctx.db` and `ctx.events`. |
-| `/api/agents` | `src/lib/agent/identity.ts`, `src/lib/data-dir.ts` | Manages agent definitions and identity files on disk. |
-| `/api/credentials` | `src/lib/security/credential-vault.ts` | Uses the credential vault to create and list keys (values never leave the vault). |
-| `/api/cron/jobs` | `ctx.db` (cron_jobs), `src/lib/cron/describe.ts` | Lists cron jobs with human-readable descriptions and next run time. |
-| `/api/cron/heartbeat` | `src/lib/heartbeat.ts` | Triggers the internal heartbeat tool to wake Maia and reconcile agent cron jobs. |
-| `/api/queue` | `src/lib/queue/llm-queue.ts` | Exposes a snapshot of queued jobs and their priorities. |
-| `/api/events` | `src/lib/events.ts` and `AppContext.events` | Bridges the event bus to an SSE stream consumed by the UI. |
+| `/api/sessions/*`                         | `src/lib/history.ts`                                                                                     | Lists, creates, and updates sessions; fetches compressed/original history.                          |
+| `/api/history/search`                     | `src/lib/history.ts`                                                                                     | Performs fuzzy search across sessions via `searchAcrossSessions`.                                   |
+| `/api/tasks`                              | `src/lib/tasks.ts`                                                                                       | CRUD over tasks via task service; service uses `ctx.db` and `ctx.events`.                           |
+| `/api/agents`                             | `src/lib/agent/identity.ts`, `src/lib/data-dir.ts`                                                       | Manages agent definitions and identity files on disk.                                               |
+| `/api/credentials`                        | `src/lib/security/credential-vault.ts`                                                                   | Uses the credential vault to create and list keys (values never leave the vault).                   |
+| `/api/cron/jobs`                          | `ctx.db` (cron_jobs), `src/lib/cron/describe.ts`                                                         | Lists cron jobs with human-readable descriptions and next run time.                                 |
+| `/api/cron/heartbeat`                     | `src/lib/heartbeat.ts`                                                                                   | Triggers the internal heartbeat tool to wake Maia and reconcile agent cron jobs.                    |
+| `/api/queue`                              | `src/lib/queue/llm-queue.ts`                                                                             | Exposes a snapshot of queued jobs and their priorities.                                             |
+| `/api/events`                             | `src/lib/events.ts` and `AppContext.events`                                                              | Bridges the event bus to an SSE stream consumed by the UI.                                          |
 
 ### How to extend or debug the backend
 
@@ -248,4 +254,3 @@ The table below links a sample of key routes to the domain modules they primaril
   - Start from the API route under `src/app/api/**`.
   - Follow calls into `src/instrumentation.ts` (for `AppContext`), then into the appropriate `src/lib/**` modules as outlined above.
   - Use the logging helpers (`agentDebug`, `agentError`) and queue/cron snapshots to see background processing when needed.
-

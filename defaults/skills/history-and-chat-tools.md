@@ -10,13 +10,13 @@ You can inspect and search past conversations using these tools:
 - `history_find` — Find specific history entries across sessions by filters (for example, role, text).
 - `history_search_all` — Run a broader search across all history (multiple sessions).
 - `history_get_session` — Retrieve metadata and entries for a specific session.
-- `chat_read` — Read recent messages and tool calls for the current chat thread.
+- `chat_read` — Return full context for specific conversation rounds. Call with `rounds: [1, 2, …]` (1-based round numbers). The current round is excluded. Use `include_reasoning: true` to include the agent's reasoning for those rounds.
 
 ## Choosing the right history tool
 
 - Use `chat_read` when:
-  - You need to see earlier turns in **this** conversation beyond the last few rounds already shown in the system prompt.
-  - You want to re-read prior user instructions, your own replies, or tool results in this thread.
+  - You need full context for **specific** earlier rounds in this conversation (e.g. `chat_read({ rounds: [1, 2] })`). You must specify which round number(s) to read; there is no "last N rounds" option.
+  - You want to re-read prior user instructions, your own replies, or tool results for those rounds.
 - Use `history_get_session` when:
   - You need the full timeline for a particular session id (for example, debugging or audit).
 - Use `history_find` when:
@@ -37,4 +37,3 @@ You can inspect and search past conversations using these tools:
 
 - Treat all history content as sensitive user data; do not summarize or forward details to external systems without explicit user request.
 - When referencing old messages in your answer, include only the minimal necessary detail to address the user’s current question.
-

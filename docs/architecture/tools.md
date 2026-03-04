@@ -140,6 +140,8 @@ Operations outside the volume, knowledge base, or tools directory throw.
 - Default timeout: 30 seconds (configurable in settings).
 - `cwd` defaults to `/workspace` if not provided.
 - stdout and stderr are capped at 50KB each to prevent context flooding.
+- The Maia bash-like parser supports **heredoc** syntax (`<<'EOF'` … `EOF`) so commands such as `cat > file <<'EOF'\n...\nEOF` are parsed correctly; the heredoc body is not treated as a file path or redirect target.
+- Built-in commands (`ls`, `touch`, `cat`, `cd`) treat leading arguments that look like Unix options (e.g. `-l`, `-a`, `-n`) as ignored; the first non-option argument is used as the path/operand. So `ls -la`, `touch -a file`, `cat -n file`, and `cd -L ~/dir` behave as intended.
 
 ### `web_search` — Brave Web Search
 
@@ -243,9 +245,9 @@ One browser **page per session** (keyed by `sessionId`). Use for multi-step agen
 
 ### `messaging` — Inter-agent and User Communication
 
-| Function       | Args                                              | Returns  |
-| -------------- | ------------------------------------------------- | -------- |
-| `message_send` | `to: "user" \| agentId`, `text: string`           | `string` |
+| Function       | Args                                    | Returns  |
+| -------------- | --------------------------------------- | -------- |
+| `message_send` | `to: "user" \| agentId`, `text: string` | `string` |
 
 `message_send` (to agent) behavior:
 
@@ -262,6 +264,22 @@ One browser **page per session** (keyed by `sessionId`). Use for multi-step agen
 2. Append message as `role: "agent"` entry.
 3. Emit SSE event to UI.
 4. Returns `"Message sent to user."`
+
+### `ask_user` — Ask the user questions (choices + Other)
+
+| Function   | Args                                                                   | Returns                  |
+| ---------- | ---------------------------------------------------------------------- | ------------------------ |
+| `ask_user` | `questions: Array<{ id, prompt, choices?, allowOther? }>` (1–20 items) | `{ questions, answers }` |
+
+- **Purpose:** Lets agents ask the user one or more questions with optional predefined choices and an “Other” option for custom input. The tool blocks until the user submits all answers.
+- **Flow:**
+  1. Agent calls `ask_user` with an array of questions. Each question has `id`, `prompt`, optional `choices` (string array), and optional `allowOther` (default true when choices exist).
+  2. Server registers a pending question, emits a `question` SSE event (sessionId, requestId, questions), and the tool’s `execute` awaits a promise.
+  3. The client (chat page) receives the event, shows a modal with the questions (radios for choices, optional “Other” text input, or free text when no choices).
+  4. User submits; client POSTs to `/api/chat/question-response` with `sessionId`, `requestId`, and `answers` (record of question id → string).
+  5. The question service resolves the pending promise; the tool returns `{ questions, answers }` to the agent and the loop continues.
+- **Result:** The agent receives the original questions and the user’s answers (keyed by question `id`). “Other” answers are returned as `"Other: <user text>"`.
+- **Timeout:** Pending questions time out after 10 minutes if the user never submits; the tool then rejects with an error.
 
 ### `history` — Session Management
 

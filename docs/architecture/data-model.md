@@ -54,9 +54,10 @@ All schema creation and migrations occur inside `initSchema(db: DbAdapter)` in `
   - Columns:
     - `id TEXT PRIMARY KEY`
     - `session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE`
-    - `role TEXT NOT NULL` – `"user"`, `"agent"`, `"system"`, `"tool_call"`, `"thinking"`, etc.
+    - `role TEXT NOT NULL` – `"user"`, `"agent"`, `"system"`, `"tool_call"`, `"thinking"`, `"smart_context"`, etc.
+    - For `role = "smart_context"`: UI-only; `content` is JSON of a smart context run (phases + result). Excluded from prompt building and round selection via `entriesForConversation()`; included when loading session for the UI so the latest run is shown after refresh.
     - `content TEXT NOT NULL` – full (or compressed) content.
-    - `resolved_content TEXT` – context-aware “rewritten” command for user entries.
+    - `resolved_content TEXT` – clarified command for user entries (ambiguous terms and references to prior rounds resolved; meaning and structure preserved).
     - `round_index INTEGER` – numeric round index per user turn.
     - `tool_name TEXT` – for tool calls.
     - `tool_args TEXT` – JSON string of tool arguments.
@@ -260,4 +261,3 @@ When you add a new migration:
   - See `docs/architecture/backend-and-domain.md` for how API routes and domain libraries interact with the DB.
   - See `docs/architecture/context-window.md` and `docs/architecture/agent-system.md` for how sessions and history entries map to the agent context window.
   - See `docs/architecture/tools.md` for how tools persist data in tasks, knowledge, and security-related tables.
-

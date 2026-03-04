@@ -91,6 +91,7 @@ flowchart TD
     - `currentToken` (streaming tokens from the current reply).
     - `currentThinking` (ephemeral reasoning text).
     - `loading` (whether a message is in flight).
+    - `smartContextRun` (optional preserved run: `{ phases, doneDetail }` from `smart_context_phase` SSE events; used only for UI, not cleared when the agent responds).
     - `bottomRef` (DOM ref used for autoscroll).
     - Optional `onResendMessage` callback.
   - Renders bubbles for:
@@ -99,6 +100,7 @@ flowchart TD
     - System messages (`role: "system"`).
     - Tool calls/results (`role: "tool"`).
     - Reasoning (`role: "thinking"`).
+  - **Smart context phase bubbles**: When `smartContextRun` is set, renders a row of phase bubbles (Extracting queries → Searching → Filtering → Summarizing → Done) that update live as each phase completes. Clicking a phase shows its saved output in a detail panel (for example, the extracted queries, retrieved source ids, or the summarized block). The run is preserved after the agent responds (not cleared on token/tool/done); it is replaced only when the next message triggers a new smart context run. **Persistence**: The run is stored in the DB as a history entry with `role: "smart_context"` (content = JSON of the run). When loading a session (e.g. on refresh), the UI filters conversation entries for the message list and restores `smartContextRun` from the latest `smart_context` entry. Backend and prompt building exclude these entries via `entriesForConversation()`. UI-only for display; excluded from round selection and message list.
 
 - **`ChatInputBar` (`src/app/components/ChatInputBar.tsx`)**
   - Controlled input:
@@ -177,9 +179,9 @@ flowchart LR
 
 #### Autoscroll behavior
 
-- A `bottomRef` is attached to the bottom of the chat area.
-- `useEffect` in `Home` calls `bottomRef.current?.scrollIntoView({ behavior: "smooth" })` whenever:
-  - `messages`, `currentToken`, or `currentThinking` change.
+- A `bottomRef` is attached to the bottom of the chat area. The scroll container (the `div` with `overflow-y-auto`) has an `onScroll` handler that tracks whether the user is “at bottom” (within a small pixel threshold of the bottom).
+- Auto-scroll runs only when the user is at the bottom. When the user scrolls up, auto-scroll stops until they scroll back to the bottom. This avoids pulling the view down while the user is reading older messages.
+- `useEffect` in `Home` calls `bottomRef.current?.scrollIntoView({ behavior: "smooth" })` when `messages`, `currentToken`, or `currentThinking` change **and** the user is at the bottom (tracked via a ref updated synchronously in the scroll handler so the decision is correct even before React commits state).
 
 #### Error and loading states
 
@@ -238,4 +240,3 @@ sequenceDiagram
     - `src/__tests__/app/page.test.tsx`
     - `src/__tests__/app/components/ChatMessageList.test.tsx` (and similar component tests)
   - Use these tests as executable documentation for expected props, state transitions, and rendering behavior described above.
-
