@@ -86,21 +86,18 @@ flowchart TD
   - Uses `refetchTrigger` to decide when to re‑fetch session metadata.
 
 - **`ChatMessageList` (`src/app/components/ChatMessageList.tsx`)**
-  - Receives:
-    - `messages` (mapped from `HistoryEntry[]` via `entryToItem`).
-    - `currentToken` (streaming tokens from the current reply).
-    - `currentThinking` (ephemeral reasoning text).
-    - `loading` (whether a message is in flight).
-    - `smartContextRun` (optional preserved run: `{ phases, doneDetail }` from `smart_context_phase` SSE events; used only for UI, not cleared when the agent responds).
-    - `bottomRef` (DOM ref used for autoscroll).
-    - Optional `onResendMessage` callback.
-  - Renders bubbles for:
+  - **Universal bubble rendering**: Receives a single `messages` array of `ChatMessageListItem` (discriminated by `role`). Iterates once and, for each item, chooses the bubble component by `role`. Extensible: new bubble types add one role variant and one branch in the render loop. No special-case props for specific bubble types.
+  - Receives: `messages` (flat list in display order; home page merges conversation items with synthetic items e.g. `role: "smart_context"` at the right index; user messages can carry `conversationIndex` for edit/truncate), `currentToken`, `currentThinking`, `loading`, `bottomRef`, optional `onEditMessage(conversationIndex, content)`, `onUserInputAnswered`.
+  - Renders one bubble per item by `role` (user, agent, system, tool, thinking, smart_context, user_input); user messages can carry `conversationIndex` for Edit/truncate.
     - User messages (`role: "user"`).
     - Agent messages (`role: "agent"`).
     - System messages (`role: "system"`).
     - Tool calls/results (`role: "tool"`).
     - Reasoning (`role: "thinking"`).
-  - **Smart context phase bubbles**: When `smartContextRun` is set, renders a row of phase bubbles (Extracting queries → Searching → Filtering → Summarizing → Done) that update live as each phase completes. Clicking a phase shows its saved output in a detail panel (for example, the extracted queries, retrieved source ids, or the summarized block). The run is preserved after the agent responds (not cleared on token/tool/done); it is replaced only when the next message triggers a new smart context run. **Persistence**: The run is stored in the DB as a history entry with `role: "smart_context"` (content = JSON of the run). When loading a session (e.g. on refresh), the UI filters conversation entries for the message list and restores `smartContextRun` from the latest `smart_context` entry. Backend and prompt building exclude these entries via `entriesForConversation()`. UI-only for display; excluded from round selection and message list.
+    - **Inline user-input bubbles** (`role: "user_input"`):
+      - **Pending:** Render the shared `QuestionForm` used by `ask_user` as an inline bubble when the server emits a `question` SSE event (radios + “Other” field or free text).
+      - **Answered:** Render a read-only Q&A summary (questions with their final answers). Answered bubbles are restored from history by mapping `ask_user` `tool_call` entries into `user_input` items.
+  - Smart context is a `role: "smart_context"` item in the same list; the page inserts it after the triggering user message. Data comes from the session row; persistence and exclusion from conversation/embeddings unchanged.
 
 - **`ChatInputBar` (`src/app/components/ChatInputBar.tsx`)**
   - Controlled input:
@@ -169,13 +166,14 @@ flowchart LR
    - `error`: append a `"system"` message, clear streaming state, and reset accumulators.
 5. Finally, clear `loading` regardless of success or failure.
 
-#### Re-sending from history
+#### Editing and re-sending from history
 
-- `ChatMessageList` can call `onResendMessage(index, content)` to let the user re‑run a previous turn.
-- `Home` implements `handleResendMessage`:
-  - If `sessionId` is set, `POST /api/sessions/{sessionId}/history/truncate` with `{ keepThroughIndex: index - 1 }`.
-  - Trim `messages` locally to `prev.slice(0, index)`.
-  - Call `sendMessage(content)` with `overrideContent` so input is not cleared.
+- `ChatMessageList` can call `onEditMessage(index, content)` to let the user load a previous turn into the input for editing.
+- `Home` implements `handleEditMessage`:
+  - When the user clicks **Edit** on a user bubble, it records `editingMessageIndex = index` and copies `content` into the input.
+  - On the next `sendMessage` call while `editingMessageIndex` is set:
+    - If `sessionId` is set, it `POST`s `/api/sessions/{sessionId}/history/truncate` with `{ keepThroughIndex: index - 1 }` to drop the original message and anything after it.
+    - It trims `messages` locally to `prev.slice(0, index)` and appends a new `{ role: "user", content }` entry using the (possibly edited) text.
 
 #### Autoscroll behavior
 
@@ -201,8 +199,9 @@ sequenceDiagram
 
   Home->>Events: GET (EventSource)
   loop SSE stream
-    Events-->>Home: event: message (sessionId, entry, participants)
-    Events-->>Home: event: session_created / session_updated / agent_status / heartbeat / ping
+  Events-->>Home: event: message (sessionId, entry, participants)
+  Events-->>Home: event: question (sessionId, requestId, questions)
+  Events-->>Home: event: session_created / session_updated / agent_status / heartbeat / ping
   end
 ```
 
@@ -214,6 +213,10 @@ sequenceDiagram
     - While `loadingRef.current` is `true`, it ignores `user` and `tool_call` echoes so the SSE stream does not double‑render the optimistic entries.
     - Deduplicates repeated user messages by comparing the content of the last user bubble.
   - Appends agent and system entries to `messages` as they arrive.
+- On `question` events:
+  - Parses the payload `{ sessionId, requestId, questions }`.
+  - Only processes the event if `sessionId === sessionIdRef.current`.
+  - Appends a `user_input` message to `messages` so the inline user-input bubble appears in the chat stream. When the user submits, the bubble calls `/api/chat/question-response` and the corresponding `user_input` item is updated to `status: "answered"` with the recorded answers.
 - On `ping` events:
   - No UI update; used only to keep the connection alive.
 

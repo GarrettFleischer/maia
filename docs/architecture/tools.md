@@ -272,14 +272,17 @@ One browser **page per session** (keyed by `sessionId`). Use for multi-step agen
 | `ask_user` | `questions: Array<{ id, prompt, choices?, allowOther? }>` (1–20 items) | `{ questions, answers }` |
 
 - **Purpose:** Lets agents ask the user one or more questions with optional predefined choices and an “Other” option for custom input. The tool blocks until the user submits all answers.
-- **Flow:**
+- **Flow (end-to-end):**
   1. Agent calls `ask_user` with an array of questions. Each question has `id`, `prompt`, optional `choices` (string array), and optional `allowOther` (default true when choices exist).
-  2. Server registers a pending question, emits a `question` SSE event (sessionId, requestId, questions), and the tool’s `execute` awaits a promise.
-  3. The client (chat page) receives the event, shows a modal with the questions (radios for choices, optional “Other” text input, or free text when no choices).
-  4. User submits; client POSTs to `/api/chat/question-response` with `sessionId`, `requestId`, and `answers` (record of question id → string).
+  2. The server registers a pending question in the in-process question service, emits a `question` SSE event via the shared event bus (`sessionId`, `requestId`, `questions`), and the tool’s `execute` awaits a promise.
+  3. The client home page receives the `question` event and appends a **user-input bubble** to the chat stream:
+     - The bubble renders the questions inline (radios for choices, optional “Other” text input, or free text when no choices).
+     - The rest of the thread remains visible; there is no fullscreen modal.
+  4. When the user submits in the inline bubble, the client POSTs to `/api/chat/question-response` with `sessionId`, `requestId`, and `answers` (record of question id → string). On success, the bubble is updated in-place to an **answered, read-only** state that shows each question with its final answer.
   5. The question service resolves the pending promise; the tool returns `{ questions, answers }` to the agent and the loop continues.
-- **Result:** The agent receives the original questions and the user’s answers (keyed by question `id`). “Other” answers are returned as `"Other: <user text>"`.
-- **Timeout:** Pending questions time out after 10 minutes if the user never submits; the tool then rejects with an error.
+  6. The `ask_user` tool call result (`{ questions, answers }`) is persisted as a `tool_call` history entry. When loading history, the UI maps these entries back into answered user-input bubbles so past Q&A is always visible (but never editable).
+- **Result:** The agent receives the original questions and the user’s answers (keyed by question `id`). “Other” answers are returned as `"Other: <user text>"`. The user sees both the pending form and the final Q&A inline in the chat history.
+- **Timeout:** Pending questions time out after 10 minutes if the user never submits; the tool then rejects with an error, which surfaces in the chat as a system message.
 
 ### `history` — Session Management
 
