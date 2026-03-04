@@ -853,6 +853,10 @@ describe("runAgent", () => {
     ).mockResolvedValue({
       block: "## Smart context\n\nSummary here.",
       sourceIds: ["history:s1/entry-1", "knowledge:docs/guide.md"],
+      sourceLabels: [
+        "User asked about deployment.",
+        "docs/guide.md excerpt...",
+      ],
     });
 
     const skillsMod = await import("@/lib/skills");
@@ -897,6 +901,39 @@ describe("runAgent", () => {
 
     smartBlockSpy.mockRestore();
     skillsSpy.mockRestore();
+  });
+
+  it("persists smart context run to session row as phases progress so refresh can restore retrieval and filter outputs", async () => {
+    seedIdentityFiles(ctx.fs as FakeFs, "maia");
+
+    const historyMod = await import("@/lib/history");
+    const originalUpdate = historyMod.updateSessionSmartContext;
+    const updates: Array<{ sessionId: string; run: { phases: unknown[] } }> =
+      [];
+
+    const updateSpy = spyOn(
+      historyMod,
+      "updateSessionSmartContext",
+    ).mockImplementation((ctxArg, sessionIdArg, runArg) => {
+      updates.push({ sessionId: sessionIdArg, run: { phases: runArg.phases } });
+      return originalUpdate(ctxArg, sessionIdArg, runArg, 0);
+    });
+
+    await runAgent(
+      ctx,
+      makeProviderFactory(makeSimpleProvider({ content: "ok" })),
+      "maia",
+      sessionId,
+      "hi",
+      () => {},
+    );
+
+    updateSpy.mockRestore();
+
+    const forSession = updates.filter((u) => u.sessionId === sessionId);
+    expect(forSession.length).toBeGreaterThan(1);
+    const last = forSession[forSession.length - 1];
+    expect(last.run.phases.length).toBeGreaterThan(0);
   });
 
   it("includes AGENTS.md from agent dir as full system command when present", async () => {

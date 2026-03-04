@@ -65,4 +65,23 @@ describe("askUserTool", () => {
   it("schema rejects empty questions array", () => {
     expect(() => askUserTool.schema.parse({ questions: [] })).toThrow();
   });
+
+  it("accepts questions as JSON string and parses to array", () => {
+    const json = JSON.stringify([
+      {
+        id: "env",
+        prompt: "Which env?",
+        choices: ["dev", "prod"],
+        allowOther: true,
+      },
+    ]);
+    const parsed = askUserTool.schema.parse({ questions: json });
+    expect(parsed.questions).toHaveLength(1);
+    expect(parsed.questions[0]).toEqual({
+      id: "env",
+      prompt: "Which env?",
+      choices: ["dev", "prod"],
+      allowOther: true,
+    });
+  });
 });

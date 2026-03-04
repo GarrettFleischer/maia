@@ -211,30 +211,23 @@ describe("Home page", () => {
     });
   });
 
-  it("clears smart context bubbles when re-sending the related user message", async () => {
+  it("clears smart context bubbles when editing and re-sending the related user message", async () => {
     const sessionWithSmartContext = {
       sessionId: "session-1",
       session: {
         ...sessionActiveWithMessages.session,
-        original: [
-          ...sessionActiveWithMessages.session.original,
-          {
-            id: "sc1",
-            role: "smart_context" as const,
-            content: JSON.stringify({
-              phases: [
-                {
-                  phase: "clarified" as const,
-                  detail: null,
-                  output: "Clarified v1",
-                },
-                { phase: "done" as const, detail: "1 sources" },
-              ],
-              doneDetail: "1 sources",
-            }),
-            timestamp: new Date().toISOString(),
-          },
-        ],
+        smartContextRun: {
+          phases: [
+            {
+              phase: "clarified" as const,
+              detail: undefined,
+              output: "Clarified v1",
+            },
+            { phase: "done" as const, detail: "1 sources" },
+          ],
+          doneDetail: "1 sources",
+        },
+        smartContextAfterMessageIndex: 0,
       },
     };
     installFetchMock([
@@ -272,10 +265,14 @@ describe("Home page", () => {
       expect(screen.getByText("Hello")).toBeInTheDocument();
     });
     expect(screen.getByText("Smart context")).toBeInTheDocument();
-    const resendButton = screen.getByRole("button", {
-      name: "Re-send this message",
+    const editButton = screen.getByRole("button", {
+      name: "Edit this message",
     });
-    fireEvent.click(resendButton);
+    fireEvent.click(editButton);
+    const input = screen.getByPlaceholderText(/Message Maia/i);
+    fireEvent.change(input, { target: { value: "Hello (edited)" } });
+    const sendButton = screen.getByRole("button", { name: "Send message" });
+    fireEvent.click(sendButton);
     await waitFor(() => {
       expect(screen.queryByText("Smart context")).toBeNull();
     });
@@ -388,6 +385,77 @@ describe("Home page", () => {
     await waitFor(() => {
       expect(sessionsPostBody.participants).toEqual(["user", "agent-2"]);
       expect(sessionsPostBody.type).toBe("user");
+    });
+  });
+
+  describe("ask_user user input bubble", () => {
+    let originalEventSource: typeof EventSource | undefined;
+
+    beforeEach(() => {
+      originalEventSource = (
+        globalThis as unknown as { EventSource?: typeof EventSource }
+      ).EventSource;
+      (
+        globalThis as unknown as { EventSource?: typeof EventSource }
+      ).EventSource = FakeEventSource as unknown as typeof EventSource;
+    });
+
+    afterEach(() => {
+      (
+        globalThis as unknown as { EventSource?: typeof EventSource }
+      ).EventSource = originalEventSource as typeof EventSource;
+    });
+
+    it("shows an inline user_input bubble when a question event arrives for the active session", async () => {
+      installFetchMock([
+        {
+          url: "/api/sessions/active",
+          handler: () => jsonResponse(sessionActiveWithMessages),
+        },
+        { url: "/api/sessions", handler: () => jsonResponse({ sessions: [] }) },
+        { url: "/api/agents", handler: () => jsonResponse(agentsEmpty) },
+        {
+          url: "/api/chat/question-response",
+          handler: () => jsonResponse({ ok: true }),
+        },
+      ]);
+      await renderHome();
+      await waitFor(() =>
+        expect(screen.getByText("Hello")).toBeInTheDocument(),
+      );
+
+      const es = lastEventSource;
+      expect(es).not.toBeNull();
+      const questionPayload = {
+        sessionId: "session-1",
+        requestId: "req-1",
+        questions: [
+          {
+            id: "env",
+            prompt: "Which environment should I operate on?",
+            choices: ["development", "staging", "production"],
+            allowOther: true,
+          },
+        ],
+      };
+
+      await act(async () => {
+        for (const cb of es?.listeners["question"] ?? []) {
+          cb({ data: JSON.stringify(questionPayload) } as MessageEvent);
+        }
+      });
+
+      await waitFor(() =>
+        expect(
+          screen.getByText("Which environment should I operate on?"),
+        ).toBeInTheDocument(),
+      );
+      // The old fullscreen modal should not be rendered anymore.
+      expect(
+        screen.queryByRole("dialog", {
+          name: /answer the agent's questions/i,
+        }),
+      ).toBeNull();
     });
   });
 

@@ -480,6 +480,7 @@ describe("buildSmartContextBlock", () => {
     );
     expect(result.block).toBe("");
     expect(result.sourceIds).toEqual([]);
+    expect(result.sourceLabels).toEqual([]);
   });
 
   it("returns summarized block when retrieval has results", async () => {
@@ -529,6 +530,8 @@ describe("buildSmartContextBlock", () => {
     expect(result.block).toContain("## Smart context");
     expect(result.block).toContain("history:sess-1/entry-1");
     expect(result.sourceIds).toContain("history:sess-1/entry-1");
+    expect(result.sourceLabels.length).toBe(result.sourceIds.length);
+    expect(result.sourceLabels[0]).toContain("We decided to use smart context");
   });
 });
 
