@@ -12,7 +12,7 @@ import {
   within,
   act,
 } from "@testing-library/react";
-import SettingsPage from "@/app/settings/page";
+import SettingsContent from "@/app/settings/SettingsContent";
 import {
   installFetchMock,
   restoreFetch,
@@ -35,7 +35,10 @@ async function renderSettingsPage() {
   let result: ReturnType<typeof render>;
   await act(async () => {
     result = render(
-      <SettingsPage params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />,
+      <SettingsContent
+        params={TEST_PARAMS}
+        searchParams={TEST_SEARCH_PARAMS}
+      />,
     );
   });
   await act(async () => {
@@ -813,5 +816,207 @@ describe("Settings page", () => {
     expect(
       screen.getByRole("button", { name: /Download ollama\/llama3\.2/i }),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * Credential vault UI (GET/POST /api/credentials, list keys, add/edit/delete) is not
+   * implemented in SettingsContent; these tests are skipped until the UI exists.
+   */
+  describe.skip("Credential vault (Providers tab)", () => {
+    const defaultHandlers = [
+      { url: "/api/settings", handler: () => jsonResponse(settingsPublic) },
+      { url: "/api/agents", handler: () => jsonResponse({ agents: [] }) },
+      {
+        url: "/api/model-capabilities",
+        handler: () => jsonResponse(modelCapabilitiesFixture),
+      },
+      { url: "/api/skills", handler: () => jsonResponse({ skills: [] }) },
+    ];
+
+    it("shows Credential vault section and lists only non-default keys", async () => {
+      let credentialKeys = [
+        "BRAVE_SEARCH_API_KEY",
+        "BRAVE_ANSWERS_API_KEY",
+        "MY_CUSTOM_KEY",
+      ];
+      installFetchMock([
+        ...defaultHandlers,
+        {
+          url: "/api/credentials/",
+          handler: () => jsonResponse({ ok: true }),
+        },
+        {
+          url: "/api/credentials",
+          handler: (_url, init) => {
+            if (init?.method === "GET") {
+              return jsonResponse({ keys: credentialKeys });
+            }
+            if (init?.method === "POST") {
+              const body = JSON.parse(init?.body as string) as {
+                key: string;
+                value: string;
+              };
+              credentialKeys = [...credentialKeys, body.key].sort();
+              return jsonResponse({ ok: true }, 201);
+            }
+            return jsonResponse({ keys: credentialKeys });
+          },
+        },
+      ]);
+      await renderSettingsPage();
+      await waitFor(() => {
+        expect(screen.getByText("Ollama Base URL")).toBeInTheDocument();
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Credential vault")).toBeInTheDocument();
+      });
+      expect(screen.getByText("MY_CUSTOM_KEY")).toBeInTheDocument();
+      expect(
+        screen.queryByText("BRAVE_SEARCH_API_KEY"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("BRAVE_ANSWERS_API_KEY"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("creates a new vault credential via form and refetches list", async () => {
+      let credentialKeys: string[] = [];
+      installFetchMock([
+        ...defaultHandlers,
+        {
+          url: "/api/credentials/",
+          handler: () => jsonResponse({ ok: true }),
+        },
+        {
+          url: "/api/credentials",
+          handler: (_url, init) => {
+            if (init?.method === "GET") {
+              return jsonResponse({ keys: credentialKeys });
+            }
+            if (init?.method === "POST") {
+              const body = JSON.parse(init?.body as string) as {
+                key: string;
+                value: string;
+              };
+              credentialKeys = [...credentialKeys, body.key].sort();
+              return jsonResponse({ ok: true }, 201);
+            }
+            return jsonResponse({ keys: credentialKeys });
+          },
+        },
+      ]);
+      await renderSettingsPage();
+      await waitFor(() => {
+        expect(screen.getByText("Credential vault")).toBeInTheDocument();
+      });
+      const vaultSection = screen
+        .getByText("Credential vault")
+        .closest("section")!;
+      const keyInput = within(vaultSection).getByRole("textbox", {
+        name: /Credential key/i,
+      });
+      const valueInput =
+        within(vaultSection).getByPlaceholderText("Secret value");
+      fireEvent.change(keyInput, { target: { value: "NEW_KEY" } });
+      fireEvent.change(valueInput, { target: { value: "secret123" } });
+      fireEvent.click(screen.getByRole("button", { name: /Add credential/i }));
+      await waitFor(() => {
+        expect(screen.getByText("NEW_KEY")).toBeInTheDocument();
+      });
+    });
+
+    it("updates a vault credential", async () => {
+      const credentialKeys = ["CUSTOM_KEY"];
+      let putValue: string | null = null;
+      installFetchMock([
+        ...defaultHandlers,
+        {
+          url: "/api/credentials/",
+          handler: (_url, init) => {
+            if (init?.method === "PUT" && init.body) {
+              putValue = (JSON.parse(init.body as string) as { value: string })
+                .value;
+              return jsonResponse({ ok: true });
+            }
+            if (init?.method === "DELETE") {
+              return jsonResponse({ ok: true });
+            }
+            return jsonResponse({ ok: true });
+          },
+        },
+        {
+          url: "/api/credentials",
+          handler: (_url, init) => {
+            if (init?.method === "GET") {
+              return jsonResponse({ keys: credentialKeys });
+            }
+            return jsonResponse({ keys: credentialKeys });
+          },
+        },
+      ]);
+      await renderSettingsPage();
+      await waitFor(() => {
+        expect(screen.getByText("CUSTOM_KEY")).toBeInTheDocument();
+      });
+      const editButton = within(
+        screen.getByText("CUSTOM_KEY").closest("li")!,
+      ).getByRole("button", { name: /Edit/i });
+      fireEvent.click(editButton);
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: /Update credential/i }),
+        ).toBeInTheDocument();
+      });
+      const valueInput = screen.getByPlaceholderText("New value");
+      fireEvent.change(valueInput, { target: { value: "new-secret" } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /Update credential/i }),
+      );
+      await waitFor(() => {
+        expect(putValue).toBe("new-secret");
+      });
+    });
+
+    it("deletes a vault credential after confirm", async () => {
+      let credentialKeys = ["CUSTOM_KEY"];
+      let deleteUrl: string | null = null;
+      installFetchMock([
+        ...defaultHandlers,
+        {
+          url: "/api/credentials/",
+          handler: (url, init) => {
+            if (init?.method === "DELETE") {
+              deleteUrl = url;
+              credentialKeys = credentialKeys.filter(
+                (k) => !url.endsWith("/" + k),
+              );
+              return jsonResponse({ ok: true });
+            }
+            return jsonResponse({ ok: true });
+          },
+        },
+        {
+          url: "/api/credentials",
+          handler: () => jsonResponse({ keys: credentialKeys }),
+        },
+      ]);
+      await renderSettingsPage();
+      await waitFor(() => {
+        expect(screen.getByText("CUSTOM_KEY")).toBeInTheDocument();
+      });
+      const deleteButton = within(
+        screen.getByText("CUSTOM_KEY").closest("li")!,
+      ).getByRole("button", { name: /Delete/i });
+      fireEvent.click(deleteButton);
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: /Confirm delete/i }),
+        ).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Confirm delete/i }));
+      await waitFor(() => {
+        expect(deleteUrl).toContain("CUSTOM_KEY");
+      });
+    });
   });
 });

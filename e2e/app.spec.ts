@@ -17,18 +17,18 @@ test.describe("App shell", () => {
   test("navigates to Settings and back", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("link", { name: /Settings/i }).click();
-    await expect(page).toHaveURL(/\/settings/);
+    await expect(page).toHaveURL(/view=settings/);
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
     await page.getByRole("link", { name: /Chat/i }).click();
-    await expect(page).toHaveURL(/\//);
+    await expect(page).toHaveURL(/^https?:\/\/[^/]+\/?(\?.*)?$/);
   });
 
   test("navigates to Agents and back", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("link", { name: /Agents/i }).click();
-    await expect(page).toHaveURL(/\/agents/);
+    await expect(page).toHaveURL(/view=agents/);
     await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
     await page.getByRole("link", { name: /Chat/i }).click();
-    await expect(page).toHaveURL(/\//);
+    await expect(page).toHaveURL(/^https?:\/\/[^/]+\/?(\?.*)?$/);
   });
 });

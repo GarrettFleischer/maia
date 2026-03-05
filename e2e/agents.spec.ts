@@ -14,7 +14,9 @@ test.describe("Agents", () => {
   test("shows either empty message or agent list", async ({ page }) => {
     await page.goto("/agents");
     // Wait for dashboard to load (loading state clears and content appears)
-    await expect(page.getByText("Loading...")).toBeHidden({ timeout: 15_000 });
+    await expect(page.getByText("Loading...").first()).toBeHidden({
+      timeout: 15_000,
+    });
     const statusSection = page.locator('section[aria-label="Agent status"]');
     await expect(statusSection).toBeVisible({ timeout: 5_000 });
     const emptyMessage = statusSection.getByText(/No agents yet\. Maia will create agents/i);

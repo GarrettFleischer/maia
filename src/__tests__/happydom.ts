@@ -8,4 +8,5 @@
 
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
-GlobalRegistrator.register();
+/** Base URL so relative fetch (e.g. /api/sessions) works; avoids "Invalid URL on document location 'about:blank'" in tests. */
+GlobalRegistrator.register({ url: "http://localhost:3000" });
