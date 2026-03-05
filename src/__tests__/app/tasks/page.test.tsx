@@ -6,7 +6,7 @@
 
 import { describe, it, expect, afterEach } from "bun:test";
 import { render, screen, waitFor, act } from "@testing-library/react";
-import TasksPage from "@/app/tasks/page";
+import TasksView from "@/app/views/TasksView";
 import {
   installFetchMock,
   restoreFetch,
@@ -26,9 +26,7 @@ const TEST_SEARCH_PARAMS = Promise.resolve(
 async function renderTasksPage() {
   let result: ReturnType<typeof render>;
   await act(async () => {
-    result = render(
-      <TasksPage params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />,
-    );
+    result = render(<TasksView />);
   });
   await act(async () => {
     await Promise.resolve();

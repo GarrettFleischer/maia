@@ -6,7 +6,7 @@
 
 import { describe, it, expect, afterEach } from "bun:test";
 import { render, screen, waitFor, act } from "@testing-library/react";
-import CronPage from "@/app/cron/page";
+import CronView from "@/app/views/CronView";
 import {
   installFetchMock,
   restoreFetch,
@@ -26,9 +26,7 @@ const TEST_SEARCH_PARAMS = Promise.resolve(
 async function renderCronPage() {
   let result: ReturnType<typeof render>;
   await act(async () => {
-    result = render(
-      <CronPage params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />,
-    );
+    result = render(<CronView />);
   });
   await act(async () => {
     await Promise.resolve();

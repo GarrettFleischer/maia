@@ -5,19 +5,28 @@
 
 import { describe, it, expect, afterEach } from "bun:test";
 import { render, screen, waitFor, act } from "@testing-library/react";
-import AgentsPage from "@/app/agents/page";
-import { installFetchMock, restoreFetch, jsonResponse } from "@/__tests__/helpers/fetch-mock";
-import { dashboardEmpty, dashboardWithData } from "@/__tests__/helpers/fixtures";
+import AgentsView from "@/app/views/AgentsView";
+import {
+  installFetchMock,
+  restoreFetch,
+  jsonResponse,
+} from "@/__tests__/helpers/fetch-mock";
+import {
+  dashboardEmpty,
+  dashboardWithData,
+} from "@/__tests__/helpers/fixtures";
 
 /** Resolved promises so client pages don't suspend in tests (Next.js 15 passes these at runtime). */
 const TEST_PARAMS = Promise.resolve({} as Record<string, string | undefined>);
-const TEST_SEARCH_PARAMS = Promise.resolve({} as Record<string, string | string[] | undefined>);
+const TEST_SEARCH_PARAMS = Promise.resolve(
+  {} as Record<string, string | string[] | undefined>,
+);
 
 /** Renders AgentsPage and flushes React Suspense (use() with promises) so content appears. */
 async function renderAgentsPage() {
   let result: ReturnType<typeof render>;
   await act(async () => {
-    result = render(<AgentsPage params={TEST_PARAMS} searchParams={TEST_SEARCH_PARAMS} />);
+    result = render(<AgentsView />);
   });
   await act(async () => {
     await Promise.resolve();
@@ -112,7 +121,9 @@ describe("Agents page (monitor dashboard)", () => {
     ]);
     await renderAgentsPage();
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: /Schedule/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: /Schedule/i }),
+      ).toBeInTheDocument();
     });
     expect(screen.getByText("Heartbeat")).toBeInTheDocument();
   });

@@ -126,7 +126,6 @@ describe("ChatMessageList", () => {
         { phase: "queries" as const },
         { phase: "retrieval" as const },
         { phase: "filter" as const },
-        { phase: "summary" as const },
       ],
       doneDetail: undefined as string | undefined,
     };
@@ -137,12 +136,11 @@ describe("ChatMessageList", () => {
       <ChatMessageList messages={messages} currentToken="" loading={true} />,
     );
     expect(screen.getByText("Smart context")).toBeInTheDocument();
-    expect(screen.getByText("Clarified command")).toBeInTheDocument();
-    expect(screen.getByText("Extracting queries")).toBeInTheDocument();
-    expect(screen.getByText("Searching")).toBeInTheDocument();
-    expect(screen.getByText("Filtering")).toBeInTheDocument();
-    expect(screen.getByText("Summarizing")).toBeInTheDocument();
-    expect(screen.getByText("Done")).toBeInTheDocument();
+    expect(screen.getByText("clarify")).toBeInTheDocument();
+    expect(screen.getByText("extract")).toBeInTheDocument();
+    expect(screen.getByText("search")).toBeInTheDocument();
+    expect(screen.getByText("filter")).toBeInTheDocument();
+    expect(screen.getByText("done")).toBeInTheDocument();
   });
 
   it("renders smart context result when run is complete with doneDetail", () => {
@@ -151,7 +149,6 @@ describe("ChatMessageList", () => {
         { phase: "queries" as const },
         { phase: "retrieval" as const },
         { phase: "filter" as const },
-        { phase: "summary" as const },
         { phase: "done" as const, detail: "3 sources" },
       ],
       doneDetail: "3 sources",
@@ -163,7 +160,7 @@ describe("ChatMessageList", () => {
       <ChatMessageList messages={messages} currentToken="" loading={false} />,
     );
     expect(screen.getByText("Smart context")).toBeInTheDocument();
-    expect(screen.getByText(/Done \(3 sources\)/)).toBeInTheDocument();
+    expect(screen.getByText("done")).toBeInTheDocument();
   });
 
   it("does not render a redundant smart context result bubble when run is complete", () => {
@@ -172,7 +169,6 @@ describe("ChatMessageList", () => {
         { phase: "queries" as const },
         { phase: "retrieval" as const },
         { phase: "filter" as const },
-        { phase: "summary" as const },
         { phase: "done" as const, detail: "2 sources" },
       ],
       doneDetail: "2 sources",
@@ -184,7 +180,7 @@ describe("ChatMessageList", () => {
       <ChatMessageList messages={messages} currentToken="" loading={false} />,
     );
     expect(screen.queryByText(/Result:/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/Done \(2 sources\)/)).toBeInTheDocument();
+    expect(screen.getByText("done")).toBeInTheDocument();
   });
 
   it("does not render smart context bubbles when messages have no smart_context item", () => {
@@ -211,7 +207,7 @@ describe("ChatMessageList", () => {
     );
 
     const queriesBubble = screen.getByRole("button", {
-      name: /Extracting queries/i,
+      name: /extract/i,
     });
     fireEvent.click(queriesBubble);
 
@@ -243,7 +239,7 @@ describe("ChatMessageList", () => {
     );
 
     const doneBubble = screen.getByRole("button", {
-      name: /Done \(1 source\), click to view details/i,
+      name: /done, click to view details/i,
     });
     fireEvent.click(doneBubble);
 
