@@ -11,6 +11,7 @@ import type { EmbeddingAdapter } from "../knowledge/embedding";
 import { cosineSimilarity } from "../knowledge/vector-store";
 import { getAvailableSkillsMetadata } from "./discovery";
 import { loadSkillContent } from "./discovery";
+import { getAgentSkillsDir } from "../data-dir";
 import type { ProviderFactory } from "../agent/context-query";
 
 const DEFAULT_TOP_K = 5;
@@ -50,7 +51,11 @@ export async function matchSkillsToMessage(
   userMessage: string,
   options: MatchSkillsOptions = {},
 ): Promise<SkillMetadata[]> {
-  const { topK = DEFAULT_TOP_K, minScore = DEFAULT_MIN_SCORE, embedder: injectedEmbedder } = options;
+  const {
+    topK = DEFAULT_TOP_K,
+    minScore = DEFAULT_MIN_SCORE,
+    embedder: injectedEmbedder,
+  } = options;
 
   if (metadata.length === 0) return [];
 
@@ -131,7 +136,7 @@ export async function selectSkillsWithModel(
           role: "system",
           content:
             "You are a skill selection assistant. Given a user command and a list of skills (name and description), choose the skills that are most relevant.\n" +
-            "Return ONLY a JSON array of skill names to activate, exactly matching the names from the list. Example: [\"commit-changes\", \"deploy-app\"].\n" +
+            'Return ONLY a JSON array of skill names to activate, exactly matching the names from the list. Example: ["commit-changes", "deploy-app"].\n' +
             "Do not include any explanations or extra text.",
         },
         { role: "user", content: userContent },
@@ -163,12 +168,14 @@ export async function selectSkillsWithModel(
   if (!Array.isArray(parsed)) return [];
 
   const allByName = new Map(metadata.map((m) => [m.name, m]));
-  const names = [...new Set(
-    (parsed as unknown[])
-      .filter((v): v is string => typeof v === "string")
-      .map((v) => v.trim())
-      .filter((v) => v.length > 0),
-  )];
+  const names = [
+    ...new Set(
+      (parsed as unknown[])
+        .filter((v): v is string => typeof v === "string")
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0),
+    ),
+  ];
 
   const out: SkillMetadata[] = [];
   for (const name of names) {
@@ -189,8 +196,30 @@ export interface GetMatchedSkillsResult {
 }
 
 /**
+ * Filter skill metadata to only global skills and skills belonging to the given agent.
+ * Used before passing options to the LLM so other agents' skills are never offered.
+ * @param metadata - Full list of skill metadata (may include other agents' agent-scoped skills if from a future code path)
+ * @param agentId - Current agent id
+ * @returns Subset: scope === 'global' or (scope === 'agent' and skill is under getAgentSkillsDir(agentId))
+ */
+export function filterSkillsForAgent(
+  metadata: SkillMetadata[],
+  agentId: string,
+): SkillMetadata[] {
+  const agentDir = getAgentSkillsDir(agentId);
+  return metadata.filter((meta) => {
+    if (meta.scope === "global") return true;
+    if (meta.scope === "agent") {
+      return meta.agentId === agentId || meta.sourcePath.startsWith(agentDir);
+    }
+    return false;
+  });
+}
+
+/**
  * Get matched skills content for the system prompt: discover skills, match to user message,
  * load full body for matched only, return content and skill names.
+ * Only global skills and the current agent's local skills are offered to the LLM.
  * @param ctx - App context
  * @param agentId - Agent identifier
  * @param userMessage - Current user message
@@ -203,12 +232,18 @@ export async function getMatchedSkillsContent(
   userMessage: string,
   options: MatchSkillsOptions = {},
 ): Promise<GetMatchedSkillsResult> {
-  const metadata = getAvailableSkillsMetadata(ctx, agentId);
+  const rawMetadata = getAvailableSkillsMetadata(ctx, agentId);
+  const metadata = filterSkillsForAgent(rawMetadata, agentId);
   let matched: SkillMetadata[] = [];
 
   if (options.providerFactory) {
     try {
-      matched = await selectSkillsWithModel(ctx, userMessage, metadata, options.providerFactory);
+      matched = await selectSkillsWithModel(
+        ctx,
+        userMessage,
+        metadata,
+        options.providerFactory,
+      );
     } catch {
       matched = [];
     }

@@ -34,14 +34,14 @@ describe("tool registry", () => {
       expect(otherNames.has("tool_deregister")).toBe(false);
     });
 
-    it("includes shared tools for both maia and non-maia; Maia shell is always available", () => {
+    it("includes find_tool and find_skill for both maia and non-maia", () => {
       const maiaTools = getToolsForAgent("maia");
       const otherTools = getToolsForAgent("other");
 
-      expect(maiaTools.some((t) => t.name === "terminal_exec")).toBe(true);
-      expect(otherTools.some((t) => t.name === "terminal_exec")).toBe(true);
       expect(maiaTools.some((t) => t.name === "find_tool")).toBe(true);
       expect(otherTools.some((t) => t.name === "find_tool")).toBe(true);
+      expect(maiaTools.some((t) => t.name === "find_skill")).toBe(true);
+      expect(otherTools.some((t) => t.name === "find_skill")).toBe(true);
     });
   });
 
@@ -66,16 +66,23 @@ describe("tool registry", () => {
   });
 
   describe("getMinimalToolDefsForAgent", () => {
-    it("hides file management tools from the minimal tool set", () => {
+    it("returns only find_tool and find_skill for every agent", () => {
       const defs = getMinimalToolDefsForAgent("maia");
       const names = new Set(defs.map((d) => d.name));
 
-      expect(names.has("terminal_exec")).toBe(true);
+      expect(names.size).toBe(2);
       expect(names.has("find_tool")).toBe(true);
+      expect(names.has("find_skill")).toBe(true);
+      expect(names.has("terminal_exec")).toBe(false);
       expect(names.has("file_list")).toBe(false);
-      expect(names.has("file_read")).toBe(false);
-      expect(names.has("file_write")).toBe(false);
-      expect(names.has("file_exists")).toBe(false);
+    });
+
+    it("returns same minimal set for maia and non-maia", () => {
+      const maiaDefs = getMinimalToolDefsForAgent("maia");
+      const otherDefs = getMinimalToolDefsForAgent("other");
+      const maiaNames = new Set(maiaDefs.map((d) => d.name));
+      const otherNames = new Set(otherDefs.map((d) => d.name));
+      expect(maiaNames).toEqual(otherNames);
     });
   });
 
@@ -115,7 +122,11 @@ describe("tool registry", () => {
         name: "clash",
         description: "Clash",
         functions: [
-          { name: "terminal_exec", description: "Clash with built-in", parameters: {} },
+          {
+            name: "terminal_exec",
+            description: "Clash with built-in",
+            parameters: {},
+          },
         ],
       });
       const readFile = (filePath: string): string => {

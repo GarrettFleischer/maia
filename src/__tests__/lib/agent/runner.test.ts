@@ -362,7 +362,7 @@ describe("runAgent", () => {
     expect(systemContent).toContain("You are agent");
   });
 
-  it("system message omits last 3 rounds (smart context and chat_read used for prior context)", async () => {
+  it("system message omits last 3 rounds (smart context and find_tool used for prior context)", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     appendEntry(
@@ -460,7 +460,7 @@ describe("runAgent", () => {
     expect(systemContent).toContain("You are agent");
   });
 
-  it("when more than 3 rounds exist, system includes chat_read note (no verbatim recent thread)", async () => {
+  it("when more than 3 rounds exist, system includes find_tool note (no verbatim recent thread)", async () => {
     const ts = "2020-01-01T00:00:00.000Z";
     for (let i = 0; i < 4; i++) {
       appendEntry(
@@ -495,7 +495,7 @@ describe("runAgent", () => {
       () => {},
     );
     expect(systemContent).not.toContain("## Recent thread");
-    expect(systemContent).toContain("**chat_read**");
+    expect(systemContent).toContain("**find_tool**");
     expect(systemContent).toContain("You are agent");
   });
 
@@ -760,7 +760,7 @@ describe("runAgent", () => {
     ).toBe(true);
   });
 
-  it("stores tool calls in history so agents can retrieve them via chat_read", async () => {
+  it("stores tool calls in history so agents can retrieve them via find_tool", async () => {
     seedIdentityFiles(ctx.fs as FakeFs, "maia");
     const now = new Date().toISOString();
     appendEntry(ctx, sessionId, {
@@ -899,6 +899,10 @@ describe("runAgent", () => {
     expect(out).toContain("Active skills");
     expect(out).toContain("deploy-app");
 
+    expect(lastDone.fullPrompt).toBeDefined();
+    expect(String(lastDone.fullPrompt)).toContain("--- SYSTEM ---");
+    expect(String(lastDone.fullPrompt)).toContain("--- USER ---");
+
     smartBlockSpy.mockRestore();
     skillsSpy.mockRestore();
   });
@@ -934,6 +938,11 @@ describe("runAgent", () => {
     expect(forSession.length).toBeGreaterThan(1);
     const last = forSession[forSession.length - 1];
     expect(last.run.phases.length).toBeGreaterThan(0);
+    // No duplicate phase entries: each phase appears at most once (update-in-place, not push).
+    const phaseNames = last.run.phases.map(
+      (p: { phase: string }) => p.phase,
+    ) as string[];
+    expect(new Set(phaseNames).size).toBe(phaseNames.length);
   });
 
   it("includes AGENTS.md from agent dir as full system command when present", async () => {
@@ -1043,5 +1052,90 @@ describe("runAgent", () => {
         typeof (e as { result: { error?: string } }).result?.error === "string",
     );
     expect(errResult).toBeDefined();
+  });
+
+  it("includes only the most recent thinking bubble in the next request when tool calls follow", async () => {
+    seedIdentityFiles(ctx.fs as FakeFs, "maia");
+    const THINKING_TEXT = "I will call cron_list to list jobs.";
+    let secondRequestAssistantContent: string | undefined;
+    let completeCallCount = 0;
+    const provider: AIProvider = {
+      async complete(messages, _tools, onToken, options) {
+        completeCallCount++;
+        if (completeCallCount === 1) {
+          options?.onThinkingToken?.(THINKING_TEXT);
+          onToken("");
+          return {
+            content: "",
+            toolCalls: [{ id: "tc-1", name: "cron_list", args: {} }],
+            stopped: false,
+          };
+        }
+        const assistantMsg = [...messages]
+          .reverse()
+          .find((m) => m.role === "assistant");
+        secondRequestAssistantContent =
+          assistantMsg && typeof assistantMsg.content === "string"
+            ? assistantMsg.content
+            : undefined;
+        onToken("Done.");
+        return { content: "Done.", toolCalls: [], stopped: true };
+      },
+    };
+    await runAgent(
+      ctx,
+      () => provider,
+      "maia",
+      sessionId,
+      "list cron jobs",
+      () => {},
+    );
+    expect(completeCallCount).toBe(2);
+    expect(secondRequestAssistantContent).toBeDefined();
+    expect(secondRequestAssistantContent).toContain("Reasoning:");
+    expect(secondRequestAssistantContent).toContain(THINKING_TEXT);
+    expect(secondRequestAssistantContent).toMatch(
+      new RegExp(
+        `^Reasoning: ${THINKING_TEXT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n\n`,
+      ),
+    );
+  });
+
+  it("emits tool_result with non-null result on success (never null)", async () => {
+    let callCount = 0;
+    const provider: AIProvider = {
+      async complete(_messages, _tools, onToken) {
+        callCount++;
+        if (callCount === 1) {
+          onToken("");
+          return {
+            content: "",
+            toolCalls: [{ id: "tc-1", name: "cron_list", args: {} }],
+            stopped: false,
+          };
+        }
+        onToken("Done");
+        return { content: "Done", toolCalls: [], stopped: true };
+      },
+    };
+    const toolResults: SSEEvent[] = [];
+    await runAgent(
+      ctx,
+      () => provider,
+      "maia",
+      sessionId,
+      "list cron jobs",
+      (e) => {
+        if (e.type === "tool_result") toolResults.push(e);
+      },
+    );
+    expect(toolResults.length).toBeGreaterThanOrEqual(1);
+    const successResult = toolResults.find(
+      (e) =>
+        e.type === "tool_result" && (e as { result: unknown }).result != null,
+    );
+    expect(successResult).toBeDefined();
+    expect((successResult as { result: unknown }).result).not.toBeNull();
+    expect((successResult as { result: unknown }).result).not.toBeUndefined();
   });
 });

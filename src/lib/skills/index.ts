@@ -4,7 +4,12 @@
  * @module lib/skills
  */
 
-export type { SkillMetadata, Skill } from "./types";
+export type {
+  SkillMetadata,
+  SkillMetadataBase,
+  Skill,
+  SkillScope,
+} from "./types";
 export { parseSkillFrontmatter } from "./parse";
 export type { ParsedSkill } from "./parse";
 export {
@@ -16,5 +21,6 @@ export {
 export {
   matchSkillsToMessage,
   getMatchedSkillsContent,
+  filterSkillsForAgent,
 } from "./match";
 export type { MatchSkillsOptions, GetMatchedSkillsResult } from "./match";

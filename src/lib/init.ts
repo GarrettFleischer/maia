@@ -3,7 +3,13 @@
 
 import path from "path";
 import type { AppContext } from "./context";
-import { getAgentsDir, getDefaultSkillsDir, getSkillsDir } from "./data-dir";
+import {
+  getAgentsDir,
+  getDefaultSkillsDir,
+  getDefaultMaiaSkillsDir,
+  getSkillsDir,
+  getAgentSkillsDir,
+} from "./data-dir";
 import { copyDefaultAgentFiles } from "./tools/agent-management";
 import { listSkillFiles } from "./skills";
 
@@ -38,14 +44,47 @@ function seedDefaultGlobalSkills(ctx: AppContext): void {
   }
 }
 
+/**
+ * Seed Maia's skills from defaults/maia/skills into data/agents/maia/skills.
+ * Copies only when Maia's skills directory is missing or has no .md files; existing skills are never overwritten.
+ * @param ctx - Application context (fs)
+ */
+function seedDefaultMaiaSkills(ctx: AppContext): void {
+  const maiaSkillsDir = getAgentSkillsDir("maia");
+  const defaultMaiaSkillsDir = getDefaultMaiaSkillsDir();
+
+  if (!ctx.fs.exists(defaultMaiaSkillsDir)) return;
+
+  if (ctx.fs.exists(maiaSkillsDir)) {
+    const existing = listSkillFiles(ctx.fs, maiaSkillsDir);
+    if (existing.length > 0) return;
+  }
+
+  ctx.fs.mkdirp(maiaSkillsDir);
+  const defaultFiles = listSkillFiles(ctx.fs, defaultMaiaSkillsDir);
+  for (const name of defaultFiles) {
+    const srcPath = path.join(defaultMaiaSkillsDir, name);
+    const content = ctx.fs.readFile(srcPath);
+    if (typeof content !== "string") continue;
+    const destPath = path.join(maiaSkillsDir, name);
+    if (!ctx.fs.exists(destPath)) {
+      ctx.fs.writeFile(destPath, content);
+    }
+  }
+}
+
 export function initMaiaAgent(ctx: AppContext): void {
-  const existing = ctx.db.prepare("SELECT id FROM agents WHERE id = 'maia'").get();
+  const existing = ctx.db
+    .prepare("SELECT id FROM agents WHERE id = 'maia'")
+    .get();
   if (!existing) {
     const now = new Date().toISOString();
-    ctx.db.prepare(
-      `INSERT INTO agents (id, name, model, status, system_prompt_extra, created_at, updated_at)
-       VALUES ('maia', 'Maia', 'ollama/llama3.2', 'active', NULL, ?, ?)`
-    ).run(now, now);
+    ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, model, status, system_prompt_extra, created_at, updated_at)
+       VALUES ('maia', 'Maia', 'ollama/llama3.2', 'active', NULL, ?, ?)`,
+      )
+      .run(now, now);
 
     const maiaDir = path.join(getAgentsDir(), "maia");
     if (!ctx.fs.exists(maiaDir)) {
@@ -57,4 +96,6 @@ export function initMaiaAgent(ctx: AppContext): void {
 
   // Always attempt to seed global skills; no-op when skills already exist.
   seedDefaultGlobalSkills(ctx);
+  // Seed Maia's skills when her skills dir is empty or missing.
+  seedDefaultMaiaSkills(ctx);
 }

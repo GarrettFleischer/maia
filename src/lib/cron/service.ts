@@ -1,7 +1,7 @@
 /**
  * @fileoverview In-process cron job scheduler: loads jobs from cron_jobs table,
  * registers them with node-cron, and runs agent messages when they fire.
- * Syncs per-agent run jobs so each active agent (except Maia) has a staggered cron job.
+ * Agent cron jobs are created by Maia via cron_schedule; no automatic per-agent jobs.
  * @module lib/cron/service
  */
 import cron from "node-cron";
@@ -12,12 +12,9 @@ import type { RunAgentFn } from "../agent/runner";
 import { fireHeartbeat } from "../heartbeat";
 import { getSettings } from "../settings";
 import { enqueue } from "../queue/llm-queue";
-import { listAgents } from "../agent/identity";
 import {
   BUILTIN_HEARTBEAT_JOB_ID,
-  AGENT_RUN_JOB_ID_PREFIX,
   minutesToCronExpression,
-  staggeredAgentRunCronExpression,
 } from "./expression";
 
 export interface CronSchedulerOptions {
@@ -176,79 +173,6 @@ function scheduleJob(
   }
 }
 
-/**
- * Syncs agent-run cron jobs with active agents: one staggered job per active agent (except Maia).
- * Each job wakes the agent with cron_echo and empty message; no hardcoded prompt.
- * @param ctx - Application context
- */
-export function syncAgentRunJobs(ctx: AppContext): void {
-  const agents = listAgents(ctx).filter(
-    (a) => a.status === "active" && a.id !== "maia",
-  );
-  const interval = getSettings(ctx).heartbeatIntervalMinutes;
-
-  ctx.db
-    .prepare("DELETE FROM cron_jobs WHERE id LIKE ?")
-    .run(AGENT_RUN_JOB_ID_PREFIX + "%");
-
-  const now = new Date().toISOString();
-  for (let i = 0; i < agents.length; i++) {
-    const agent = agents[i]!;
-    const jobId = AGENT_RUN_JOB_ID_PREFIX + agent.id;
-    const expression = staggeredAgentRunCronExpression(
-      interval,
-      i,
-      agents.length,
-    );
-    const toolArgs = JSON.stringify({ msg: "" });
-    ctx.db
-      .prepare(
-        `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
-       VALUES (?, ?, ?, ?, 1, ?, 'cron_echo', ?)`,
-      )
-      .run(jobId, expression, "Scheduled run", agent.id, now, toolArgs);
-  }
-}
-
-/**
- * Reconciles in-memory scheduled tasks with cron_jobs: schedules any new agent-run jobs
- * and stops any agent-run jobs that no longer exist in the DB.
- * No-op if the cron scheduler has not been started.
- * @param ctx - Application context
- */
-export function reconcileAgentRunTasks(ctx: AppContext): void {
-  if (!_started || !_ctx || !_runAgentFn) return;
-
-  const rows = ctx.db
-    .prepare(
-      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id LIKE ?",
-    )
-    .all(AGENT_RUN_JOB_ID_PREFIX + "%") as {
-    id: string;
-    expression: string;
-    task_description: string;
-    agent_id: string;
-    tool_name: string;
-    tool_args: string;
-  }[];
-
-  for (const row of rows) {
-    if (!_taskMap.has(row.id)) {
-      scheduleJob(_ctx, _runAgentFn, row, false);
-    }
-  }
-
-  for (const [jobId, task] of _taskMap.entries()) {
-    if (
-      jobId.startsWith(AGENT_RUN_JOB_ID_PREFIX) &&
-      !rows.some((r) => r.id === jobId)
-    ) {
-      task.stop();
-      _taskMap.delete(jobId);
-    }
-  }
-}
-
 export function startCronScheduler(
   ctx: AppContext,
   runAgentFn: RunAgentFn,
@@ -258,8 +182,6 @@ export function startCronScheduler(
   _started = true;
   _ctx = ctx;
   _runAgentFn = runAgentFn;
-
-  syncAgentRunJobs(ctx);
 
   const runOnInit = options.runOnInit ?? false;
   const rows = ctx.db
@@ -335,6 +257,21 @@ export function refreshHeartbeatJob(ctx: AppContext): void {
     | undefined;
   if (row && cron.validate(row.expression)) {
     scheduleJob(_ctx, _runAgentFn, row, false);
+  }
+}
+
+/**
+ * Stops and removes a cron job from the in-process scheduler (e.g. after the job was deleted from the DB).
+ * No-op if the scheduler is not started or the job is not currently scheduled.
+ * @param jobId - Cron job id to unschedule
+ */
+export function unscheduleCronJob(jobId: string): void {
+  if (!_started) return;
+
+  const existing = _taskMap.get(jobId);
+  if (existing) {
+    existing.stop();
+    _taskMap.delete(jobId);
   }
 }
 

@@ -66,6 +66,30 @@ describe("cronScheduleTool", () => {
     expect(JSON.parse(rows[0].tool_args as string)).toEqual({ q: "test" });
   });
 
+  it("accepts args as JSON string and persists correctly", async () => {
+    const ctx = makeToolCtx();
+    ctx.db
+      .prepare("DELETE FROM cron_jobs WHERE id != 'builtin-heartbeat'")
+      .run();
+    const id = await cronScheduleTool.execute(
+      {
+        id: "maia",
+        expr: "0 9 * * *",
+        tool: "task_list",
+        args: "{}",
+        desc: "Daily task summary",
+      },
+      ctx,
+    );
+    expect(typeof id).toBe("string");
+    const rows = ctx.db
+      .prepare("SELECT * FROM cron_jobs WHERE id = ?")
+      .all(id) as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tool_name).toBe("task_list");
+    expect(JSON.parse(rows[0].tool_args as string)).toEqual({});
+  });
+
   it("throws when target agent does not exist", async () => {
     const ctx = makeToolCtx();
     await expect(
@@ -153,6 +177,21 @@ describe("cronListTool", () => {
 });
 
 describe("cronDeleteTool", () => {
+  it("returns explicit success payload (never null)", async () => {
+    const ctx = makeToolCtx();
+    const id = await cronScheduleTool.execute(
+      {
+        id: "maia",
+        expr: "0 * * * *",
+        tool: "cron_echo",
+        args: { msg: "Delete me" },
+      },
+      ctx,
+    );
+    const result = await cronDeleteTool.execute({ id: id as string }, ctx);
+    expect(result).toEqual({ success: true, message: "Cron job deleted." });
+  });
+
   it("deletes a non-built-in job", async () => {
     const ctx = makeToolCtx();
     const id = await cronScheduleTool.execute(
@@ -178,10 +217,27 @@ describe("cronDeleteTool", () => {
     ).rejects.toThrow();
   });
 
-  it("throws when job is built-in", async () => {
+  it("deletes a built-in job when requested", async () => {
     const ctx = makeToolCtx();
-    await expect(
-      cronDeleteTool.execute({ id: "builtin-heartbeat" }, ctx),
-    ).rejects.toThrow("Cannot delete built-in");
+    const now = new Date().toISOString();
+    ctx.db
+      .prepare(
+        "INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "builtin-heartbeat",
+        "*/30 * * * *",
+        "Heartbeat",
+        "maia",
+        1,
+        now,
+        "cron_echo",
+        "{}",
+      );
+    await cronDeleteTool.execute({ id: "builtin-heartbeat" }, ctx);
+    const rows = ctx.db
+      .prepare("SELECT * FROM cron_jobs WHERE id = ?")
+      .all("builtin-heartbeat") as Record<string, unknown>[];
+    expect(rows).toHaveLength(0);
   });
 });

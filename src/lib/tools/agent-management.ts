@@ -3,8 +3,11 @@ import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import { zodToJsonSchema } from "../zod-to-json";
 import { getSettings } from "../settings";
-import { getAgentsDir, getDefaultAgentDir, getDefaultMaiaDir } from "../data-dir";
-import { syncAgentRunJobs, reconcileAgentRunTasks } from "../cron/service";
+import {
+  getAgentsDir,
+  getDefaultAgentDir,
+  getDefaultMaiaDir,
+} from "../data-dir";
 import type { Tool, ToolContext } from "./types";
 import type { AgentDefinition } from "../types";
 import type { AppContext } from "../context";
@@ -14,11 +17,18 @@ function makeTool<S extends z.ZodTypeAny>(
   name: string,
   description: string,
   schema: S,
-  execute: (args: z.infer<S>, ctx: ToolContext) => Promise<unknown>
+  execute: (args: z.infer<S>, ctx: ToolContext) => Promise<unknown>,
 ): Tool<z.infer<S>> {
   return {
-    name, description, schema, execute,
-    toDefinition: () => ({ name, description, parameters: zodToJsonSchema(schema) }),
+    name,
+    description,
+    schema,
+    execute,
+    toDefinition: () => ({
+      name,
+      description,
+      parameters: zodToJsonSchema(schema),
+    }),
   };
 }
 
@@ -31,7 +41,8 @@ const agentCreateSchema = z.object({
 
 /** Inline fallbacks when defaults/agent file is missing (e.g. in tests). */
 const FALLBACK_SOUL = "# Soul\n\nI am {{name}}, a helpful AI agent.\n";
-const FALLBACK_AGENTS_MD = "# How you function\n\nFollow AGENTS.md from project root or defaults/agent. Copy the full system command there into this file for a complete prompt.\n";
+const FALLBACK_AGENTS_MD =
+  "# How you function\n\nFollow AGENTS.md from project root or defaults/agent. Copy the full system command there into this file for a complete prompt.\n";
 
 /** Default model when agent_create receives a model not in the whitelist. */
 const DEFAULT_MODEL = "openrouter/free";
@@ -43,7 +54,11 @@ const DEFAULT_MODEL = "openrouter/free";
  * @param fallback - Used when file is missing or unreadable
  * @returns File content or fallback
  */
-function readDefaultAgentFile(ctx: AppContext, filename: string, fallback: string): string {
+function readDefaultAgentFile(
+  ctx: AppContext,
+  filename: string,
+  fallback: string,
+): string {
   const filePath = path.join(getDefaultAgentDir(), filename);
   try {
     const raw = ctx.fs.readFile(filePath);
@@ -121,7 +136,7 @@ function copyDefaultFactFiles(
   ctx: AppContext,
   defaultDir: string,
   agentDir: string,
-  subdir: "user" | "memory"
+  subdir: "user" | "memory",
 ): void {
   const srcDir = path.join(defaultDir, subdir);
   if (!ctx.fs.exists(srcDir)) return;
@@ -152,16 +167,24 @@ export function copyDefaultAgentFiles(
   ctx: AppContext,
   agentDir: string,
   agentName: string,
-  agentId?: string
+  agentId?: string,
 ): void {
   ctx.fs.mkdirp(agentDir);
   ctx.fs.mkdirp(path.join(agentDir, "workspace"));
   ctx.fs.mkdirp(path.join(agentDir, "memory"));
   ctx.fs.mkdirp(path.join(agentDir, "user"));
   const defaultDir = getDefaultDirForAgent(agentId);
-  const soulContent = readDefaultIdentityFile(ctx, "SOUL.md", FALLBACK_SOUL, agentId).replace(/\{\{name\}\}/g, agentName);
+  const soulContent = readDefaultIdentityFile(
+    ctx,
+    "SOUL.md",
+    FALLBACK_SOUL,
+    agentId,
+  ).replace(/\{\{name\}\}/g, agentName);
   ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), soulContent);
-  ctx.fs.writeFile(path.join(agentDir, "AGENTS.md"), readDefaultAgentsMd(ctx, agentId));
+  ctx.fs.writeFile(
+    path.join(agentDir, "AGENTS.md"),
+    readDefaultAgentsMd(ctx, agentId),
+  );
   copyDefaultFactFiles(ctx, defaultDir, agentDir, "user");
   copyDefaultFactFiles(ctx, defaultDir, agentDir, "memory");
 }
@@ -172,24 +195,27 @@ export const agentCreateTool = makeTool(
   agentCreateSchema,
   async (args, ctx) => {
     const settings = getSettings(ctx);
-    const model = settings.whitelistedModels.includes(args.model) ? args.model : DEFAULT_MODEL;
+    const model = settings.whitelistedModels.includes(args.model)
+      ? args.model
+      : DEFAULT_MODEL;
 
     const id = uuidv4();
     const now = new Date().toISOString();
-    ctx.db.prepare(
-      `INSERT INTO agents (id, name, model, system_prompt_extra, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'active', ?, ?)`
-    ).run(id, args.name, model, args.extra ?? null, now, now);
+    ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, model, system_prompt_extra, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      )
+      .run(id, args.name, model, args.extra ?? null, now, now);
 
     const agentDir = path.join(getAgentsDir(), id);
     copyDefaultAgentFiles(ctx, agentDir, args.name, id);
 
-    if (args.soul !== undefined) ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), args.soul);
+    if (args.soul !== undefined)
+      ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), args.soul);
 
-    syncAgentRunJobs(ctx);
-    reconcileAgentRunTasks(ctx);
     return id;
-  }
+  },
 );
 
 export const agentDeleteTool = makeTool(
@@ -197,11 +223,12 @@ export const agentDeleteTool = makeTool(
   "Delete an agent by ID. Use agent_list first to find the agent ID. Maia only. Example: agent_delete({ id: 'uuid' }).",
   z.object({ id: z.string().describe("Agent ID") }),
   async ({ id: agentId }, ctx) => {
-    ctx.db.prepare("UPDATE agents SET status = 'deleted', updated_at = ? WHERE id = ?")
+    ctx.db
+      .prepare(
+        "UPDATE agents SET status = 'deleted', updated_at = ? WHERE id = ?",
+      )
       .run(new Date().toISOString(), agentId);
-    syncAgentRunJobs(ctx);
-    reconcileAgentRunTasks(ctx);
-  }
+  },
 );
 
 export const agentListTool = makeTool(
@@ -209,8 +236,14 @@ export const agentListTool = makeTool(
   "List all agents. Maia only. Example: agent_list({}).",
   z.object({}),
   async (_args, ctx) => {
-    return (ctx.db.prepare("SELECT * FROM agents WHERE status != 'deleted' ORDER BY created_at").all() as Record<string, unknown>[]).map(rowToAgent);
-  }
+    return (
+      ctx.db
+        .prepare(
+          "SELECT * FROM agents WHERE status != 'deleted' ORDER BY created_at",
+        )
+        .all() as Record<string, unknown>[]
+    ).map(rowToAgent);
+  },
 );
 
 export const agentGetTool = makeTool(
@@ -218,14 +251,26 @@ export const agentGetTool = makeTool(
   "Get an agent's definition and identity files. Maia only. Example: agent_get({ id: 'uuid' }).",
   z.object({ id: z.string().describe("Agent ID") }),
   async ({ id: agentId }, ctx) => {
-    const row = ctx.db.prepare("SELECT * FROM agents WHERE id = ?").get(agentId) as Record<string, unknown> | undefined;
+    const row = ctx.db
+      .prepare("SELECT * FROM agents WHERE id = ?")
+      .get(agentId) as Record<string, unknown> | undefined;
     if (!row) return null;
     const agentDir = path.join(getAgentsDir(), agentId);
     const read = (file: string) => {
-      try { return ctx.fs.readFile(path.join(agentDir, file)); } catch { return ""; }
+      try {
+        return ctx.fs.readFile(path.join(agentDir, file));
+      } catch {
+        return "";
+      }
     };
-    return { agent: rowToAgent(row), soul: read("SOUL.md"), memory: read("MEMORY.md"), user: read("USER.md"), agentsMd: read("AGENTS.md") };
-  }
+    return {
+      agent: rowToAgent(row),
+      soul: read("SOUL.md"),
+      memory: read("MEMORY.md"),
+      user: read("USER.md"),
+      agentsMd: read("AGENTS.md"),
+    };
+  },
 );
 
 function rowToAgent(r: Record<string, unknown>): AgentDefinition {

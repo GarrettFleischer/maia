@@ -5,6 +5,7 @@ import type {
   Session,
   SessionMeta,
   SmartContextRun,
+  SmartContextRunEntry,
 } from "./types";
 
 // -- Session CRUD --
@@ -144,30 +145,14 @@ export function getSession(ctx: AppContext, id: string): Session | null {
     .all(id) as Record<string, unknown>[];
 
   const meta = rowToMeta(row);
-  const smartContextRunRaw = row.smart_context_run as string | null | undefined;
-  const smartContextAfterMessageIndex = row.smart_context_after_message_index as
-    | number
-    | null
-    | undefined;
-  let smartContextRun: SmartContextRun | null | undefined;
-  if (smartContextRunRaw != null && smartContextRunRaw !== "") {
-    try {
-      smartContextRun = JSON.parse(smartContextRunRaw) as SmartContextRun;
-    } catch {
-      smartContextRun = null;
-    }
-  } else {
-    smartContextRun = null;
-  }
+  const smartContextRuns = parseSmartContextRuns(
+    row.smart_context_runs as string | null | undefined,
+  );
   return {
     ...meta,
     original: original.map(rowToEntry),
     compressed: compressed.map(rowToEntry),
-    smartContextRun: smartContextRun ?? null,
-    smartContextAfterMessageIndex:
-      typeof smartContextAfterMessageIndex === "number"
-        ? smartContextAfterMessageIndex
-        : null,
+    smartContextRuns,
   };
 }
 
@@ -205,30 +190,14 @@ export function getSessionRecent(
 
   const original = originalDesc.reverse().map(rowToEntry);
   const compressed = compressedDesc.reverse().map(rowToEntry);
-  const smartContextRunRaw = row.smart_context_run as string | null | undefined;
-  const smartContextAfterMessageIndex = row.smart_context_after_message_index as
-    | number
-    | null
-    | undefined;
-  let smartContextRun: SmartContextRun | null | undefined;
-  if (smartContextRunRaw != null && smartContextRunRaw !== "") {
-    try {
-      smartContextRun = JSON.parse(smartContextRunRaw) as SmartContextRun;
-    } catch {
-      smartContextRun = null;
-    }
-  } else {
-    smartContextRun = null;
-  }
+  const smartContextRuns = parseSmartContextRuns(
+    row.smart_context_runs as string | null | undefined,
+  );
   return {
     ...rowToMeta(row),
     original,
     compressed,
-    smartContextRun: smartContextRun ?? null,
-    smartContextAfterMessageIndex:
-      typeof smartContextAfterMessageIndex === "number"
-        ? smartContextAfterMessageIndex
-        : null,
+    smartContextRuns,
   };
 }
 
@@ -273,12 +242,36 @@ export function updateSessionMeta(
 }
 
 /**
- * Updates the session's smart context run and after-message index.
- * Persists a single object per run so the UI can restore phase bubbles on refresh.
+ * Parses smart_context_runs column to SmartContextRunEntry[].
+ * @param raw - JSON string or null/undefined
+ * @returns Array of entries, or [] when missing or invalid
+ */
+function parseSmartContextRuns(
+  raw: string | null | undefined,
+): SmartContextRunEntry[] {
+  if (raw == null || raw === "") return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (e): e is SmartContextRunEntry =>
+        e != null &&
+        typeof e === "object" &&
+        typeof (e as SmartContextRunEntry).afterMessageIndex === "number" &&
+        typeof (e as SmartContextRunEntry).run === "object",
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Updates the session's smart context runs: upserts one entry by afterMessageIndex
+ * so the UI can restore all rounds' phase bubbles on refresh.
  * @param ctx - Application context
  * @param sessionId - Session to update
  * @param run - Full smart context run (phases + outputs)
- * @param afterMessageIndex - Message index after which to show smart context
+ * @param afterMessageIndex - Message index after which to show this run
  */
 export function updateSessionSmartContext(
   ctx: AppContext,
@@ -286,32 +279,61 @@ export function updateSessionSmartContext(
   run: SmartContextRun,
   afterMessageIndex: number,
 ): void {
+  const row = ctx.db
+    .prepare("SELECT smart_context_runs FROM sessions WHERE id = ?")
+    .get(sessionId) as { smart_context_runs: string | null } | undefined;
+  const entries = parseSmartContextRuns(row?.smart_context_runs ?? null);
+  const idx = entries.findIndex(
+    (e) => e.afterMessageIndex === afterMessageIndex,
+  );
+  const entry: SmartContextRunEntry = { afterMessageIndex, run };
+  const next =
+    idx >= 0
+      ? entries.map((e, i) => (i === idx ? entry : e))
+      : [...entries, entry];
   ctx.db
     .prepare(
-      `UPDATE sessions SET smart_context_run = ?, smart_context_after_message_index = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE sessions SET smart_context_runs = ?, updated_at = ? WHERE id = ?`,
     )
-    .run(
-      JSON.stringify(run),
-      afterMessageIndex,
-      new Date().toISOString(),
-      sessionId,
-    );
+    .run(JSON.stringify(next), new Date().toISOString(), sessionId);
 }
 
 /**
  * Clears the session's smart context (e.g. when history is truncated on re-send).
+ * When keepThroughMessageIndex is provided, only runs after that index are removed.
  * @param ctx - Application context
  * @param sessionId - Session to clear
+ * @param keepThroughMessageIndex - When set, keep runs with afterMessageIndex <= this value; when omitted, clear all
  */
 export function clearSessionSmartContext(
   ctx: AppContext,
   sessionId: string,
+  keepThroughMessageIndex?: number,
 ): void {
+  if (keepThroughMessageIndex === undefined) {
+    ctx.db
+      .prepare(
+        `UPDATE sessions SET smart_context_runs = NULL, updated_at = ? WHERE id = ?`,
+      )
+      .run(new Date().toISOString(), sessionId);
+    return;
+  }
+  const row = ctx.db
+    .prepare("SELECT smart_context_runs FROM sessions WHERE id = ?")
+    .get(sessionId) as { smart_context_runs: string | null } | undefined;
+  const entries = parseSmartContextRuns(row?.smart_context_runs ?? null);
+  const next = entries.filter(
+    (e) => e.afterMessageIndex <= keepThroughMessageIndex,
+  );
   ctx.db
     .prepare(
-      `UPDATE sessions SET smart_context_run = NULL, smart_context_after_message_index = NULL, updated_at = ? WHERE id = ?`,
+      `UPDATE sessions SET smart_context_runs = ?, updated_at = ? WHERE id = ?`,
     )
-    .run(new Date().toISOString(), sessionId);
+    .run(
+      next.length === 0 ? null : JSON.stringify(next),
+      new Date().toISOString(),
+      sessionId,
+    );
 }
 
 /**
@@ -430,7 +452,7 @@ export function truncateHistoryAfterIndex(
   ctx.db
     .prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")
     .run(new Date().toISOString(), sessionId);
-  clearSessionSmartContext(ctx, sessionId);
+  clearSessionSmartContext(ctx, sessionId, keepThroughIndex);
 }
 
 // -- Fuzzy search --

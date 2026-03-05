@@ -285,10 +285,14 @@ async function _runLoop(
         const parsed = tool.schema.safeParse(toolArgs);
         if (parsed.success) {
           const result = await tool.execute(parsed.data, toolContext);
+          const normalized =
+            result === undefined || result === null
+              ? { success: true }
+              : result;
           const resultStr =
-            typeof result === "string"
-              ? result
-              : JSON.stringify(result ?? null);
+            typeof normalized === "string"
+              ? normalized
+              : JSON.stringify(normalized);
           const filtered = filterText(resultStr, `tool:${toolName}`);
           appendEntry(ctx, sessionId, {
             role: "tool_call",
@@ -335,7 +339,7 @@ async function _runLoop(
     }
   }
 
-  // Include last 3 rounds automatically (thinking entries omitted—display only). Tell agent how many more rounds exist so they use chat_read when needed. Use getSessionRecent in the hot path to avoid loading full history.
+  // Include last 3 rounds automatically (thinking entries omitted—display only). Tell agent how many more rounds exist so they can discover the right tool when needed. Use getSessionRecent in the hot path to avoid loading full history.
   const session = getSessionRecent(ctx, sessionId);
   const AUTO_INCLUDE_ROUNDS = 3;
   const totalRounds = getTotalUserRounds(ctx, sessionId);
@@ -348,10 +352,10 @@ async function _runLoop(
       : "";
   const roundsNote =
     roundsBefore > 0
-      ? `**Context:** You are seeing the last ${AUTO_INCLUDE_ROUNDS} conversation rounds below. There are **${roundsBefore}** more rounds before these. Use the **chat_read** tool with specific round numbers (e.g. rounds: [1, 2]) when you need full context for those rounds.\n\n`
+      ? `**Context:** You are seeing the last ${AUTO_INCLUDE_ROUNDS} conversation rounds below. There are **${roundsBefore}** more rounds before these. Use **find_tool** to discover how to read earlier rounds when you need full context.\n\n`
       : "";
   const recentThreadBlock = lastThreeBlock ? roundsNote + lastThreeBlock : "";
-  // Clarified commands only (no full rounds) for query extraction; agent can use chat_read(rounds: [n]) for full context.
+  // Clarified commands only (no full rounds) for query extraction; agent can use find_tool to discover how to read full context for rounds.
   const clarifiedCommandsBlock = [
     ...priorCommands.map((c) => `Round ${c.roundIndex}: ${c.resolvedCommand}`),
     `Round ${currentRoundIndex}: ${effectiveUserMessage}`,
@@ -440,7 +444,7 @@ async function _runLoop(
         } else {
           const prev = smartContextRunAccumulator.phases;
           const last = prev[prev.length - 1];
-          const isNewPhase = !last || last.phase !== phase || prev.length < 6;
+          const isNewPhase = !last || last.phase !== phase;
           if (isNewPhase) {
             smartContextRunAccumulator.phases.push({ phase, detail, output });
           } else {
@@ -448,8 +452,8 @@ async function _runLoop(
               smartContextRunAccumulator.phases.length - 1
             ] = {
               phase,
-              detail,
-              output,
+              detail: detail ?? last.detail,
+              output: output ?? last.output,
             };
           }
           if (phase === "done") {
@@ -463,8 +467,54 @@ async function _runLoop(
       providerFactory: contextProviderFactory,
     }),
   ]);
-  // Enhance the final done phase with active skills so the UI and persisted run
-  // show both included sources and skills in the smart context result.
+
+  // Build the full prompt (system + user + optional tool) so we can include it in the done phase for the UI.
+  const baseBlock =
+    smartResult.block || "## Smart context\n\nNo relevant prior context found.";
+  const sourcesSection =
+    "\n\n### Sources\n" +
+    (smartResult.sourceIds.length > 0
+      ? smartResult.sourceIds.map((id) => `- ${id}`).join("\n")
+      : "(none)");
+  const skillsSection =
+    "\n\n### Skills\n" +
+    (skillsResult.skillNames.length > 0
+      ? skillsResult.skillNames.map((n) => `- ${n}`).join("\n")
+      : "(none)");
+  const smartContextBlock = baseBlock + sourcesSection + skillsSection;
+
+  const systemPromptContent = buildSystemPrompt(
+    ctx,
+    agent,
+    skillsResult.content,
+  );
+  const contextNote =
+    totalRounds > AUTO_INCLUDE_ROUNDS
+      ? "Use **find_tool** to discover how to read earlier conversation rounds when you need full context.\n\n"
+      : "";
+  const combinedSystemContent = transformContext(
+    contextNote,
+    smartContextBlock,
+    systemPromptContent,
+  );
+  const messages: Message[] = convertToLlm(
+    combinedSystemContent,
+    effectiveUserMessage,
+    initialToolResult ?? undefined,
+  );
+
+  const fullPromptLines: string[] = [];
+  for (const m of messages) {
+    const role = m.role.toUpperCase();
+    fullPromptLines.push(`--- ${role} ---`);
+    fullPromptLines.push(m.content);
+    fullPromptLines.push("");
+  }
+  const fullPrompt = fullPromptLines.join("\n").trimEnd();
+  smartContextRunAccumulator.fullPrompt = fullPrompt;
+
+  // Enhance the final done phase with active skills and full prompt so the UI and persisted run
+  // show both included sources/skills and the exact prompt sent to the main LLM.
   const sourceCount = smartResult.sourceIds.length;
   const skillCount = skillsResult.skillNames.length;
   const combinedDoneDetail =
@@ -486,6 +536,19 @@ async function _runLoop(
       ? skillsResult.skillNames.map((name) => `- ${name}`)
       : ["(none)"]),
   ];
+
+  const toolsForAgent = getToolsForAgent(agent.id);
+  const skillsContent = skillsResult.content;
+  const toolsMentionedInSkills = toolsForAgent.filter((t) =>
+    skillsContent.includes(t.name),
+  );
+  if (toolsMentionedInSkills.length > 0) {
+    combinedDoneOutputLines.push("", "Relevant tools (from active skills):");
+    combinedDoneOutputLines.push(
+      ...toolsMentionedInSkills.map((t) => `- ${t.name}`),
+    );
+  }
+
   const combinedDoneOutput = combinedDoneOutputLines.join("\n");
 
   onEvent({
@@ -493,6 +556,7 @@ async function _runLoop(
     phase: "done",
     detail: combinedDoneDetail,
     output: combinedDoneOutput,
+    fullPrompt,
   });
 
   // Keep SmartContextRun in sync with the enhanced done phase (overwrite the last
@@ -500,7 +564,7 @@ async function _runLoop(
   {
     const prev = smartContextRunAccumulator.phases;
     const last = prev[prev.length - 1];
-    const isNewPhase = !last || last.phase !== "done" || prev.length < 6;
+    const isNewPhase = !last || last.phase !== "done" || prev.length < 5;
     if (isNewPhase) {
       smartContextRunAccumulator.phases.push({
         phase: "done",
@@ -529,57 +593,6 @@ async function _runLoop(
     "ms",
   );
 
-  const baseBlock =
-    smartResult.block || "## Smart context\n\nNo relevant prior context found.";
-  const sourcesSection =
-    "\n\n### Sources\n" +
-    (smartResult.sourceIds.length > 0
-      ? smartResult.sourceIds.map((id) => `- ${id}`).join("\n")
-      : "(none)");
-  const skillsSection =
-    "\n\n### Skills\n" +
-    (skillsResult.skillNames.length > 0
-      ? skillsResult.skillNames.map((n) => `- ${n}`).join("\n")
-      : "(none)");
-  const smartContextBlock = baseBlock + sourcesSection + skillsSection;
-
-  const systemPromptContent = buildSystemPrompt(
-    ctx,
-    agent,
-    skillsResult.content,
-  );
-  // Do not pass last 3 rounds into the final prompt; smart context already retrieves relevant prior context.
-  // Optional one-line note so the agent knows to use chat_read for earlier context when needed.
-  const contextNote =
-    totalRounds > AUTO_INCLUDE_ROUNDS
-      ? "Use the **chat_read** tool with specific round numbers (e.g. rounds: [1, 2]) when you need earlier conversation context; pass include_reasoning: true to include the agent's reasoning for those rounds.\n\n"
-      : "";
-  const combinedSystemContent = transformContext(
-    contextNote,
-    smartContextBlock,
-    systemPromptContent,
-  );
-  const messages: Message[] = convertToLlm(
-    combinedSystemContent,
-    effectiveUserMessage,
-    initialToolResult ?? undefined,
-  );
-
-  const fullPromptLines: string[] = [];
-  for (const m of messages) {
-    const role = m.role.toUpperCase();
-    fullPromptLines.push(`--- ${role} ---`);
-    fullPromptLines.push(m.content);
-    fullPromptLines.push("");
-  }
-  smartContextRunAccumulator.fullPrompt = fullPromptLines.join("\n").trimEnd();
-  if (
-    smartContextRunAccumulator.phases.length > 0 &&
-    smartContextRunAccumulator.doneDetail !== undefined
-  ) {
-    persistSmartContextRunPartial();
-  }
-
   let agentResponseContent = "";
   const agentEntry: Omit<HistoryEntry, "id"> = {
     role: "agent",
@@ -596,9 +609,10 @@ async function _runLoop(
   /**
    * Persists accumulated thinking to session history so it survives refresh/navigation.
    * Does not emit via EventSource to avoid duplicating the bubble already shown from the stream.
+   * @returns The content that was flushed, or empty string if none (so the loop can include only the most recent thinking in the next request).
    */
-  function flushThinking(): void {
-    if (thinkingAccumulator.current.length === 0) return;
+  function flushThinking(): string {
+    if (thinkingAccumulator.current.length === 0) return "";
     const content = thinkingAccumulator.current;
     thinkingAccumulator.current = "";
     appendEntry(ctx, sessionId, {
@@ -606,7 +620,11 @@ async function _runLoop(
       content,
       timestamp: new Date().toISOString(),
     });
+    return content;
   }
+
+  /** Most recent thinking flushed this turn; prepended to assistant message when appending to messages so the next request sees only one thinking bubble. */
+  const lastFlushedThinkingRef = { current: "" };
 
   const DEBUG_SEP = "────────────────────────────────────────────────────────";
   const DEBUG_BLOCK =
@@ -631,8 +649,9 @@ async function _runLoop(
         agentResponseContent += event.delta;
         onEvent({ type: "token", content: event.delta });
         break;
-      case "message_end":
-        flushThinking();
+      case "message_end": {
+        const flushed = flushThinking();
+        if (flushed) lastFlushedThinkingRef.current = flushed;
         if (event.toolCalls.length === 0) {
           const finalContent = event.content || agentResponseContent;
           agentEntry.content = finalContent;
@@ -654,6 +673,7 @@ async function _runLoop(
           resultRef.current = finalContent;
         }
         break;
+      }
       case "tool_execution_start":
         onEvent({ type: "tool_call", tool: event.toolName, args: event.args });
         break;
@@ -689,9 +709,8 @@ async function _runLoop(
     }
   }
 
-  // Agentic loop
+  // Agentic loop (no hard limit; runs until agent returns a final response)
   let loopCount = 0;
-  const MAX_LOOPS = 10;
 
   /** For Ollama agents: track current AbortController so cancel can abort the in-flight request. */
   const controllerRef: { current: AbortController | null } = { current: null };
@@ -715,7 +734,7 @@ async function _runLoop(
   try {
     handleAgentLoopEvent({ type: "agent_start" });
 
-    while (loopCount < MAX_LOOPS && resultRef.current === null) {
+    while (resultRef.current === null) {
       loopCount++;
       handleAgentLoopEvent({ type: "turn_start", loopIndex: loopCount });
 
@@ -765,7 +784,8 @@ async function _runLoop(
         messages,
         toolDefs,
         (token) => {
-          flushThinking();
+          const flushed = flushThinking();
+          if (flushed) lastFlushedThinkingRef.current = flushed;
           handleAgentLoopEvent({ type: "message_update", delta: token });
         },
         completeOptions,
@@ -832,17 +852,23 @@ async function _runLoop(
         try {
           const parsed = tool.schema.parse(tc.args);
           const result = await tool.execute(parsed, toolContext);
+          const normalized =
+            result === undefined || result === null
+              ? { success: true }
+              : result;
           const resultStr =
-            typeof result === "string"
-              ? result
-              : JSON.stringify(result ?? null);
-          const filtered = filterText(resultStr ?? "", `tool:${tc.name}`);
+            typeof normalized === "string"
+              ? normalized
+              : JSON.stringify(normalized);
+          const filtered = filterText(resultStr, `tool:${tc.name}`);
           handleAgentLoopEvent({
             type: "tool_execution_end",
             toolCallId: tc.id,
             toolName: tc.name,
             content: filtered.text,
             toolArgs: tc.args,
+            resultForSSE:
+              typeof normalized === "string" ? normalized : normalized,
           });
           toolResults.push({
             role: "tool",
@@ -872,21 +898,19 @@ async function _runLoop(
 
       handleAgentLoopEvent({ type: "turn_end" });
 
-      // Append assistant response + tool results to messages, loop again
-      messages.push({
-        role: "assistant",
-        content: response.content || agentResponseContent,
-      });
+      // Append assistant response + tool results to messages, loop again.
+      // Include only the most recent thinking bubble (this turn's) so context window is not filled by reasoning.
+      const assistantContent = response.content || agentResponseContent;
+      const withReasoning =
+        lastFlushedThinkingRef.current.length > 0
+          ? `Reasoning: ${lastFlushedThinkingRef.current}\n\n${assistantContent}`
+          : assistantContent;
+      messages.push({ role: "assistant", content: withReasoning });
+      lastFlushedThinkingRef.current = "";
       messages.push(...toolResults);
       agentResponseContent = "";
     }
 
-    if (loopCount >= MAX_LOOPS) {
-      handleAgentLoopEvent({
-        type: "agent_error",
-        message: "Agent reached maximum tool call loop limit",
-      });
-    }
     return resultRef.current ?? "";
   } finally {
     if (ollamaJobId) completeOllamaJob(ollamaJobId);

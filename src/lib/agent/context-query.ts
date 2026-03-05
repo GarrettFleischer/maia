@@ -1652,7 +1652,6 @@ export async function buildSmartContextBlock(
       "skipped",
       "No sources to filter (retrieval returned none).",
     );
-    onProgress?.("summary", undefined, "(no content to summarize)");
     onProgress?.("done", "0 sources", "No prior context found.");
     agentDebug(
       "[Smart context] done in",
@@ -1702,11 +1701,6 @@ export async function buildSmartContextBlock(
   }
   if (finalSources.length === 0) {
     onProgress?.(
-      "summary",
-      undefined,
-      "(all filtered out, nothing to summarize)",
-    );
-    onProgress?.(
       "done",
       "0 sources",
       "All sources filtered out; no prior context included.",
@@ -1723,36 +1717,16 @@ export async function buildSmartContextBlock(
     };
   }
 
-  onProgress?.("summary");
-  t0 = Date.now();
+  // Include filtered sources in their entirety (no summarization).
   const filteredRawContext = buildRawTextFromChunks(
     finalSources,
     finalContents,
   );
-  const allRetrievedSourceIds = sources.map((s) => s.id);
-  const summarizeResult = await summarizeRetrievedContext(
-    ctx,
-    providerFactory,
-    filteredRawContext,
-    finalSources,
-    {
-      contents: finalContents,
-      userMessage,
-      searchQueries: queries,
-      allRetrievedSourceIds,
-    },
-  );
-  agentDebug("[Smart context] phase summary:", Date.now() - t0, "ms");
-
-  const block =
-    typeof summarizeResult === "string"
-      ? summarizeResult
-      : summarizeResult.block;
+  const block = `## Smart context\n\n${filteredRawContext}`;
   const sourceIds = finalSources.map((s) => s.id);
   const sourceLabels = finalContents.map((c, i) =>
     sourcePreviewLabel(c, finalSources[i].id),
   );
-  onProgress?.("summary", undefined, block || "(empty)");
 
   const doneOutput = `Included in context (${sourceIds.length} sources):\n${sourceLabels.join("\n")}`;
   onProgress?.("done", `${sourceIds.length} sources`, doneOutput);
@@ -1863,9 +1837,25 @@ export function formatRoundsByIndex(
   for (const roundIndex of sortedWanted) {
     const indices = roundToEntryIndices.get(roundIndex);
     if (!indices || indices.length === 0) continue;
+    // When including thinking, keep only the most recent thinking entry per round to avoid filling context.
+    const thinkingIndicesInRound = indices.filter(
+      (i) => source[i].role === "thinking",
+    );
+    const lastThinkingIdxInRound =
+      thinkingIndicesInRound.length > 0
+        ? Math.max(...thinkingIndicesInRound)
+        : -1;
     lines.push(`### Round ${roundIndex}`);
-    for (const idx of indices) {
+    const sortedIndices = [...indices].sort((a, b) => a - b);
+    for (const idx of sortedIndices) {
       const entry = source[idx];
+      if (
+        entry.role === "thinking" &&
+        lastThinkingIdxInRound !== -1 &&
+        idx !== lastThinkingIdxInRound
+      ) {
+        continue;
+      }
       const label =
         entry.role === "user"
           ? "**User:**"
@@ -1934,6 +1924,23 @@ export function formatRecentThreadTurns(
     take = source.slice(earliestUserIndex);
   } else {
     take = source.slice(-turns);
+  }
+
+  // When including thinking, keep only the most recent thinking entry in the slice to avoid filling context.
+  if (!skipThinking) {
+    let lastThinkingIndexInTake = -1;
+    for (let i = take.length - 1; i >= 0; i--) {
+      if (take[i].role === "thinking") {
+        lastThinkingIndexInTake = i;
+        break;
+      }
+    }
+    if (lastThinkingIndexInTake >= 0) {
+      take = take.filter(
+        (entry, i) =>
+          entry.role !== "thinking" || i === lastThinkingIndexInTake,
+      );
+    }
   }
 
   const heading = `## Recent thread (last ${turns} turns)`;

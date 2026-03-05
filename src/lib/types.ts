@@ -31,10 +31,8 @@ export interface Session {
   type: "user" | "agents";
   original: HistoryEntry[];
   compressed: HistoryEntry[];
-  /** Preserved smart context run (phases + outputs). Single object per run; updated in place as phases complete. */
-  smartContextRun?: SmartContextRun | null;
-  /** Message index after which to show smart context (below the user message that triggered it). */
-  smartContextAfterMessageIndex?: number | null;
+  /** Smart context runs per round (afterMessageIndex + run). Restored on refresh so all rounds show their phases. */
+  smartContextRuns?: SmartContextRunEntry[];
   createdAt: string;
   updatedAt: string;
 }
@@ -326,7 +324,6 @@ export type SmartContextPhase =
   | "queries"
   | "retrieval"
   | "filter"
-  | "summary"
   | "done";
 
 /**
@@ -334,7 +331,7 @@ export type SmartContextPhase =
  * Stored in UI state and not cleared when the agent responds; replaced only when a new run starts.
  */
 export interface SmartContextRun {
-  /** Phases completed or in progress, in order (queries → retrieval → filter → summary → done). */
+  /** Phases completed or in progress, in order (queries → retrieval → filter → done). */
   phases: Array<{
     phase: SmartContextPhase;
     detail?: string;
@@ -345,6 +342,15 @@ export interface SmartContextRun {
   doneDetail?: string;
   /** Full prompt sent to the agent (system + user + optional tool), shown in the done phase detail. */
   fullPrompt?: string;
+}
+
+/**
+ * One smart context run plus the message index after which it is shown.
+ * Stored per round so the full conversation (including all smart context) can be restored on refresh.
+ */
+export interface SmartContextRunEntry {
+  afterMessageIndex: number;
+  run: SmartContextRun;
 }
 
 // SSE event types
@@ -359,6 +365,8 @@ export type SSEEvent =
       detail?: string;
       /** Actual step output for hover tooltip. */
       output?: string;
+      /** When phase is "done", the full prompt sent to the main LLM. */
+      fullPrompt?: string;
     }
   | {
       type: "done";

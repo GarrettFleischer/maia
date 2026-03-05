@@ -483,12 +483,11 @@ describe("buildSmartContextBlock", () => {
     expect(result.sourceLabels).toEqual([]);
   });
 
-  it("returns summarized block when retrieval has results", async () => {
+  it("returns full context block when retrieval has results", async () => {
     const ctx = makeTestContext();
     updateSettings(ctx, {
       whitelistedModels: ["ollama/llama3.2", "ollama/nomic-embed-text"],
       contextQueryModel: "ollama/llama3.2",
-      contextSummaryModel: "ollama/llama3.2",
       embeddingModel: "ollama/nomic-embed-text",
     });
     (
@@ -1287,6 +1286,29 @@ describe("formatRecentThreadTurns", () => {
     expect(result).not.toContain("internal reasoning");
     expect(result).not.toContain("Reasoning:");
   });
+
+  it("when skipThinking false, includes only the most recent thinking entry in the slice", () => {
+    const ts = new Date().toISOString();
+    const session = makeSession([
+      { id: "e1", role: "user", content: "user msg", timestamp: ts },
+      { id: "e2", role: "thinking", content: "first reasoning", timestamp: ts },
+      {
+        id: "e3",
+        role: "thinking",
+        content: "second reasoning",
+        timestamp: ts,
+      },
+      { id: "e4", role: "thinking", content: "last reasoning", timestamp: ts },
+      { id: "e5", role: "agent", content: "agent reply", timestamp: ts },
+    ]);
+    const result = formatRecentThreadTurns(session, 2, { skipThinking: false });
+    expect(result).toContain("user msg");
+    expect(result).toContain("agent reply");
+    expect(result).toContain("Reasoning:");
+    expect(result).toContain("last reasoning");
+    expect(result).not.toContain("first reasoning");
+    expect(result).not.toContain("second reasoning");
+  });
 });
 
 // ─── formatRoundsByIndex & buildRecentRoundDetail ─────────────────────────────
@@ -1321,6 +1343,39 @@ describe("formatRoundsByIndex", () => {
     expect(result).toContain("### Round 2");
     expect(result).toContain("a");
     expect(result).toContain("c");
+  });
+
+  it("when including reasoning, includes only the most recent thinking entry per round", () => {
+    const ts = new Date().toISOString();
+    const session = makeSession([
+      { id: "e1", role: "user", content: "first", timestamp: ts },
+      { id: "e2", role: "thinking", content: "early thought", timestamp: ts },
+      { id: "e3", role: "thinking", content: "mid thought", timestamp: ts },
+      { id: "e4", role: "thinking", content: "last thought", timestamp: ts },
+      { id: "e5", role: "agent", content: "reply one", timestamp: ts },
+      { id: "e6", role: "user", content: "second", timestamp: ts },
+      {
+        id: "e7",
+        role: "thinking",
+        content: "round two reasoning",
+        timestamp: ts,
+      },
+      { id: "e8", role: "agent", content: "reply two", timestamp: ts },
+    ]);
+    const result = formatRoundsByIndex(session, [1, 2], {
+      skipThinking: false,
+    });
+    expect(result).toContain("### Round 1");
+    expect(result).toContain("### Round 2");
+    expect(result).toContain("first");
+    expect(result).toContain("reply one");
+    expect(result).toContain("second");
+    expect(result).toContain("reply two");
+    expect(result).toContain("Reasoning:");
+    expect(result).toContain("last thought");
+    expect(result).toContain("round two reasoning");
+    expect(result).not.toContain("early thought");
+    expect(result).not.toContain("mid thought");
   });
 });
 

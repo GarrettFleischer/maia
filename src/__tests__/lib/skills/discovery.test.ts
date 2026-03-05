@@ -19,7 +19,8 @@ describe("listSkillFiles", () => {
   it("returns only .md files in directory", () => {
     const mockFs: FileSystemAdapter = {
       listDir: (dir) => {
-        if (dir.endsWith("skills")) return ["a.md", "b.md", "readme.txt", "other.md"];
+        if (dir.endsWith("skills"))
+          return ["a.md", "b.md", "readme.txt", "other.md"];
         return [];
       },
     } as FileSystemAdapter;
@@ -99,7 +100,9 @@ describe("getAvailableSkillsMetadata", () => {
   beforeEach(() => {
     tmpDir = path.join(os.tmpdir(), `maia-skills-${Date.now()}`);
     fs.mkdirSync(path.join(tmpDir, "skills"), { recursive: true });
-    fs.mkdirSync(path.join(tmpDir, "agents", "maia", "skills"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "agents", "maia", "skills"), {
+      recursive: true,
+    });
     origMaiaDataDir = process.env.MAIA_DATA_DIR;
     process.env.MAIA_DATA_DIR = tmpDir;
   });
@@ -135,7 +138,10 @@ description: Only for this agent.
 Agent body
 `;
     fs.writeFileSync(path.join(getSkillsDir(), "global-skill.md"), globalSkill);
-    fs.writeFileSync(path.join(getAgentSkillsDir("maia"), "agent-skill.md"), agentSkill);
+    fs.writeFileSync(
+      path.join(getAgentSkillsDir("maia"), "agent-skill.md"),
+      agentSkill,
+    );
 
     const ctx = { fs: makeNodeFs() } as import("@/lib/context").AppContext;
     const result = getAvailableSkillsMetadata(ctx, "maia");
@@ -144,14 +150,20 @@ Agent body
     expect(names).toEqual(["agent-skill", "global-skill"]);
     const global = result.find((s) => s.name === "global-skill");
     const agent = result.find((s) => s.name === "agent-skill");
+    expect(global!.scope).toBe("global");
     expect(global!.sourcePath).toContain("skills");
     expect(global!.sourcePath).toContain("global-skill.md");
+    expect(agent!.scope).toBe("agent");
+    expect(agent!.agentId).toBe("maia");
     expect(agent!.sourcePath).toContain("maia");
     expect(agent!.sourcePath).toContain("agent-skill.md");
   });
 
   it("does not throw when skills dir does not exist", () => {
-    process.env.MAIA_DATA_DIR = path.join(os.tmpdir(), `maia-none-${Date.now()}`);
+    process.env.MAIA_DATA_DIR = path.join(
+      os.tmpdir(),
+      `maia-none-${Date.now()}`,
+    );
     const ctx = { fs: makeNodeFs() } as import("@/lib/context").AppContext;
     expect(() => getAvailableSkillsMetadata(ctx, "maia")).not.toThrow();
     const result = getAvailableSkillsMetadata(ctx, "maia");

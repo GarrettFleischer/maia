@@ -260,6 +260,53 @@ export function initSchema(db: DbAdapter): void {
           "UPDATE schema_version SET version = 4, applied_at = datetime('now')",
         )
         .run();
+      currentVersion = 4;
+    }
+
+    // Step 5: sessions smart_context_runs (array of { afterMessageIndex, run } per round)
+    if (currentVersion < 5) {
+      const sessionsInfo = database
+        .prepare("PRAGMA table_info(sessions)")
+        .all() as { name: string }[];
+      if (!sessionsInfo.some((c) => c.name === "smart_context_runs")) {
+        database.exec(
+          "ALTER TABLE sessions ADD COLUMN smart_context_runs TEXT",
+        );
+      }
+      const rows = database
+        .prepare(
+          "SELECT id, smart_context_run, smart_context_after_message_index FROM sessions WHERE smart_context_run IS NOT NULL AND smart_context_run != ''",
+        )
+        .all() as Array<{
+        id: string;
+        smart_context_run: string;
+        smart_context_after_message_index: number | null;
+      }>;
+      const updateStmt = database.prepare(
+        "UPDATE sessions SET smart_context_runs = ?, updated_at = datetime('now') WHERE id = ?",
+      );
+      for (const row of rows) {
+        const afterMessageIndex =
+          typeof row.smart_context_after_message_index === "number"
+            ? row.smart_context_after_message_index
+            : 0;
+        try {
+          const run = JSON.parse(row.smart_context_run) as {
+            phases?: unknown[];
+            doneDetail?: string;
+            fullPrompt?: string;
+          };
+          const entry = { afterMessageIndex, run };
+          updateStmt.run(JSON.stringify([entry]), row.id);
+        } catch {
+          // Skip malformed JSON
+        }
+      }
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 5, applied_at = datetime('now')",
+        )
+        .run();
     }
   }
 

@@ -7,7 +7,12 @@ import path from "path";
 import { makeTestContext, FakeFs } from "../helpers/fakes";
 import { initMaiaAgent } from "@/lib/init";
 import type { AppContext } from "@/lib/context";
-import { getDefaultSkillsDir, getSkillsDir } from "@/lib/data-dir";
+import {
+  getDefaultSkillsDir,
+  getDefaultMaiaSkillsDir,
+  getSkillsDir,
+  getAgentSkillsDir,
+} from "@/lib/data-dir";
 
 describe("initMaiaAgent", () => {
   let ctx: AppContext;
@@ -17,12 +22,16 @@ describe("initMaiaAgent", () => {
   });
 
   it("inserts maia agent row on first call", () => {
-    const before = ctx.db.prepare("SELECT id FROM agents WHERE id = 'maia'").get();
+    const before = ctx.db
+      .prepare("SELECT id FROM agents WHERE id = 'maia'")
+      .get();
     expect(before).toBeUndefined();
 
     initMaiaAgent(ctx);
 
-    const row = ctx.db.prepare("SELECT id, name, model, status FROM agents WHERE id = 'maia'").get() as {
+    const row = ctx.db
+      .prepare("SELECT id, name, model, status FROM agents WHERE id = 'maia'")
+      .get() as {
       id: string;
       name: string;
       model: string;
@@ -39,7 +48,9 @@ describe("initMaiaAgent", () => {
     initMaiaAgent(ctx);
     initMaiaAgent(ctx);
 
-    const rows = ctx.db.prepare("SELECT id FROM agents WHERE id = 'maia'").all() as { id: string }[];
+    const rows = ctx.db
+      .prepare("SELECT id FROM agents WHERE id = 'maia'")
+      .all() as { id: string }[];
     expect(rows).toHaveLength(1);
   });
 
@@ -79,5 +90,53 @@ describe("initMaiaAgent", () => {
     const snapshot = fs.snapshot();
     expect(snapshot[existingSkillPath]).toBe(existingContent);
     expect(snapshot[path.join(skillsDir, "memory-basics.md")]).toBeUndefined();
+  });
+
+  it("seeds Maia skills from defaults/maia/skills when her skills dir is empty", () => {
+    const fs = new FakeFs();
+    const ctxWithFs = makeTestContext({ fs });
+    const defaultMaiaSkillsDir = getDefaultMaiaSkillsDir();
+    const maiaSkillsDir = getAgentSkillsDir("maia");
+    const defaultSkillPath = path.join(
+      defaultMaiaSkillsDir,
+      "agent-creation-and-lifecycle.md",
+    );
+    const defaultContent =
+      "---\nname: agent-creation-and-lifecycle\ndescription: Maia-only agent creation.\n---\n\n# Agent creation\n";
+
+    fs.seed(defaultSkillPath, defaultContent);
+    initMaiaAgent(ctxWithFs);
+
+    const snapshot = fs.snapshot();
+    const copiedPath = path.join(
+      maiaSkillsDir,
+      "agent-creation-and-lifecycle.md",
+    );
+    expect(snapshot[copiedPath]).toBe(defaultContent);
+  });
+
+  it("does not overwrite existing Maia skills when seeding", () => {
+    const fs = new FakeFs();
+    const ctxWithFs = makeTestContext({ fs });
+    const defaultMaiaSkillsDir = getDefaultMaiaSkillsDir();
+    const maiaSkillsDir = getAgentSkillsDir("maia");
+    const defaultSkillPath = path.join(
+      defaultMaiaSkillsDir,
+      "agent-creation-and-lifecycle.md",
+    );
+    const existingSkillPath = path.join(maiaSkillsDir, "custom.md");
+    const existingContent = "Custom Maia skill";
+
+    fs.seed(defaultSkillPath, "---\nname: x\n---\n\nDefault");
+    fs.mkdirp(maiaSkillsDir);
+    fs.seed(existingSkillPath, existingContent);
+
+    initMaiaAgent(ctxWithFs);
+
+    const snapshot = fs.snapshot();
+    expect(snapshot[existingSkillPath]).toBe(existingContent);
+    expect(
+      snapshot[path.join(maiaSkillsDir, "agent-creation-and-lifecycle.md")],
+    ).toBeUndefined();
   });
 });

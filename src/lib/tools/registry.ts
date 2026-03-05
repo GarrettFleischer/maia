@@ -11,6 +11,7 @@ import { askUserTool } from "./ask-user-tool";
 import { historyTools } from "./history-tool";
 import { knowledgeTools } from "./knowledge-tool";
 import { findTool } from "./find-tool";
+import { findSkill } from "./find-skill";
 import { chainTool } from "./chain-tool";
 import { smartContextTool } from "./smart-context-tool";
 import { credentialTools } from "./credentials";
@@ -36,6 +37,7 @@ import { parseManifest, buildToolsFromManifest } from "./custom-tool-manifest";
 
 export const TOOL_REGISTRY: ToolRegistration[] = [
   { tool: findTool, maiaOnly: false },
+  { tool: findSkill, maiaOnly: false },
   { tool: chainTool, maiaOnly: false },
   ...fileCrudTools.map((tool) => ({ tool, maiaOnly: false })),
   { tool: terminalTool, maiaOnly: false },
@@ -117,21 +119,8 @@ function getApprovedCustomTools(): Tool[] {
   }
 }
 
-/** Tool names sent to the LLM by default; agents discover and invoke other tools via find_tool. */
-const MINIMAL_DEFAULT_TOOL_NAMES = new Set([
-  "find_tool",
-  "chat_read",
-  "chat_find",
-  "terminal_exec",
-]);
-
-/** Maia-only tools included in the minimal set for the maia agent. */
-const MAIA_MINIMAL_TOOL_NAMES = new Set([
-  "agent_create",
-  "agent_delete",
-  "agent_list",
-  "agent_get",
-]);
+/** Tool names sent to the LLM by default; agents discover tools via find_tool and skills via find_skill. */
+const MINIMAL_DEFAULT_TOOL_NAMES = new Set(["find_tool", "find_skill"]);
 
 /** Include terminal_exec Maia shell tool on all platforms. */
 function isToolAvailableForPlatform(toolName: string): boolean {
@@ -155,8 +144,8 @@ export function getToolsForAgent(agentId: string): Tool[] {
 }
 
 /**
- * @brief Get the minimal tool definitions to send to the LLM (find_tool, chat_read, chat_find, terminal; for maia also agent management).
- * The runner uses this so the model discovers other tools via find_tool; tool execution still resolves by name from getToolsForAgent.
+ * @brief Get the minimal tool definitions to send to the LLM (find_tool and find_skill only).
+ * The runner uses this so the model discovers tools via find_tool and skills via find_skill; tool execution still resolves by name from getToolsForAgent.
  * @param agentId - Agent id (maia gets additional agent-management tools in the minimal set).
  * @returns Tool definitions for the minimal set only.
  */
@@ -164,11 +153,9 @@ export function getMinimalToolDefsForAgent(
   agentId: string,
 ): import("../ai/types").ToolDefinition[] {
   const tools = getToolsForAgent(agentId);
-  const names = new Set(MINIMAL_DEFAULT_TOOL_NAMES);
-  if (agentId === "maia") {
-    for (const n of MAIA_MINIMAL_TOOL_NAMES) names.add(n);
-  }
-  return tools.filter((t) => names.has(t.name)).map((t) => t.toDefinition());
+  return tools
+    .filter((t) => MINIMAL_DEFAULT_TOOL_NAMES.has(t.name))
+    .map((t) => t.toDefinition());
 }
 
 /**
