@@ -652,21 +652,6 @@ export default function ChatMessageList({
                       />
                     )}
                   </div>
-                  {msg.role === "user" &&
-                    msg.resolvedContent &&
-                    msg.resolvedContent.trim() !== msg.content.trim() && (
-                      <details className="mt-1 max-w-[80%] text-xs text-zinc-400">
-                        <summary className="cursor-pointer select-none">
-                          Clarified command
-                          {typeof msg.roundIndex === "number"
-                            ? ` (Round ${msg.roundIndex})`
-                            : ""}
-                        </summary>
-                        <div className="mt-1 whitespace-pre-wrap rounded-md bg-zinc-900/80 px-3 py-2 text-zinc-300">
-                          {msg.resolvedContent}
-                        </div>
-                      </details>
-                    )}
                   {msg.role === "user" && onEditMessage && (
                     <button
                       type="button"
