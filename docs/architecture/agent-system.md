@@ -40,7 +40,7 @@ There are no "Memory" or "User" blocks in the prompt; memory and user facts are 
 
 Context is built and passed to the LLM as follows:
 
-1. **transformContext** — Combines (optionally empty) recent-thread and smart-context blocks with the system prompt into a single system string. By default, recent thread and smart context are not included; agents use **chat_read**, **chat_find**, and **smart_context** when they need prior context. Implemented in `src/lib/agent/context-query.ts` as `transformContext(recentThreadBlock, smartContextBlock, systemPromptContent)`.
+1. **transformContext** — Combines (optionally empty) recent-thread and smart-context blocks with the system prompt into a single system string. By default, recent thread and smart context are not included; agents discover tools via **find_tool** and skills via **find_skill** (the only two tools in the minimal set); they use these to get prior context and other capabilities as needed. Implemented in `src/lib/agent/context-query.ts` as `transformContext(recentThreadBlock, smartContextBlock, systemPromptContent)`.
 
 2. **convertToLlm** — Maps that system string plus the user message (and optional initial tool result) to the `Message[]` format the AI provider expects.
 
@@ -81,6 +81,7 @@ flowchart TD
 ### Agent → User
 
 An agent can post to the active user session at any time using `message_send({ to: "user", text: "..." })`. This:
+
 1. Adds the agent to the session's `participants` array if not already present.
 2. Appends the message as an `"agent"` role entry.
 3. Emits an SSE event causing the UI to update.
@@ -88,6 +89,7 @@ An agent can post to the active user session at any time using `message_send({ t
 ### Agent → Agent
 
 An agent uses `message_send({ to: targetAgentId, text: content })`. This:
+
 1. Searches for an existing session where `participants` contains exactly `[senderAgentId, targetAgentId]`.
 2. If found, appends to that session.
 3. If not found, creates a new session in `data/history/agents/`.
@@ -96,6 +98,7 @@ An agent uses `message_send({ to: targetAgentId, text: content })`. This:
 ### User → Specific Agent
 
 The user prefixes their message with `@agent_name`. The system:
+
 1. Resolves `agent_name` to an `agent_id`.
 2. Adds that agent to the active user session.
 3. Routes the message to that agent's execution loop.
@@ -120,10 +123,10 @@ sequenceDiagram
 
 Every N minutes (configurable via `heartbeatIntervalMinutes`), a **heartbeat** runs that wakes **only Maia**. She receives:
 
-- A prompt to **check the task board and the cron job list**, assign unassigned tasks, and ensure each active agent has a staggered cron job. She does not message agents—they run on their own cron schedule.
+- A prompt to **check the task board and the cron job list**, assign unassigned tasks, and ensure each active agent has a cron job. She does not message agents—they run on their own cron schedule.
 - The current task board (unassigned and in-progress tasks), cron jobs table, and agents list.
 
-Maia does not wake other agents directly via the heartbeat. Instead, the system assigns **one cron job per active agent** (except Maia). Those jobs run at **staggered times** within the interval so agents do not overlap (e.g. at :05, :15, :25 for a 30-minute interval). When an agent’s cron fires, that agent is run with a reminder to review GOALS and assigned tasks, check MEMORY, and take action. The heartbeat thus coordinates via tasks and cron; agents run on their own schedule.
+Maia does not wake other agents directly via the heartbeat. There are **no automatic per-agent cron jobs** (no staggered agent-run job creation in code). Maia schedules each agent’s cron via **cron_schedule** at her chosen time and frequency (e.g. so agents do not overlap). When an agent’s cron fires, that agent is run with the scheduled tool (typically `cron_echo`) and a reminder to review tasks and take action. The heartbeat thus coordinates via tasks and cron; agents run when their Maia-scheduled jobs fire.
 
 ```mermaid
 flowchart LR
@@ -131,42 +134,37 @@ flowchart LR
   cronJobs["cron_jobs table"]
   cronScheduler["CronScheduler(src/lib/cron/service.ts)"]
   heartbeatJob["builtin-heartbeat job"]
-  agentRunJobs["agent-run-<agent_id> jobs"]
   maia["Maia agent"]
   agents["Other agents"]
 
   settingsNode --> cronScheduler
   cronScheduler --> cronJobs
   cronScheduler --> heartbeatJob
-  cronScheduler --> agentRunJobs
 
   heartbeatJob --> maia
   maia --> cronJobs
   maia --> agents
-
-  agentRunJobs --> agents
+  cronJobs --> agents
 ```
 
-- **Heartbeat job**:
-  - Implemented as a built-in cron job that runs an internal heartbeat tool.
-  - Wakes Maia, who inspects tasks and cron jobs and ensures every active agent has a staggered job.
-- **Per-agent jobs**:
-  - Generated as `agent-run-<agent_id>` cron jobs at staggered minutes.
-  - When they fire, they run the agent with a focused reminder to review tasks and memory.
+- **Heartbeat job**: Implemented as a built-in cron job that runs an internal heartbeat tool. Wakes Maia, who inspects tasks and cron jobs and creates or adjusts agent cron jobs via **cron_schedule** so every active agent has a run schedule.
+- **Per-agent jobs**: Created by Maia via **cron_schedule** (not automatic). When they fire, they run the agent with the scheduled tool (e.g. `cron_echo`) and a reminder to review tasks and memory. Agent creation and lifecycle (instantiate, soul, task, cron) is documented in a Maia-only skill in `defaults/maia/skills/agent-creation-and-lifecycle.md` (seeded to `data/agents/maia/skills/`).
 
 ## Maia — The Orchestrator
 
 Maia is the only agent that can:
+
 - Create new agents
 - Delete agents
 - Schedule cron jobs
 - Manage the cron job list
 
 Maia's responsibility is to:
+
 1. Understand the user's high-level goals.
 2. Break them into discrete, assignable tasks.
-3. Create specialized agents for those tasks.
-4. Monitor the task board and cron jobs on each heartbeat; ensure each agent has a staggered cron run.
+3. Create specialized agents for those tasks (see the agent-creation skill in `defaults/maia/skills/`).
+4. Monitor the task board and cron jobs on each heartbeat; ensure each agent has a cron job (via **cron_schedule**) at times that do not overlap.
 5. Synthesize agent outputs for the user.
 
 Maia should NOT directly implement features or run commands when she can delegate. Her value is in coordination and synthesis.
@@ -174,11 +172,13 @@ Maia should NOT directly implement features or run commands when she can delegat
 ## Model Assignment
 
 Each agent has a model assigned at creation:
+
 - `ollama/llama3.2` — local lightweight model
 - `ollama/qwen2.5-coder` — local code-specialized model
 - `openrouter/anthropic/claude-3.5-haiku` — cloud model
 
 The system validates the model against `settings.whitelistedModels` before:
+
 - Creating an agent
 - Triggering an agent (heartbeat or message)
 

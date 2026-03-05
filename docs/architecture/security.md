@@ -4,14 +4,14 @@
 
 The primary threats to a local agentic system:
 
-| Threat | Vector | Mitigation |
-|--------|--------|------------|
-| Prompt injection | Web search results, file contents, agent messages | Injection filter, security preamble |
-| Credential exfiltration | LLM instructed to reveal secrets | Credential tool design (no read access for LLM) |
-| Path traversal | Agent file tool with `../` paths | Path validation against volume root |
-| Sandbox escape | Agent terminal executing host commands | Docker isolation, `network_mode: none` |
-| Model abuse | Using non-whitelisted/unknown models | Whitelist validation before every AI call |
-| Supply chain | Malicious content in workspace files | Agent identity files not sourced from web |
+| Threat                  | Vector                                            | Mitigation                                      |
+| ----------------------- | ------------------------------------------------- | ----------------------------------------------- |
+| Prompt injection        | Web search results, file contents, agent messages | Injection filter, security preamble             |
+| Credential exfiltration | LLM instructed to reveal secrets                  | Credential tool design (no read access for LLM) |
+| Path traversal          | Agent file tool with `../` paths                  | Path validation against volume root             |
+| Sandbox escape          | Agent terminal executing host commands            | Docker isolation, `network_mode: none`          |
+| Model abuse             | Using non-whitelisted/unknown models              | Whitelist validation before every AI call       |
+| Supply chain            | Malicious content in workspace files              | Agent identity files not sourced from web       |
 
 ## Security Preamble
 
@@ -196,6 +196,7 @@ flowchart TD
 
 - **Write path**: UI or API calls `credentialCreate` / `credentialUpdate`; vault encrypts with `CREDENTIAL_MASTER_KEY` and writes iv, tag, ciphertext to `credentials`. Values are never returned in API responses.
 - **Read path**: Only internal code (e.g. web tools) calls `credentialGet`. The vault reads the row, decrypts, and returns the plaintext to the caller; the LLM never receives credential values.
+- **Settings vault UI**: On the Settings page, the first tab (Providers) includes a **Credential vault** section. It lists all vault keys except the default ones (Brave Search and Brave Answers, which are managed by the dedicated API key fields above). From this section users can create, update, and delete non-default credentials via GET/POST `/api/credentials` and PUT/DELETE `/api/credentials/[key]`.
 
 ### Encryption Details
 
@@ -207,17 +208,17 @@ flowchart TD
 
 ```typescript
 function encrypt(plaintext: string, masterKey: Buffer): EncryptedValue {
-  const iv = crypto.randomBytes(12);           // 96-bit nonce
-  const cipher = crypto.createCipheriv('aes-256-gcm', masterKey, iv);
+  const iv = crypto.randomBytes(12); // 96-bit nonce
+  const cipher = crypto.createCipheriv("aes-256-gcm", masterKey, iv);
   const ciphertext = Buffer.concat([
-    cipher.update(plaintext, 'utf8'),
-    cipher.final()
+    cipher.update(plaintext, "utf8"),
+    cipher.final(),
   ]);
   const tag = cipher.getAuthTag();
   return {
-    iv: iv.toString('base64'),
-    tag: tag.toString('base64'),
-    ciphertext: ciphertext.toString('base64')
+    iv: iv.toString("base64"),
+    tag: tag.toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
   };
 }
 ```
@@ -237,6 +238,7 @@ function validatePath(userPath: string, volumeRoot: string): string {
 ```
 
 This prevents:
+
 - `../../etc/passwd`
 - `/absolute/paths/outside/volume`
 - Symlink attacks (volume root is checked after resolution)
@@ -247,30 +249,36 @@ The agent sandbox container is configured with:
 
 ```yaml
 maia-sandbox:
-  network_mode: none          # no internet access from sandbox
-  read_only: false            # agents can write to their volume
+  network_mode: none # no internet access from sandbox
+  read_only: false # agents can write to their volume
   volumes:
-    - maia-data:/workspace    # ONLY the data volume is mounted
+    - maia-data:/workspace # ONLY the data volume is mounted
   cap_drop:
-    - ALL                     # drop all Linux capabilities
+    - ALL # drop all Linux capabilities
   cap_add:
-    - CHOWN                   # agents can own their files
-    - SETUID                  # for normal operations
+    - CHOWN # agents can own their files
+    - SETUID # for normal operations
   security_opt:
-    - no-new-privileges:true  # prevent privilege escalation
+    - no-new-privileges:true # prevent privilege escalation
 ```
 
 The terminal tool executes via `docker exec` from the Next.js server:
 
 ```typescript
 async function terminalExec(command: string, cwd: string): Promise<ExecResult> {
-  const sanitizedCwd = validatePath(cwd, '/workspace');
-  const result = await execDocker([
-    'exec',
-    '--workdir', sanitizedCwd,
-    SANDBOX_CONTAINER_NAME,
-    'bash', '-c', command
-  ], { timeout: TERMINAL_TIMEOUT_MS });
+  const sanitizedCwd = validatePath(cwd, "/workspace");
+  const result = await execDocker(
+    [
+      "exec",
+      "--workdir",
+      sanitizedCwd,
+      SANDBOX_CONTAINER_NAME,
+      "bash",
+      "-c",
+      command,
+    ],
+    { timeout: TERMINAL_TIMEOUT_MS },
+  );
   return result;
 }
 ```

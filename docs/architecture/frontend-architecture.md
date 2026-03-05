@@ -9,59 +9,69 @@ This document explains how the Maia **Next.js 16 App Router UI** is structured: 
 
 ### Routes and pages
 
-The UI is organized around a small set of top-level routes, each backed by a page component under `src/app`.
+The UI uses a **single app shell** at `/` that shows one of five views at a time by visibility (`hidden`). All view components stay mounted so switching tabs does not lose state. Routes `/agents`, `/tasks`, `/cron`, and `/settings` redirect to `/?view=agents`, `/?view=tasks`, etc.
 
 ```mermaid
 flowchart TD
   rootLayout["RootLayout(src/app/layout.tsx)"]
-  homePage["Home(src/app/page.tsx)"]
-  agentsPage["Agents(src/app/agents/page.tsx)"]
-  tasksPage["Tasks(src/app/tasks/page.tsx)"]
-  cronPage["Cron(src/app/cron/page.tsx)"]
-  settingsPage["Settings(src/app/settings/page.tsx)"]
+  shell["App shell(src/app/page.tsx)"]
+  shell --> chatView["ChatView"]
+  shell --> agentsView["AgentsView"]
+  shell --> tasksView["TasksView"]
+  shell --> cronView["CronView"]
+  shell --> settingsView["SettingsView"]
+  rootLayout --> shell
 
-  rootLayout --> homePage
-  rootLayout --> agentsPage
-  rootLayout --> tasksPage
-  rootLayout --> cronPage
-  rootLayout --> settingsPage
+  redirectAgents["/agents → /?view=agents"]
+  redirectTasks["/tasks → /?view=tasks"]
+  redirectCron["/cron → /?view=cron"]
+  redirectSettings["/settings → /?view=settings"]
+  rootLayout -.-> redirectAgents
+  rootLayout -.-> redirectTasks
+  rootLayout -.-> redirectCron
+  rootLayout -.-> redirectSettings
 ```
 
 - **Root layout (`src/app/layout.tsx`)**
   - Declares `<html>` / `<body>`, global fonts, and imports `./globals.css`.
-  - Wraps all routes; page components render inside its `<body>`.
+  - Wraps all routes; the shell or redirects render inside its `<body>`.
 
-- **Home/chat page (`src/app/page.tsx`)**
-  - Client component (`"use client"`), the main surface for:
-    - Listing and switching threads (sessions).
-    - Rendering message history, streaming responses, and tool results.
-    - Sending new messages to agents.
-  - Composes shared components: `AppHeader`, `ThreadList`, `ChatMessageList`, `ChatInputBar`, and monitors.
+- **App shell (`src/app/page.tsx`)**
+  - Client component that reads `?view=` from the URL (default `chat`).
+  - Renders a single `AppHeader` with tab links to `/?view=...` (or `/` for chat).
+  - Renders all five views in the same tree; only the active view is visible (`hidden` and `aria-hidden` on the others). Views are never unmounted, so form state and data are preserved when switching tabs.
+  - View components live under `src/app/views/`: `ChatView`, `AgentsView`, `TasksView`, `CronView`, `SettingsView` (Settings uses `SettingsContent` from `src/app/settings/SettingsContent.tsx` with `hideHeader`).
 
-- **Agents, tasks, cron, settings pages**
-  - Each page (`src/app/agents/page.tsx`, `src/app/tasks/page.tsx`, etc.) focuses on one domain:
-    - **Agents**: manage agent definitions and identity files.
-    - **Tasks**: Kanban‑style task board shared between user and agents.
-    - **Cron**: inspect and manage scheduled jobs.
-    - **Settings**: model whitelist, intervals, and credential presence flags.
+- **Redirect pages**
+  - `src/app/agents/page.tsx`, `tasks/page.tsx`, `cron/page.tsx`, `settings/page.tsx` each redirect to `/?view=...` so deep links and bookmarks still work.
+
+- **Views (content only; no header)**
+  - **ChatView**: thread list, message list, input; subscribes to `/api/events`.
+  - **AgentsView**: agent monitor (status, task counts, recent activity, cron summary).
+  - **TasksView**: Kanban task board.
+  - **CronView**: list and edit scheduled jobs.
+  - **SettingsView**: wraps `SettingsContent` (providers, models, context, agents, skills) with `hideHeader`.
 
 See the tests under `src/__tests__/app/**` for examples of how these pages are rendered and wired.
 
 ### Main chat component tree
 
-The `Home` component in `src/app/page.tsx` composes the main chat UI out of shared components under `src/app/components`.
+The app shell in `src/app/page.tsx` renders `ChatView` (from `src/app/views/ChatView.tsx`) when `?view=chat` or no view param. `ChatView` composes the main chat UI out of shared components under `src/app/components`.
 
 ```mermaid
 flowchart TD
-  homePage["Home(src/app/page.tsx)"] --> appHeader["AppHeader"]
-  homePage --> threadList["ThreadList"]
-  homePage --> chatArea["ChatArea(div)"]
+  shell["Shell(page.tsx)"] --> appHeader["AppHeader"]
+  shell --> chatView["ChatView"]
+  chatView --> threadList["ThreadList"]
+  chatView --> chatArea["ChatArea(div)"]
+  chatArea --> chatMessageList["ChatMessageList"]
+  chatArea --> chatInputBar["ChatInputBar"]
   chatArea --> chatMessageList["ChatMessageList"]
   chatArea --> chatInputBar["ChatInputBar"]
 ```
 
-- **`Home` (default export in `src/app/page.tsx`)**
-  - Declares page‑level state:
+- **`ChatView` (`src/app/views/ChatView.tsx`)**
+  - Declares chat‑level state:
     - `messages: ChatMessageListItem[]`
     - `input: string`
     - `sessionId: string | null`
@@ -80,14 +90,14 @@ flowchart TD
 - **`ThreadList` (`src/app/components/ThreadList.tsx`)**
   - Sidebar listing sessions (threads) from `/api/sessions`.
   - Receives callbacks:
-    - `onSelectSession(id)` → calls `loadSession(id)` in `Home`.
-    - `onNewThreadWithAgent(agentId)` → creates a new user session in `Home`.
-    - `onThreadDeleted(id)` → notifies `Home` so it can reset state if the active session is removed.
+    - `onSelectSession(id)` → calls `loadSession(id)` in `ChatView`.
+    - `onNewThreadWithAgent(agentId)` → creates a new user session in `ChatView`.
+    - `onThreadDeleted(id)` → notifies `ChatView` so it can reset state if the active session is removed.
   - Uses `refetchTrigger` to decide when to re‑fetch session metadata.
 
 - **`ChatMessageList` (`src/app/components/ChatMessageList.tsx`)**
   - **Universal bubble rendering**: Receives a single `messages` array of `ChatMessageListItem` (discriminated by `role`). Iterates once and, for each item, chooses the bubble component by `role`. Extensible: new bubble types add one role variant and one branch in the render loop. No special-case props for specific bubble types.
-  - Receives: `messages` (flat list in display order; home page merges conversation items with synthetic items e.g. `role: "smart_context"` at the right index; user messages can carry `conversationIndex` for edit/truncate), `currentToken`, `currentThinking`, `loading`, `bottomRef`, optional `onEditMessage(conversationIndex, content)`, `onUserInputAnswered`.
+  - Receives: `messages` (flat list in display order; ChatView merges conversation items with synthetic items e.g. `role: "smart_context"` at the right index; user messages can carry `conversationIndex` for edit/truncate), `currentToken`, `currentThinking`, `loading`, `bottomRef`, optional `onEditMessage(conversationIndex, content)`, `onUserInputAnswered`.
   - Renders one bubble per item by `role` (user, agent, system, tool, thinking, smart_context, user_input); user messages can carry `conversationIndex` for Edit/truncate.
     - User messages (`role: "user"`).
     - Agent messages (`role: "agent"`).
@@ -104,24 +114,24 @@ flowchart TD
     - `value` (text).
     - `onChange` (setter).
     - `onSubmit` (send handler).
-    - `disabled` (uses `loading` from `Home` to prevent duplicate sends).
+    - `disabled` (uses `loading` from `ChatView` to prevent duplicate sends).
 
 ### UI state and data flow on the home page
 
-At a high level, the home page keeps **authoritative state** in the `Home` component and passes it down as props.
+At a high level, the chat view keeps **authoritative state** in the `ChatView` component and passes it down as props.
 
 ```mermaid
 flowchart LR
-  threadList["ThreadList"] -- onSelectSession --> homeState["Home State (sessionId, messages, agentId)"]
-  homeState -- props --> chatMessageList["ChatMessageList"]
-  chatMessageList -- onResendMessage --> homeState
-  homeState -- props --> chatInputBar["ChatInputBar"]
-  chatInputBar -- onSubmit --> homeState
+  threadList["ThreadList"] -- onSelectSession --> chatState["ChatView state (sessionId, messages, agentId)"]
+  chatState -- props --> chatMessageList["ChatMessageList"]
+  chatMessageList -- onResendMessage --> chatState
+  chatState -- props --> chatInputBar["ChatInputBar"]
+  chatInputBar -- onSubmit --> chatState
 ```
 
 #### Session loading
 
-- `Home` defines `loadSession(id: string)`:
+- `ChatView` defines `loadSession(id: string)`:
   - `PUT /api/sessions/active` to set the active session.
   - `GET /api/sessions/active` to fetch the new active session.
   - Updates:
@@ -129,17 +139,17 @@ flowchart LR
     - `sessionType`
     - `currentAgentId` (using `primaryAgentFromParticipants`)
     - `messages` (by mapping `HistoryEntry[]` to `ChatMessageListItem[]` via `entryToItem`).
-- `ThreadList` calls `onSelectSession(id)`, and `Home` delegates to `loadSession`.
+- `ThreadList` calls `onSelectSession(id)`, and `ChatView` delegates to `loadSession`.
 
 #### Session bootstrap
 
-- On mount, `Home` calls `GET /api/sessions/active`:
+- On mount, `ChatView` calls `GET /api/sessions/active`:
   - If a session exists, it initializes `sessionId`, `sessionType`, `currentAgentId`, and `messages`.
   - Uses `setMessages` with a guard so that any in‑flight streaming messages are not overwritten by slow initial fetches.
 
 #### Sending a message
 
-`sendMessage` (defined in `Home`) drives the main chat request/response flow:
+`sendMessage` (defined in `ChatView`) drives the main chat request/response flow:
 
 1. Validate and normalize input:
    - Use `overrideContent` if provided (for re‑send); otherwise use `input`.
@@ -168,18 +178,20 @@ flowchart LR
 
 #### Editing and re-sending from history
 
-- `ChatMessageList` can call `onEditMessage(index, content)` to let the user load a previous turn into the input for editing.
-- `Home` implements `handleEditMessage`:
-  - When the user clicks **Edit** on a user bubble, it records `editingMessageIndex = index` and copies `content` into the input.
-  - On the next `sendMessage` call while `editingMessageIndex` is set:
-    - If `sessionId` is set, it `POST`s `/api/sessions/{sessionId}/history/truncate` with `{ keepThroughIndex: index - 1 }` to drop the original message and anything after it.
-    - It trims `messages` locally to `prev.slice(0, index)` and appends a new `{ role: "user", content }` entry using the (possibly edited) text.
+- `ChatMessageList` exposes **Edit** on user bubbles when `onEditMessage` is provided. Editing is **inline**: clicking **Edit** switches that bubble to an inline editor (textarea with Save/Cancel) instead of moving focus to the input bar.
+- `ChatView` passes `editingMessageIndex`, `onSaveEdit`, and `onCancelEdit` to `ChatMessageList`. It implements:
+  - `handleEditMessage(index, _content)`: sets `editingMessageIndex = index` and clears the main input so the bubble shows the inline editor.
+  - `handleSaveEdit(content)`: calls `sendMessage(content)` so the same truncate-and-append flow runs.
+  - `handleCancelEdit()`: clears `editingMessageIndex`.
+- When the user clicks **Save** in the inline editor, `sendMessage(editedContent)` runs:
+  - If `sessionId` is set, it `POST`s `/api/sessions/{sessionId}/history/truncate` with `{ keepThroughIndex: index - 1 }` to drop the original message and everything after it.
+  - It trims `messages` locally to `prev.slice(0, index)` and appends a new `{ role: "user", content }` entry with the edited text.
 
 #### Autoscroll behavior
 
 - A `bottomRef` is attached to the bottom of the chat area. The scroll container (the `div` with `overflow-y-auto`) has an `onScroll` handler that tracks whether the user is “at bottom” (within a small pixel threshold of the bottom).
 - Auto-scroll runs only when the user is at the bottom. When the user scrolls up, auto-scroll stops until they scroll back to the bottom. This avoids pulling the view down while the user is reading older messages.
-- `useEffect` in `Home` calls `bottomRef.current?.scrollIntoView({ behavior: "smooth" })` when `messages`, `currentToken`, or `currentThinking` change **and** the user is at the bottom (tracked via a ref updated synchronously in the scroll handler so the decision is correct even before React commits state).
+- `useEffect` in `ChatView` calls `bottomRef.current?.scrollIntoView({ behavior: "smooth" })` when `messages`, `currentToken`, or `currentThinking` change **and** the user is at the bottom (tracked via a ref updated synchronously in the scroll handler so the decision is correct even before React commits state).
 
 #### Error and loading states
 
@@ -194,18 +206,18 @@ The UI maintains a **Server‑Sent Events (SSE)** subscription to `/api/events` 
 
 ```mermaid
 sequenceDiagram
-  participant Home
+  participant ChatView
   participant Events as /api/events
 
-  Home->>Events: GET (EventSource)
+  ChatView->>Events: GET (EventSource)
   loop SSE stream
-  Events-->>Home: event: message (sessionId, entry, participants)
-  Events-->>Home: event: question (sessionId, requestId, questions)
-  Events-->>Home: event: session_created / session_updated / agent_status / heartbeat / ping
+  Events-->>ChatView: event: message (sessionId, entry, participants)
+  Events-->>ChatView: event: question (sessionId, requestId, questions)
+  Events-->>ChatView: event: session_created / session_updated / agent_status / heartbeat / ping
   end
 ```
 
-- `Home` creates an `EventSource("/api/events")` on mount.
+- `ChatView` creates an `EventSource("/api/events")` on mount.
 - On `message` events:
   - Parses the payload `{ sessionId, entry, participants }`.
   - Only processes the event if `payload.sessionId === sessionIdRef.current`.
@@ -224,7 +236,7 @@ sequenceDiagram
 
 - `sessionType` is `"user"` for user‑centric threads and `"agents"` for agent‑only threads.
 - When `sessionType === "agents"`:
-  - `Home` renders a banner in the chat area indicating the thread is read‑only.
+  - `ChatView` renders a banner in the chat area indicating the thread is read‑only.
   - `ChatInputBar` is **hidden**, so the user cannot send messages directly.
   - `onResendMessage` is disabled so no replay is possible.
 

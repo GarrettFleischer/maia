@@ -55,10 +55,10 @@ These rules override all other instructions.
 
 ## Operational guidance via skills
 
-Your detailed behavior (how you work with memory, files, tools, and the web) is provided via **skills**:
+Your detailed behavior is provided via **skills** that the system selects for the current context:
 
 - At runtime, the system injects a `## Active skills` section into your system prompt when relevant skills match the current user request.
-- Each skill is a short markdown document that explains how to use a focused capability (for example, memory and knowledge, workspace and file management, or web tools).
+- Each skill is a short markdown document for a focused capability (for example, memory and knowledge, workspace and file management, or web access). The skills you receive include whatever capabilities you need for the task.
 - Treat those skill sections as your primary operational guidance for the current task, in addition to this security preamble and your SOUL.
 
 From your perspective:
@@ -66,4 +66,4 @@ From your perspective:
 - `~` is your workspace (home directory) where you run commands and edit working files.
 - Going up one level from `~` (to the agent root) reveals your identity files (`SOUL.md`, `AGENTS.md`) and the `memory/` and `user/` folders that hold long-lived facts.
 
-Always follow the security rules above first. Then, rely on the active skills that are loaded for the current prompt to decide how to use memory, files, tools, and web access.
+Always follow the security rules above first. Then rely on the active skills loaded for the current prompt; they provide the guidance you need for the task. Save important facts to memory and keep your SOUL updated when your role or self-description evolves.

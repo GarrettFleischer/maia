@@ -1,6 +1,6 @@
 # Maia
 
-Maia is an agentic system: a **Next.js** app where **Maia** (the orchestrator agent) coordinates sub-agents, threads (sessions), tasks, and tools. Users chat in threads; Maia can create agents, assign tasks, approve custom tools, run cron jobs, and manage threads. Agents discover and call tools via **find_tool** and use the same tool set (terminal, web search, knowledge, files, messaging, etc.) with identity and workspace isolation.
+Maia is an agentic system: a **Next.js** app where **Maia** (the orchestrator agent) coordinates sub-agents, threads (sessions), tasks, and tools. Users chat in threads; Maia can create agents, assign tasks, approve custom tools, run cron jobs, and manage threads. Agents discover tools via **find_tool** and skills via **find_skill** and use the same tool set (terminal, web search, knowledge, files, messaging, etc.) with identity and workspace isolation.
 
 **Features:**
 
@@ -15,13 +15,19 @@ Maia is an agentic system: a **Next.js** app where **Maia** (the orchestrator ag
 
 ## Tools
 
-Agents discover and invoke tools via **find_tool** (natural-language search). The following built-in tools are available. Custom tools can be added under `data/tools/<slug>/` and approved by Maia; they then appear in find_tool results.
+Agents receive only **find_tool** and **find_skill** by default; they discover other tools via find_tool and operational guidance (skills) via find_skill. The following built-in tools are available once discovered. Custom tools can be added under `data/tools/<slug>/` and approved by Maia; they then appear in find_tool results.
 
-### Context & discovery (all agents)
+### Minimal set (always available)
+
+| Tool         | Returns                                          | Args          | Example                                     |
+| ------------ | ------------------------------------------------ | ------------- | ------------------------------------------- |
+| `find_tool`  | `ToolDefinition[]`                               | `q`, `limit?` | `find_tool({ q: "search the web" })`        |
+| `find_skill` | `FindSkillResult[]` (name, description, content) | `q`, `limit?` | `find_skill({ q: "how to save memories" })` |
+
+### Context & discovery (discoverable via find_tool)
 
 | Tool                      | Returns                        | Args                                             | Example                                                                               |
 | ------------------------- | ------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| `find_tool`               | `ToolDefinition[]`             | `q`, `limit?`                                    | `find_tool({ q: "search the web" })`                                                  |
 | `chat_read`               | `string`                       | `rounds` (1-based indices), `include_reasoning?` | `chat_read({ rounds: [1, 2] })`                                                       |
 | `chat_find`               | search result array            | `q`, `limit?`                                    | `chat_find({ q: "what did we decide about the API?" })`                               |
 | `knowledge_search`        | doc array (with last_modified) | `q`, `limit?`, `scope?`, `include_archived?`     | `knowledge_search({ q: "deployment steps", scope: "self" })`                          |

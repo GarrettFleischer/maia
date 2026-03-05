@@ -46,7 +46,11 @@ interface Tool<TArgs extends ZodTypeAny, TResult> {
   schema: TArgs; // Zod schema for argument validation
   execute(args: z.infer<TArgs>, context: ToolContext): Promise<TResult>;
 }
+```
 
+**Tool results are never null.** Every tool must return a valid success payload (e.g. object or string) or throw. The runner normalizes `undefined`/`null` return values to `{ success: true }` so SSE and history always receive a non-null result; tools should still return explicit success/error shapes (e.g. `cron_delete` returns `{ success: true, message: "Cron job deleted." }`).
+
+```typescript
 interface ToolContext {
   agentId: string;
   sessionId: string;
@@ -86,6 +90,10 @@ function getToolsForAgent(agentId: string): Tool[] {
 ```
 
 Approved custom tools (see **Custom agent tools** below) are loaded from `data/tools/<slug>/manifest.json` and merged in for all agents. Built-in tool names take precedence; a custom tool whose function name clashes with a built-in is skipped.
+
+### Minimal tool set (find_tool and find_skill)
+
+Only two tools are sent to the LLM by default: **find_tool** and **find_skill**. The runner uses `getMinimalToolDefsForAgent(agentId)` so the model discovers other tools via **find_tool** (natural-language search over the full tool set) and operational guidance via **find_skill** (natural-language search over skills). Tool execution still resolves by name from `getToolsForAgent(agentId)`, so once the model has discovered a tool (e.g. from a find_tool result), it can invoke it by name.
 
 ## Tool Definitions (LLM-facing)
 
@@ -300,9 +308,18 @@ Full API in [PLAN.md — History Tool API](../PLAN.md#history-tool-api).
 | `knowledge_search`        | `query: string, limit?: number`    | `{ path, content, score }[]`                             |
 | `history_semantic_search` | `query: string, limit?: number`    | `{ sessionId, entryId, content, isCompressed, score }[]` |
 
-- **`smart_context`**: **Prefer this over knowledge_search and history_semantic_search** when querying prior knowledge or session history. The agent provides `context` (what to base search queries on) and `command` (what they are trying to accomplish). The system generates search queries, retrieves from history and knowledge, filters relevant sources, and returns a summarized block with citations. Use for accessing knowledge and history.
+- **`smart_context`**: **Prefer this over knowledge_search and history_semantic_search** when querying prior knowledge or session history. The agent provides `context` (what to base search queries on) and `command` (what they are trying to accomplish). The system generates search queries, retrieves from history and knowledge, filters relevant sources, and returns the full filtered content (sources in their entirety, no summarization). Smart context also includes **skills** (see below): only global skills and the current agent’s local skills are offered to the LLM.
 - **`knowledge_search`**: Semantic search over the knowledge base. Returns the most relevant documents (full content). Use to find stored reports and durable knowledge.
 - **`history_semantic_search`**: Semantic search over past session history. Returns the most relevant past messages or tool results. Use when you need to find something by meaning rather than keywords. Existing fuzzy search (`history_find`, `history_search_all`) remains available.
+
+### Skills (global and per-agent)
+
+Skills are markdown files with YAML frontmatter (`name`, `description`) and a body of instructions. They are matched to the user message (semantic or LLM-based) and injected into context when relevant.
+
+- **Global skills**: `data/skills/` — available to all agents. Seeded from `defaults/skills/` on first run when no skills exist. Example: `defaults/skills/building-skills.md` describes how to create skills (global vs local).
+- **Per-agent skills**: `data/agents/<agent_id>/skills/` — only that agent sees them. Maia’s skills are seeded from `defaults/maia/skills/` when her skills dir is empty (e.g. `agent-creation-and-lifecycle.md` for the full agent-creation workflow).
+
+Smart context and skill matching **only** offer global skills plus the **current agent’s** local skills to the LLM; other agents’ skills are never included.
 
 ### `agent_management` — Agent Lifecycle (Maia only)
 
@@ -325,22 +342,24 @@ On creation:
 2. Generate a unique `agent_id`.
 3. Insert into `agents` DB table.
 4. Create `data/agents/<agent_id>/` and copy default template files (e.g. SOUL.md, AGENTS.md) from `defaults/agent/`.
-5. If `soul` was provided, overwrite SOUL.md. Cron and task sync run after creation.
+5. If `soul` was provided, overwrite SOUL.md. No automatic cron jobs are created; Maia schedules each agent’s cron via **cron_schedule** when appropriate.
 
 ### `cron` — Job Scheduling (Maia only)
 
-| Function        | Args                                                                               | Returns                                             |
-| --------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `cron_echo`     | `message: string`                                                                  | `string` (echoes message; used by legacy cron jobs) |
-| `cron_schedule` | `expression: string, toolName: string, toolArgs: object, taskDescription?: string` | `string` (jobId)                                    |
-| `cron_list`     | _(none)_                                                                           | `CronJob[]`                                         |
-| `cron_delete`   | `jobId: string`                                                                    | `void`                                              |
+| Function        | Args                                                                                              | Returns                                             |
+| --------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `cron_echo`     | `message: string`                                                                                 | `string` (echoes message; used by legacy cron jobs) |
+| `cron_schedule` | `expression: string, toolName: string, toolArgs: object or JSON string, taskDescription?: string` | `string` (jobId)                                    |
+| `cron_list`     | _(none)_                                                                                          | `CronJob[]`                                         |
+| `cron_delete`   | `jobId: string`                                                                                   | `{ success: true, message: string }`                |
+
+**cron_delete** can remove any job by ID, including built-in or system jobs (e.g. the heartbeat job). The in-process scheduler unschedules the job immediately so it stops firing.
 
 When a cron job fires, the runner **calls the specified tool with the stored args** (instead of sending a free-form message). The agent sees the tool result as the first turn. Use `cron_echo` with `{ message: "..." }` for a simple reminder, or any other tool (e.g. `web_search`) with appropriate args.
 
 Cron expressions follow standard 5-field format: `* * * * *` (minute, hour, day, month, weekday).
 
-The heartbeat is implemented as the built-in cron job `builtin-heartbeat` in `cron_jobs`. When it fires, it invokes an internal **heartbeat tool** (not visible to agents) that wakes **only Maia** so she can check the task board and cron job list, assign tasks, and ensure each active agent has a staggered cron job. The system also maintains **per-agent run jobs** (`agent-run-<agent_id>`): one cron job per active agent (except Maia), at staggered minutes, so agents run on a tight schedule without overlapping.
+The heartbeat is implemented as the built-in cron job `builtin-heartbeat` in `cron_jobs`. When it fires, it invokes an internal **heartbeat tool** (not visible to agents) that wakes **only Maia** so she can check the task board and cron job list, assign tasks, and ensure each active agent has a cron job. There are **no automatic staggered per-agent run jobs**; agent cron jobs are created only when Maia (or an authorized caller) uses **cron_schedule** at her chosen time and frequency (e.g. so agents do not overlap).
 
 ### Custom agent tools (data/tools)
 
