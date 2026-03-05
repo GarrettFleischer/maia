@@ -35,6 +35,39 @@ export function streamResponse(
 
 const originalFetch = globalThis.fetch;
 
+/** Test app origin used by Happy DOM; stray fetches here would hit ECONNREFUSED. */
+const TEST_APP_ORIGIN = "http://localhost:3000";
+
+/**
+ * Fetch wrapper used after restore: forwards to real fetch except for the test app origin.
+ * Stray fetches to the app (e.g. from teardown or parallel tests) get a benign response
+ * so the run does not get an unhandled ECONNREFUSED.
+ */
+function safeFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const urlStr =
+    typeof input === "string"
+      ? input
+      : input instanceof Request
+        ? input.url
+        : input.toString();
+  const isTestApp =
+    urlStr.startsWith(TEST_APP_ORIGIN) ||
+    urlStr.startsWith("/api/") ||
+    (urlStr.startsWith("/") && !urlStr.startsWith("//"));
+  if (isTestApp) {
+    return Promise.resolve(
+      new Response(JSON.stringify({ agents: [], sessions: [], tasks: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  }
+  return originalFetch(input, init);
+}
+
 /** Install a mock fetch. Handlers are tried in order; first matching URL wins. */
 export function installFetchMock(
   handlers: Array<{ url: string | RegExp; handler: FetchHandler }>
@@ -63,7 +96,10 @@ export function installFetchMock(
   }) as typeof fetch;
 }
 
-/** Restore the original global fetch. */
+/**
+ * Restore fetch to the original implementation, with a guard for the test app origin
+ * so stray fetches (e.g. after unmount or from parallel tests) do not cause ECONNREFUSED.
+ */
 export function restoreFetch(): void {
-  globalThis.fetch = originalFetch;
+  globalThis.fetch = safeFetch as typeof fetch;
 }
