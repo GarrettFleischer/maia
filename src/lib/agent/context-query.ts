@@ -8,14 +8,12 @@
  */
 
 import { getSettings } from "../settings";
-import {
-  searchHistory,
-  searchKnowledge,
-  type HistorySearchResult,
-  type KnowledgeSearchResult,
+import type {
+  HistorySearchResult,
+  KnowledgeSearchResult,
 } from "../knowledge/search";
-import { createEmbeddingAdapter } from "../knowledge/embedding";
-import { createVectorStore } from "../knowledge/vector-store";
+import { getMuninnConfig } from "../muninn/config";
+import { createMuninnClient } from "../muninn/client";
 import type { AppContext } from "../context";
 import type { AIProvider } from "../ai/types";
 import type { Message } from "../ai/types";
@@ -702,8 +700,6 @@ export async function buildRawRetrievedContext(
   contents: string[];
   maxScore: number;
 }> {
-  const settings = getSettings(ctx);
-  const embedder = createEmbeddingAdapter(settings, ctx.http);
   const historyLimit = options?.historyLimit ?? HISTORY_LIMIT_PER_QUERY;
   const knowledgeLimit = options?.knowledgeLimit ?? KNOWLEDGE_LIMIT_PER_QUERY;
 
@@ -731,61 +727,75 @@ export async function buildRawRetrievedContext(
     knowledgeHits: number;
   }> = [];
 
-  const perQueryResults = await Promise.all(
-    queries.map(async (query, i) => {
-      agentDebug(
-        "[Smart context] buildRawRetrievedContext: searching query",
-        i + 1,
-        "of",
-        queries.length,
+  const muninnConfig = getMuninnConfig(ctx);
+  if (!muninnConfig.enabled || queries.length === 0) {
+    return {
+      text: "No relevant prior context found.",
+      sources: [],
+      contents: [],
+      maxScore: 0,
+    };
+  }
+  try {
+    const client = createMuninnClient(ctx.http, muninnConfig.baseUrl);
+    const totalK = Math.min(
+      50,
+      (historyLimit + knowledgeLimit) * Math.max(1, queries.length),
+    );
+    const res = await client.activate("default", queries, totalK);
+    for (const a of res.activations) {
+      const tags = a.tags ?? [];
+      if (
+        tags[0] === "history" &&
+        tags.length >= 3 &&
+        typeof tags[1] === "string" &&
+        typeof tags[2] === "string"
+      ) {
+        const key = `${tags[1]}/${tags[2]}`;
+        if (!seenHistoryKeys.has(key)) {
+          seenHistoryKeys.add(key);
+          historyEntries.push({
+            sessionId: tags[1],
+            entryId: tags[2],
+            content: a.content,
+            isCompressed: tags.includes("compressed"),
+            score: a.score,
+            createdAt: "",
+          });
+          sources.push({ type: "history", id: `history:${key}` });
+        }
+      } else if (tags[0] === "knowledge" && typeof tags[1] === "string") {
+        const path = tags[1];
+        if (!seenKnowledgeKeys.has(path)) {
+          seenKnowledgeKeys.add(path);
+          knowledgeEntries.push({
+            path,
+            content: a.content,
+            score: a.score,
+          });
+          sources.push({ type: "knowledge", id: `knowledge:${path}` });
+        }
+      }
+    }
+    debugPerQuery.push(
+      ...queries.map((query) => ({
         query,
-      );
-      try {
-        const queryEmbedding = await embedder.embed(query);
-        const [histHits, knowledgeHits] = await Promise.all([
-          searchHistory(ctx, embedder, query, historyLimit, queryEmbedding),
-          searchKnowledge(ctx, embedder, query, knowledgeLimit, {
-            scope: "global",
-            queryEmbedding,
-          }),
-        ]);
-        return { query, histHits, knowledgeHits };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        agentDebug(
-          "[Smart context] buildRawRetrievedContext: query failed, skipping",
-          { query, error: msg },
-        );
-        return {
-          query,
-          histHits: [] as HistorySearchResult[],
-          knowledgeHits: [] as KnowledgeSearchResult[],
-        };
-      }
-    }),
-  );
-
-  for (const { query, histHits, knowledgeHits } of perQueryResults) {
-    debugPerQuery.push({
-      query,
-      historyHits: histHits.length,
-      knowledgeHits: knowledgeHits.length,
-    });
-    for (const hit of histHits) {
-      const key = `${hit.sessionId}/${hit.entryId}`;
-      if (!seenHistoryKeys.has(key)) {
-        seenHistoryKeys.add(key);
-        historyEntries.push(hit);
-        sources.push({ type: "history", id: `history:${key}` });
-      }
-    }
-    for (const hit of knowledgeHits) {
-      if (!seenKnowledgeKeys.has(hit.path)) {
-        seenKnowledgeKeys.add(hit.path);
-        knowledgeEntries.push(hit);
-        sources.push({ type: "knowledge", id: `knowledge:${hit.path}` });
-      }
-    }
+        historyHits: historyEntries.length,
+        knowledgeHits: knowledgeEntries.length,
+      })),
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    agentDebug(
+      "[Smart context] buildRawRetrievedContext (Muninn): activate failed, returning empty:",
+      msg,
+    );
+    return {
+      text: "No relevant prior context found.",
+      sources: [],
+      contents: [],
+      maxScore: 0,
+    };
   }
 
   agentDebug(
@@ -798,19 +808,9 @@ export async function buildRawRetrievedContext(
   );
 
   if (knowledgeEntries.length === 0) {
-    const store = createVectorStore(ctx.db);
-    const knowledgePathCount = store.getAllKnowledgePaths().length;
-    if (knowledgePathCount === 0) {
-      agentDebug(
-        "[Smart context] Knowledge base is empty. Index data/ files in Settings (Embeddings) so semantic search can find them.",
-      );
-    } else {
-      agentDebug(
-        "[Smart context] Knowledge base has",
-        knowledgePathCount,
-        "documents but no semantic matches for this query.",
-      );
-    }
+    agentDebug(
+      "[Smart context] No knowledge matches for this query. Index data/ files in Settings (Embeddings) so semantic search can find them.",
+    );
   }
 
   if (historyEntries.length === 0 && knowledgeEntries.length === 0) {
@@ -838,15 +838,17 @@ export async function buildRawRetrievedContext(
     }
   }
   if (historyEntries.length >= 2) {
-    const createdDates = historyEntries.map((h) =>
-      new Date(h.createdAt).getTime(),
-    );
+    const createdDates = historyEntries.map((h) => {
+      const t = h.createdAt ? new Date(h.createdAt).getTime() : Date.now();
+      return Number.isFinite(t) ? t : Date.now();
+    });
     const minT = Math.min(...createdDates);
     const maxT = Math.max(...createdDates);
     const range = maxT - minT || 1;
     for (const h of historyEntries) {
-      const normalizedRecency =
-        (new Date(h.createdAt).getTime() - minT) / range;
+      const t = h.createdAt ? new Date(h.createdAt).getTime() : Date.now();
+      const ts = Number.isFinite(t) ? t : Date.now();
+      const normalizedRecency = (ts - minT) / range;
       h.score *= 1 + RECENCY_BOOST_FACTOR * normalizedRecency;
     }
   }

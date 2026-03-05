@@ -1,100 +1,117 @@
 /**
- * @fileoverview Tests for knowledge base index (scan, hash, upsert/delete).
+ * @fileoverview Tests for knowledge base index (Muninn-only).
  * @module __tests__/lib/knowledge/index
  */
 import path from "path";
 import { describe, it, expect, beforeEach } from "bun:test";
-import { makeTestContext, FakeHttp, FakeResponse } from "@/__tests__/helpers/fakes";
+import {
+  makeTestContext,
+  FakeHttp,
+  FakeResponse,
+} from "@/__tests__/helpers/fakes";
 import { runKnowledgeIndex, DATA_DIR } from "@/lib/knowledge/index";
-import { createVectorStore } from "@/lib/knowledge/vector-store";
-import { _clearOllamaEmbedContextLengthCacheForTests } from "@/lib/knowledge/embedding";
 import type { AppContext } from "@/lib/context";
-import type { EmbeddingAdapter } from "@/lib/knowledge/embedding";
 
 describe("knowledge index", () => {
   let ctx: AppContext;
 
   beforeEach(() => {
     ctx = makeTestContext();
-    _clearOllamaEmbedContextLengthCacheForTests();
   });
 
-  it("creates knowledge dir and returns 0 indexed when dir empty", async () => {
+  it("returns 0 indexed when Muninn not configured", async () => {
     const result = await runKnowledgeIndex(ctx, {});
     expect(result.indexed).toBe(0);
     expect(result.removed).toBe(0);
   });
 
-  it("indexes markdown files when embedder provided", async () => {
-    const fakeEmbedder: EmbeddingAdapter = {
-      embed: async () => [0.1, 0.2, 0.3],
-    };
-    ctx.fs.mkdirp(DATA_DIR);
-    ctx.fs.writeFile(path.join(DATA_DIR, "report.md"), "# Report\n\nContent here.");
+  it("creates knowledge dir and returns 0 indexed when dir empty and Muninn enabled", async () => {
+    ctx.db
+      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run("muninnUrl", "http://localhost:8475");
+    const http = new FakeHttp();
+    http.on(
+      "/api/engrams",
+      async () => new FakeResponse(200, JSON.stringify({ id: "eng-1" })),
+    );
+    ctx = { ...ctx, http };
+    const result = await runKnowledgeIndex(ctx, {});
+    expect(result.indexed).toBe(0);
+    expect(result.removed).toBe(0);
+  });
 
-    const result = await runKnowledgeIndex(ctx, { embedder: fakeEmbedder });
+  it("indexes markdown files when Muninn enabled", async () => {
+    ctx.db
+      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run("muninnUrl", "http://localhost:8475");
+    let capturedBody: Record<string, unknown> = {};
+    const http = new FakeHttp();
+    http.on("/api/engrams", async (_url, init) => {
+      const body =
+        init?.body && typeof init.body === "string"
+          ? (JSON.parse(init.body) as Record<string, unknown>)
+          : {};
+      capturedBody = body;
+      return new FakeResponse(200, JSON.stringify({ id: "eng-1" }));
+    });
+    ctx = { ...ctx, http };
+    ctx.fs.mkdirp(DATA_DIR);
+    ctx.fs.writeFile(
+      path.join(DATA_DIR, "report.md"),
+      "# Report\n\nContent here.",
+    );
+
+    const result = await runKnowledgeIndex(ctx, {});
     expect(result.indexed).toBe(1);
     expect(result.removed).toBe(0);
-
-    const store = createVectorStore(ctx.db);
-    const paths = store.getAllKnowledgePaths();
-    expect(paths).toContain("report.md");
+    expect(capturedBody.vault).toBe("default");
+    expect(capturedBody.concept).toBe("report.md");
+    expect((capturedBody.content as string).trim()).toBe(
+      "# Report\n\nContent here.",
+    );
+    expect(capturedBody.tags).toEqual(["knowledge", "report.md"]);
   });
 
-  it("skips unchanged files (same hash)", async () => {
-    const embedCalls: string[] = [];
-    const fakeEmbedder: EmbeddingAdapter = {
-      embed: async (text) => {
-        embedCalls.push(text);
-        return [0.1, 0.2];
-      },
-    };
-    ctx.fs.mkdirp(DATA_DIR);
-    ctx.fs.writeFile(path.join(DATA_DIR, "same.md"), "unchanged");
-
-    await runKnowledgeIndex(ctx, { embedder: fakeEmbedder });
-    expect(embedCalls).toHaveLength(1);
-    embedCalls.length = 0;
-
-    await runKnowledgeIndex(ctx, { embedder: fakeEmbedder });
-    expect(embedCalls).toHaveLength(0);
-  });
-
-  it("removes vector when file deleted from disk", async () => {
-    const fakeEmbedder: EmbeddingAdapter = { embed: async () => [0.1] };
-    ctx.fs.mkdirp(DATA_DIR);
-    ctx.fs.writeFile(path.join(DATA_DIR, "gone.md"), "content");
-    await runKnowledgeIndex(ctx, { embedder: fakeEmbedder });
-
-    ctx.fs.deleteFile(path.join(DATA_DIR, "gone.md"));
-    const result = await runKnowledgeIndex(ctx, {});
-    expect(result.removed).toBe(1);
-    const store = createVectorStore(ctx.db);
-    expect(store.getAllKnowledgePaths()).not.toContain("gone.md");
-  });
-
-  it("truncates content to effective embed limit when embedMaxContentLength exceeds model limit", async () => {
-    const embedCalls: string[] = [];
-    const fakeEmbedder: EmbeddingAdapter = {
-      embed: async (text) => {
-        embedCalls.push(text);
-        return [0.1, 0.2];
-      },
-    };
-    ctx.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run("embedMaxContentLength", "32000");
+  it("returns 0 indexed when file deleted from disk (no remove tracking)", async () => {
+    ctx.db
+      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run("muninnUrl", "http://localhost:8475");
     const http = new FakeHttp();
-    http.on("/api/show", async () =>
-      new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 2048\n" }))
+    http.on(
+      "/api/engrams",
+      async () => new FakeResponse(200, JSON.stringify({ id: "eng-1" })),
     );
     ctx = { ...ctx, http };
     ctx.fs.mkdirp(DATA_DIR);
-    const longContent = "x".repeat(10000);
+    ctx.fs.writeFile(path.join(DATA_DIR, "gone.md"), "content");
+    await runKnowledgeIndex(ctx, {});
+
+    ctx.fs.deleteFile(path.join(DATA_DIR, "gone.md"));
+    const result = await runKnowledgeIndex(ctx, {});
+    expect(result.indexed).toBe(0);
+    expect(result.removed).toBe(0);
+  });
+
+  it("truncates content to 16K when writing to Muninn", async () => {
+    ctx.db
+      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run("muninnUrl", "http://localhost:8475");
+    let capturedContentLength = 0;
+    const http = new FakeHttp();
+    http.on("/api/engrams", async (_url, init) => {
+      const body =
+        init?.body && typeof init.body === "string"
+          ? (JSON.parse(init.body) as { content: string })
+          : { content: "" };
+      capturedContentLength = body.content.length;
+      return new FakeResponse(200, JSON.stringify({ id: "eng-1" }));
+    });
+    ctx = { ...ctx, http };
+    ctx.fs.mkdirp(DATA_DIR);
+    const longContent = "x".repeat(20 * 1024);
     ctx.fs.writeFile(path.join(DATA_DIR, "long.md"), longContent);
 
-    await runKnowledgeIndex(ctx, { embedder: fakeEmbedder });
-
-    expect(embedCalls).toHaveLength(1);
-    expect(embedCalls[0].length).toBe(4096);
-    expect(embedCalls[0]).toBe("x".repeat(4096));
+    await runKnowledgeIndex(ctx, {});
+    expect(capturedContentLength).toBe(16 * 1024);
   });
 });

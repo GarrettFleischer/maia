@@ -1,24 +1,20 @@
 /**
- * @fileoverview Index a single history entry into the vector store for semantic search.
+ * @fileoverview Index a single history entry for semantic search (MuninnDB only).
  * @module lib/knowledge/history-index
  *
+ * When Muninn URL is set, writes the entry as an engram to Muninn. When not set, no-op.
  * Called fire-and-forget after appending entries (original and compressed).
- * Long content is chunked using the model's context length; multiple vectors may be stored per entry.
  */
 
-import { v4 as uuidv4 } from "uuid";
-import {
-  createEmbeddingAdapter,
-  getEffectiveEmbedMaxLength,
-  chunkContentForEmbedding,
-} from "./embedding";
-import { createVectorStore } from "./vector-store";
-import { getSettings } from "../settings";
+import { getMuninnConfig } from "../muninn/config";
+import { createMuninnClient } from "../muninn/client";
 import type { AppContext } from "../context";
 
+const MUNINN_CONCEPT_MAX = 512;
+const MUNINN_CONTENT_MAX = 16 * 1024;
+
 /**
- * Load an entry from history_entries, embed its content, and insert into history_vectors.
- * Uses effective max length (Ollama context when available) and chunks long content into multiple vectors per entry.
+ * Load an entry from history_entries and write it to Muninn when configured.
  * Safe to call fire-and-forget; logs errors and does not throw.
  */
 export async function indexHistoryEntry(
@@ -40,70 +36,30 @@ export async function indexHistoryEntry(
 
   if (!row) return;
 
-  // Skip UI-only entries (smart_context); not part of conversation search.
   const role = (row as { role?: string }).role;
   if (role === "smart_context") return;
-
-  // Skip indexing empty content (e.g. compressed skip entries); nothing to embed and Ollama may return invalid shape.
   if (row.content.trim() === "") return;
 
-  const settings = getSettings(ctx);
+  const muninnConfig = getMuninnConfig(ctx);
+  if (!muninnConfig.enabled) return;
 
   try {
-    const maxLen = await getEffectiveEmbedMaxLength(settings, ctx.http);
-    const chunks = chunkContentForEmbedding(row.content, maxLen);
-    const embedder = createEmbeddingAdapter(settings, ctx.http);
-    const store = createVectorStore(ctx.db);
-    const now = new Date().toISOString();
-    if (chunks.length > 1) {
-      console.info(
-        `[Embedding] Indexing entry ${row.id}: ${chunks.length} chunks`,
-      );
-    }
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      if (chunks.length > 1) {
-        console.info(
-          `[Embedding] Entry ${row.id}: chunk ${i + 1}/${chunks.length}`,
-        );
-      }
-      const embedding = await embedder.embed(chunk);
-      store.insertHistory(
-        uuidv4(),
-        row.session_id,
-        row.id,
-        chunk,
-        embedding,
-        row.is_compressed === 1,
-        now,
-      );
-    }
-    if (chunks.length > 1) {
-      console.info(
-        `[Embedding] Indexed entry ${row.id}: ${chunks.length} chunks`,
-      );
-    }
+    const concept = `session:${row.session_id} entry:${row.id}`.slice(
+      0,
+      MUNINN_CONCEPT_MAX,
+    );
+    const content = row.content.slice(0, MUNINN_CONTENT_MAX);
+    const tags = [
+      "history",
+      row.session_id,
+      row.id,
+      ...(role ? [role] : []),
+      row.is_compressed === 1 ? "compressed" : "original",
+    ];
+    const client = createMuninnClient(ctx.http, muninnConfig.baseUrl);
+    await client.writeEngram("default", concept, content, tags);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const cause =
-      err instanceof Error && err.cause instanceof Error
-        ? err.cause.message
-        : "";
-    const causeCode =
-      err instanceof Error &&
-      err.cause &&
-      typeof (err.cause as { code?: string }).code === "string"
-        ? (err.cause as { code: string }).code
-        : undefined;
-    const isRefused =
-      causeCode === "ECONNREFUSED" ||
-      msg.includes("ECONNREFUSED") ||
-      cause.includes("ECONNREFUSED");
-    const hint = isRefused ? " (embedding service not running?)" : "";
-    console.error(
-      "History indexing skipped:",
-      msg + hint,
-      `(embedding model: ${settings.embeddingModel})`,
-    );
+    console.error("Muninn history write skipped:", msg, entryId);
   }
 }

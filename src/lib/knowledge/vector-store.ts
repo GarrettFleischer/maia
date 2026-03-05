@@ -1,9 +1,10 @@
 /**
- * @fileoverview Vector store for knowledge base and history semantic search.
+ * @fileoverview Vector store (deprecated for semantic memory). Cosine similarity helper still used by skills.
  * @module lib/knowledge/vector-store
  *
- * Stores embeddings in SQLite (knowledge_vectors, history_vectors) and
- * performs cosine similarity search in application code.
+ * Semantic search now uses MuninnDB. knowledge_vectors and history_vectors are no longer read or written
+ * by the app; this module remains for cosineSimilarity() used by find-skill and skills/match, and for
+ * one-time migration reads (migrate-vectors-to-muninn uses raw db, not this store).
  */
 
 import type { DbAdapter } from "../context";
@@ -62,7 +63,7 @@ export function createVectorStore(db: DbAdapter) {
       content: string,
       contentHash: string,
       embedding: number[],
-      updatedAt: string
+      updatedAt: string,
     ): void {
       const stmt = db.prepare(
         `INSERT INTO knowledge_vectors (id, path, content, content_hash, embedding_json, updated_at)
@@ -72,9 +73,16 @@ export function createVectorStore(db: DbAdapter) {
            content = excluded.content,
            content_hash = excluded.content_hash,
            embedding_json = excluded.embedding_json,
-           updated_at = excluded.updated_at`
+           updated_at = excluded.updated_at`,
       );
-      stmt.run(id, path, content, contentHash, JSON.stringify(embedding), updatedAt);
+      stmt.run(
+        id,
+        path,
+        content,
+        contentHash,
+        JSON.stringify(embedding),
+        updatedAt,
+      );
     },
 
     /** Delete knowledge document by path. */
@@ -93,15 +101,17 @@ export function createVectorStore(db: DbAdapter) {
 
     /** Get all knowledge paths (for change detection). */
     getAllKnowledgePaths(): string[] {
-      const rows = db.prepare("SELECT path FROM knowledge_vectors").all() as { path: string }[];
+      const rows = db.prepare("SELECT path FROM knowledge_vectors").all() as {
+        path: string;
+      }[];
       return rows.map((r) => r.path);
     },
 
     /** Get content hash for path if present. */
     getKnowledgeHash(path: string): string | null {
-      const row = db.prepare("SELECT content_hash FROM knowledge_vectors WHERE path = ?").get(path) as
-        | { content_hash: string }
-        | undefined;
+      const row = db
+        .prepare("SELECT content_hash FROM knowledge_vectors WHERE path = ?")
+        .get(path) as { content_hash: string } | undefined;
       return row?.content_hash ?? null;
     },
 
@@ -114,10 +124,19 @@ export function createVectorStore(db: DbAdapter) {
     searchKnowledge(
       queryEmbedding: number[],
       limit: number,
-      options?: { pathPrefix?: string; excludeArchivedBefore?: string }
+      options?: { pathPrefix?: string; excludeArchivedBefore?: string },
     ): KnowledgeHit[] {
-      let rows: { id: string; path: string; content: string; embedding_json: string; updated_at: string }[];
-      if (options?.pathPrefix != null || options?.excludeArchivedBefore != null) {
+      let rows: {
+        id: string;
+        path: string;
+        content: string;
+        embedding_json: string;
+        updated_at: string;
+      }[];
+      if (
+        options?.pathPrefix != null ||
+        options?.excludeArchivedBefore != null
+      ) {
         const conditions: string[] = [];
         const params: (string | number)[] = [];
         if (options.pathPrefix != null) {
@@ -128,10 +147,12 @@ export function createVectorStore(db: DbAdapter) {
           conditions.push("updated_at >= ?");
           params.push(options.excludeArchivedBefore);
         }
-        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        const where = conditions.length
+          ? `WHERE ${conditions.join(" AND ")}`
+          : "";
         rows = db
           .prepare(
-            `SELECT id, path, content, embedding_json, updated_at FROM knowledge_vectors ${where}`
+            `SELECT id, path, content, embedding_json, updated_at FROM knowledge_vectors ${where}`,
           )
           .all(...params) as {
           id: string;
@@ -143,7 +164,7 @@ export function createVectorStore(db: DbAdapter) {
       } else {
         rows = db
           .prepare(
-            "SELECT id, path, content, embedding_json, updated_at FROM knowledge_vectors"
+            "SELECT id, path, content, embedding_json, updated_at FROM knowledge_vectors",
           )
           .all() as {
           id: string;
@@ -155,16 +176,21 @@ export function createVectorStore(db: DbAdapter) {
       }
       const withScore = rows.map((r) => ({
         ...r,
-        score: cosineSimilarity(queryEmbedding, parseEmbedding(r.embedding_json)),
+        score: cosineSimilarity(
+          queryEmbedding,
+          parseEmbedding(r.embedding_json),
+        ),
       }));
       withScore.sort((a, b) => b.score - a.score);
-      return withScore.slice(0, limit).map(({ id, path, content, score, updated_at }) => ({
-        id,
-        path,
-        content,
-        score,
-        last_modified: updated_at,
-      }));
+      return withScore
+        .slice(0, limit)
+        .map(({ id, path, content, score, updated_at }) => ({
+          id,
+          path,
+          content,
+          score,
+          last_modified: updated_at,
+        }));
     },
 
     /** Insert a history entry into the vector store. */
@@ -175,12 +201,20 @@ export function createVectorStore(db: DbAdapter) {
       content: string,
       embedding: number[],
       isCompressed: boolean,
-      createdAt: string
+      createdAt: string,
     ): void {
       db.prepare(
         `INSERT INTO history_vectors (id, session_id, entry_id, content, embedding_json, is_compressed, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(id, sessionId, entryId, content, JSON.stringify(embedding), isCompressed ? 1 : 0, createdAt);
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        sessionId,
+        entryId,
+        content,
+        JSON.stringify(embedding),
+        isCompressed ? 1 : 0,
+        createdAt,
+      );
     },
 
     /**
@@ -191,7 +225,7 @@ export function createVectorStore(db: DbAdapter) {
     searchHistory(queryEmbedding: number[], limit: number): HistoryHit[] {
       const rows = db
         .prepare(
-          "SELECT id, session_id, entry_id, content, embedding_json, is_compressed, created_at FROM history_vectors"
+          "SELECT id, session_id, entry_id, content, embedding_json, is_compressed, created_at FROM history_vectors",
         )
         .all() as {
         id: string;
@@ -204,12 +238,23 @@ export function createVectorStore(db: DbAdapter) {
       }[];
       const withScore = rows.map((r) => ({
         ...r,
-        score: cosineSimilarity(queryEmbedding, parseEmbedding(r.embedding_json)),
+        score: cosineSimilarity(
+          queryEmbedding,
+          parseEmbedding(r.embedding_json),
+        ),
       }));
       // Collapse by entry_id: keep the hit with max score per entry
       const bestByEntry = new Map<
         string,
-        { id: string; session_id: string; entry_id: string; content: string; is_compressed: number; score: number; created_at: string }
+        {
+          id: string;
+          session_id: string;
+          entry_id: string;
+          content: string;
+          is_compressed: number;
+          score: number;
+          created_at: string;
+        }
       >();
       for (const r of withScore) {
         const existing = bestByEntry.get(r.entry_id);

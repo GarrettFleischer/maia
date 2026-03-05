@@ -178,6 +178,8 @@ export interface Settings {
   ollamaBaseUrl: string;
   /** Optional API key for Ollama Cloud (Bearer token). When set, sent as Authorization header. */
   ollamaApiKey?: string;
+  /** Base URL for MuninnDB (cognitive memory). When set, Maia uses Muninn for semantic memory. */
+  muninnUrl: string;
   openRouterApiKey?: string;
   /** Embedding model for knowledge base and history semantic search (e.g. nomic-embed-text). */
   embeddingModel: string;
@@ -221,6 +223,8 @@ export interface SettingsPublic {
   heartbeatIntervalMinutes: number;
   ollamaBaseUrl: string;
   hasOllamaKey: boolean;
+  /** MuninnDB REST base URL (e.g. http://localhost:8475). Empty = not configured. */
+  muninnUrl: string;
   hasOpenRouterKey: boolean;
   hasBraveKey: boolean;
   hasBraveAnswersKey: boolean;

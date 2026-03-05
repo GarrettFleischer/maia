@@ -1,15 +1,16 @@
 /**
- * @fileoverview Tests for history indexing into the vector store.
- * Covers skipping missing/empty entries and successful multi-chunk indexing.
+ * @fileoverview Tests for history indexing (vector store and MuninnDB path).
+ * Covers skipping missing/empty entries, Muninn engram write when enabled, and vector-store indexing.
  * @module __tests__/lib/knowledge/history-index
- *
- * @example
- * // See indexHistoryEntry behavior when history row is missing or content is empty.
  */
 
 import { describe, it, expect, spyOn } from "bun:test";
 import { indexHistoryEntry } from "@/lib/knowledge/history-index";
-import { makeTestContext } from "@/__tests__/helpers/fakes";
+import {
+  makeTestContext,
+  FakeHttp,
+  FakeResponse,
+} from "@/__tests__/helpers/fakes";
 import type { AppContext } from "@/lib/context";
 
 /**
@@ -20,7 +21,6 @@ import type { AppContext } from "@/lib/context";
 function seedHistoryEntry(content: string): [AppContext, string] {
   const ctx = makeTestContext();
   const id = "entry-1";
-  // History entries require a valid session due to FOREIGN KEY constraint.
   ctx.db
     .prepare(
       "INSERT INTO sessions (id, name, description, participants, tags, type, created_at, updated_at) VALUES (?, ?, '', '[]', '[]', 'user', ?, ?)",
@@ -66,5 +66,40 @@ describe("history-index", () => {
     expect(vectors.count).toBe(0);
     expect(infoSpy).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("writes engram to Muninn when muninnUrl is set and does not touch vector store", async () => {
+    const [ctx, id] = seedHistoryEntry("User asked about auth.");
+    ctx.db
+      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run("muninnUrl", "http://localhost:8475");
+    let capturedBody: Record<string, unknown> = {};
+    const http = new FakeHttp();
+    http.on("/api/engrams", async (_url, init) => {
+      const body =
+        init?.body && typeof init.body === "string"
+          ? (JSON.parse(init.body) as Record<string, unknown>)
+          : {};
+      capturedBody = body;
+      return new FakeResponse(200, JSON.stringify({ id: "eng-1" }));
+    });
+    const ctxWithHttp: AppContext = { ...ctx, http };
+
+    await indexHistoryEntry(ctxWithHttp, id);
+
+    expect(capturedBody.vault).toBe("default");
+    expect(capturedBody.concept).toBe("session:entry-1 entry:entry-1");
+    expect(capturedBody.content).toBe("User asked about auth.");
+    expect(capturedBody.tags).toEqual([
+      "history",
+      "entry-1",
+      "entry-1",
+      "user",
+      "original",
+    ]);
+    const vectors = ctx.db
+      .prepare("SELECT COUNT(1) as count FROM history_vectors")
+      .get() as { count: number };
+    expect(vectors.count).toBe(0);
   });
 });

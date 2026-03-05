@@ -4,7 +4,11 @@
  */
 import { describe, it, expect, beforeEach } from "bun:test";
 import { _setTestContext } from "@/instrumentation";
-import { makeTestContext, FakeResponse } from "@/__tests__/helpers/fakes";
+import {
+  makeTestContext,
+  FakeHttp,
+  FakeResponse,
+} from "@/__tests__/helpers/fakes";
 import { updateSettings } from "@/lib/settings";
 import { createSession, appendEntry } from "@/lib/history";
 import { POST } from "@/app/api/embeddings/rebuild/route";
@@ -20,7 +24,8 @@ describe("POST /api/embeddings/rebuild", () => {
       ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
     ).on(
       "/api/embed",
-      async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] }))
+      async () =>
+        new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] })),
     );
     _setTestContext(ctx);
   });
@@ -40,17 +45,15 @@ describe("POST /api/embeddings/rebuild", () => {
     expect(typeof body.historyIndexed).toBe("number");
   });
 
-  it("clears and rebuilds history embeddings when entries exist", async () => {
+  it("rebuilds history embeddings to Muninn when entries exist", async () => {
     const ctx = makeTestContext();
-    updateSettings(ctx, {
-      whitelistedModels: ["ollama/nomic-embed-text"],
-      embeddingModel: "ollama/nomic-embed-text",
-    });
-    (
-      ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
-    ).on(
-      "/api/embed",
-      async () => new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] }))
+    ctx.db
+      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run("muninnUrl", "http://localhost:8475");
+    const http = new FakeHttp();
+    http.on(
+      "/api/engrams",
+      async () => new FakeResponse(200, JSON.stringify({ id: "eng-1" })),
     );
     const sessionId = createSession(ctx, ["user", "maia"]);
     appendEntry(ctx, sessionId, {
@@ -58,7 +61,7 @@ describe("POST /api/embeddings/rebuild", () => {
       content: "test message for rebuild",
       timestamp: new Date().toISOString(),
     });
-    _setTestContext(ctx);
+    _setTestContext({ ...ctx, http });
 
     const res = await POST();
     expect(res.status).toBe(200);

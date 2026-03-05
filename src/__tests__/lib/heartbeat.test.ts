@@ -5,11 +5,9 @@ import {
 } from "@/lib/heartbeat";
 import { refreshEmbeddings } from "@/lib/knowledge/refresh-embeddings";
 import { registerLlmQueueHandlers } from "@/lib/queue/llm-queue-handlers";
-import { _clearOllamaEmbedContextLengthCacheForTests } from "@/lib/knowledge/embedding";
 import { makeTestContext, FakeEvents, FakeResponse } from "../helpers/fakes";
 import { updateSettings } from "@/lib/settings";
 import { appendEntry, createSession } from "@/lib/history";
-import { createVectorStore } from "@/lib/knowledge/vector-store";
 import type { AppContext } from "@/lib/context";
 
 function seedAgent(ctx: AppContext, id: string, status = "active") {
@@ -39,66 +37,26 @@ describe("refreshEmbeddings", () => {
     );
   });
 
-  it("indexes history entries that have no vector yet", async () => {
+  it("resolves without error when called (no-op; semantic memory is Muninn on append)", async () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
-    const entry = appendEntry(ctx, sessionId, {
+    appendEntry(ctx, sessionId, {
       role: "user",
       content: "unindexed message",
       timestamp: new Date().toISOString(),
     });
 
-    const store = createVectorStore(ctx.db);
-    const beforeCount = (
-      ctx.db.prepare("SELECT COUNT(*) as c FROM history_vectors").get() as {
-        c: number;
-      }
-    ).c;
-    expect(beforeCount).toBe(0);
-
-    await refreshEmbeddings(ctx);
-
-    const afterCount = (
-      ctx.db
-        .prepare("SELECT COUNT(*) as c FROM history_vectors WHERE entry_id = ?")
-        .get(entry.id) as { c: number }
-    ).c;
-    expect(afterCount).toBe(1);
+    await expect(refreshEmbeddings(ctx)).resolves.toBeUndefined();
   });
 
-  it("does not re-index history entries that already have a vector", async () => {
+  it("resolves without error when entries exist", async () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
-    const entry = appendEntry(ctx, sessionId, {
+    appendEntry(ctx, sessionId, {
       role: "user",
       content: "already indexed",
       timestamp: new Date().toISOString(),
     });
-    // Manually insert a vector for this entry
-    const store = createVectorStore(ctx.db);
-    store.insertHistory(
-      "vec-1",
-      sessionId,
-      entry.id,
-      "already indexed",
-      [0.1, 0.2],
-      false,
-      new Date().toISOString(),
-    );
 
-    let embedCallCount = 0;
-    (
-      ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
-    ).on("/api/embed", async () => {
-      embedCallCount++;
-      return new FakeResponse(
-        200,
-        JSON.stringify({ embeddings: [[0.5, 0.5]] }),
-      );
-    });
-
-    await refreshEmbeddings(ctx);
-
-    // Should not have called embed again for an already-indexed entry
-    expect(embedCallCount).toBe(0);
+    await expect(refreshEmbeddings(ctx)).resolves.toBeUndefined();
   });
 
   it("skips entries with empty content", async () => {
@@ -140,111 +98,14 @@ describe("refreshEmbeddings", () => {
     await expect(refreshEmbeddings(failCtx)).resolves.toBeUndefined();
   });
 
-  it("chunks long content and stores multiple vectors per entry", async () => {
-    _clearOllamaEmbedContextLengthCacheForTests();
-    const chunkCtx = makeTestContext();
-    updateSettings(chunkCtx, { embeddingModel: "ollama/nomic-embed-text" });
-    (
-      chunkCtx.http as {
-        on: (p: string, h: () => Promise<FakeResponse>) => void;
-      }
-    ).on(
-      "/api/show",
-      async () =>
-        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 2" })),
-    );
-    let embedCallCount = 0;
-    (
-      chunkCtx.http as {
-        on: (p: string, h: () => Promise<FakeResponse>) => void;
-      }
-    ).on("/api/embed", async (_url: string, init?: RequestInit) => {
-      embedCallCount++;
-      const body = init?.body
-        ? (JSON.parse(init.body as string) as { input?: string | string[] })
-        : {};
-      const input = body.input;
-      const count = Array.isArray(input) ? input.length : 1;
-      const embeddings = Array.from({ length: count }, () => [0.1, 0.2, 0.3]);
-      return new FakeResponse(200, JSON.stringify({ embeddings }));
-    });
-    const sessionId = createSession(chunkCtx, ["user", "maia"]);
-    const longContent = "one two three four five six seven eight";
-    const entry = appendEntry(chunkCtx, sessionId, {
+  it("resolves without error when content is long (no-op)", async () => {
+    const sessionId = createSession(ctx, ["user", "maia"]);
+    appendEntry(ctx, sessionId, {
       role: "user",
-      content: longContent,
+      content: "one two three four five six seven eight",
       timestamp: new Date().toISOString(),
     });
-    await refreshEmbeddings(chunkCtx);
-    const vectorRows = chunkCtx.db
-      .prepare(
-        "SELECT id, entry_id, content FROM history_vectors WHERE entry_id = ?",
-      )
-      .all(entry.id) as { id: string; entry_id: string; content: string }[];
-    expect(vectorRows.length).toBeGreaterThan(1);
-    expect(embedCallCount).toBeGreaterThanOrEqual(1);
-  });
-
-  it("retries with half-sized chunks when embed fails with context length error", async () => {
-    _clearOllamaEmbedContextLengthCacheForTests();
-    const retryCtx = makeTestContext();
-    updateSettings(retryCtx, { embeddingModel: "ollama/nomic-embed-text" });
-    (
-      retryCtx.http as {
-        on: (
-          p: string,
-          h: (url: string, init?: RequestInit) => Promise<FakeResponse>,
-        ) => void;
-      }
-    ).on(
-      "/api/show",
-      async () =>
-        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 100" })),
-    );
-    let embedCallCount = 0;
-    (
-      retryCtx.http as {
-        on: (
-          p: string,
-          h: (url: string, init?: RequestInit) => Promise<FakeResponse>,
-        ) => void;
-      }
-    ).on("/api/embed", async (_url: string, init?: RequestInit) => {
-      embedCallCount++;
-      const body = init?.body
-        ? (JSON.parse(init.body as string) as { input?: string | string[] })
-        : {};
-      const input = body.input;
-      const count = Array.isArray(input) ? input.length : 1;
-      const firstLen = Array.isArray(input)
-        ? (input[0]?.length ?? 0)
-        : ((input as string)?.length ?? 0);
-      if (firstLen > 100 && count === 1) {
-        return new FakeResponse(
-          400,
-          JSON.stringify({
-            error: "the input length exceeds the context length",
-          }),
-        );
-      }
-      const embeddings = Array.from({ length: count }, () => [0.1, 0.2, 0.3]);
-      return new FakeResponse(200, JSON.stringify({ embeddings }));
-    });
-    const sessionId = createSession(retryCtx, ["user", "maia"]);
-    const content = "a".repeat(120);
-    const entry = appendEntry(retryCtx, sessionId, {
-      role: "user",
-      content,
-      timestamp: new Date().toISOString(),
-    });
-    await refreshEmbeddings(retryCtx);
-    const vectorRows = retryCtx.db
-      .prepare(
-        "SELECT id, entry_id, content FROM history_vectors WHERE entry_id = ?",
-      )
-      .all(entry.id) as { id: string; entry_id: string; content: string }[];
-    expect(vectorRows.length).toBeGreaterThanOrEqual(1);
-    expect(embedCallCount).toBeGreaterThan(1);
+    await expect(refreshEmbeddings(ctx)).resolves.toBeUndefined();
   });
 });
 
@@ -331,27 +192,17 @@ describe("fireHeartbeat", () => {
     expect(messages[0]).toContain("cron job");
   });
 
-  it("runs embedding refresh before waking agents (vectors available when runAgentFn is called)", async () => {
+  it("runs embedding refresh before waking agents", async () => {
     seedAgent(ctx, "maia", "active");
     const sessionId = createSession(ctx, ["user", "maia"]);
-    const entry = appendEntry(ctx, sessionId, {
+    appendEntry(ctx, sessionId, {
       role: "user",
       content: "unindexed at heartbeat time",
       timestamp: new Date().toISOString(),
     });
 
-    let vectorCountWhenAgentRan = -1;
-    await fireHeartbeat(ctx, async () => {
-      vectorCountWhenAgentRan = (
-        ctx.db
-          .prepare(
-            "SELECT COUNT(*) as c FROM history_vectors WHERE entry_id = ?",
-          )
-          .get(entry.id) as { c: number }
-      ).c;
-    });
-    // The entry should already be indexed by the time the agent runs (may be multiple vectors if chunked)
-    expect(vectorCountWhenAgentRan).toBeGreaterThanOrEqual(1);
+    await fireHeartbeat(ctx, async () => {});
+    // refreshEmbeddings is a no-op (semantic memory is written on append via indexHistoryEntry)
   });
 
   it("passes task board section to maia when present", async () => {

@@ -1,16 +1,15 @@
 /**
- * @fileoverview Clear all embeddings and rebuild from knowledge files and history.
+ * @fileoverview Rebuild or build Muninn engrams from knowledge files and history.
  * @module lib/knowledge/rebuild-embeddings
  *
- * Deletes all rows from knowledge_vectors and history_vectors, then re-indexes
- * knowledge documents and history entries using the current embedding model.
+ * When Muninn is configured, (re)indexes knowledge files and history entries to Muninn.
+ * When not configured, returns zeros.
  */
 
-import { getSettings } from "../settings";
-import { createEmbeddingAdapter } from "./embedding";
-import { createVectorStore } from "./vector-store";
 import { runKnowledgeIndex } from "./index";
 import { refreshEmbeddings } from "./refresh-embeddings";
+import { indexHistoryEntry } from "./history-index";
+import { getMuninnConfig } from "../muninn/config";
 import type { AppContext } from "../context";
 
 export interface RebuildEmbeddingsResult {
@@ -20,31 +19,30 @@ export interface RebuildEmbeddingsResult {
 }
 
 /**
- * Clears all embeddings and rebuilds from knowledge files and history entries.
- * @param ctx - Application context
- * @returns Counts of indexed knowledge files and history entries
+ * Rebuilds Muninn from current knowledge files and history entries.
+ * When Muninn is not configured, returns zeros.
  */
-export async function rebuildEmbeddings(ctx: AppContext): Promise<RebuildEmbeddingsResult> {
-  const store = createVectorStore(ctx.db);
-  store.clearAll();
-
-  const settings = getSettings(ctx);
-  const embedder = createEmbeddingAdapter(settings, ctx.http);
-
-  const { indexed: knowledgeIndexed, removed: knowledgeRemoved } = await runKnowledgeIndex(ctx, {
-    embedder,
-  });
-
+export async function rebuildEmbeddings(
+  ctx: AppContext,
+): Promise<RebuildEmbeddingsResult> {
+  if (!getMuninnConfig(ctx).enabled) {
+    return { knowledgeIndexed: 0, knowledgeRemoved: 0, historyIndexed: 0 };
+  }
+  const { indexed: knowledgeIndexed, removed: knowledgeRemoved } =
+    await runKnowledgeIndex(ctx, {});
   await refreshEmbeddings(ctx);
-
-  const historyCount = ctx.db
-    .prepare("SELECT COUNT(*) as c FROM history_vectors")
-    .get() as { c: number };
-
+  const historyRows = ctx.db
+    .prepare(
+      "SELECT id FROM history_entries WHERE content != '' AND role != 'smart_context'",
+    )
+    .all() as { id: string }[];
+  for (const row of historyRows) {
+    await indexHistoryEntry(ctx, row.id);
+  }
   return {
     knowledgeIndexed,
     knowledgeRemoved,
-    historyIndexed: historyCount.c,
+    historyIndexed: historyRows.length,
   };
 }
 
@@ -55,28 +53,29 @@ export interface BuildEmbeddingsResult {
 }
 
 /**
- * Indexes new/changed knowledge files and unindexed history entries without clearing.
- * Use to continue indexing after new content is added.
- * @param ctx - Application context
- * @returns Counts of indexed knowledge files and history vectors
+ * Indexes new/changed knowledge files and history entries to Muninn without clearing.
+ * When Muninn is not configured, returns zeros.
  */
-export async function buildEmbeddings(ctx: AppContext): Promise<BuildEmbeddingsResult> {
-  const settings = getSettings(ctx);
-  const embedder = createEmbeddingAdapter(settings, ctx.http);
-
-  const { indexed: knowledgeIndexed, removed: knowledgeRemoved } = await runKnowledgeIndex(ctx, {
-    embedder,
-  });
-
+export async function buildEmbeddings(
+  ctx: AppContext,
+): Promise<BuildEmbeddingsResult> {
+  if (!getMuninnConfig(ctx).enabled) {
+    return { knowledgeIndexed: 0, knowledgeRemoved: 0, historyIndexed: 0 };
+  }
+  const { indexed: knowledgeIndexed, removed: knowledgeRemoved } =
+    await runKnowledgeIndex(ctx, {});
   await refreshEmbeddings(ctx);
-
-  const historyCount = ctx.db
-    .prepare("SELECT COUNT(*) as c FROM history_vectors")
-    .get() as { c: number };
-
+  const historyRows = ctx.db
+    .prepare(
+      "SELECT id FROM history_entries WHERE content != '' AND role != 'smart_context'",
+    )
+    .all() as { id: string }[];
+  for (const row of historyRows) {
+    await indexHistoryEntry(ctx, row.id);
+  }
   return {
     knowledgeIndexed,
     knowledgeRemoved,
-    historyIndexed: historyCount.c,
+    historyIndexed: historyRows.length,
   };
 }

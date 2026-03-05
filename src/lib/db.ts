@@ -99,6 +99,7 @@ export function initSchema(db: DbAdapter): void {
       session_id TEXT
     );
 
+    /* Deprecated: semantic memory now uses MuninnDB. Tables kept for one-time migration only; do not drop. */
     CREATE TABLE IF NOT EXISTS knowledge_vectors (
       id TEXT PRIMARY KEY,
       path TEXT NOT NULL UNIQUE,
@@ -315,6 +316,7 @@ export function initSchema(db: DbAdapter): void {
       heartbeatIntervalMinutes: "30",
       ollamaBaseUrl: "http://localhost:11434",
       ollamaApiKey: "",
+      muninnUrl: "",
       openRouterApiKey: "",
       embeddingModel: "ollama/nomic-embed-text",
       embedMaxContentLength: "8192",

@@ -346,7 +346,6 @@ export function deleteSession(ctx: AppContext, id: string): boolean {
   const exists = ctx.db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(id);
   if (!exists) return false;
 
-  ctx.db.prepare("DELETE FROM history_vectors WHERE session_id = ?").run(id);
   if (getActiveSessionId(ctx) === id) {
     ctx.db
       .prepare("UPDATE active_session SET session_id = ? WHERE singleton = 1")
@@ -418,7 +417,7 @@ export function setActiveSessionId(ctx: AppContext, sessionId: string): void {
 
 /**
  * Truncates session history so only the first (keepThroughIndex + 1) original (uncompressed)
- * entries remain. Entries after that index are removed from history_entries and history_vectors.
+ * entries remain. Entries after that index are removed from history_entries.
  * Used by re-send: keep history before the re-sent message, then post that message again.
  * @param ctx - Application context
  * @param sessionId - Session to truncate
@@ -439,11 +438,6 @@ export function truncateHistoryAfterIndex(
   const toDelete = rows.slice(keepCount).map((r) => r.id);
   if (toDelete.length === 0) return;
   const placeholders = toDelete.map(() => "?").join(",");
-  ctx.db
-    .prepare(
-      `DELETE FROM history_vectors WHERE session_id = ? AND entry_id IN (${placeholders})`,
-    )
-    .run(sessionId, ...toDelete);
   ctx.db
     .prepare(
       `DELETE FROM history_entries WHERE session_id = ? AND id IN (${placeholders})`,

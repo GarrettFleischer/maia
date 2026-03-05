@@ -44,6 +44,7 @@ export default function SettingsContent(props: SettingsContentProps = {}) {
   const [braveAnswersApiKey, setBraveAnswersApiKey] = useState("");
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaApiKey, setOllamaApiKey] = useState("");
+  const [muninnUrl, setMuninnUrl] = useState("");
   const [contextQueryModel, setContextQueryModel] = useState("");
   const [contextSummaryModel, setContextSummaryModel] = useState("");
   const [contextReasoningEffort, setContextReasoningEffort] =
@@ -134,6 +135,7 @@ export default function SettingsContent(props: SettingsContentProps = {}) {
     ]).then(([settingsData, agentsList, capabilities]) => {
       setSettings(settingsData);
       setOllamaUrl(settingsData.ollamaBaseUrl);
+      setMuninnUrl(settingsData.muninnUrl ?? "");
       setContextQueryModel(settingsData.contextQueryModel);
       setContextSummaryModel(settingsData.contextSummaryModel);
       setContextReasoningEffort(settingsData.contextReasoningEffort);
@@ -204,6 +206,7 @@ export default function SettingsContent(props: SettingsContentProps = {}) {
     );
     const body: Record<string, unknown> = {
       ollamaBaseUrl: ollamaUrl,
+      muninnUrl: muninnUrl.trim(),
       contextQueryModel,
       contextSummaryModel,
       contextReasoningEffort,
@@ -586,6 +589,24 @@ export default function SettingsContent(props: SettingsContentProps = {}) {
                     }
                     className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
                     aria-label="Ollama API Key"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="settings-muninn-url"
+                    className="block text-xs text-zinc-500 mb-1"
+                  >
+                    MuninnDB URL
+                  </label>
+                  <input
+                    id="settings-muninn-url"
+                    type="text"
+                    value={muninnUrl}
+                    onChange={(e) => setMuninnUrl(e.target.value)}
+                    placeholder="http://localhost:8475 (optional — cognitive memory)"
+                    className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                    aria-label="MuninnDB URL"
                   />
                 </div>
 

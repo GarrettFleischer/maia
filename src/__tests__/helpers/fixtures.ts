@@ -3,10 +3,18 @@
  * @module __tests__/helpers/fixtures
  */
 
-import type { Session, SettingsPublic, AgentDefinition, HistoryEntry } from "@/lib/types";
+import type {
+  Session,
+  SettingsPublic,
+  AgentDefinition,
+  HistoryEntry,
+} from "@/lib/types";
 
 /** GET /api/sessions/active with no active session. */
-export const sessionActiveEmpty: { sessionId: string | null; session: Session | null } = {
+export const sessionActiveEmpty: {
+  sessionId: string | null;
+  session: Session | null;
+} = {
   sessionId: null,
   session: null,
 };
@@ -69,10 +77,16 @@ export const sessionActiveWithCustomAgent: {
 
 /** GET /api/settings — public settings (no raw API key). */
 export const settingsPublic: SettingsPublic = {
-  whitelistedModels: ["ollama/llama3.2", "ollama/qwen2.5-coder", "ollama/nomic-embed-text", "openrouter/anthropic/claude-3.5-sonnet"],
+  whitelistedModels: [
+    "ollama/llama3.2",
+    "ollama/qwen2.5-coder",
+    "ollama/nomic-embed-text",
+    "openrouter/anthropic/claude-3.5-sonnet",
+  ],
   heartbeatIntervalMinutes: 30,
   ollamaBaseUrl: "http://localhost:11434",
   hasOllamaKey: false,
+  muninnUrl: "",
   hasOpenRouterKey: false,
   hasBraveKey: false,
   hasBraveAnswersKey: false,
@@ -89,13 +103,19 @@ export const settingsPublic: SettingsPublic = {
 
 /** GET /api/model-capabilities — capabilities for whitelisted models. */
 export const modelCapabilitiesFixture: {
-  modelCapabilities: Record<string, { provider: string; supportsReasoning: boolean }>;
+  modelCapabilities: Record<
+    string,
+    { provider: string; supportsReasoning: boolean }
+  >;
 } = {
   modelCapabilities: {
     "ollama/llama3.2": { provider: "ollama", supportsReasoning: true },
     "ollama/qwen2.5-coder": { provider: "ollama", supportsReasoning: true },
     "ollama/nomic-embed-text": { provider: "ollama", supportsReasoning: false },
-    "openrouter/anthropic/claude-3.5-sonnet": { provider: "openrouter", supportsReasoning: true },
+    "openrouter/anthropic/claude-3.5-sonnet": {
+      provider: "openrouter",
+      supportsReasoning: true,
+    },
   },
 };
 
@@ -138,9 +158,24 @@ export const agentsList: { agents: AgentDefinition[] } = {
 export interface DashboardFixture {
   agents: AgentDefinition[];
   taskCountsByStatus: { todo: number; in_progress: number; done: number };
-  taskCountsByAgent: Record<string, { todo: number; in_progress: number; done: number }>;
-  recentAgentSessions: { id: string; name: string; participants: string[]; updatedAt: string }[];
-  cronJobs: { id: string; expression: string; taskDescription: string; agentId: string; isBuiltIn: boolean; createdAt: string }[];
+  taskCountsByAgent: Record<
+    string,
+    { todo: number; in_progress: number; done: number }
+  >;
+  recentAgentSessions: {
+    id: string;
+    name: string;
+    participants: string[];
+    updatedAt: string;
+  }[];
+  cronJobs: {
+    id: string;
+    expression: string;
+    taskDescription: string;
+    agentId: string;
+    isBuiltIn: boolean;
+    createdAt: string;
+  }[];
 }
 
 /** GET /api/dashboard — empty (no agents). */

@@ -521,15 +521,18 @@ async function _runLoop(
     skillCount > 0
       ? `${sourceCount} sources, ${skillCount} skills`
       : `${sourceCount} sources`;
-  const sourceList =
+  const sourceListRaw =
     sourceCount > 0 && smartResult.sourceLabels?.length === sourceCount
       ? smartResult.sourceLabels
       : sourceCount > 0
         ? smartResult.sourceIds
         : ["(no sources)"];
+  const sourceListLines = sourceListRaw.map((line) =>
+    typeof line === "string" && line.startsWith("- ") ? line : `- ${line}`,
+  );
   const combinedDoneOutputLines: string[] = [
     `Included in context (${sourceCount} sources):`,
-    ...sourceList,
+    ...sourceListLines,
     "",
     `Active skills (${skillCount}):`,
     ...(skillCount > 0
