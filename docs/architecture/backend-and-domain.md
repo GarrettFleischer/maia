@@ -212,9 +212,22 @@ Key modules:
   - `describe.ts`:
     - `describeCronSchedule` and `getNextCronRun` used by `/api/cron/jobs`.
 
-- **Knowledge and embeddings (`src/lib/knowledge/**`)\*\*
-  - Knowledge base (files under `data/knowledge/`), history vectors (`history_vectors`), and vector search.
-  - Utilities for building smart context and semantic search surfaces.
+- **Knowledge and semantic memory (`src/lib/knowledge/**`, `src/lib/muninn/**`)**
+  - When **MuninnDB URL** is set in Settings, semantic memory uses Muninn only: knowledge files and history entries are written as engrams; smart context and the knowledge tool use Muninn’s ACTIVATE API. See [MuninnDB integration](#muninndb-integration) below.
+  - Knowledge base: files under `data/` (indexed when Muninn is configured). Utilities for building smart context and semantic search surfaces.
+
+### MuninnDB integration
+
+When the **MuninnDB URL** is set in Settings (AI Providers → MuninnDB URL), Maia uses MuninnDB as its semantic memory layer.
+
+- **Config**: `src/lib/muninn/config.ts` – reads `getSettings(ctx).muninnUrl`; when non-empty, Muninn is enabled.
+- **Client**: `src/lib/muninn/client.ts` – thin REST client: `writeEngram(vault, concept, content, tags)`, `activate(vault, context[], maxResults)`, `writeEngramBatch(items)` for migration.
+- **Vault**: A single **default** vault is used for both history and knowledge engrams; vault names follow Muninn rules (1–64 chars, lowercase/digits/hyphens/underscores). `src/lib/muninn/vault.ts` – `vaultFromKnowledgePath(path)` maps `agents/<id>/...` to vault `<id>`, others to `default`.
+- **Writes**:
+  - **History**: On each history append (and after compression), `indexHistoryEntry(ctx, entryId)` is enqueued; when Muninn is enabled, it writes one engram per entry (concept `session:<id> entry:<id>`, content ≤16KB, tags `["history", sessionId, entryId, role, original|compressed]`).
+  - **Knowledge**: `runKnowledgeIndex(ctx)` scans `data/` and writes each markdown file as an engram (concept = path, tags `["knowledge", path]`). Rebuild/build embeddings re-run index and sync history to Muninn.
+- **Retrieval**: `buildRawRetrievedContext` and `searchKnowledge` / `searchHistory` (in `src/lib/knowledge/search.ts`) call `client.activate("default", context, k)` and map activations to `ContextSource` and result types. When Muninn URL is empty, retrieval returns no results.
+- **Migration**: One-time transfer of existing `knowledge_vectors` and `history_vectors` to Muninn via `POST /api/embeddings/migrate-to-muninn` (see `src/lib/muninn/migrate-vectors-to-muninn.ts`).
 
 - **Security (`src/lib/security/**`)\*\*
   - `injection-filter.ts` – sanitizes untrusted text before exposing it to the LLM.

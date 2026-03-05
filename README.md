@@ -155,7 +155,7 @@ Available only to the Maia orchestrator agent:
 
 ## Getting Started
 
-**Prerequisites:** Node 20+ (or Bun). For embeddings and some tools: Ollama or another provider; Brave Search / Brave Answers API keys (optional); Yahoo Mail credentials in the vault if using email tools.
+**Prerequisites:** Node 20+ (or Bun). For semantic memory and embeddings: **Docker** and **Ollama** (local, no API keys). Optional: Brave Search/Answers keys, Yahoo Mail credentials in the vault.
 
 1. **Install dependencies**
 
@@ -169,9 +169,32 @@ Available only to the Maia orchestrator agent:
    - `CREDENTIAL_MASTER_KEY` — 64-char hex (e.g. `openssl rand -hex 32`) for encrypting credentials.
    - `SANDBOX_CONTAINER_NAME` — only if using the Docker sandbox for terminal runs (e.g. `maia-sandbox`).
 
-   API keys (Brave Search, Brave Answers, etc.) can be set in `.env` or later in the app **Settings**; the UI stores them in the credential vault.
+   API keys (Brave, etc.) can be set in `.env` or later in **Settings**; the UI stores them in the credential vault.
 
-3. **Run the app**
+3. **MuninnDB (semantic memory) — optional**
+
+   Maia can use [MuninnDB](https://muninndb.com/docs) for long-term semantic memory (Ollama-only: no cloud API keys). Ensure Ollama is running and pull the required models:
+
+   ```bash
+   ollama pull nomic-embed-text
+   ollama pull llama3.2
+   ```
+
+   Start MuninnDB with Docker (persistent volume, Ollama for embed + enrich):
+
+   ```bash
+   docker volume create muninndb-data
+   docker run -d --name muninndb \
+     -p 8475:8475 -p 8476:8476 -p 8750:8750 \
+     -v muninndb-data:/data \
+     -e MUNINN_OLLAMA_URL=ollama://host.docker.internal:11434/nomic-embed-text \
+     -e MUNINN_ENRICH_URL=ollama://host.docker.internal:11434/llama3.2 \
+     ghcr.io/scrypster/muninndb:latest
+   ```
+
+   Web UI: [http://localhost:8476](http://localhost:8476) (admin `root` / `password`). To use MuninnDB from Maia, set **MuninnDB URL** in **Settings → AI Providers** (e.g. `http://localhost:8475`). Full setup details: [docs/architecture/runtime-and-ops.md](docs/architecture/runtime-and-ops.md#muninndb-cognitive-memory-database).
+
+4. **Run the app**
 
    ```bash
    bun dev

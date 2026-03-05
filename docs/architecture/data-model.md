@@ -23,7 +23,7 @@ erDiagram
 - **`cron_jobs`** – scheduled jobs that trigger tools/agents.
 - **`settings`** – global configuration such as whitelisted models and heartbeat intervals.
 - **`credentials`** – encrypted vault for secrets.
-- **`knowledge_vectors`**, **`history_vectors`** – embeddings for semantic search.
+- **`knowledge_vectors`**, **`history_vectors`** – deprecated; no longer read or written. Semantic memory uses **MuninnDB** when configured (see [Runtime and operations](runtime-and-ops.md#muninndb-cognitive-memory-database)).
 - **`security_events`** – logs of injection and security-related events.
 - **`active_session`** – singleton row for the currently active user session.
 - **`approved_tools`** – registered custom tools (proposed by agents, approved by Maia).
@@ -68,7 +68,7 @@ All schema creation and migrations occur inside `initSchema(db: DbAdapter)` in `
   - Used by:
     - `src/lib/history.ts` – read/write history.
     - `src/lib/agent/runner.ts` – appends user, tool, thinking, and agent entries.
-    - `src/lib/knowledge/history-index.ts` – builds `history_vectors`.
+    - `src/lib/knowledge/history-index.ts` – when Muninn is configured, writes entries to Muninn as engrams.
 
 - `active_session`
   - Columns:
@@ -169,36 +169,15 @@ All schema creation and migrations occur inside `initSchema(db: DbAdapter)` in `
   - `src/lib/security/injection-filter.ts` – logs redacted content.
   - Future security dashboards or audits.
 
-### Embeddings and semantic search
+### Semantic memory (MuninnDB) and deprecated vector tables
 
-**Tables: `knowledge_vectors`, `history_vectors`**
+**Semantic memory:** When the **MuninnDB URL** is set in Settings (AI Providers), all semantic storage and retrieval use MuninnDB. History entries and knowledge files are written as **engrams** to Muninn on append/index; smart context and the knowledge tool use Muninn’s **ACTIVATE** API for retrieval. See [Runtime and operations](runtime-and-ops.md#muninndb-cognitive-memory-database) and [Backend and domain](backend-and-domain.md#muninndb-integration).
 
-- `knowledge_vectors`
-  - Columns:
-    - `id TEXT PRIMARY KEY`
-    - `path TEXT NOT NULL UNIQUE` – path within `data/knowledge/`.
-    - `content TEXT NOT NULL` – full (or normalized) file content.
-    - `content_hash TEXT NOT NULL` – hash used to detect changes.
-    - `embedding_json TEXT NOT NULL` – serialized embedding vector.
-    - `updated_at TEXT NOT NULL`
-  - Used by:
-    - `src/lib/knowledge/**` – knowledge indexing and semantic search.
-    - Heartbeat/cron jobs that rebuild embeddings.
+**Tables: `knowledge_vectors`, `history_vectors` (deprecated)**
 
-- `history_vectors`
-  - Columns:
-    - `id TEXT PRIMARY KEY`
-    - `session_id TEXT NOT NULL`
-    - `entry_id TEXT NOT NULL`
-    - `content TEXT NOT NULL`
-    - `embedding_json TEXT NOT NULL`
-    - `is_compressed INTEGER NOT NULL DEFAULT 0`
-    - `created_at TEXT NOT NULL`
-  - Indexes:
-    - `idx_history_vectors_session(session_id)`
-  - Used by:
-    - History semantic search (`history_semantic_search`).
-    - Smart context building over past conversations.
+- These tables remain in the schema for one-time migration only (e.g. `POST /api/embeddings/migrate-to-muninn`). They are **not** read or written by normal operation.
+- `knowledge_vectors`: id, path, content, content_hash, embedding_json, updated_at.
+- `history_vectors`: id, session_id, entry_id, content, embedding_json, is_compressed, created_at; index on session_id.
 
 ### Tasks and approved tools
 
