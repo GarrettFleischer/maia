@@ -6,11 +6,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { ensureAppContext } from "@/instrumentation";
 import { getAgentIdentity, updateAgent } from "@/lib/agent/identity";
 import { getSettings } from "@/lib/settings";
-import { syncAgentRunJobs, reconcileAgentRunTasks } from "@/lib/cron/service";
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const ctx = await ensureAppContext();
   const { id } = await params;
@@ -22,13 +21,17 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const ctx = await ensureAppContext();
   const { id } = await params;
   const data = getAgentIdentity(ctx, id);
   if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  let body: { model?: string; name?: string; reasoningEffort?: "off" | "low" | "medium" | "high" };
+  let body: {
+    model?: string;
+    name?: string;
+    reasoningEffort?: "off" | "low" | "medium" | "high";
+  };
   try {
     body = await req.json();
   } catch {
@@ -39,7 +42,7 @@ export async function PATCH(
     if (!settings.whitelistedModels.includes(body.model)) {
       return NextResponse.json(
         { error: `Model not whitelisted: ${body.model}` },
-        { status: 400 }
+        { status: 400 },
       );
     }
   }
@@ -48,7 +51,8 @@ export async function PATCH(
     name: body.name,
     reasoningEffort: body.reasoningEffort,
   });
-  if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!updated)
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   const updatedData = getAgentIdentity(ctx, id);
   const { soul, memory, user, agentsMd, ...agent } = updatedData!;
   return NextResponse.json({ agent });
@@ -56,15 +60,14 @@ export async function PATCH(
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const ctx = await ensureAppContext();
   const { id } = await params;
-  ctx.db.prepare("UPDATE agents SET status = 'deleted', updated_at = ? WHERE id = ?").run(
-    new Date().toISOString(),
-    id
-  );
-  syncAgentRunJobs(ctx);
-  reconcileAgentRunTasks(ctx);
+  ctx.db
+    .prepare(
+      "UPDATE agents SET status = 'deleted', updated_at = ? WHERE id = ?",
+    )
+    .run(new Date().toISOString(), id);
   return NextResponse.json({ ok: true });
 }

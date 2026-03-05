@@ -7,7 +7,7 @@
  * new bubble types add one role variant and one branch in the loop. No special-case props per type.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { SmartContextPhase, SmartContextRun } from "@/lib/types";
@@ -16,12 +16,11 @@ import type { QuestionItem } from "@/app/components/QuestionFormModal";
 
 /** Ordered smart context phases for live bubble display. Not part of message/round list. */
 const SMART_CONTEXT_PHASES: { id: SmartContextPhase; label: string }[] = [
-  { id: "clarified", label: "Clarified command" },
-  { id: "queries", label: "Extracting queries" },
-  { id: "retrieval", label: "Searching" },
-  { id: "filter", label: "Filtering" },
-  { id: "summary", label: "Summarizing" },
-  { id: "done", label: "Done" },
+  { id: "clarified", label: "clarify" },
+  { id: "queries", label: "extract" },
+  { id: "retrieval", label: "search" },
+  { id: "filter", label: "filter" },
+  { id: "done", label: "done" },
 ];
 
 /**
@@ -34,9 +33,9 @@ function smartContextPhaseLabel(
   phase: SmartContextPhase,
   detail?: string,
 ): string {
-  if (phase === "filter" && detail === "skipped") return "Filter skipped";
-  if (phase === "done" && detail) return `Done (${detail})`;
-  if (phase === "clarified") return "Clarified command";
+  if (phase === "filter" && detail === "skipped") return "filter skipped";
+  if (phase === "done") return "done";
+  if (phase === "clarified") return "clarify";
   const entry = SMART_CONTEXT_PHASES.find((p) => p.id === phase);
   return entry?.label ?? phase;
 }
@@ -168,9 +167,7 @@ function SmartContextPhaseBubbles({
                   p.id,
                   p.id === "done" ? run.doneDetail : phaseData.detail,
                 )
-              : p.id === "filter"
-                ? "Filtering"
-                : p.label;
+              : p.label;
           return (
             <SmartContextPhaseBubble
               key={p.id}
@@ -308,6 +305,19 @@ export interface ChatMessageListProps {
    */
   onEditMessage?: (conversationIndex: number, content: string) => void;
   /**
+   * When set, the user message at this conversation index is shown in inline-edit mode
+   * (textarea with Save/Cancel). Pass the same index used for onEditMessage.
+   */
+  editingMessageIndex?: number | null;
+  /**
+   * Called when the user saves an inline edit. Parent should send the new content and clear editing state.
+   */
+  onSaveEdit?: (content: string) => void;
+  /**
+   * Called when the user cancels an inline edit. Parent should clear editing state.
+   */
+  onCancelEdit?: () => void;
+  /**
    * Called when a pending user_input bubble successfully submits answers.
    * Used by the page to mark the corresponding message as answered in state.
    */
@@ -426,7 +436,7 @@ function ToolCallBubble({
   );
 }
 
-/** Expandable bubble for model reasoning/thinking (persisted or streaming). */
+/** Expandable bubble for model reasoning/thinking (persisted or streaming). Auto-scrolls the inner content to bottom when content updates. */
 function ThinkingBubble({
   content,
   streaming = false,
@@ -434,6 +444,14 @@ function ThinkingBubble({
   content: string;
   streaming?: boolean;
 }) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [content, streaming]);
+
   return (
     <details
       className="group max-w-[80%] rounded-xl rounded-bl-sm overflow-hidden bg-amber-950/40 text-amber-100/95 border border-amber-800/60"
@@ -447,7 +465,10 @@ function ThinkingBubble({
         </span>
       </summary>
       <div className="px-4 pb-3 pt-0 text-xs font-mono border-t border-amber-800/60">
-        <div className="mt-0.5 p-2 rounded bg-zinc-900/80 text-amber-200/90 max-h-64 overflow-auto whitespace-pre-wrap break-all">
+        <div
+          ref={scrollContainerRef}
+          className="mt-0.5 p-2 rounded bg-zinc-900/80 text-amber-200/90 max-h-64 overflow-auto whitespace-pre-wrap break-all"
+        >
           {content}
           {streaming && (
             <span
@@ -458,6 +479,61 @@ function ThinkingBubble({
         </div>
       </div>
     </details>
+  );
+}
+
+/**
+ * Inline edit view for a user message bubble: textarea with Save and Cancel.
+ * @param initialContent - Current message text to edit
+ * @param onSave - Called with the edited text when Save is clicked
+ * @param onCancel - Called when Cancel is clicked
+ * @param disabled - Disable Save/Cancel while a request is in progress
+ */
+function UserBubbleInlineEdit({
+  initialContent,
+  onSave,
+  onCancel,
+  disabled,
+}: {
+  initialContent: string;
+  onSave: (content: string) => void;
+  onCancel: () => void;
+  disabled?: boolean;
+}) {
+  const [value, setValue] = useState(initialContent);
+
+  return (
+    <div className="min-w-[20rem] max-w-[80%] w-full rounded-2xl rounded-br-sm px-4 py-3 text-sm bg-violet-600 text-white flex flex-col gap-2">
+      <textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        disabled={disabled}
+        rows={4}
+        className="w-full rounded-lg bg-violet-700/80 border border-violet-500/50 px-3 py-2 text-white placeholder-violet-200/60 focus:outline-none focus:ring-2 focus:ring-white/50 resize-y min-h-16"
+        placeholder="Edit your message…"
+        aria-label="Edit message"
+      />
+      <div className="flex gap-2 justify-end">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={disabled}
+          className="text-xs text-violet-200 hover:text-white disabled:opacity-50 px-2 py-1 rounded"
+          aria-label="Cancel editing"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => onSave(value.trim())}
+          disabled={disabled || !value.trim()}
+          className="text-xs bg-white text-violet-700 hover:bg-violet-100 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1.5 rounded font-medium"
+          aria-label="Save edited message"
+        >
+          Save
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -524,6 +600,9 @@ export default function ChatMessageList({
   loading,
   bottomRef,
   onEditMessage,
+  editingMessageIndex = null,
+  onSaveEdit,
+  onCancelEdit,
   onUserInputAnswered,
 }: ChatMessageListProps) {
   return (
@@ -544,49 +623,64 @@ export default function ChatMessageList({
             <div
               className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}
             >
-              <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                  msg.role === "user"
-                    ? "bg-violet-600 text-white rounded-br-sm"
-                    : "bg-red-900/50 text-red-200 border border-red-800 rounded-lg"
-                }`}
-              >
-                {msg.role === "user" ? (
-                  <div className="whitespace-pre-wrap">{msg.content}</div>
-                ) : (
-                  <MarkdownContent
-                    content={msg.content}
-                    className="text-red-200 [&_code]:bg-red-900/50 [&_pre]:bg-red-900/50"
-                  />
-                )}
-              </div>
               {msg.role === "user" &&
-                msg.resolvedContent &&
-                msg.resolvedContent.trim() !== msg.content.trim() && (
-                  <details className="mt-1 max-w-[80%] text-xs text-zinc-400">
-                    <summary className="cursor-pointer select-none">
-                      Clarified command
-                      {typeof msg.roundIndex === "number"
-                        ? ` (Round ${msg.roundIndex})`
-                        : ""}
-                    </summary>
-                    <div className="mt-1 whitespace-pre-wrap rounded-md bg-zinc-900/80 px-3 py-2 text-zinc-300">
-                      {msg.resolvedContent}
-                    </div>
-                  </details>
-                )}
-              {msg.role === "user" && onEditMessage && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    onEditMessage(msg.conversationIndex ?? i, msg.content)
-                  }
+              typeof editingMessageIndex === "number" &&
+              (msg.conversationIndex ?? i) === editingMessageIndex &&
+              onSaveEdit &&
+              onCancelEdit ? (
+                <UserBubbleInlineEdit
+                  initialContent={msg.content}
+                  onSave={onSaveEdit}
+                  onCancel={onCancelEdit}
                   disabled={loading}
-                  className="mt-1 text-xs text-zinc-500 hover:text-violet-400 disabled:opacity-50"
-                  aria-label="Edit this message"
-                >
-                  Edit
-                </button>
+                />
+              ) : (
+                <>
+                  <div
+                    className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                      msg.role === "user"
+                        ? "bg-violet-600 text-white rounded-br-sm"
+                        : "bg-red-900/50 text-red-200 border border-red-800 rounded-lg"
+                    }`}
+                  >
+                    {msg.role === "user" ? (
+                      <div className="whitespace-pre-wrap">{msg.content}</div>
+                    ) : (
+                      <MarkdownContent
+                        content={msg.content}
+                        className="text-red-200 [&_code]:bg-red-900/50 [&_pre]:bg-red-900/50"
+                      />
+                    )}
+                  </div>
+                  {msg.role === "user" &&
+                    msg.resolvedContent &&
+                    msg.resolvedContent.trim() !== msg.content.trim() && (
+                      <details className="mt-1 max-w-[80%] text-xs text-zinc-400">
+                        <summary className="cursor-pointer select-none">
+                          Clarified command
+                          {typeof msg.roundIndex === "number"
+                            ? ` (Round ${msg.roundIndex})`
+                            : ""}
+                        </summary>
+                        <div className="mt-1 whitespace-pre-wrap rounded-md bg-zinc-900/80 px-3 py-2 text-zinc-300">
+                          {msg.resolvedContent}
+                        </div>
+                      </details>
+                    )}
+                  {msg.role === "user" && onEditMessage && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onEditMessage(msg.conversationIndex ?? i, msg.content)
+                      }
+                      disabled={loading}
+                      className="mt-1 text-xs text-zinc-500 hover:text-violet-400 disabled:opacity-50"
+                      aria-label="Edit this message"
+                    >
+                      Edit
+                    </button>
+                  )}
+                </>
               )}
             </div>
           ) : msg.role === "smart_context" ? (
