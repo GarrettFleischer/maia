@@ -24,9 +24,9 @@ describe("tool registry", () => {
       const otherNames = new Set(otherTools.map((t) => t.name));
 
       expect(maiaTools.length).toBeGreaterThan(otherTools.length);
-      expect(maiaNames.has("agent_create")).toBe(true);
+      expect(maiaNames.has("persona_list")).toBe(true);
       expect(maiaNames.has("cron_schedule")).toBe(true);
-      expect(otherNames.has("agent_create")).toBe(false);
+      expect(otherNames.has("persona_list")).toBe(false);
       expect(otherNames.has("cron_schedule")).toBe(false);
       expect(maiaNames.has("approve_tool")).toBe(true);
       expect(maiaNames.has("tool_deregister")).toBe(true);

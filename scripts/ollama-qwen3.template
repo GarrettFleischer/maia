@@ -1,0 +1,52 @@
+{{- $lastUserIdx := -1 -}}
+{{- range $idx, $msg := .Messages -}}
+{{- if eq $msg.Role "user" }}{{ $lastUserIdx = $idx }}{{ end -}}
+{{- end }}
+{{- if .Messages }}
+{{- if or .System .Tools }}<|im_start|>system
+{{- if .System }}
+{{ .System }}
+{{- end }}
+{{- if .Tools }}
+# Tools
+You may call one or more functions to assist with the user query.
+You are provided with function signatures within XML tags:
+
+{{- range .Tools }}
+{"type": "function", "function": {{ .Function }}}
+{{- end }}
+
+For each function call, return a json object with function name and arguments within XML tags:
+
+{"name": "{{ .Function.Name }}", "arguments": {{ .Function.Arguments }}}
+{{- end }}<|im_end|>
+{{ end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 -}}
+{{- if eq .Role "user" }}<|im_start|>user
+{{ .Content }}<|im_end|>
+{{ else if eq .Role "assistant" }}<|im_start|>assistant
+{{ if (and $.IsThinkSet (and .Thinking (or $last (gt $i $lastUserIdx)))) -}}
+ {{ .Thinking }}
+{{ end -}}
+{{ if .Content }}{{ .Content }}
+{{- else if .ToolCalls }}
+{{ range .ToolCalls }}{"name": "{{ .Function.Name }}", "arguments": {{ .Function.Arguments }}}
+{{ end }}
+{{- end }}{{ if not $last }}<|im_end|>
+{{ end }}
+{{- else if eq .Role "tool" }}<|im_start|>user
+
+{{ .Content }}
+ <|im_end|>
+{{ end }}
+{{- if and (ne .Role "assistant") $last }}<|im_start|>assistant
+{{ end }}
+{{- end }}
+{{- else }}
+{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ end }}{{ .Response }}{{ if .Response }}<|im_end|>{{ end }}

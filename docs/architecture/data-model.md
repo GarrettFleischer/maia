@@ -18,12 +18,13 @@ erDiagram
 
 - **`sessions`** – conversational threads.
 - **`history_entries`** – individual messages and tool calls in sessions, both original and compressed.
-- **`agents`** – AI agents (Maia plus sub-agents).
+- **`agents`** – Orchestrator rows (Maia remains primary); delegated personas live under `defaults/personas/` + `data/personas/` rather than multiplying isolated identities.
 - **`tasks`** – Kanban-style tasks attached to agents/users.
 - **`cron_jobs`** – scheduled jobs that trigger tools/agents.
 - **`settings`** – global configuration such as whitelisted models and heartbeat intervals.
 - **`credentials`** – encrypted vault for secrets.
-- **`knowledge_vectors`**, **`history_vectors`** – deprecated; no longer read or written. Semantic memory uses **MuninnDB** when configured (see [Runtime and operations](runtime-and-ops.md#muninndb-cognitive-memory-database)).
+- **`knowledge_vectors`**, **`history_vectors`** – primary **semantic** store for knowledge files and history (see [Semantic memory and layered memory](#semantic-memory-and-layered-memory)).
+- **`memory_registry`**, **`memory_episodes`**, **`memory_entities`**, **`memory_edges`**, **`session_compactions`** – structured layered memory (pre-prompt recall, cross-session episodes, graph links, session compaction metadata).
 - **`security_events`** – logs of injection and security-related events.
 - **`active_session`** – singleton row for the currently active user session.
 - **`approved_tools`** – registered custom tools (proposed by agents, approved by Maia).
@@ -63,12 +64,13 @@ All schema creation and migrations occur inside `initSchema(db: DbAdapter)` in `
     - `tool_args TEXT` – JSON string of tool arguments.
     - `timestamp TEXT NOT NULL`
     - `is_compressed INTEGER NOT NULL DEFAULT 0` – 0 for original, 1 for compressed.
+    - `speaker_id TEXT`, `speaker_label TEXT`, `persona_id TEXT` – optional attribution for `role = "agent"` (or related rows) so the unified transcript can show **who** spoke (Maia, a persona id, or another agent id).
   - Indexes:
     - `idx_history_session(session_id, is_compressed)`
   - Used by:
     - `src/lib/history.ts` – read/write history.
     - `src/lib/agent/runner.ts` – appends user, tool, thinking, and agent entries.
-    - `src/lib/knowledge/history-index.ts` – when Muninn is configured, writes entries to Muninn as engrams.
+    - `src/lib/knowledge/history-index.ts` – embeds entries into `history_vectors` (skips `thinking` and `smart_context` roles).
 
 - `active_session`
   - Columns:
@@ -169,15 +171,23 @@ All schema creation and migrations occur inside `initSchema(db: DbAdapter)` in `
   - `src/lib/security/injection-filter.ts` – logs redacted content.
   - Future security dashboards or audits.
 
-### Semantic memory (MuninnDB) and deprecated vector tables
+### Semantic memory and layered memory
 
-**Semantic memory:** When the **MuninnDB URL** is set in Settings (AI Providers), all semantic storage and retrieval use MuninnDB. History entries and knowledge files are written as **engrams** to Muninn on append/index; smart context and the knowledge tool use Muninn’s **ACTIVATE** API for retrieval. See [Runtime and operations](runtime-and-ops.md#muninndb-cognitive-memory-database) and [Backend and domain](backend-and-domain.md#muninndb-integration).
+**Vector semantic memory:** Knowledge index and history index write to **`knowledge_vectors`** and **`history_vectors`** using the configured embedder. Smart context and knowledge/history search read from the same tables. `thinking` entries are not embedded. See [Runtime and operations](runtime-and-ops.md#layered-memory-and-semantic-search-sqlite).
 
-**Tables: `knowledge_vectors`, `history_vectors` (deprecated)**
+**Tables: `knowledge_vectors`, `history_vectors`**
 
-- These tables remain in the schema for one-time migration only (e.g. `POST /api/embeddings/migrate-to-muninn`). They are **not** read or written by normal operation.
-- `knowledge_vectors`: id, path, content, content_hash, embedding_json, updated_at.
-- `history_vectors`: id, session_id, entry_id, content, embedding_json, is_compressed, created_at; index on session_id.
+- `knowledge_vectors`: id, path, content, content_hash, embedding_json, updated_at. File content is truncated/chunked to the effective embed context length before embedding.
+- `history_vectors`: id, session_id, entry_id, content, embedding_json, is_compressed, created_at; index on session_id. Long entries are chunked; one row per chunk (same entry_id). Search returns at most one hit per entry_id (the highest-scoring chunk).
+
+**Tables: layered memory (SQLite)**
+
+- `memory_registry` – pre-prompt “cards” with embeddings, quality, dedupe hash, access stats (`src/lib/memory/registry.ts`).
+- `memory_episodes` – cross-session summaries with embeddings and optional source entry id list (`src/lib/memory/graph.ts`).
+- `memory_entities`, `memory_edges` – simple graph for episodes and linking (`src/lib/memory/graph.ts`).
+- `session_compactions` – session-local compaction summaries and source entry id lineage (`src/lib/memory/compaction.ts`).
+
+**On-disk PARA** lives under `data/agents/<agent_id>/life/` (hierarchy with `items.json` / `summary.md` per leaf); not stored as separate SQL tables. **Daily notes** are dated markdown under the agent data directory (see `src/lib/memory/daily-notes.ts`).
 
 ### Tasks and approved tools
 
@@ -226,7 +236,7 @@ Maia uses **code-driven migrations** inside `initSchema` in `src/lib/db.ts`. A *
 2. Run the migration runner: read current `version` from `schema_version`. For each migration step `N` (1, 2, 3, …), if `currentVersion < N`, run the step (e.g. `ALTER TABLE`, backfill), then `UPDATE schema_version SET version = N, applied_at = datetime('now')`.
 3. Future schema changes: add a new step at the next integer (e.g. step 4), implement it in code, and document it in this section.
 
-**Existing migrations** (cron_jobs `tool_name`/`tool_args`, agents `reasoning_effort`, history_entries `resolved_content`/`round_index`) are assigned step numbers and run via this runner so that existing databases advance to the current version and new databases apply all steps in order.
+**Existing migrations** include, among others: cron job tool columns; agents `reasoning_effort`; history `resolved_content` / `round_index`; Muninn settings key removal (step 7); layered memory tables `memory_registry`, `memory_episodes`, `memory_entities`, `memory_edges`, `session_compactions` (step 8).
 
 When you add a new migration:
 

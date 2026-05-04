@@ -1,12 +1,111 @@
 /**
- * @fileoverview Helpers for inferring model capabilities (provider, reasoning support).
+ * @fileoverview Helpers for model capabilities (provider, reasoning, tools).
  * @module lib/ai/model-capabilities
+ *
+ * For Ollama, capabilities are read from POST /api/show when the model is
+ * installed; when unknown we do not default to true (no icons shown). If Ollama
+ * does not report "thinking", we still set supportsReasoning for known
+ * reasoning-capable model names (e.g. Qwen3.5, *-Reasoning, deepseek-r1).
+ * OpenRouter has no capability API; we assume all OpenRouter models support
+ * reasoning and tools.
  */
 
 import type { HttpClient } from "@/lib/context";
 import type { ModelCapabilities, ModelProviderId, Settings } from "@/lib/types";
 
-const OLLAMA_THINKING_URL = "https://ollama.com/search?c=thinking";
+/** Result of querying Ollama /api/show for a single model. Undefined when unknown. */
+export interface OllamaShowCapabilities {
+  supportsReasoning?: boolean;
+  supportsTools?: boolean;
+}
+
+const ollamaShowCache = new Map<string, OllamaShowCapabilities>();
+
+/**
+ * Clears the Ollama show capability cache. Only for use in tests.
+ * @internal
+ */
+export function _clearOllamaShowCapabilityCacheForTests(): void {
+  ollamaShowCache.clear();
+}
+
+/**
+ * True when the model name indicates a known reasoning-capable model that may not
+ * advertise "thinking" in Ollama /api/show (e.g. Unsloth Qwen3.5, Ministral-Reasoning).
+ * Used to show the reasoning control and pass think: true for these models.
+ *
+ * @param modelName - Bare model name (no ollama/ prefix).
+ * @returns True if we treat this model as supporting reasoning by name.
+ */
+function isKnownReasoningModelByName(modelName: string): boolean {
+  const name = modelName.toLowerCase();
+  if (name.includes("qwen3.5")) return true;
+  if (name.includes("reasoning")) return true;
+  if (name.startsWith("deepseek-r1") || name.startsWith("deepseek-v3"))
+    return true;
+  if (name.startsWith("gpt-oss")) return true;
+  return false;
+}
+
+/**
+ * Fetches whether an Ollama model supports thinking and tools via POST /api/show.
+ * Results are cached per (baseUrl, modelName). When the model is not installed or
+ * the request fails, returns undefined for both (do not default to true).
+ * If Ollama does not report "thinking", we still set supportsReasoning for
+ * known reasoning-capable model names (e.g. Qwen3.5, *-Reasoning, deepseek-r1).
+ *
+ * @param baseUrl - Ollama server base URL (e.g. http://localhost:11434).
+ * @param modelName - Model name without prefix (e.g. llama3.2 or qwen3.5:latest).
+ * @param apiKey - Optional API key for Ollama Cloud.
+ * @param http - HTTP client from app context.
+ * @returns Object with supportsReasoning and supportsTools when known; undefined when not.
+ */
+export async function fetchOllamaModelCapabilities(
+  baseUrl: string,
+  modelName: string,
+  apiKey: string | undefined,
+  http: HttpClient,
+): Promise<OllamaShowCapabilities> {
+  const normalizedBase = baseUrl.replace(/\/+$/, "");
+  const cacheKey = `${normalizedBase}|${modelName}`;
+  const cached = ollamaShowCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const unknown: OllamaShowCapabilities = {
+    supportsReasoning: undefined,
+    supportsTools: undefined,
+  };
+
+  try {
+    const url = `${normalizedBase}/api/show`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    const res = await http.fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: modelName }),
+    });
+    if (!res.ok) {
+      ollamaShowCache.set(cacheKey, unknown);
+      return unknown;
+    }
+    const data = (await res.json()) as { capabilities?: string[] };
+    const caps = Array.isArray(data.capabilities) ? data.capabilities : [];
+    let supportsReasoning = caps.includes("thinking");
+    const supportsTools = caps.includes("tools");
+    if (supportsReasoning !== true && isKnownReasoningModelByName(modelName)) {
+      supportsReasoning = true;
+    }
+    const result: OllamaShowCapabilities = { supportsReasoning, supportsTools };
+    ollamaShowCache.set(cacheKey, result);
+    return result;
+  } catch {
+    ollamaShowCache.set(cacheKey, unknown);
+    return unknown;
+  }
+}
 
 /**
  * Infers the provider id from a whitelisted model string.
@@ -21,63 +120,11 @@ function inferProvider(model: string): ModelProviderId {
 }
 
 /**
- * Fetches the set of Ollama model families that support thinking mode by querying
- * the public Ollama search page for thinking models.
+ * Computes capabilities for all whitelisted models. For Ollama, uses POST /api/show
+ * when baseUrl is set; when not set or request fails, returns undefined (no icons).
+ * OpenRouter has no capability API; we assume reasoning and tools are supported.
  *
- * @param http - HTTP client from the app context.
- * @returns Set of model family slugs (e.g. "qwen3.5", "gpt-oss").
- */
-async function fetchOllamaThinkingFamilies(http: HttpClient): Promise<Set<string>> {
-  const families = new Set<string>();
-  try {
-    const res = await http.fetch(OLLAMA_THINKING_URL);
-    if (!res.ok) return families;
-    const text = await res.text();
-    const regex = /\/library\/([a-zA-Z0-9._-]+)/g;
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) !== null) {
-      const slug = match[1];
-      if (slug) families.add(slug);
-    }
-  } catch {
-    // Network errors: return empty set and fall back to local heuristics.
-  }
-  return families;
-}
-
-/**
- * Determines whether a given Ollama model supports reasoning/think based on the
- * fetched family slugs and local heuristics.
- *
- * @param model - Full model identifier (e.g. "ollama/qwen3.5:latest").
- * @param thinkingFamilies - Set of Ollama thinking model family slugs.
- */
-function ollamaSupportsReasoning(model: string, thinkingFamilies: Set<string>): boolean {
-  const bare = model.replace(/^ollama\//, "").split(":")[0];
-
-  // If we have thinking families, check for direct or prefix matches.
-  if (thinkingFamilies.size > 0) {
-    for (const family of thinkingFamilies) {
-      if (bare === family || bare.startsWith(`${family}-`) || bare.startsWith(`${family}_`)) {
-        return true;
-      }
-    }
-  }
-
-  // Fallback heuristic: treat obvious embedding models as not supporting reasoning.
-  const lower = bare.toLowerCase();
-  if (lower.includes("embed") || lower.includes("embedding")) {
-    return false;
-  }
-
-  return true;
-}
-
-/**
- * Computes capabilities for all whitelisted models using provider inference and,
- * for Ollama, the public thinking-models catalog where available.
- *
- * @param settings - App settings (whitelistedModels, provider URLs/keys).
+ * @param settings - App settings (whitelistedModels, ollamaBaseUrl, ollamaApiKey).
  * @param http - HTTP client from app context.
  */
 export async function getModelCapabilitiesForSettings(
@@ -85,24 +132,41 @@ export async function getModelCapabilitiesForSettings(
   http: HttpClient,
 ): Promise<Record<string, ModelCapabilities>> {
   const modelCapabilities: Record<string, ModelCapabilities> = {};
-
-  const ollamaThinkingFamilies = await fetchOllamaThinkingFamilies(http);
+  const baseUrl = (settings.ollamaBaseUrl ?? "").replace(/\/+$/, "");
 
   for (const model of settings.whitelistedModels) {
     const provider = inferProvider(model);
 
-    let supportsReasoning = true;
     if (provider === "ollama") {
-      supportsReasoning = ollamaSupportsReasoning(model, ollamaThinkingFamilies);
+      const bareName = model.replace(/^ollama\//, "");
+      if (baseUrl) {
+        const show = await fetchOllamaModelCapabilities(
+          baseUrl,
+          bareName,
+          settings.ollamaApiKey,
+          http,
+        );
+        modelCapabilities[model] = {
+          provider,
+          supportsReasoning: show.supportsReasoning,
+          supportsTools: show.supportsTools,
+        };
+      } else {
+        modelCapabilities[model] = {
+          provider,
+          supportsReasoning: undefined,
+          supportsTools: undefined,
+        };
+      }
     } else {
-      // For non-Ollama providers, default to supporting reasoning; future improvements
-      // can add provider-specific capability lookups here.
-      supportsReasoning = true;
+      // OpenRouter: no capability API; assume all models support reasoning and tools.
+      modelCapabilities[model] = {
+        provider,
+        supportsReasoning: true,
+        supportsTools: true,
+      };
     }
-
-    modelCapabilities[model] = { provider, supportsReasoning };
   }
 
   return modelCapabilities;
 }
-

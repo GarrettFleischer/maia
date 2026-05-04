@@ -314,9 +314,9 @@ export default function TasksView() {
     tasks.filter((t) => t.status === status);
 
   return (
-    <div className="min-h-full bg-zinc-950 text-zinc-100 overflow-auto">
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        <div className="flex items-center justify-between mb-6">
+    <div className="h-full min-h-0 flex flex-col bg-zinc-950 text-zinc-100">
+      <main className="max-w-7xl mx-auto w-full px-4 py-6 flex flex-col flex-1 min-h-0">
+        <div className="shrink-0 flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold">Task Board</h1>
           <button
             onClick={() => setShowForm((s) => !s)}
@@ -329,7 +329,7 @@ export default function TasksView() {
         {showForm && (
           <form
             onSubmit={handleCreate}
-            className="bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-4 mb-6 space-y-3"
+            className="shrink-0 bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-4 mb-4 space-y-3"
           >
             <h2 className="text-sm font-medium">New Task</h2>
             <input
@@ -371,18 +371,20 @@ export default function TasksView() {
           </form>
         )}
 
-        {loading && <p className="text-zinc-500 text-sm">Loading tasks…</p>}
+        {loading && (
+          <p className="shrink-0 text-zinc-500 text-sm">Loading tasks…</p>
+        )}
 
         {!loading && (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-3 gap-4 flex-1 min-h-0 overflow-hidden">
             {COLUMNS.map((status) => {
               const col = byStatus(status);
               return (
                 <div
                   key={status}
-                  className={`border-t-2 ${COLUMN_HEADER_COLORS[status]} pt-3`}
+                  className={`flex flex-col min-h-0 border-t-2 ${COLUMN_HEADER_COLORS[status]} pt-3`}
                 >
-                  <div className="flex items-center gap-2 mb-3 px-1">
+                  <div className="shrink-0 flex items-center gap-2 mb-3 px-1">
                     <span className="text-sm font-medium">
                       {STATUS_LABELS[status]}
                     </span>
@@ -393,7 +395,7 @@ export default function TasksView() {
                     </span>
                   </div>
 
-                  <div className="space-y-2">
+                  <div className="flex-1 min-h-0 overflow-auto space-y-2">
                     {col.length === 0 && (
                       <p className="text-xs text-zinc-700 px-1">No tasks</p>
                     )}

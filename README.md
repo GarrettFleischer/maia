@@ -1,13 +1,13 @@
 # Maia
 
-Maia is an agentic system: a **Next.js** app where **Maia** (the orchestrator agent) coordinates sub-agents, threads (sessions), tasks, and tools. Users chat in threads; Maia can create agents, assign tasks, approve custom tools, run cron jobs, and manage threads. Agents discover tools via **find_tool** and skills via **find_skill** and use the same tool set (terminal, web search, knowledge, files, messaging, etc.) with identity and workspace isolation.
+Maia is an agentic system: a **Next.js** app where **Maia** (the orchestrator) manages threads (sessions), tasks, delegated personas, tools, and cron schedules inside one unified transcript. Users chat with Maia; she routes specialized reasoning through catalog personas (**`persona_run`**, **`persona_list`**, **`persona_catalog_upsert`**, **`persona_override_write`**) instead of juggling disconnected chat identities.
 
 **Features:**
 
-- **Multi-agent:** Maia plus any number of sub-agents; each has SOUL.md, AGENTS.md, workspace, memory, and user facts.
+- **Orchestrator persona:** Maia loads **`PERSONA.md`** (`data/agents/maia/PERSONA.md`) plus **`workspace/`**, **`memory/`**, and **`user/`** folders for durable facts.
 - **Threads:** User and agent-only sessions; conversation history and semantic search.
 - **Shared task board:** Kanban-style tasks (todo / in_progress / done) with assignment and notes.
-- **Rich tool set:** Context (chat_read, knowledge_search, smart_context), terminal, web (search, answer, research), browser automation (optional), files, credentials, messaging between agents, Yahoo Mail, cron.
+- **Rich tool set:** Context (chat_read, knowledge_search, smart_context), terminal, web (search, answer, research), browser automation (optional), files, credentials, messaging (`message_send` toward personas/Maia/the user), Yahoo Mail, cron.
 - **Custom tools:** Add tools under `data/tools/<slug>/`; Maia reviews and approves them via **approve_tool**.
 - **Embeddings & models:** Configurable models (see `defaults/models.json`); optional embeddings for semantic search.
 
@@ -171,28 +171,16 @@ Available only to the Maia orchestrator agent:
 
    API keys (Brave, etc.) can be set in `.env` or later in **Settings**; the UI stores them in the credential vault.
 
-3. **MuninnDB (semantic memory) — optional**
+3. **Ollama (chat + embeddings)**
 
-   Maia can use [MuninnDB](https://muninndb.com/docs) for long-term semantic memory (Ollama-only: no cloud API keys). Ensure Ollama is running and pull the required models:
+   Ensure Ollama is running and pull the models you will select in **Settings** (at minimum an embedder and a chat model), for example:
 
    ```bash
    ollama pull nomic-embed-text
    ollama pull llama3.2
    ```
 
-   Start MuninnDB with Docker (persistent volume, Ollama for embed + enrich):
-
-   ```bash
-   docker volume create muninndb-data
-   docker run -d --name muninndb \
-     -p 8475:8475 -p 8476:8476 -p 8750:8750 \
-     -v muninndb-data:/data \
-     -e MUNINN_OLLAMA_URL=ollama://host.docker.internal:11434/nomic-embed-text \
-     -e MUNINN_ENRICH_URL=ollama://host.docker.internal:11434/llama3.2 \
-     ghcr.io/scrypster/muninndb:latest
-   ```
-
-   Web UI: [http://localhost:8476](http://localhost:8476) (admin `root` / `password`). To use MuninnDB from Maia, set **MuninnDB URL** in **Settings → AI Providers** (e.g. `http://localhost:8475`). Full setup details: [docs/architecture/runtime-and-ops.md](docs/architecture/runtime-and-ops.md#muninndb-cognitive-memory-database).
+   Semantic search and layered memory store vectors in **SQLite** (`data/maia.db`: `knowledge_vectors`, `history_vectors`, and layered-memory tables). No separate vector database service is required. See [Runtime — layered memory](docs/architecture/runtime-and-ops.md#layered-memory-and-semantic-search-sqlite).
 
 4. **Run the app**
 
@@ -205,7 +193,7 @@ Available only to the Maia orchestrator agent:
 ## Main UI
 
 - **Home** — Chat with Maia (or the active agent) in the current thread; switch or create threads from the sidebar.
-- **Agents** — List, create, and manage sub-agents (Maia-only).
+- **Agents** — Inspect orchestrator metadata (`agents` row); delegated personas ship from `defaults/personas/catalog` and `data/personas/catalog`.
 - **Tasks** — Shared kanban board (all agents).
 - **Cron** — List and manage scheduled jobs (Maia-only).
 - **Settings** — API keys, model whitelist, credential vault, and other app settings.

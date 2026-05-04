@@ -15,7 +15,7 @@ import { findSkill } from "./find-skill";
 import { chainTool } from "./chain-tool";
 import { smartContextTool } from "./smart-context-tool";
 import { credentialTools } from "./credentials";
-import { agentManagementTools } from "./agent-management";
+import { personaManagementTools } from "./personas-tools";
 import { cronTools } from "./cron-tool";
 import { taskTrackerTools } from "./task-tracker";
 import { yahooMailTools } from "./yahoo-mail";
@@ -23,6 +23,7 @@ import { dateTimeTools } from "./datetime";
 import { customToolManagementTools } from "./custom-tools";
 import { threadManagementTools } from "./thread-management";
 import { fileCrudTools } from "./file-crud";
+import { layeredMemoryTools } from "./layered-memory-tools";
 import type { Tool, ToolRegistration } from "./types";
 import type { DbAdapter } from "../context";
 import { getDb } from "../db";
@@ -53,11 +54,12 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
   ...historyTools.map((tool) => ({ tool, maiaOnly: false })),
   ...knowledgeTools.map((tool) => ({ tool, maiaOnly: false })),
   { tool: smartContextTool, maiaOnly: false },
+  ...layeredMemoryTools.map((tool) => ({ tool, maiaOnly: false })),
   ...credentialTools.map((tool) => ({ tool, maiaOnly: false })),
   ...taskTrackerTools.map((tool) => ({ tool, maiaOnly: false })),
   ...yahooMailTools.map((tool) => ({ tool, maiaOnly: false })),
   ...dateTimeTools.map((tool) => ({ tool, maiaOnly: false })),
-  ...agentManagementTools.map((tool) => ({ tool, maiaOnly: true })),
+  ...personaManagementTools.map((tool) => ({ tool, maiaOnly: true })),
   ...cronTools.map((tool) => ({ tool, maiaOnly: true })),
   ...customToolManagementTools.map((tool) => ({ tool, maiaOnly: true })),
   ...threadManagementTools.map((tool) => ({ tool, maiaOnly: true })),

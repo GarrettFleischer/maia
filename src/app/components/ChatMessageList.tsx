@@ -260,6 +260,9 @@ export type ChatMessageListItem =
       roundIndex?: number;
       /** Conversation index of this message (for edit/truncate); set for user messages when list includes smart context. */
       conversationIndex?: number;
+      /** When set (e.g. Maia delegation or persona), shown above the bubble. */
+      speakerLabel?: string;
+      speakerId?: string;
     }
   | {
       role: "tool";
@@ -636,6 +639,11 @@ export default function ChatMessageList({
                 />
               ) : (
                 <>
+                  {msg.role === "user" && msg.speakerLabel ? (
+                    <span className="text-xs text-zinc-500 mb-1 block text-right">
+                      {msg.speakerLabel}
+                    </span>
+                  ) : null}
                   <div
                     className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                       msg.role === "user"
@@ -693,7 +701,10 @@ export default function ChatMessageList({
           ) : (
             <>
               {msg.content ? (
-                <div className="flex justify-start">
+                <div className="flex flex-col items-start gap-1">
+                  {msg.speakerLabel ? (
+                    <span className="text-xs text-zinc-500">{msg.speakerLabel}</span>
+                  ) : null}
                   <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed bg-zinc-800 text-zinc-100">
                     <MarkdownContent content={msg.content} />
                   </div>

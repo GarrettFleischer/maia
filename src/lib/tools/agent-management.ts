@@ -1,80 +1,21 @@
-import { z } from "zod";
-import { v4 as uuidv4 } from "uuid";
-import path from "path";
-import { zodToJsonSchema } from "../zod-to-json";
-import { getSettings } from "../settings";
-import {
-  getAgentsDir,
-  getDefaultAgentDir,
-  getDefaultMaiaDir,
-} from "../data-dir";
-import type { Tool, ToolContext } from "./types";
-import type { AgentDefinition } from "../types";
-import type { AppContext } from "../context";
-import { normalizeReasoningEffort } from "../agent/identity";
-
-function makeTool<S extends z.ZodTypeAny>(
-  name: string,
-  description: string,
-  schema: S,
-  execute: (args: z.infer<S>, ctx: ToolContext) => Promise<unknown>,
-): Tool<z.infer<S>> {
-  return {
-    name,
-    description,
-    schema,
-    execute,
-    toDefinition: () => ({
-      name,
-      description,
-      parameters: zodToJsonSchema(schema),
-    }),
-  };
-}
-
-const agentCreateSchema = z.object({
-  name: z.string(),
-  model: z.string(),
-  soul: z.string().optional(),
-  extra: z.string().optional().describe("System prompt extra"),
-});
-
-/** Inline fallbacks when defaults/agent file is missing (e.g. in tests). */
-const FALLBACK_SOUL = "# Soul\n\nI am {{name}}, a helpful AI agent.\n";
-const FALLBACK_AGENTS_MD =
-  "# How you function\n\nFollow AGENTS.md from project root or defaults/agent. Copy the full system command there into this file for a complete prompt.\n";
-
-/** Default model when agent_create receives a model not in the whitelist. */
-const DEFAULT_MODEL = "openrouter/free";
-
 /**
- * Reads a default agent template file from defaults/agent.
- * @param ctx - App context (uses ctx.fs)
- * @param filename - e.g. "SOUL.md"
- * @param fallback - Used when file is missing or unreadable
- * @returns File content or fallback
+ * @fileoverview Seeds default agent directories with PERSONA.md plus workspace/memory/user skeletons.
+ * @module lib/tools/agent-management
  */
-function readDefaultAgentFile(
-  ctx: AppContext,
-  filename: string,
-  fallback: string,
-): string {
-  const filePath = path.join(getDefaultAgentDir(), filename);
-  try {
-    const raw = ctx.fs.readFile(filePath);
-    const s = typeof raw === "string" ? raw.trim() : "";
-    return s !== "" ? s : fallback;
-  } catch {
-    return fallback;
-  }
-}
+import path from "path";
+import { getDefaultAgentDir, getDefaultMaiaDir } from "../data-dir";
+import type { Tool } from "./types";
+import type { AppContext } from "../context";
+
+const FALLBACK_PERSONA =
+  "# Persona\n\nYou are {{name}}, an AI assistant inside Maia. Your behavior and priorities live in this file (`PERSONA.md`). Improve it over time via **file_write** (`PERSONA.md`) when intent is clear.\n";
 
 /**
- * Reads a default identity file (SOUL). When agentId is "maia", reads from defaults/maia first; otherwise (or if missing) from defaults/agent.
+ * Reads a template file from defaults/agent (with defaults/maia override when agentId is maia).
  * @param ctx - App context (uses ctx.fs)
- * @param filename - e.g. "SOUL.md"
+ * @param filename - e.g. "PERSONA.md"
  * @param fallback - Used when file is missing or unreadable in both locations
- * @param agentId - When "maia", use defaults/maia first
+ * @param agentId - When "maia", prefer defaults/maia
  * @returns File content or fallback
  */
 function readDefaultIdentityFile(
@@ -93,44 +34,30 @@ function readDefaultIdentityFile(
       // fall through to defaults/agent
     }
   }
-  return readDefaultAgentFile(ctx, filename, fallback);
-}
-
-/**
- * Reads AGENTS.md default for the given agent. Maia gets content from defaults/maia/AGENTS.md when present; others (and fallback) use defaults/agent/AGENTS.md.
- * @param ctx - App context (uses ctx.fs)
- * @param agentId - Optional agent id; when "maia", use defaults/maia/AGENTS.md first
- * @returns AGENTS.md content or fallback
- */
-function readDefaultAgentsMd(ctx: AppContext, agentId?: string): string {
-  if (agentId === "maia") {
-    try {
-      const maiaPath = path.join(getDefaultMaiaDir(), "AGENTS.md");
-      const raw = ctx.fs.readFile(maiaPath);
-      const s = typeof raw === "string" ? raw.trim() : "";
-      if (s !== "") return s;
-    } catch {
-      // fall through to defaults/agent
-    }
+  const filePath = path.join(getDefaultAgentDir(), filename);
+  try {
+    const raw = ctx.fs.readFile(filePath);
+    const s = typeof raw === "string" ? raw.trim() : "";
+    return s !== "" ? s : fallback;
+  } catch {
+    return fallback;
   }
-  return readDefaultAgentFile(ctx, "AGENTS.md", FALLBACK_AGENTS_MD);
 }
 
 /**
- * Returns the default template directory for an agent: defaults/maia when agentId is "maia", else defaults/agent.
- * @param agentId - When "maia", use defaults/maia; otherwise defaults/agent
- * @returns Absolute path to the default directory
+ * Returns defaults/maia when agentId is maia; otherwise defaults/agent.
+ * @param agentId - Optional agent id
  */
 function getDefaultDirForAgent(agentId?: string): string {
   return agentId === "maia" ? getDefaultMaiaDir() : getDefaultAgentDir();
 }
 
 /**
- * Copies all .md files from defaultDir/subdir into agentDir/subdir. No-op if the source subdir does not exist.
+ * Copies markdown seeds from defaultDir/user or memory into the agent directory.
  * @param ctx - App context (uses ctx.fs)
- * @param defaultDir - Default template root (defaults/maia or defaults/agent)
- * @param agentDir - Agent directory (data/agents/<id>)
- * @param subdir - "user" or "memory"
+ * @param defaultDir - defaults root for this agent type
+ * @param agentDir - data/agents/<id>
+ * @param subdir - user or memory folder name
  */
 function copyDefaultFactFiles(
   ctx: AppContext,
@@ -157,11 +84,11 @@ function copyDefaultFactFiles(
 }
 
 /**
- * Copies default agent template files into an agent directory. When agentId is "maia", SOUL and AGENTS.md come from defaults/maia when present; otherwise from defaults/agent. Any .md files in the default's user/ and memory/ subfolders are copied into the agent's user/ and memory/ folders.
+ * Copies default PERSONA.md and workspace/memory/user skeleton files into an agent directory.
  * @param ctx - App context (uses ctx.fs)
- * @param agentDir - Absolute path to the agent directory (e.g. data/agents/<id>)
- * @param agentName - Used to replace {{name}} in SOUL.md (sub-agents only; Maia template typically has no placeholder)
- * @param agentId - Optional agent id; when "maia", identity files and AGENTS.md are read from defaults/maia when present
+ * @param agentDir - Absolute path (e.g. data/agents/<id>)
+ * @param agentName - Substituted for {{name}} in generic templates
+ * @param agentId - When "maia", templates load from defaults/maia first
  */
 export function copyDefaultAgentFiles(
   ctx: AppContext,
@@ -174,121 +101,16 @@ export function copyDefaultAgentFiles(
   ctx.fs.mkdirp(path.join(agentDir, "memory"));
   ctx.fs.mkdirp(path.join(agentDir, "user"));
   const defaultDir = getDefaultDirForAgent(agentId);
-  const soulContent = readDefaultIdentityFile(
+  const personaContent = readDefaultIdentityFile(
     ctx,
-    "SOUL.md",
-    FALLBACK_SOUL,
+    "PERSONA.md",
+    FALLBACK_PERSONA,
     agentId,
   ).replace(/\{\{name\}\}/g, agentName);
-  ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), soulContent);
-  ctx.fs.writeFile(
-    path.join(agentDir, "AGENTS.md"),
-    readDefaultAgentsMd(ctx, agentId),
-  );
+  ctx.fs.writeFile(path.join(agentDir, "PERSONA.md"), personaContent);
   copyDefaultFactFiles(ctx, defaultDir, agentDir, "user");
   copyDefaultFactFiles(ctx, defaultDir, agentDir, "memory");
 }
 
-export const agentCreateTool = makeTool(
-  "agent_create",
-  "Create a new agent. Use agent_list first to see existing agents and avoid duplicates. Pick the model from data/models.json (or defaults/models.json); if the model is not in the whitelist, openrouter/free is used. Maia only. Example: agent_create({ name: 'Helper', model: 'openrouter/free' }).",
-  agentCreateSchema,
-  async (args, ctx) => {
-    const settings = getSettings(ctx);
-    const model = settings.whitelistedModels.includes(args.model)
-      ? args.model
-      : DEFAULT_MODEL;
-
-    const id = uuidv4();
-    const now = new Date().toISOString();
-    ctx.db
-      .prepare(
-        `INSERT INTO agents (id, name, model, system_prompt_extra, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-      )
-      .run(id, args.name, model, args.extra ?? null, now, now);
-
-    const agentDir = path.join(getAgentsDir(), id);
-    copyDefaultAgentFiles(ctx, agentDir, args.name, id);
-
-    if (args.soul !== undefined)
-      ctx.fs.writeFile(path.join(agentDir, "SOUL.md"), args.soul);
-
-    return id;
-  },
-);
-
-export const agentDeleteTool = makeTool(
-  "agent_delete",
-  "Delete an agent by ID. Use agent_list first to find the agent ID. Maia only. Example: agent_delete({ id: 'uuid' }).",
-  z.object({ id: z.string().describe("Agent ID") }),
-  async ({ id: agentId }, ctx) => {
-    ctx.db
-      .prepare(
-        "UPDATE agents SET status = 'deleted', updated_at = ? WHERE id = ?",
-      )
-      .run(new Date().toISOString(), agentId);
-  },
-);
-
-export const agentListTool = makeTool(
-  "agent_list",
-  "List all agents. Maia only. Example: agent_list({}).",
-  z.object({}),
-  async (_args, ctx) => {
-    return (
-      ctx.db
-        .prepare(
-          "SELECT * FROM agents WHERE status != 'deleted' ORDER BY created_at",
-        )
-        .all() as Record<string, unknown>[]
-    ).map(rowToAgent);
-  },
-);
-
-export const agentGetTool = makeTool(
-  "agent_get",
-  "Get an agent's definition and identity files. Maia only. Example: agent_get({ id: 'uuid' }).",
-  z.object({ id: z.string().describe("Agent ID") }),
-  async ({ id: agentId }, ctx) => {
-    const row = ctx.db
-      .prepare("SELECT * FROM agents WHERE id = ?")
-      .get(agentId) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    const agentDir = path.join(getAgentsDir(), agentId);
-    const read = (file: string) => {
-      try {
-        return ctx.fs.readFile(path.join(agentDir, file));
-      } catch {
-        return "";
-      }
-    };
-    return {
-      agent: rowToAgent(row),
-      soul: read("SOUL.md"),
-      memory: read("MEMORY.md"),
-      user: read("USER.md"),
-      agentsMd: read("AGENTS.md"),
-    };
-  },
-);
-
-function rowToAgent(r: Record<string, unknown>): AgentDefinition {
-  return {
-    id: r.id as string,
-    name: r.name as string,
-    model: r.model as string,
-    reasoningEffort: normalizeReasoningEffort(r.reasoning_effort),
-    status: r.status as AgentDefinition["status"],
-    systemPromptExtra: r.system_prompt_extra as string | undefined,
-    createdAt: r.created_at as string,
-    updatedAt: r.updated_at as string,
-  };
-}
-
-export const agentManagementTools: Tool[] = [
-  agentCreateTool,
-  agentDeleteTool,
-  agentListTool,
-  agentGetTool,
-];
+/** Legacy export (multi-agent CRUD removed); persona tools live in `personas-tools`. */
+export const agentManagementTools: Tool[] = [];

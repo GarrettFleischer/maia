@@ -15,11 +15,9 @@ function seedAgent(ctx: AppContext, id: string, name = "Test Agent", model = "ol
   ).run(id, name, model, null, status, now, now);
 }
 
-function seedIdentityFiles(fs: FakeFs, agentId: string, soul = "# Soul\nI am Sender Agent.") {
+function seedIdentityFiles(fs: FakeFs, agentId: string, persona = "# Persona\nI am Sender Agent.") {
   const dir = path.join(getAgentsDir(), agentId);
-  fs.seed(path.join(dir, "SOUL.md"), soul);
-  fs.seed(path.join(dir, "MEMORY.md"), "# Memory\nNo memories yet.");
-  fs.seed(path.join(dir, "USER.md"), "# User\nThe user is a developer.");
+  fs.seed(path.join(dir, "PERSONA.md"), persona);
 }
 
 afterEach(() => {
@@ -81,175 +79,115 @@ describe("initMessagingService", () => {
     });
   });
 
-  describe("message_send (agent-to-agent)", () => {
-    it("creates a new session for the conversation if none exists", async () => {
-      const runCalls: string[] = [];
-      initMessagingService(ctx, async (_c, toAgentId) => {
-        runCalls.push(toAgentId);
-        return "[DONE]";
-      });
-      const sourceSession = createSession(ctx, ["agent-1", "maia"]);
-      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
+  describe("message_send (non-user targets, unified session)", () => {
+    it("does not create type=agents sessions when messaging another agent", async () => {
+      seedAgent(ctx, "agent-1", "A1");
+      seedAgent(ctx, "agent-2", "A2");
+      initMessagingService(ctx, async () => "OK");
+      const sourceSession = createSession(ctx, ["agent-1", "user"]);
+      const toolCtx = {
+        ...ctx,
+        agentId: "agent-1",
+        sessionId: sourceSession,
+        volumeRoot: "/workspace",
+      };
       await messageSendTool.execute({ to: "agent-2", text: "Hello agent 2" }, toolCtx);
-      // A new agent session should have been created
-      const sessions = ctx.db
-        .prepare("SELECT * FROM sessions WHERE type = 'agents'")
-        .all() as Record<string, unknown>[];
-      expect(sessions.some((s) => {
-        const parts = JSON.parse(s.participants as string);
-        return parts.includes("agent-1") && parts.includes("agent-2");
-      })).toBe(true);
-    });
-
-    it("reuses existing agent-to-agent session", async () => {
-      initMessagingService(ctx, async () => "[DONE]");
-      // Pre-create the session
-      const agentSession = createSession(ctx, ["agent-1", "agent-2"], "agents");
-      const sourceSession = createSession(ctx, ["agent-1"]);
-      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ to: "agent-2", text: "Reuse session" }, toolCtx);
-      await messageSendTool.execute({ to: "agent-2", text: "Second message" }, toolCtx);
-      // Should still be only one session between agent-1 and agent-2
-      const sessions = ctx.db
-        .prepare("SELECT * FROM sessions WHERE type = 'agents'")
-        .all() as Record<string, unknown>[];
-      const a2aSessions = sessions.filter((s) => {
-        const parts = JSON.parse(s.participants as string);
-        return parts.includes("agent-1") && parts.includes("agent-2");
-      });
-      expect(a2aSessions).toHaveLength(1);
-      expect(a2aSessions[0].id).toBe(agentSession);
-    });
-
-    it("returns immediately and runs recipient in background; runAgentFn is called for target agent", async () => {
-      const triggered: string[] = [];
-      initMessagingService(ctx, async (_c, agentId) => {
-        triggered.push(agentId);
-        return "Reply from agent-2. [DONE]";
-      });
-      const sourceSession = createSession(ctx, ["agent-1"]);
-      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      const reply = await messageSendTool.execute({ to: "agent-2", text: "Wake up!" }, toolCtx);
-      expect(reply).toContain("Message sent");
-      expect(reply).toContain("separate thread");
       await new Promise((r) => setImmediate(r));
-      expect(triggered).toContain("agent-2");
+      const row = ctx.db
+        .prepare("SELECT COUNT(*) as c FROM sessions WHERE type = 'agents'")
+        .get() as { c: number };
+      expect(row.c).toBe(0);
     });
 
-    it("passes only sender name/id and content to runAgentFn; recipient gets own system prompt from runner", async () => {
+    it("enqueues runAgent on the caller session with the target agent id", async () => {
+      seedAgent(ctx, "agent-1", "A1");
+      seedAgent(ctx, "agent-2", "A2");
+      let captured: { agentId: string; sessionId: string; message: string } | null =
+        null;
+      initMessagingService(ctx, async (_c, toAgentId, sid, message) => {
+        captured = { agentId: toAgentId, sessionId: sid, message };
+        return "done";
+      });
+      const sourceSession = createSession(ctx, ["user", "maia"]);
+      const toolCtx = {
+        ...ctx,
+        agentId: "maia",
+        sessionId: sourceSession,
+        volumeRoot: "/workspace",
+      };
+      await messageSendTool.execute({ to: "agent-2", text: "Ping" }, toolCtx);
+      await new Promise((r) => setImmediate(r));
+      expect(captured).not.toBeNull();
+      expect(captured!.agentId).toBe("agent-2");
+      expect(captured!.sessionId).toBe(sourceSession);
+      expect(captured!.message).toContain("Ping");
+    });
+
+    it("returns copy that mentions this thread and queued delivery", async () => {
+      seedAgent(ctx, "agent-2", "A2");
+      initMessagingService(ctx, async () => "OK");
+      const sourceSession = createSession(ctx, ["agent-1", "user"]);
+      const toolCtx = {
+        ...ctx,
+        agentId: "agent-1",
+        sessionId: sourceSession,
+        volumeRoot: "/workspace",
+      };
+      const reply = await messageSendTool.execute({ to: "agent-2", text: "Hi" }, toolCtx);
+      expect(reply).toContain("this thread");
+      expect(reply.toLowerCase()).toContain("queued");
+    });
+
+    it("passes formatted sender line to runAgentFn; recipient gets own system prompt from runner", async () => {
       const fs = new FakeFs();
       ctx = makeTestContext({ fs });
       seedAgent(ctx, "agent-1", "Sender Agent");
-      seedIdentityFiles(fs, "agent-1", "# Soul\nI am Sender Agent, the one who sends.");
+      seedAgent(ctx, "agent-2", "Recipient");
+      seedIdentityFiles(
+        fs,
+        "agent-1",
+        "# Persona\nI am Sender Agent, the one who sends.",
+      );
 
       let capturedMessage = "";
-      initMessagingService(ctx, async (_c, toAgentId, _sessionId, message, _opts) => {
+      initMessagingService(ctx, async (_c, toAgentId, _sessionId, message) => {
         if (toAgentId === "agent-2") capturedMessage = message;
-        return toAgentId === "agent-2" ? "OK" : "[DONE]";
+        return "OK";
       });
       const sourceSession = createSession(ctx, ["agent-1"]);
-      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
+      const toolCtx = {
+        ...ctx,
+        agentId: "agent-1",
+        sessionId: sourceSession,
+        volumeRoot: "/workspace",
+      };
       await messageSendTool.execute({ to: "agent-2", text: "Hello recipient" }, toolCtx);
       await new Promise((r) => setImmediate(r));
 
       expect(capturedMessage).toContain("Message from **Sender Agent**");
       expect(capturedMessage).toContain("agent-1");
       expect(capturedMessage).toContain("Hello recipient");
-      // Recipient gets their own system prompt when runner runs them; we do NOT embed sender's identity
-      expect(capturedMessage).not.toContain("Sender's Identity");
       expect(capturedMessage).not.toContain("### Soul");
       expect(capturedMessage).not.toContain("I am Sender Agent, the one who sends.");
     });
 
-    it("automatically forwards replies between agents until one says [DONE]", async () => {
+    it("runs a single queued runAgent per message (no multi-agent forward loop)", async () => {
       seedAgent(ctx, "agent-2", "Recipient Agent");
-      const runCalls: { agentId: string; sessionId: string; message?: string }[] = [];
-      let agentSessionId: string | undefined;
-      initMessagingService(ctx, async (_c, agentId, sessionId, message) => {
-        runCalls.push({ agentId, sessionId, message });
-        if (agentId === "agent-2") agentSessionId = sessionId;
-        return agentId === "agent-2"
-          ? "Here is my reply."
-          : "I have reviewed. [DONE]";
-      });
-      const sourceSession = createSession(ctx, ["agent-1", "user"]);
-      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ to: "agent-2", text: "Question" }, toolCtx);
-      await new Promise((r) => setTimeout(r, 50));
-
-      expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2", "agent-1"]);
-      const callerRun = runCalls.find((c) => c.agentId === "agent-1");
-      expect(callerRun?.sessionId).toBe(agentSessionId);
-      expect(callerRun?.message).toContain("Message from **Recipient Agent**");
-      expect(callerRun?.message).toContain("Here is my reply.");
-    });
-
-    it("continues multiple rounds until one says [DONE]", async () => {
-      seedAgent(ctx, "agent-2", "Recipient Agent");
-      const runCalls: { agentId: string; message?: string }[] = [];
-      let turn = 0;
-      initMessagingService(ctx, async (_c, agentId, _sessionId, message) => {
-        runCalls.push({ agentId, message });
-        turn++;
-        if (agentId === "agent-2") {
-          return turn === 1 ? "First reply from B." : "Second reply from B. [DONE]";
-        }
-        return "Reply from A.";
-      });
-      const sourceSession = createSession(ctx, ["agent-1", "user"]);
-      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ to: "agent-2", text: "Question" }, toolCtx);
-      await new Promise((r) => setTimeout(r, 100));
-
-      expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2", "agent-1", "agent-2"]);
-      expect(runCalls[2].message).toContain("Reply from A.");
-      const entries = ctx.db
-        .prepare("SELECT * FROM history_entries WHERE session_id = ? ORDER BY timestamp")
-        .all(sourceSession) as Record<string, unknown>[];
-      const doneEntry = entries.find((e) => (e.content as string).includes("Second reply from B"));
-      expect(doneEntry?.content).toBe("Second reply from B.");
-    });
-
-    it("when recipient reply ends with [DONE], does not run caller; posts reply to caller session instead", async () => {
-      const runCalls: { agentId: string; sessionId: string }[] = [];
-      initMessagingService(ctx, async (_c, agentId, sessionId) => {
-        runCalls.push({ agentId, sessionId });
-        return agentId === "agent-2" ? "Here is my final answer. [DONE]" : "";
-      });
-      const sourceSession = createSession(ctx, ["agent-1", "user"]);
-      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
-      await messageSendTool.execute({ to: "agent-2", text: "Question" }, toolCtx);
-      await new Promise((r) => setTimeout(r, 50));
-
-      expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2"]);
-      expect(runCalls.some((c) => c.agentId === "agent-1")).toBe(false);
-      const entries = ctx.db
-        .prepare("SELECT * FROM history_entries WHERE session_id = ? ORDER BY timestamp")
-        .all(sourceSession) as Record<string, unknown>[];
-      const agent2Entry = entries.find((e) => (e.content as string).includes("Here is my final answer"));
-      expect(agent2Entry).toBeDefined();
-      expect(agent2Entry?.content).toBe("Here is my final answer.");
-    });
-
-    it("when caller reply ends with [DONE], posts caller reply to caller session", async () => {
-      seedAgent(ctx, "agent-2", "Recipient Agent");
-      const runCalls: { agentId: string; sessionId: string }[] = [];
+      const runCalls: string[] = [];
       initMessagingService(ctx, async (_c, agentId) => {
-        runCalls.push({ agentId, sessionId: "" });
-        return agentId === "agent-2" ? "Here is my reply." : "I have reviewed. [DONE]";
+        runCalls.push(agentId);
+        return "[DONE]";
       });
       const sourceSession = createSession(ctx, ["agent-1", "user"]);
-      const toolCtx = { ...ctx, agentId: "agent-1", sessionId: sourceSession, volumeRoot: "/workspace" };
+      const toolCtx = {
+        ...ctx,
+        agentId: "agent-1",
+        sessionId: sourceSession,
+        volumeRoot: "/workspace",
+      };
       await messageSendTool.execute({ to: "agent-2", text: "Question" }, toolCtx);
-      await new Promise((r) => setTimeout(r, 50));
-
-      expect(runCalls.map((c) => c.agentId)).toEqual(["agent-2", "agent-1"]);
-      const entries = ctx.db
-        .prepare("SELECT * FROM history_entries WHERE session_id = ? ORDER BY timestamp")
-        .all(sourceSession) as Record<string, unknown>[];
-      const callerEntry = entries.find((e) => (e.content as string).includes("I have reviewed"));
-      expect(callerEntry).toBeDefined();
-      expect(callerEntry?.content).toBe("I have reviewed.");
+      await new Promise((r) => setImmediate(r));
+      expect(runCalls).toEqual(["agent-2"]);
     });
   });
 });

@@ -45,7 +45,10 @@ export function initSchema(db: DbAdapter): void {
       tool_name TEXT,
       tool_args TEXT,
       timestamp TEXT NOT NULL,
-      is_compressed INTEGER NOT NULL DEFAULT 0
+      is_compressed INTEGER NOT NULL DEFAULT 0,
+      speaker_id TEXT,
+      speaker_label TEXT,
+      persona_id TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_history_session ON history_entries(session_id, is_compressed);
@@ -82,7 +85,10 @@ export function initSchema(db: DbAdapter): void {
       is_built_in INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       tool_name TEXT NOT NULL DEFAULT 'cron_echo',
-      tool_args TEXT NOT NULL DEFAULT '{}'
+      tool_args TEXT NOT NULL DEFAULT '{}',
+      persona_id TEXT,
+      persona_model TEXT,
+      cron_message TEXT
     );
 
     CREATE TABLE IF NOT EXISTS security_events (
@@ -99,7 +105,7 @@ export function initSchema(db: DbAdapter): void {
       session_id TEXT
     );
 
-    /* Deprecated: semantic memory now uses MuninnDB. Tables kept for one-time migration only; do not drop. */
+    /* Semantic memory: embedded markdown files (knowledge) and history entry chunks. */
     CREATE TABLE IF NOT EXISTS knowledge_vectors (
       id TEXT PRIMARY KEY,
       path TEXT NOT NULL UNIQUE,
@@ -308,6 +314,135 @@ export function initSchema(db: DbAdapter): void {
           "UPDATE schema_version SET version = 5, applied_at = datetime('now')",
         )
         .run();
+      currentVersion = 5;
+    }
+
+    // Step 6: history_entries speaker attribution (unified multi-persona transcript)
+    if (currentVersion < 6) {
+      const historyInfo = database
+        .prepare("PRAGMA table_info(history_entries)")
+        .all() as { name: string }[];
+      if (!historyInfo.some((c) => c.name === "speaker_id")) {
+        database.exec("ALTER TABLE history_entries ADD COLUMN speaker_id TEXT");
+      }
+      if (!historyInfo.some((c) => c.name === "speaker_label")) {
+        database.exec(
+          "ALTER TABLE history_entries ADD COLUMN speaker_label TEXT",
+        );
+      }
+      if (!historyInfo.some((c) => c.name === "persona_id")) {
+        database.exec("ALTER TABLE history_entries ADD COLUMN persona_id TEXT");
+      }
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 6, applied_at = datetime('now')",
+        )
+        .run();
+      currentVersion = 6;
+    }
+
+    // Step 7: remove MuninnDB settings keys (semantic memory is SQLite-only)
+    if (currentVersion < 7) {
+      database.exec(
+        "DELETE FROM settings WHERE key IN ('muninnUrl', 'muninnApiKey')",
+      );
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 7, applied_at = datetime('now')",
+        )
+        .run();
+      currentVersion = 7;
+    }
+
+    // Step 8: layered memory (registry, graph episodes, compactions)
+    if (currentVersion < 8) {
+      database.exec(`
+    CREATE TABLE IF NOT EXISTS memory_registry (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      embedding_json TEXT NOT NULL,
+      quality_score REAL NOT NULL DEFAULT 1.0,
+      source_kind TEXT NOT NULL DEFAULT 'explicit',
+      dedupe_hash TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      accessed_at TEXT NOT NULL,
+      access_count INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_registry_agent ON memory_registry(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_registry_dedupe ON memory_registry(agent_id, dedupe_hash);
+
+    CREATE TABLE IF NOT EXISTS memory_episodes (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      entry_ids_json TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      embedding_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      accessed_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_episodes_agent ON memory_episodes(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_episodes_session ON memory_episodes(session_id);
+
+    CREATE TABLE IF NOT EXISTS memory_entities (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'entity',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_entities_agent ON memory_entities(agent_id);
+
+    CREATE TABLE IF NOT EXISTS memory_edges (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      from_id TEXT NOT NULL,
+      to_id TEXT NOT NULL,
+      relation TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_edges_agent ON memory_edges(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_edges_from ON memory_edges(from_id);
+
+    CREATE TABLE IF NOT EXISTS session_compactions (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      summary_markdown TEXT NOT NULL,
+      source_entry_ids_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_compactions_session ON session_compactions(session_id);
+      `);
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 8, applied_at = datetime('now')",
+        )
+        .run();
+      currentVersion = 8;
+    }
+
+    // Step 9: cron_jobs delegated persona + prompt wake columns
+    if (currentVersion < 9) {
+      const cronInfo = database
+        .prepare("PRAGMA table_info(cron_jobs)")
+        .all() as { name: string }[];
+      if (!cronInfo.some((c) => c.name === "persona_id")) {
+        database.exec("ALTER TABLE cron_jobs ADD COLUMN persona_id TEXT");
+      }
+      if (!cronInfo.some((c) => c.name === "persona_model")) {
+        database.exec("ALTER TABLE cron_jobs ADD COLUMN persona_model TEXT");
+      }
+      if (!cronInfo.some((c) => c.name === "cron_message")) {
+        database.exec("ALTER TABLE cron_jobs ADD COLUMN cron_message TEXT");
+      }
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 9, applied_at = datetime('now')",
+        )
+        .run();
+      currentVersion = 9;
     }
   }
 
@@ -316,12 +451,10 @@ export function initSchema(db: DbAdapter): void {
       heartbeatIntervalMinutes: "30",
       ollamaBaseUrl: "http://localhost:11434",
       ollamaApiKey: "",
-      muninnUrl: "",
       openRouterApiKey: "",
       embeddingModel: "ollama/nomic-embed-text",
       embedMaxContentLength: "8192",
       contextQueryModel: "",
-      contextSummaryModel: "",
       contextRecentTurns: "3",
       contextReasoningEffort: "medium",
       archiveDurationValue: "0",

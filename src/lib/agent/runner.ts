@@ -9,8 +9,6 @@ import { getSettings } from "../settings";
 import { getAgentIdentity, setAgentStatus } from "./identity";
 import {
   getSession,
-  getSessionRecent,
-  getTotalUserRounds,
   appendEntry,
   ensureSession,
   entriesForConversation,
@@ -38,6 +36,7 @@ import type { AIProvider } from "../ai/types";
 import type {
   AgentLoopEvent,
   HistoryEntry,
+  PersonaTurnOptions,
   SmartContextRun,
   SSEEvent,
 } from "../types";
@@ -48,7 +47,9 @@ import { getCurrentSystemDateTime } from "../date-time";
 import { getMatchedSkillsContent } from "../skills";
 import { completeOllamaJob, registerOllamaJob } from "../ollama/jobs";
 import { enqueue } from "../queue/llm-queue";
+import { runExclusive } from "../history/session-lock";
 import { runWithAgentContext, agentDebug, agentError } from "./agent-logger";
+import { buildPrepromptMemoryBlock } from "../memory/preprompt";
 
 export type SSECallback = (event: SSEEvent) => void;
 export type ProviderFactory = (
@@ -92,6 +93,16 @@ export interface RunAgentOptions {
    * Default true (use queue) for direct chat and other non-queue entry points.
    */
   smartContextViaQueue?: boolean;
+  /**
+   * Run as Maia with a delegated persona template (model + instructions). Requires `agentId === "maia"`.
+   */
+  personaTurn?: PersonaTurnOptions;
+  /**
+   * Overrides tool registry lookup (e.g. `persona:typescript-pro`). Derived from personaTurn when omitted.
+   */
+  toolAgentId?: string;
+  /** Attribute the user row to Maia when Maia delegated a sub-task (persona run). */
+  delegatedFromMaia?: boolean;
 }
 
 /**
@@ -139,17 +150,49 @@ export async function runAgent(
   onEvent: SSECallback,
   options?: RunAgentOptions,
 ): Promise<string> {
+  return runExclusive(sessionId, () =>
+    runAgentUnlocked(
+      ctx,
+      providerFactory,
+      agentId,
+      sessionId,
+      userMessage,
+      onEvent,
+      options,
+    ),
+  );
+}
+
+async function runAgentUnlocked(
+  ctx: AppContext,
+  providerFactory: ProviderFactory,
+  agentId: string,
+  sessionId: string,
+  userMessage: string,
+  onEvent: SSECallback,
+  options?: RunAgentOptions,
+): Promise<string> {
   const settings = getSettings(ctx);
 
   // Load agent
   const agent = getAgentIdentity(ctx, agentId);
   if (!agent) throw new Error(`Agent not found: ${agentId}`);
 
-  if (!settings.whitelistedModels.includes(agent.model)) {
+  if (options?.personaTurn) {
+    if (agentId !== "maia") {
+      throw new Error('personaTurn requires agentId "maia"');
+    }
+    if (!settings.whitelistedModels.includes(options.personaTurn.model)) {
+      throw new Error(`Model not whitelisted: ${options.personaTurn.model}`);
+    }
+  } else if (!settings.whitelistedModels.includes(agent.model)) {
     throw new Error(`Model not whitelisted: ${agent.model}`);
   }
 
-  setAgentStatus(ctx, agentId, "running");
+  const skipAgentStatus = options?.personaTurn !== undefined;
+  if (!skipAgentStatus) {
+    setAgentStatus(ctx, agentId, "running");
+  }
 
   try {
     return await runWithAgentContext({ id: agent.id, name: agent.name }, () =>
@@ -165,7 +208,9 @@ export async function runAgent(
       ),
     );
   } finally {
-    setAgentStatus(ctx, agentId, "idle");
+    if (!skipAgentStatus) {
+      setAgentStatus(ctx, agentId, "idle");
+    }
   }
 }
 
@@ -195,18 +240,32 @@ async function _runLoop(
     }
   }
 
-  const provider = providerFactory(agent.model, ctx, {
-    reasoningEffort: agent.reasoningEffort,
+  const effectiveToolAgentId =
+    options?.toolAgentId ??
+    (options?.personaTurn ? `persona:${options.personaTurn.id}` : agent.id);
+  const runModel = options?.personaTurn?.model ?? agent.model;
+  const runReasoning =
+    options?.personaTurn?.reasoningEffort ?? agent.reasoningEffort;
+
+  const provider = providerFactory(runModel, ctx, {
+    reasoningEffort: runReasoning,
   });
-  const tools = getToolsForAgent(agent.id);
-  const toolDefs = getMinimalToolDefsForAgent(agent.id);
+  const tools = getToolsForAgent(effectiveToolAgentId);
+  const toolDefs = getMinimalToolDefsForAgent(effectiveToolAgentId);
+
+  const volumeRoot = options?.personaTurn
+    ? getAgentDir("maia")
+    : getAgentDir(agent.id);
+  const defaultCwd = options?.personaTurn
+    ? getAgentWorkspace("maia")
+    : getAgentWorkspace(agent.id);
 
   const toolContext: ToolContext = {
     ...ctx,
-    agentId: agent.id,
+    agentId: effectiveToolAgentId,
     sessionId,
-    volumeRoot: getAgentDir(agent.id),
-    defaultCwd: getAgentWorkspace(agent.id),
+    volumeRoot,
+    defaultCwd,
     providerFactory,
     getToolsForAgent,
   };
@@ -262,6 +321,23 @@ async function _runLoop(
   );
   const effectiveUserMessage = rewriteResult.resolvedCommand;
 
+  const AUTO_INCLUDE_ROUNDS = 3;
+  const totalRoundsPrior = existingSession ? countUserRounds(existingSession) : 0;
+  const roundsBeforePrior = Math.max(0, totalRoundsPrior - AUTO_INCLUDE_ROUNDS);
+  const lastThreeBlockPrior =
+    existingSession && existingSession.original.length > 0
+      ? formatRecentThreadTurns(existingSession, AUTO_INCLUDE_ROUNDS, {
+          skipThinking: true,
+        })
+      : "";
+  const roundsNotePrior =
+    roundsBeforePrior > 0
+      ? `**Context:** You are seeing the last ${AUTO_INCLUDE_ROUNDS} conversation rounds below. There are **${roundsBeforePrior}** more rounds before these. Use **find_tool** to discover how to read earlier rounds when you need full context.\n\n`
+      : "";
+  const recentThreadBlock = lastThreeBlockPrior
+    ? roundsNotePrior + lastThreeBlockPrior
+    : "";
+
   // Store user message with resolved command and round index
   const userEntry = appendEntry(ctx, sessionId, {
     role: "user",
@@ -269,6 +345,9 @@ async function _runLoop(
     resolvedContent: effectiveUserMessage,
     roundIndex: currentRoundIndex,
     timestamp: new Date().toISOString(),
+    ...(options?.delegatedFromMaia
+      ? { speakerId: "maia", speakerLabel: "Maia" }
+      : {}),
   });
   emitEntryIfRequested(userEntry);
   scheduleHistoryIndex(ctx, userEntry.id, options, (err) =>
@@ -339,22 +418,6 @@ async function _runLoop(
     }
   }
 
-  // Include last 3 rounds automatically (thinking entries omitted—display only). Tell agent how many more rounds exist so they can discover the right tool when needed. Use getSessionRecent in the hot path to avoid loading full history.
-  const session = getSessionRecent(ctx, sessionId);
-  const AUTO_INCLUDE_ROUNDS = 3;
-  const totalRounds = getTotalUserRounds(ctx, sessionId);
-  const roundsBefore = Math.max(0, totalRounds - AUTO_INCLUDE_ROUNDS);
-  const lastThreeBlock =
-    session && session.original.length > 0
-      ? formatRecentThreadTurns(session, AUTO_INCLUDE_ROUNDS, {
-          skipThinking: true,
-        })
-      : "";
-  const roundsNote =
-    roundsBefore > 0
-      ? `**Context:** You are seeing the last ${AUTO_INCLUDE_ROUNDS} conversation rounds below. There are **${roundsBefore}** more rounds before these. Use **find_tool** to discover how to read earlier rounds when you need full context.\n\n`
-      : "";
-  const recentThreadBlock = lastThreeBlock ? roundsNote + lastThreeBlock : "";
   // Clarified commands only (no full rounds) for query extraction; agent can use find_tool to discover how to read full context for rounds.
   const clarifiedCommandsBlock = [
     ...priorCommands.map((c) => `Round ${c.roundIndex}: ${c.resolvedCommand}`),
@@ -403,6 +466,15 @@ async function _runLoop(
     output: effectiveUserMessage,
   });
   persistSmartContextRunPartial();
+  const skillMatchAgentId = options?.personaTurn ? "maia" : agent.id;
+
+  const prepromptMemory = await buildPrepromptMemoryBlock(
+    ctx,
+    effectiveToolAgentId,
+    effectiveUserMessage,
+    sessionId,
+  );
+
   const [smartResult, skillsResult] = await Promise.all([
     buildSmartContextBlock(
       ctx,
@@ -463,7 +535,7 @@ async function _runLoop(
         }
       },
     ),
-    getMatchedSkillsContent(ctx, agent.id, effectiveUserMessage, {
+    getMatchedSkillsContent(ctx, skillMatchAgentId, effectiveUserMessage, {
       providerFactory: contextProviderFactory,
     }),
   ]);
@@ -481,19 +553,17 @@ async function _runLoop(
     (skillsResult.skillNames.length > 0
       ? skillsResult.skillNames.map((n) => `- ${n}`).join("\n")
       : "(none)");
-  const smartContextBlock = baseBlock + sourcesSection + skillsSection;
+  const smartContextBlock =
+    (prepromptMemory ? prepromptMemory + "\n\n" : "") +
+    baseBlock +
+    sourcesSection +
+    skillsSection;
 
-  const systemPromptContent = buildSystemPrompt(
-    ctx,
-    agent,
-    skillsResult.content,
-  );
-  const contextNote =
-    totalRounds > AUTO_INCLUDE_ROUNDS
-      ? "Use **find_tool** to discover how to read earlier conversation rounds when you need full context.\n\n"
-      : "";
+  const systemPromptContent = options?.personaTurn
+    ? buildPersonaSystemPrompt(ctx, options.personaTurn, skillsResult.content)
+    : buildSystemPrompt(ctx, agent, skillsResult.content);
   const combinedSystemContent = transformContext(
-    contextNote,
+    recentThreadBlock,
     smartContextBlock,
     systemPromptContent,
   );
@@ -540,7 +610,7 @@ async function _runLoop(
       : ["(none)"]),
   ];
 
-  const toolsForAgent = getToolsForAgent(agent.id);
+  const toolsForAgent = getToolsForAgent(effectiveToolAgentId);
   const skillsContent = skillsResult.content;
   const toolsMentionedInSkills = toolsForAgent.filter((t) =>
     skillsContent.includes(t.name),
@@ -601,6 +671,16 @@ async function _runLoop(
     role: "agent",
     content: "",
     timestamp: new Date().toISOString(),
+    ...(options?.personaTurn
+      ? {
+          speakerId: options.personaTurn.id,
+          speakerLabel: options.personaTurn.name,
+          personaId: options.personaTurn.id,
+        }
+      : {
+          speakerId: agent.id,
+          speakerLabel: agent.name,
+        }),
   };
 
   /** When set, _runLoop returns this (final reply when no more tool calls). */
@@ -718,11 +798,11 @@ async function _runLoop(
   /** For Ollama agents: track current AbortController so cancel can abort the in-flight request. */
   const controllerRef: { current: AbortController | null } = { current: null };
   let ollamaJobId: string | null = null;
-  if (agent.model.startsWith("ollama/")) {
+  if (runModel.startsWith("ollama/")) {
     ollamaJobId = crypto.randomUUID();
     registerOllamaJob({
       id: ollamaJobId,
-      model: agent.model,
+      model: runModel,
       type: "chat",
       startedAt: new Date().toISOString(),
       status: "running",
@@ -921,32 +1001,26 @@ async function _runLoop(
 }
 
 /**
- * Fallback system instruction when AGENTS.md is missing or empty.
- * @note Kept in code so the app still runs without the file. Mirrors the security
- * preamble and minimal identity/context guidance; detailed operational behavior
- * comes from dynamically loaded skills documented in defaults/skills.
+ * Fallback system instruction when agent `PERSONA.md` and project-root `PERSONA.md` are both missing or empty.
+ * @note Kept in code so the app still runs without files on disk.
  */
 const FALLBACK_SYSTEM_INSTRUCTIONS = [
-  SECURITY_PREAMBLE,
-  "",
   "## Identity and context",
-  "Your identity is in SOUL above. Memory and user facts live in the memory/ and user/ folders one level above your workspace (`~`), in the agent root. Use **knowledge_search** with scope (self, user, global) to retrieve them when needed.",
+  "Your persona markdown (`PERSONA.md`) was missing or empty; follow the security preamble above and skills until an operator fills it in. Memory and user facts live in the memory/ and user/ folders next to `PERSONA.md`, above workspace (`~`). Use **knowledge_search** with scope (self, user, global) when needed.",
   "",
   "## Skills and behavior",
-  "Most of your operational behavior (how you use memory, manage files, and call web tools) is defined in skills that may appear in a `## Active skills` section of this system prompt. Follow those skills alongside this security preamble and your SOUL.",
+  "Operational behavior is defined in skills that may appear in a `## Active skills` section. Follow those skills alongside this notice.",
 ].join("\n");
 
 /**
- * Reads AGENTS.md from project root if present.
- * @brief Returns trimmed content or empty string when file is missing or unreadable.
+ * @brief Reads optional project-root persona fallback (`PERSONA.md`).
  * @param ctx - App context (uses ctx.fs for reading)
- * @returns Contents of AGENTS.md or ""
- * @note Used by buildSystemPrompt when agent dir has no AGENTS.md.
+ * @returns Trimmed markdown or ""
  */
-function readAgentsMd(ctx: AppContext): string {
-  const agentsPath = path.join(process.cwd(), "AGENTS.md");
+function readProjectPersonaMd(ctx: AppContext): string {
+  const personaPath = path.join(process.cwd(), "PERSONA.md");
   try {
-    const raw = ctx.fs.readFile(agentsPath);
+    const raw = ctx.fs.readFile(personaPath);
     return typeof raw === "string" ? raw.trim() : "";
   } catch {
     return "";
@@ -954,11 +1028,47 @@ function readAgentsMd(ctx: AppContext): string {
 }
 
 /**
+ * Builds the system prompt for a delegated persona run (Maia + template instructions).
+ * @param ctx - App context
+ * @param persona - Persona id, display name, instructions, and model (model not repeated here)
+ * @param skillsContent - Optional "## Active skills" block from getMatchedSkillsContent
+ * @returns Single string system prompt
+ */
+function buildPersonaSystemPrompt(
+  _ctx: AppContext,
+  persona: PersonaTurnOptions,
+  skillsContent?: string,
+): string {
+  const { iso, local, timezone } = getCurrentSystemDateTime();
+  const systemTimeSectionLines = [
+    "## System date and time",
+    `Current system ISO datetime (UTC): ${iso}`,
+    `Current system local datetime: ${local}`,
+    `System timezone: ${timezone}`,
+  ];
+  const parts: string[] = [
+    SECURITY_PREAMBLE,
+    "",
+    `You are the persona **${persona.name}** (id: \`${persona.id}\`). You run inside Maia with workspace \`data/agents/maia/workspace\`. Use **smart_context**, **find_tool**, and **find_skill** as needed. Report progress to the user.`,
+    "",
+    systemTimeSectionLines.join("\n"),
+    "",
+    "## Persona instructions (template)",
+    "",
+    persona.instructions.trim(),
+  ];
+  if (skillsContent && skillsContent.trim()) {
+    parts.push("", skillsContent.trim());
+  }
+  return parts.join("\n");
+}
+
+/**
  * Builds the full system prompt for an agent run.
- * Order: agent ID → system date/time → AGENTS.md (attribution + content) → SOUL.md (attribution + content).
- * No Memory/User blocks; those live in memory/ and user/ and are retrieved via knowledge_search.
- * @param ctx - App context (for reading project-root AGENTS.md fallback via ctx.fs)
- * @param agent - Loaded identity (id, soul, agentsMd, optional systemPromptExtra)
+ * Order: security preamble → agent ID → system date/time → persona markdown (`PERSONA.md`) with attribution.
+ * memory/ and user/ facts stay on disk; retrieve via knowledge_search and layered-memory tools.
+ * @param ctx - App context (project-root PERSONA.md fallback via ctx.fs when agent persona empty)
+ * @param agent - Loaded identity (id, persona markdown, optional systemPromptExtra)
  * @param skillsContent - Optional "## Active skills" block from getMatchedSkillsContent (empty string when none matched)
  * @returns Single string system prompt
  */
@@ -966,19 +1076,29 @@ function buildSystemPrompt(
   ctx: AppContext,
   agent: {
     id: string;
-    soul: string;
-    agentsMd: string;
+    persona: string;
     systemPromptExtra?: string;
   },
   skillsContent?: string,
 ): string {
-  const agentsContent =
-    agent.agentsMd && agent.agentsMd.trim()
-      ? agent.agentsMd.trim()
-      : readAgentsMd(ctx);
+  const trimmedAgentPersona = agent.persona.trim();
+  const trimmedRootPersona = readProjectPersonaMd(ctx).trim();
+  const personaBody =
+    trimmedAgentPersona !== "" ? trimmedAgentPersona : trimmedRootPersona;
 
   const systemInstructions =
-    agentsContent !== "" ? agentsContent : FALLBACK_SYSTEM_INSTRUCTIONS;
+    personaBody !== "" ? personaBody : FALLBACK_SYSTEM_INSTRUCTIONS;
+
+  let personaAttribution: string;
+  if (trimmedAgentPersona !== "") {
+    personaAttribution = `The following persona text is from \`data/agents/${agent.id}/PERSONA.md\`.`;
+  } else if (trimmedRootPersona !== "") {
+    personaAttribution =
+      "The following persona text is from project-root `PERSONA.md` (agent PERSONA.md was empty).";
+  } else {
+    personaAttribution =
+      "Persona markdown was missing; using compiled fallback instructions below.";
+  }
 
   const { iso, local, timezone } = getCurrentSystemDateTime();
   const systemTimeSectionLines = [
@@ -988,21 +1108,16 @@ function buildSystemPrompt(
     `System timezone: ${timezone}`,
   ];
 
-  const agentsAttribution = `The following instructions are from \`data/agents/${agent.id}/AGENTS.md\`.`;
-  const soulAttribution = `The following is from \`data/agents/${agent.id}/SOUL.md\`.`;
-
   const parts: string[] = [
+    SECURITY_PREAMBLE,
+    "",
     `You are agent \`${agent.id}\`.`,
     "",
     systemTimeSectionLines.join("\n"),
     "",
-    agentsAttribution,
+    personaAttribution,
     "",
     systemInstructions,
-    "",
-    soulAttribution,
-    "",
-    agent.soul,
   ];
   if (agent.systemPromptExtra) {
     parts.push("", "## Additional Instructions", agent.systemPromptExtra);

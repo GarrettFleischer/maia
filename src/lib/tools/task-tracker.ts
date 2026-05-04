@@ -28,7 +28,10 @@ export const taskCreateTool = makeTool(
   z.object({
     title: z.string().describe("Task title"),
     desc: z.string().optional().describe("Detailed description"),
-    assign: z.string().optional().describe("Agent ID to assign to"),
+    assign: z
+      .string()
+      .optional()
+      .describe("Assignee: persona id (e.g. typescript-pro), maia, or another agent id"),
   }),
   async ({ title, desc, assign }, ctx) => {
     return createTask(ctx, {
@@ -47,7 +50,11 @@ export const taskUpdateTool = makeTool(
     id: z.string().describe("Task ID"),
     status: z.enum(["todo", "in_progress", "done"]).optional().describe("New status"),
     note: z.string().optional().describe("Note to append"),
-    assign: z.string().nullable().optional().describe("Agent ID or null to unassign"),
+    assign: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("Persona id, maia, another agent id, or null to unassign"),
   }),
   async ({ id: taskId, status, note, assign: assignedTo }, ctx) => {
     if (status === undefined && note === undefined && assignedTo === undefined) {
@@ -69,7 +76,7 @@ export const taskListTool = makeTool(
   "List tasks on the shared kanban board. Filter by column (status: todo/in_progress/done) or agent id (assignedTo, createdBy). By default excludes completed (done) tasks unless you filter by status. Example: task_list({ status: 'todo' }).",
   z.object({
     status: z.enum(["todo", "in_progress", "done"]).optional().describe("Filter by status"),
-    assign: z.string().optional().describe("Filter by assigned agent"),
+    assign: z.string().optional().describe("Filter by assignee (persona id or maia)"),
     created: z.string().optional().describe("Filter by creator agent"),
   }),
   async ({ status, assign: assignedTo, created: createdBy }, ctx) => {

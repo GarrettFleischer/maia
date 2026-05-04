@@ -29,146 +29,22 @@ flowchart LR
 - **NextServer**: Started via `bun dev` (development) or `bun run build` then `bun start` (production). Serves the App Router UI and all API routes under `src/app/api/**`.
 - **AppContext**: Built once per process in `src/instrumentation-node.ts` when `registerNode()` runs (triggered by the first `ensureAppContext()` call from an API route). Holds `db`, `fs`, `http`, `events`, `processRunner`, and optional `sandboxContainerName`.
 - **SQLite**: Single file at `data/maia.db` (path from `getDataDir()` in `src/lib/data-dir.ts`). WAL mode; no separate DB server.
-- **LLMQueueWorker**: In-process priority queue in `src/lib/queue/llm-queue.ts`. One logical worker; jobs are processed by a timer and by `tickQueueProcessor()` on each `ensureAppContext()`.
+- **LLMQueueWorker**: In-process priority queue in `src/lib/queue/llm-queue.ts`. One logical worker; jobs are processed by a timer and by `tickQueueProcessor()` on each `ensureAppContext()`. Chat/agent runs that touch the same session also go through **`runExclusive(sessionId)`** in `src/lib/history/session-lock.ts` so history appends and nested tool calls (e.g. `persona_run`) serialize per session while different sessions can progress concurrently.
 - **CronScheduler**: In-process scheduler in `src/lib/cron/service.ts` using `node-cron`. Loads jobs from `cron_jobs` and runs them at the specified cron times.
 - **DockerSandbox**: Optional. The `maia-sandbox` container from `docker-compose.yml` is used by the terminal tool when `SANDBOX_CONTAINER_NAME` is set; the Next.js process runs `docker exec` to run shell commands inside the sandbox.
 - **ExternalAIProviders**: Ollama, OpenRouter, and (for web tools) Brave APIs. All accessed via the HTTP client in `AppContext`.
 
-## MuninnDB (cognitive memory database)
+## Layered memory and semantic search (SQLite)
 
-Maia can use **[MuninnDB](https://muninndb.com/docs)** as its long‑term semantic memory store (instead of the built‑in SQLite vector tables). MuninnDB runs as a **separate service**, typically via Docker, and exposes:
+Maia keeps **all** semantic search and long-term memory structures in the **same SQLite database** as the rest of the app (`data/maia.db`). There is **no** separate vector database service.
 
-- REST on `http://localhost:8475` (JSON API for reads/writes and `ACTIVATE`)
-- Web UI on `http://localhost:8476` (admin dashboard)
-- MCP on `http://localhost:8750/mcp` (for tools like Cursor/Claude)
-- MBP, gRPC, and clustering ports (not used directly by Maia)
-
-### Docker deployment (recommended for development)
-
-Use a named volume for persistence:
-
-```bash
-docker volume create muninndb-data
-```
-
-Run MuninnDB with all standard ports exposed and data stored in the volume:
-
-```bash
-docker run -d \
-  --name muninndb \
-  -p 8474:8474 \
-  -p 8475:8475 \
-  -p 8476:8476 \
-  -p 8477:8477 \
-  -p 8750:8750 \
-  -v muninndb-data:/data \
-  ghcr.io/scrypster/muninndb:latest
-```
-
-You should then be able to:
-
-- Open the **Web UI** at `http://localhost:8476` (admin `root` / `password` by default; change password after first login).
-- Call the **REST API** at `http://localhost:8475`.
-- Configure MCP clients (e.g. Cursor) to use `http://localhost:8750/mcp`.
-
-### Embedding plugin (semantic search) — Ollama
-
-Maia’s setup uses **Ollama only** for MuninnDB. Configure the embedder so MuninnDB can do semantic similarity in its ACTIVATE pipeline. Pull the embedding model in Ollama first (e.g. `ollama pull nomic-embed-text`), then set:
-
-```bash
--e MUNINN_OLLAMA_URL=ollama://localhost:11434/nomic-embed-text
-```
-
-Run with Docker:
-
-```bash
-docker run -d \
-  --name muninndb \
-  -p 8474:8474 \
-  -p 8475:8475 \
-  -p 8476:8476 \
-  -p 8477:8477 \
-  -p 8750:8750 \
-  -v muninndb-data:/data \
-  -e MUNINN_OLLAMA_URL=ollama://localhost:11434/nomic-embed-text \
-  ghcr.io/scrypster/muninndb:latest
-```
-
-If the MuninnDB container cannot reach `localhost:11434` (e.g. Ollama runs on the host), use the host’s IP or `host.docker.internal` (e.g. `ollama://host.docker.internal:11434/nomic-embed-text` on Docker Desktop).
-
-### Enrich plugin (summaries and key points) — Ollama
-
-The **Enrich plugin** lets MuninnDB auto‑generate `summary`, `key_points`, entities, and relationships for each engram using an LLM. With **Ollama only**, use a chat-capable model (e.g. `llama3.2` or `llama3.1`). No API key is required:
-
-```bash
--e MUNINN_ENRICH_URL=ollama://localhost:11434/llama3.2
-```
-
-Pull the model first: `ollama pull llama3.2`. If MuninnDB runs in Docker and Ollama is on the host, use `host.docker.internal` as in the embedder section (e.g. `ollama://host.docker.internal:11434/llama3.2`).
-
-**Full example — Ollama only (embed + enrich):**
-
-```bash
-docker run -d \
-  --name muninndb \
-  -p 8474:8474 \
-  -p 8475:8475 \
-  -p 8476:8476 \
-  -p 8477:8477 \
-  -p 8750:8750 \
-  -v muninndb-data:/data \
-  -e MUNINN_OLLAMA_URL=ollama://localhost:11434/nomic-embed-text \
-  -e MUNINN_ENRICH_URL=ollama://localhost:11434/llama3.2 \
-  ghcr.io/scrypster/muninndb:latest
-```
-
-Once enabled, enrichment runs in the background for both newly written and existing engrams; enriched fields appear in ACTIVATE/Read responses. No API keys are needed when using Ollama only.
-
-### Sanity checks
-
-After MuninnDB is running:
-
-- **Health check**:
-
-  ```bash
-  curl -s http://localhost:8475/api/health
-  ```
-
-- **Write a test memory (engrams)**:
-
-  ```bash
-  curl -sX POST http://localhost:8475/api/engrams \
-    -H "Content-Type: application/json" \
-    -d '{
-      "vault": "default",
-      "concept": "auth architecture",
-      "content": "Short-lived JWTs, refresh in HttpOnly cookies",
-      "tags": ["auth", "security"]
-    }'
-  ```
-
-- **Activate by context (cognitive retrieval)**:
-
-  ```bash
-  curl -sX POST http://localhost:8475/api/activate \
-    -H "Content-Type: application/json" \
-    -d '{
-      "vault": "default",
-      "context": ["login flow"],
-      "max_results": 5
-    }'
-  ```
-
-You should see the test engram in the `activations` list. After enrichment has run, ACTIVATE/Read responses for that engram will also include `summary` and `key_points`.
-
-### How Maia connects to MuninnDB
-
-Maia treats MuninnDB as an external dependency, accessed via an internal client module when the integration is wired.
-
-- **Configuration**: The MuninnDB base URL is set in **Settings → AI Providers** as **MuninnDB URL** (stored in the `settings` table as `muninnUrl`). Same pattern as **Ollama Base URL**. When empty, MuninnDB is not used. Optional: an API key can be added later if MuninnDB REST auth is enabled.
-- **Client**: When present, `src/lib/muninn/config.ts` (or equivalent) will read `getSettings(ctx).muninnUrl` and build a config; `src/lib/muninn/client.ts` will expose `writeEngram`, `activate`, and related functions to the domain layer.
-
-- **Flow**: History append and knowledge index write engrams to Muninn (default vault); smart context and the knowledge tool call Muninn’s ACTIVATE API for retrieval. See [Backend and domain](backend-and-domain.md#muninndb-integration), [data-model](data-model.md#semantic-memory-muninndb-and-deprecated-vector-tables), and [context-window](context-window.md).
+- **Embeddings**: Settings define the embedding model (e.g. Ollama or OpenRouter). `src/lib/knowledge/embedding.ts` builds an adapter; `src/lib/knowledge/vector-store.ts` stores vectors in `knowledge_vectors` and `history_vectors`.
+- **Per-turn smart context**: `buildRawRetrievedContext` and the knowledge/history search tools query those tables after embedding the user query.
+- **Layered memory** (see [Backend and domain](backend-and-domain.md#knowledge-and-layered-memory), [Data model](data-model.md#semantic-memory-and-layered-memory)):
+  - **Pre-prompt recall**: `src/lib/memory/preprompt.ts` embeds the current user message and pulls registry rows, related episodes, PARA facts (on disk under `data/agents/<id>/life/`), and a daily note excerpt; the runner prepends this inside the smart-context block so it is ordered before raw retrieval output.
+  - **Registry / graph / compaction**: SQLite tables `memory_registry`, `memory_episodes`, `memory_entities`, `memory_edges`, `session_compactions`; tools live in `src/lib/tools/layered-memory-tools.ts`.
+  - **Thinking**: `role = "thinking"` history rows are **not** indexed to `history_vectors`, so they do not appear in semantic search.
+- **Bootstrap index**: Agents seed **`PERSONA.md`** from `defaults/agent` / `defaults/maia`; layered-memory pointers stay in skills plus markdown under `memory/` / `user/` instead of stuffing everything into persona prose.
 
 ## Background processes (in-process)
 

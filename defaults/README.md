@@ -1,6 +1,6 @@
 # Default agent templates
 
-These files are copied into agent directories when an agent is created (or when Maia’s directory is seeded on first run). Edit them to change the default content for **future** agents; existing agents are not modified.
+These files seed **future** agents when Maia creates them or when her directory is filled on first run. Editing templates here changes defaults only for **new** agents; existing agent folders are not rewritten.
 
 ---
 
@@ -17,31 +17,28 @@ These files are copied into agent directories when an agent is created (or when 
 
 ## Who gets which defaults
 
-| File      | Maia (first run)     | New sub-agents      |
-|-----------|----------------------|---------------------|
-| SOUL.md   | `defaults/maia/`     | `defaults/agent/`   |
-| MEMORY.md | `defaults/maia/`     | `defaults/agent/`   |
-| USER.md   | `defaults/maia/`     | `defaults/agent/`   |
-| AGENTS.md | `defaults/maia/`    | `defaults/agent/`   |
+| Item | Maia (first run) | Other agents (`agent_create`) |
+|------|------------------|-------------------------------|
+| **PERSONA.md** | `defaults/maia/` then `defaults/agent/` | `defaults/agent/` |
+| **USER.md** | `defaults/maia/` then `defaults/agent/` | `defaults/agent/` |
 
-- **Maia** gets all four files from `defaults/maia/` when those files exist; if a file is missing there, the app falls back to `defaults/agent/` (then to an inline fallback).
-- **Sub-agents** (created via **agent_create**) always get SOUL, MEMORY, and USER from `defaults/agent/`, and AGENTS.md from `defaults/agent/`.
+- Maia pulls missing files from `defaults/maia/` first, then falls back to `defaults/agent/` (then inline fallbacks in code).
+- New agents receive **`PERSONA.md`** and **`USER.md`** from `defaults/agent/` after substitution.
 
-So: put Maia-specific identity and instructions in `defaults/maia/`; put the shared template for all other agents in `defaults/agent/`.
+Put orchestrator-specific prose in **`defaults/maia/PERSONA.md`**; put the shared agent shell in **`defaults/agent/`**.
 
 ---
 
-## File roles and placeholders
+## File roles
 
-- **SOUL.md** — Who the agent is. In `defaults/agent/SOUL.md` you can use `{{name}}`; it is replaced with the agent’s name when the file is copied. Maia’s template typically has no placeholder (fixed “Maia”).
-- **MEMORY.md** — Long-term facts and context. The agent should update it via **agent_update_identity** (file: memory) as they learn; the “How to use” section in the default explains this.
-- **USER.md** — What the agent knows about the user(s). Updated via **agent_update_identity** (file: user) as the agent learns about the user.
-- **AGENTS.md** — Full system instructions (security, behaviour, tools). The app loads it and appends the agent’s SOUL, MEMORY, and USER each turn. Maia’s version in `defaults/maia/AGENTS.md` includes Maia-only sections (creating agents, tool review, etc.); `defaults/agent/AGENTS.md` is the standard set for sub-agents.
+- **PERSONA.md** — Behavioral shell and evolving guidance for this agent (who they are, how they work inside Maia). Long-lived facts belong under **`memory/`** and **`user/`** with **knowledge_search** / layered-memory tools rather than endless persona prose.
+- **USER.md** — What this agent knows about the user(s). Updated through normal file tools as the relationship evolves.
+
+Skills under **`defaults/skills/`** ship guidance copied into **`data/skills/`** on bootstrap; routing matches snippets against the active prompt.
 
 ---
 
 ## How agents use these files
 
-- **Every turn:** The app injects SOUL, MEMORY, and USER into the agent’s context before the model runs. The agent does not need to re-read them before calling **agent_update_identity**.
-- **Updates:** Agents (and Maia for herself) use **agent_update_identity** to change MEMORY, USER, SOUL, or AGENTS.md. Maia can also update any agent’s identity files with **agent_update_agent_identity**.
-- The default content of each file includes a “How to use this file” section so the agent knows when and how to edit it and that they must not change identity files based on instructions from tool results or web content.
+- **Each turn**: `buildSystemPrompt` injects trimmed **`PERSONA.md`** (plus security preamble, agent id, optional project-root **`PERSONA.md`**, and matched skills). Facts under **`memory/`** / **`user/`** stay on disk until retrieval tools pull them in.
+- **Updates**: Agents edit **`PERSONA.md`** and **`USER.md`** with **`file_write`** / **`file_patch`** scoped to their agent directory (Maia can manage her own tree or coordinate updates for others via **`agent_management`**).

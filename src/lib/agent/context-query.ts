@@ -12,8 +12,8 @@ import type {
   HistorySearchResult,
   KnowledgeSearchResult,
 } from "../knowledge/search";
-import { getMuninnConfig } from "../muninn/config";
-import { createMuninnClient } from "../muninn/client";
+import { createEmbeddingAdapter } from "../knowledge/embedding";
+import { createVectorStore } from "../knowledge/vector-store";
 import type { AppContext } from "../context";
 import type { AIProvider } from "../ai/types";
 import type { Message } from "../ai/types";
@@ -727,8 +727,7 @@ export async function buildRawRetrievedContext(
     knowledgeHits: number;
   }> = [];
 
-  const muninnConfig = getMuninnConfig(ctx);
-  if (!muninnConfig.enabled || queries.length === 0) {
+  if (queries.length === 0) {
     return {
       text: "No relevant prior context found.",
       sources: [],
@@ -736,58 +735,51 @@ export async function buildRawRetrievedContext(
       maxScore: 0,
     };
   }
+
   try {
-    const client = createMuninnClient(ctx.http, muninnConfig.baseUrl);
-    const totalK = Math.min(
-      50,
-      (historyLimit + knowledgeLimit) * Math.max(1, queries.length),
-    );
-    const res = await client.activate("default", queries, totalK);
-    for (const a of res.activations) {
-      const tags = a.tags ?? [];
-      if (
-        tags[0] === "history" &&
-        tags.length >= 3 &&
-        typeof tags[1] === "string" &&
-        typeof tags[2] === "string"
-      ) {
-        const key = `${tags[1]}/${tags[2]}`;
+    const settings = getSettings(ctx);
+    const embedder = createEmbeddingAdapter(settings, ctx.http);
+    const store = createVectorStore(ctx.db);
+    for (const query of queries) {
+      const embedding = await embedder.embed(query);
+      const historyHits = store.searchHistory(embedding, historyLimit);
+      const knowledgeHits = store.searchKnowledge(embedding, knowledgeLimit);
+      for (const h of historyHits) {
+        const key = `${h.sessionId}/${h.entryId}`;
         if (!seenHistoryKeys.has(key)) {
           seenHistoryKeys.add(key);
           historyEntries.push({
-            sessionId: tags[1],
-            entryId: tags[2],
-            content: a.content,
-            isCompressed: tags.includes("compressed"),
-            score: a.score,
-            createdAt: "",
+            sessionId: h.sessionId,
+            entryId: h.entryId,
+            content: h.content,
+            isCompressed: h.isCompressed,
+            score: h.score,
+            createdAt: h.createdAt,
           });
           sources.push({ type: "history", id: `history:${key}` });
         }
-      } else if (tags[0] === "knowledge" && typeof tags[1] === "string") {
-        const path = tags[1];
-        if (!seenKnowledgeKeys.has(path)) {
-          seenKnowledgeKeys.add(path);
+      }
+      for (const k of knowledgeHits) {
+        if (!seenKnowledgeKeys.has(k.path)) {
+          seenKnowledgeKeys.add(k.path);
           knowledgeEntries.push({
-            path,
-            content: a.content,
-            score: a.score,
+            path: k.path,
+            content: k.content,
+            score: k.score,
           });
-          sources.push({ type: "knowledge", id: `knowledge:${path}` });
+          sources.push({ type: "knowledge", id: `knowledge:${k.path}` });
         }
       }
-    }
-    debugPerQuery.push(
-      ...queries.map((query) => ({
+      debugPerQuery.push({
         query,
         historyHits: historyEntries.length,
         knowledgeHits: knowledgeEntries.length,
-      })),
-    );
+      });
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     agentDebug(
-      "[Smart context] buildRawRetrievedContext (Muninn): activate failed, returning empty:",
+      "[Smart context] buildRawRetrievedContext (vector store): failed, returning empty:",
       msg,
     );
     return {
@@ -1287,7 +1279,7 @@ export function extractRelevantSpansByKeyword(
 
 /**
  * Extracts verbatim relevant quotes per source (and per chunk when source is large).
- * Uses contextSummaryModel or contextQueryModel. Returns empty array when no model or on parse failure.
+ * Uses contextQueryModel. Returns empty array when no model or on parse failure.
  * @param ctx Application context.
  * @param providerFactory Factory to create AI provider.
  * @param userMessage Current user query.
@@ -1305,7 +1297,7 @@ export async function extractRelevantQuotes(
   retryOptions?: RateLimitRetryOptions,
 ): Promise<Array<{ sourceId: string; text: string }>> {
   const settings = getSettings(ctx);
-  const model = settings.contextSummaryModel || settings.contextQueryModel;
+  const model = settings.contextQueryModel;
   if (!model || !settings.whitelistedModels.includes(model)) {
     agentDebug(
       "[Smart context] extractRelevantQuotes: no model or not whitelisted",
@@ -1408,7 +1400,7 @@ export function buildFocusedContextBlock(
 }
 
 /**
- * Sends raw retrieved context to the contextSummaryModel (or contextQueryModel as fallback)
+ * Sends raw retrieved context to the contextQueryModel
  * and returns a concise markdown section with inline citations.
  * When optional contents is provided, uses focused quote extraction + cleanup instead of prose summary.
  * Falls back to the raw context text on model failure.
@@ -1491,11 +1483,11 @@ export async function summarizeRetrievedContext(
   }
 
   const settings = getSettings(ctx);
-  const model = settings.contextSummaryModel || settings.contextQueryModel;
+  const model = settings.contextQueryModel;
 
   if (!model || !settings.whitelistedModels.includes(model)) {
     agentDebug(
-      "[Smart context] summarizeRetrievedContext: no summary model, returning raw",
+      "[Smart context] summarizeRetrievedContext: no query model, returning raw",
     );
     return `## Smart context\n\n${rawText}`;
   }

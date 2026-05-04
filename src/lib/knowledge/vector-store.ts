@@ -1,10 +1,9 @@
 /**
- * @fileoverview Vector store (deprecated for semantic memory). Cosine similarity helper still used by skills.
+ * @fileoverview SQLite-backed vector store for knowledge and history semantic search.
  * @module lib/knowledge/vector-store
  *
- * Semantic search now uses MuninnDB. knowledge_vectors and history_vectors are no longer read or written
- * by the app; this module remains for cosineSimilarity() used by find-skill and skills/match, and for
- * one-time migration reads (migrate-vectors-to-muninn uses raw db, not this store).
+ * Exposes `cosineSimilarity()` for find-skill and skills matching, and CRUD/search for
+ * `knowledge_vectors` and `history_vectors` using the configured embedder.
  */
 
 import type { DbAdapter } from "../context";
@@ -191,6 +190,16 @@ export function createVectorStore(db: DbAdapter) {
           score,
           last_modified: updated_at,
         }));
+    },
+
+    /** Delete history vector rows by entry_id (so the entry can be re-indexed). */
+    deleteHistoryByEntryId(entryId: string): void {
+      db.prepare("DELETE FROM history_vectors WHERE entry_id = ?").run(entryId);
+    },
+
+    /** Delete a single history vector row by id (so the same id can be re-inserted). */
+    deleteHistoryById(id: string): void {
+      db.prepare("DELETE FROM history_vectors WHERE id = ?").run(id);
     },
 
     /** Insert a history entry into the vector store. */

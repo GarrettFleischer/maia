@@ -8,7 +8,7 @@ import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
 import type { AppContext } from "../context";
 import { getOrCreateSession } from "../history";
-import type { RunAgentFn } from "../agent/runner";
+import type { RunAgentFn, RunAgentOptions } from "../agent/runner";
 import { fireHeartbeat } from "../heartbeat";
 import { getSettings } from "../settings";
 import { enqueue } from "../queue/llm-queue";
@@ -16,6 +16,9 @@ import {
   BUILTIN_HEARTBEAT_JOB_ID,
   minutesToCronExpression,
 } from "./expression";
+import { DEFAULT_CRON_WAKE_PROMPT } from "./default-wake-prompt";
+import { getPersonaById } from "../personas/registry";
+import { normalizeReasoningEffort } from "../agent/identity";
 
 export interface CronSchedulerOptions {
   /**
@@ -23,6 +26,103 @@ export interface CronSchedulerOptions {
    * @default false
    */
   runOnInit?: boolean;
+}
+
+/** Parsed cron row fields used to choose legacy vs prompt vs persona wake. */
+interface CronWakeRowParts {
+  persona_id: string | null | undefined;
+  persona_model: string | null | undefined;
+  cron_message: string | null | undefined;
+  toolNameSafe: string;
+  toolArgs: Record<string, unknown>;
+}
+
+/**
+ * @brief Builds `runAgent` message and options for a scheduled cron row (excluding heartbeat).
+ * @param ctx - Application context (settings whitelist)
+ * @param agentId - Owning agent id from the cron row
+ * @param jobId - Cron job id (logging)
+ * @param parts - Tool/persona/message payload from SQLite
+ * @returns Envelope or null when the job should be skipped (misconfiguration)
+ */
+function buildCronWakeEnvelope(
+  ctx: AppContext,
+  agentId: string,
+  jobId: string,
+  parts: CronWakeRowParts,
+): { message: string; options: RunAgentOptions } | null {
+  const personaSlug =
+    typeof parts.persona_id === "string" ? parts.persona_id.trim() : "";
+
+  if (personaSlug) {
+    if (agentId !== "maia") {
+      console.warn(
+        `CronService: job ${jobId} uses persona_id but agent_id is not maia; skipping`,
+      );
+      return null;
+    }
+    const persona = getPersonaById(personaSlug);
+    if (!persona) {
+      console.warn(
+        `CronService: job ${jobId} references unknown persona "${personaSlug}"; skipping`,
+      );
+      return null;
+    }
+    const personaModelRaw =
+      typeof parts.persona_model === "string"
+        ? parts.persona_model.trim()
+        : "";
+    if (!personaModelRaw) {
+      console.warn(
+        `CronService: job ${jobId} missing persona_model for persona wake; skipping`,
+      );
+      return null;
+    }
+    const settings = getSettings(ctx);
+    if (!settings.whitelistedModels.includes(personaModelRaw)) {
+      console.warn(
+        `CronService: job ${jobId} persona_model not whitelisted: ${personaModelRaw}`,
+      );
+      return null;
+    }
+    const rawMsg = parts.cron_message;
+    const message =
+      rawMsg != null && String(rawMsg).trim() !== ""
+        ? String(rawMsg).trim()
+        : DEFAULT_CRON_WAKE_PROMPT;
+    const reasoningEffort = normalizeReasoningEffort(
+      persona.suggestedReasoningEffort ?? "medium",
+    );
+    return {
+      message,
+      options: {
+        personaTurn: {
+          id: persona.id,
+          name: persona.name,
+          instructions: persona.instructions,
+          model: personaModelRaw,
+          reasoningEffort,
+        },
+      },
+    };
+  }
+
+  if (parts.cron_message != null) {
+    const trimmed = String(parts.cron_message).trim();
+    const message =
+      trimmed !== "" ? trimmed : DEFAULT_CRON_WAKE_PROMPT;
+    return { message, options: {} };
+  }
+
+  return {
+    message: "[CRON]",
+    options: {
+      initialToolCall: {
+        name: parts.toolNameSafe,
+        args: parts.toolArgs,
+      },
+    },
+  };
 }
 
 let _taskMap = new Map<string, ScheduledTask>();
@@ -39,14 +139,8 @@ export function isCronSchedulerRunning(): boolean {
 }
 
 /**
- * Loads all rows from cron_jobs, registers each with node-cron, and runs them on schedule.
- * When a job fires, creates a session for the owning agent and invokes runAgentFn with a [CRON] message.
- * @param ctx - Application context (db, events)
- * @param runAgentFn - Called with (ctx, agentId, sessionId, message) when a job fires
- * @param options - Optional; use runOnInit: true in tests to fire handlers once immediately
- */
-/**
  * Schedules a single job and adds it to _taskMap. Used by startCronScheduler and refreshHeartbeatJob.
+ * Non-heartbeat jobs enqueue **runAgent** with legacy tool-first wake, prompt wake, or delegated persona wake.
  * @param ctx - Application context
  * @param runAgentFn - RunAgentFn to invoke when job fires
  * @param row - cron_jobs row
@@ -62,6 +156,9 @@ function scheduleJob(
     agent_id: string;
     tool_name: string;
     tool_args: string;
+    persona_id: string | null;
+    persona_model: string | null;
+    cron_message: string | null;
   },
   runOnInit: boolean,
 ): void {
@@ -72,6 +169,9 @@ function scheduleJob(
     agent_id: agentId,
     tool_name: toolName,
     tool_args: toolArgsJson,
+    persona_id,
+    persona_model,
+    cron_message,
   } = row;
 
   const agentExists = ctx.db
@@ -117,7 +217,6 @@ function scheduleJob(
             console.error(`Cron job ${jobId} (heartbeat) failed:`, err);
           });
         } else {
-          const message = "[CRON]";
           const sessionName = taskDescription.trim() || `Cron: ${jobId}`;
           const sessionId = getOrCreateSession(
             ctx,
@@ -129,16 +228,22 @@ function scheduleJob(
             event: "cron_fired",
             data: { jobId, agentId, timestamp },
           });
+          const wake = buildCronWakeEnvelope(ctx, agentId, jobId, {
+            persona_id,
+            persona_model,
+            cron_message,
+            toolNameSafe,
+            toolArgs,
+          });
+          if (!wake) return;
           enqueue(
             {
               tool: "runAgent",
               args: {
                 agentId,
                 sessionId,
-                message,
-                options: {
-                  initialToolCall: { name: toolNameSafe, args: toolArgs },
-                },
+                message: wake.message,
+                options: wake.options,
                 queueCaller: "agent",
                 runAgentFn,
               },
@@ -186,7 +291,7 @@ export function startCronScheduler(
   const runOnInit = options.runOnInit ?? false;
   const rows = ctx.db
     .prepare(
-      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs ORDER BY created_at",
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args, persona_id, persona_model, cron_message FROM cron_jobs ORDER BY created_at",
     )
     .all() as {
     id: string;
@@ -195,6 +300,9 @@ export function startCronScheduler(
     agent_id: string;
     tool_name: string;
     tool_args: string;
+    persona_id: string | null;
+    persona_model: string | null;
+    cron_message: string | null;
   }[];
 
   for (const row of rows) {
@@ -243,7 +351,7 @@ export function refreshHeartbeatJob(ctx: AppContext): void {
 
   const row = ctx.db
     .prepare(
-      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id = ?",
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args, persona_id, persona_model, cron_message FROM cron_jobs WHERE id = ?",
     )
     .get(BUILTIN_HEARTBEAT_JOB_ID) as
     | {
@@ -253,6 +361,9 @@ export function refreshHeartbeatJob(ctx: AppContext): void {
         agent_id: string;
         tool_name: string;
         tool_args: string;
+        persona_id: string | null;
+        persona_model: string | null;
+        cron_message: string | null;
       }
     | undefined;
   if (row && cron.validate(row.expression)) {
@@ -286,7 +397,7 @@ export function refreshCronJob(jobId: string): void {
 
   const row = _ctx.db
     .prepare(
-      "SELECT id, expression, task_description, agent_id, tool_name, tool_args FROM cron_jobs WHERE id = ?",
+      "SELECT id, expression, task_description, agent_id, tool_name, tool_args, persona_id, persona_model, cron_message FROM cron_jobs WHERE id = ?",
     )
     .get(jobId) as
     | {
@@ -296,6 +407,9 @@ export function refreshCronJob(jobId: string): void {
         agent_id: string;
         tool_name: string;
         tool_args: string;
+        persona_id: string | null;
+        persona_model: string | null;
+        cron_message: string | null;
       }
     | undefined;
   if (!row) return;

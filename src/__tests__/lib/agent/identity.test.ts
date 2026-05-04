@@ -13,14 +13,19 @@ function seedAgent(ctx: AppContext, id: string, name = "Test Agent", model = "ol
   ).run(id, name, model, status, now, now);
 }
 
-function seedIdentityFiles(fs: FakeFs, agentId: string, options?: { agentsMd?: string }) {
+function seedPersonaFiles(fs: FakeFs, agentId: string, options?: { persona?: string }) {
   const dir = path.join(getAgentsDir(), agentId);
-  fs.seed(path.join(dir, "SOUL.md"), "# Soul\nI am a helpful agent.");
-  fs.seed(path.join(dir, "MEMORY.md"), "# Memory\nNo memories yet.");
-  fs.seed(path.join(dir, "USER.md"), "# User\nThe user is a developer.");
-  if (options?.agentsMd !== undefined) {
-    fs.seed(path.join(dir, "AGENTS.md"), options.agentsMd);
-  }
+  fs.seed(path.join(dir, "PERSONA.md"), options?.persona ?? "# Persona\n\nI am a helpful agent.");
+}
+
+/**
+ * @brief Seeds stray markdown files at the agent root that must not contribute to `persona`.
+ */
+function seedNonPersonaMarkdownAtAgentRoot(fs: FakeFs, agentId: string) {
+  const dir = path.join(getAgentsDir(), agentId);
+  fs.seed(path.join(dir, "AGENTS.md"), "# Agents\nOperate safely.");
+  fs.seed(path.join(dir, "SOUL.md"), "# Soul\nFriendly assistant.");
+  fs.seed(path.join(dir, "MEMORY.md"), "# Memory\nPointers only.");
 }
 
 describe("getAgentIdentity", () => {
@@ -41,28 +46,44 @@ describe("getAgentIdentity", () => {
     expect(getAgentIdentity(ctx, "agent-1")).toBeNull();
   });
 
-  it("returns agent with identity files", () => {
+  it("returns agent with PERSONA.md content", () => {
     seedAgent(ctx, "agent-1");
-    seedIdentityFiles(fs, "agent-1", { agentsMd: "# How I function\nFollow AGENTS.md." });
+    seedPersonaFiles(fs, "agent-1", {
+      persona: "# Persona\nCustom.",
+    });
     const result = getAgentIdentity(ctx, "agent-1");
     expect(result).not.toBeNull();
     expect(result!.id).toBe("agent-1");
     expect(result!.name).toBe("Test Agent");
-    expect(result!.soul).toContain("# Soul");
-    // Memory and user are no longer read from MEMORY.md/USER.md; they live in memory/ and user/ and are retrieved via knowledge_search.
-    expect(result!.memory).toBe("");
+    expect(result!.persona).toContain("# Persona");
+    expect(result!.persona).toContain("Custom.");
     expect(result!.user).toBe("");
-    expect(result!.agentsMd).toContain("# How I function");
   });
 
-  it("returns empty strings for missing identity files (graceful fallback)", () => {
+  it("ignores removed identity filenames when PERSONA.md is absent", () => {
+    seedAgent(ctx, "agent-stale-root-md");
+    seedNonPersonaMarkdownAtAgentRoot(fs, "agent-stale-root-md");
+    const result = getAgentIdentity(ctx, "agent-stale-root-md");
+    expect(result).not.toBeNull();
+    expect(result!.persona).toBe("");
+  });
+
+  it("uses only PERSONA.md when other markdown exists at agent root", () => {
+    seedAgent(ctx, "agent-with-persona");
+    seedPersonaFiles(fs, "agent-with-persona", {
+      persona: "# Persona\nFrom PERSONA.md only.",
+    });
+    seedNonPersonaMarkdownAtAgentRoot(fs, "agent-with-persona");
+    const result = getAgentIdentity(ctx, "agent-with-persona");
+    expect(result!.persona).toContain("From PERSONA.md only.");
+    expect(result!.persona).not.toContain("Operate safely.");
+  });
+
+  it("returns empty persona when PERSONA.md absent and no stray markdown", () => {
     seedAgent(ctx, "agent-2");
-    // No identity files seeded
     const result = getAgentIdentity(ctx, "agent-2");
     expect(result).not.toBeNull();
-    expect(result!.soul).toBe("");
-    expect(result!.memory).toBe("");
-    expect(result!.agentsMd).toBe("");
+    expect(result!.persona).toBe("");
   });
 
   it("includes all AgentDefinition fields", () => {
@@ -115,7 +136,6 @@ describe("listAgents", () => {
   });
 
   it("returns agents in created_at order", () => {
-    // Insert with slight delay using different timestamps
     ctx.db.prepare("INSERT INTO agents (id, name, model, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run("z", "Z", "ollama/llama3.2", "active", "2024-01-02T00:00:00Z", "2024-01-02T00:00:00Z");
     ctx.db.prepare("INSERT INTO agents (id, name, model, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run("a", "A", "ollama/llama3.2", "active", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z");
     const agents = listAgents(ctx);

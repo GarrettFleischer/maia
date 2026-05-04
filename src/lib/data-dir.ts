@@ -86,7 +86,7 @@ export function getDefaultAgentDir(): string {
 
 /**
  * Default template files for the Maia agent. Used when seeding Maia's directory on first run.
- * Resolved from project root: <cwd>/defaults/maia. Maia gets AGENTS.md from here (privileged instructions).
+ * Resolved from project root: <cwd>/defaults/maia. Maia gets PERSONA.md from here (orchestrator persona).
  * @returns Absolute path to defaults/maia directory
  */
 export function getDefaultMaiaDir(): string {
@@ -111,4 +111,28 @@ export function getDefaultMaiaSkillsDir(): string {
  */
 export function getDefaultSkillsDir(): string {
   return path.resolve(process.cwd(), "defaults", "skills");
+}
+
+/**
+ * Bundled Codex-style persona `.toml` files (e.g. from awesome-codex-subagents). Not affected by MAIA_DATA_DIR.
+ * @returns `<cwd>/defaults/personas/catalog`
+ */
+export function getDefaultPersonasCatalogDir(): string {
+  return path.resolve(process.cwd(), "defaults", "personas", "catalog");
+}
+
+/**
+ * User-added persona `.toml` files; same merge rules as defaults, later wins by id.
+ * @returns `getDataDir()/personas/catalog`
+ */
+export function getPersonasDataCatalogDir(): string {
+  return path.join(getDataDir(), "personas", "catalog");
+}
+
+/**
+ * Optional markdown overrides merged after each persona's `[instructions].text`.
+ * @returns `getDataDir()/personas/overrides`
+ */
+export function getPersonasOverridesDir(): string {
+  return path.join(getDataDir(), "personas", "overrides");
 }

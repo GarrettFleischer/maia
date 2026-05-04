@@ -72,4 +72,39 @@ describe("GET /api/ollama/models", () => {
     const body = (await res.json()) as { downloaded: string[] };
     expect(body.downloaded).toEqual([]);
   });
+
+  it("returns available Ollama model names when no modelIds query", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { ollamaBaseUrl: "http://localhost:11434" });
+    ctx.http.on("/api/tags", async () =>
+      new FakeResponse(200, JSON.stringify({
+        models: [
+          { name: "nomic-embed-text:latest" },
+          { name: "llama3.2" },
+        ],
+      })),
+    );
+    _setTestContext(ctx);
+
+    const req = createNextRequest("http://localhost/api/ollama/models");
+    const res = await GET(req);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { available: string[] };
+    expect(Array.isArray(body.available)).toBe(true);
+    expect(body.available).toEqual(["llama3.2", "nomic-embed-text:latest"]);
+  });
+
+  it("returns empty available when no base URL", async () => {
+    const ctx = makeTestContext();
+    updateSettings(ctx, { ollamaBaseUrl: "" });
+    _setTestContext(ctx);
+
+    const req = createNextRequest("http://localhost/api/ollama/models");
+    const res = await GET(req);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { available: string[] };
+    expect(body.available).toEqual([]);
+  });
 });

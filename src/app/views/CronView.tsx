@@ -1,13 +1,19 @@
 "use client";
 
 /**
- * @fileoverview Cron jobs view: list scheduled jobs, edit expression and tool settings.
+ * @fileoverview Cron jobs view: list scheduled jobs, edit schedules, tools, and wake presets.
  * Rendered inside the app shell so state is preserved when switching tabs.
  * @module app/views/CronView
  */
 
 import { useCallback, useEffect, useState } from "react";
 import type { CronJob } from "@/lib/types";
+import {
+  applyCronWakePreset,
+  CRON_WAKE_PRESET_HINTS,
+  inferCronWakePreset,
+  type CronWakePresetId,
+} from "@/lib/cron/wake-presets";
 
 function formatNextRun(iso: string): string {
   const d = new Date(iso);
@@ -33,12 +39,16 @@ export default function CronView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [wakePreset, setWakePreset] = useState<CronWakePresetId>("legacy");
   const [editForm, setEditForm] = useState({
     expression: "",
     taskDescription: "",
     toolName: "",
     toolArgsJson: "{}",
     agentId: "",
+    personaId: "",
+    personaModel: "",
+    cronMessage: "",
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -63,12 +73,20 @@ export default function CronView() {
 
   const startEdit = (job: CronJob) => {
     setEditingId(job.id);
+    const inferred = inferCronWakePreset({
+      personaId: job.personaId,
+      cronMessage: job.cronMessage,
+    });
+    setWakePreset(inferred);
     setEditForm({
       expression: job.expression,
       taskDescription: job.taskDescription,
       toolName: job.toolName ?? "cron_echo",
       toolArgsJson: JSON.stringify(job.toolArgs ?? {}, null, 2),
       agentId: job.agentId ?? "",
+      personaId: job.personaId ?? "",
+      personaModel: job.personaModel ?? "",
+      cronMessage: job.cronMessage ?? "",
     });
     setSaveError(null);
   };
@@ -100,6 +118,18 @@ export default function CronView() {
           toolName: editForm.toolName,
           toolArgs,
           ...(editForm.agentId.trim() && { agentId: editForm.agentId.trim() }),
+          personaId:
+            editForm.personaId.trim() === ""
+              ? null
+              : editForm.personaId.trim(),
+          personaModel:
+            editForm.personaModel.trim() === ""
+              ? null
+              : editForm.personaModel.trim(),
+          cronMessage:
+            editForm.cronMessage.trim() === ""
+              ? null
+              : editForm.cronMessage,
         }),
       });
       if (!res.ok) {
@@ -119,7 +149,7 @@ export default function CronView() {
   };
 
   return (
-    <div className="min-h-full bg-zinc-950 text-zinc-100 overflow-auto">
+    <div className="h-full min-h-0 overflow-auto bg-zinc-950 text-zinc-100">
       <main className="max-w-3xl mx-auto px-4 py-8">
         <h1 className="text-xl font-semibold mb-2">Cron jobs</h1>
         <p className="text-sm text-zinc-500 mb-6">
@@ -150,6 +180,47 @@ export default function CronView() {
                 {editingId === job.id ? (
                   <div className="p-5 space-y-4">
                     <h3 className="font-medium text-sm">Edit job</h3>
+                    <div>
+                      <label
+                        htmlFor="wake-preset"
+                        className="block text-xs text-zinc-500 mb-1"
+                      >
+                        Wake preset
+                      </label>
+                      <select
+                        id="wake-preset"
+                        value={wakePreset}
+                        onChange={(e) => {
+                          const v = e.target.value as CronWakePresetId;
+                          setWakePreset(v);
+                          setEditForm((f) => ({
+                            ...f,
+                            ...applyCronWakePreset(v, {
+                              personaId: f.personaId,
+                              personaModel: f.personaModel,
+                              cronMessage: f.cronMessage,
+                            }),
+                          }));
+                        }}
+                        className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600 border border-zinc-700"
+                      >
+                        <option value="legacy">
+                          Tool-first ([CRON] + forced tool below)
+                        </option>
+                        <option value="prompt_default">
+                          Maia prompt — default task review
+                        </option>
+                        <option value="prompt_custom">
+                          Maia prompt — custom message
+                        </option>
+                        <option value="persona">
+                          Delegated persona (maia + slug + model)
+                        </option>
+                      </select>
+                      <p className="text-xs text-zinc-500 mt-1.5 leading-relaxed">
+                        {CRON_WAKE_PRESET_HINTS[wakePreset]}
+                      </p>
+                    </div>
                     <div>
                       <label
                         htmlFor="edit-expression"
@@ -259,6 +330,74 @@ export default function CronView() {
                         placeholder='{"message": "Hello"}'
                       />
                     </div>
+                    <p className="text-xs text-zinc-500">
+                      Presets adjust persona / cron fields only—expression, agent,
+                      description, and tool fields stay as you set them unless you change
+                      them here.
+                    </p>
+                    <div>
+                      <label
+                        htmlFor="edit-persona-id"
+                        className="block text-xs text-zinc-500 mb-1"
+                      >
+                        Persona id (catalog slug, optional)
+                      </label>
+                      <input
+                        id="edit-persona-id"
+                        type="text"
+                        value={editForm.personaId}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            personaId: e.target.value,
+                          }))
+                        }
+                        className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
+                        placeholder="e.g. typescript-pro"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="edit-persona-model"
+                        className="block text-xs text-zinc-500 mb-1"
+                      >
+                        Persona model (whitelist id)
+                      </label>
+                      <input
+                        id="edit-persona-model"
+                        type="text"
+                        value={editForm.personaModel}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            personaModel: e.target.value,
+                          }))
+                        }
+                        className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-600"
+                        placeholder="e.g. ollama/llama3.2"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="edit-cron-message"
+                        className="block text-xs text-zinc-500 mb-1"
+                      >
+                        Cron message (prompt wake; leave empty for tool-first only)
+                      </label>
+                      <textarea
+                        id="edit-cron-message"
+                        value={editForm.cronMessage}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            cronMessage: e.target.value,
+                          }))
+                        }
+                        rows={4}
+                        className="w-full bg-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-600"
+                        placeholder="Empty + empty persona → legacy tool wake"
+                      />
+                    </div>
                     {saveError && (
                       <p className="text-red-400 text-sm" role="alert">
                         {saveError}
@@ -310,6 +449,13 @@ export default function CronView() {
                         )}
                         <p className="text-xs text-zinc-600 mt-1 font-mono">
                           {job.agentId} · {job.toolName}
+                          {job.personaId ? (
+                            <> · persona {job.personaId}</>
+                          ) : job.cronMessage != null ? (
+                            <> · prompt wake</>
+                          ) : (
+                            <> · tool-first</>
+                          )}
                         </p>
                       </div>
                       <button

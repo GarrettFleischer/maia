@@ -1,12 +1,9 @@
 /**
- * @fileoverview Sidebar list of all threads grouped by type (user chats and AI conversations).
+ * @fileoverview Sidebar list of user chat threads and a control to start a new thread (Maia orchestrator).
  * @module app/components/ThreadList
- *
- * @brief Renders thread list in two sections ("Your Chats" and "AI Conversations"), a "New thread"
- * control with agent picker, and calls callbacks when user selects a thread or starts a new one.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { SessionMeta } from "@/lib/types";
 import ThreadListItem from "./ThreadListItem";
 
@@ -81,30 +78,15 @@ export default function ThreadList({
 }: ThreadListProps) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [agentNameMap, setAgentNameMap] = useState<Map<string, string>>(new Map());
-  const [agentList, setAgentList] = useState<AgentListItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showNewThreadPicker, setShowNewThreadPicker] = useState(false);
-  const pickerRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     const [sessionsList, agents] = await Promise.all([fetchSessions(), fetchAgents()]);
     setSessions(sessionsList);
     setAgentNameMap(agents.nameMap);
-    setAgentList(agents.list);
     setLoading(false);
   }, []);
-
-  useEffect(() => {
-    if (!showNewThreadPicker) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setShowNewThreadPicker(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showNewThreadPicker]);
 
   useEffect(() => {
     load();
@@ -130,53 +112,18 @@ export default function ThreadList({
   );
 
   const userSessions = sessions.filter((s) => s.type === "user");
-  const agentSessions = sessions.filter((s) => s.type === "agents");
-
-  const handlePickAgent = useCallback(
-    (agentId: string) => {
-      setShowNewThreadPicker(false);
-      onNewThreadWithAgent(agentId);
-    },
-    [onNewThreadWithAgent]
-  );
 
   return (
     <aside className="w-[28rem] shrink-0 flex flex-col border-r border-zinc-800 bg-zinc-900/50">
-      <div className="p-2 border-b border-zinc-800 relative" ref={pickerRef}>
+      <div className="p-2 border-b border-zinc-800 relative">
         <button
           type="button"
-          onClick={() => setShowNewThreadPicker((open) => !open)}
-          aria-expanded={showNewThreadPicker}
-          aria-haspopup="listbox"
+          onClick={() => onNewThreadWithAgent("maia")}
           aria-label="New thread"
           className="w-full px-3 py-2 rounded-lg text-sm font-medium text-violet-300 hover:bg-violet-600/20 border border-violet-500/30 hover:border-violet-500/50 transition-colors"
         >
           + New thread
         </button>
-        {showNewThreadPicker && (
-          <div
-            role="listbox"
-            aria-label="Choose agent to chat with"
-            className="absolute left-2 right-2 top-full mt-1 z-10 rounded-lg border border-violet-500/30 bg-zinc-900 shadow-lg py-1 max-h-60 overflow-y-auto"
-          >
-            {agentList.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-zinc-500">No agents</div>
-            ) : (
-              agentList.map((agent) => (
-                <button
-                  key={agent.id}
-                  type="button"
-                  role="option"
-                  aria-selected={false}
-                  onClick={() => handlePickAgent(agent.id)}
-                  className="w-full text-left px-3 py-2 text-sm text-zinc-200 hover:bg-violet-600/20 focus:bg-violet-600/20 focus:outline-none"
-                >
-                  {agent.name}
-                </button>
-              ))
-            )}
-          </div>
-        )}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto p-2 chat-scroll">
         {loading ? (
@@ -192,27 +139,6 @@ export default function ThreadList({
                 </h2>
                 <ul className="space-y-1" role="list">
                   {userSessions.map((session) => (
-                    <li key={session.id}>
-                      <ThreadListItem
-                        session={session}
-                        isActive={session.id === activeSessionId}
-                        onSelect={() => onSelectSession(session.id)}
-                        agentNameMap={agentNameMap}
-                        onRename={handleRename}
-                        onDelete={handleDelete}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-            {agentSessions.length > 0 && (
-              <section aria-label="AI Conversations">
-                <h2 className="px-2 pb-1 text-xs font-semibold uppercase tracking-wider text-zinc-500 select-none">
-                  AI Conversations
-                </h2>
-                <ul className="space-y-1" role="list">
-                  {agentSessions.map((session) => (
                     <li key={session.id}>
                       <ThreadListItem
                         session={session}

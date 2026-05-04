@@ -239,6 +239,23 @@ describe("history", () => {
       expect(session?.original[0].role).toBe("thinking");
       expect(session?.original[0].content).toBe("Let me consider the options first.");
     });
+
+    it("stores speakerId, speakerLabel, and personaId for agent entries", () => {
+      const id = createSession(ctx);
+      appendEntry(ctx, id, {
+        role: "agent",
+        content: "Hello from the reviewer.",
+        timestamp: new Date().toISOString(),
+        speakerId: "typescript-pro",
+        speakerLabel: "TypeScript Pro",
+        personaId: "typescript-pro",
+      });
+      const session = getSession(ctx, id);
+      const e = session?.original[0];
+      expect(e?.speakerId).toBe("typescript-pro");
+      expect(e?.speakerLabel).toBe("TypeScript Pro");
+      expect(e?.personaId).toBe("typescript-pro");
+    });
   });
 
   // ─── updateSessionMeta ──────────────────────────────────────────────────────

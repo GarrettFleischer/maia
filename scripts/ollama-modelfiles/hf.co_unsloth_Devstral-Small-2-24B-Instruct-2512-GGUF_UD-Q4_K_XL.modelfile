@@ -1,0 +1,27 @@
+﻿# Updated by update-ollama-modelfiles.ps1 for tools/reasoning
+FROM F:\Ollama\Models\blobs\sha256-b44e34b78180fc3ab1abbe1edad9f1f3926fdca10eed3bfae168b065e683f6cd
+FROM F:\Ollama\Models\blobs\sha256-7fbd63a14ed6642370f7a8c276fdb3c1061f3349468dc7bb3a0a9e803e70926b
+TEMPLATE "{{- range $index, $_ := .Messages }}
+{{- if eq .Role "system" }}[SYSTEM_PROMPT]{{ .Content }}[/SYSTEM_PROMPT]
+
+{{- else if eq .Role "user" }}
+{{- if and (le (len (slice $.Messages $index)) 2) $.Tools }}[AVAILABLE_TOOLS]{{ $.Tools }}[/AVAILABLE_TOOLS]
+
+{{- end }}[INST]{{ .Content }}[/INST]
+
+{{- else if eq .Role "assistant" }}
+{{- if .Content }}{{ .Content }}
+{{- if not (eq (len (slice $.Messages $index)) 1) }}
+
+{{- end }}
+{{- else if .ToolCalls }}[TOOL_CALLS][
+{{- range .ToolCalls }}{"name": "{{ .Function.Name }}", "arguments": {{ .Function.Arguments }}}
+{{- end }}]
+
+{{- end }}
+{{- else if eq .Role "tool" }}[TOOL_RESULTS]{"content": {{ .Content }}}[/TOOL_RESULTS]
+
+{{- end }}
+{{- end }}"
+PARAMETER stop <s>
+PARAMETER stop [INST]

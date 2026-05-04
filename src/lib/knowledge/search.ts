@@ -1,13 +1,33 @@
 /**
- * @fileoverview Semantic search over the data folder and history via MuninnDB.
- * When Muninn URL is set, uses Muninn activate; otherwise returns empty results.
+ * @fileoverview Semantic search over the data folder and history via SQLite vector tables.
  * @module lib/knowledge/search
  */
 
 import type { AppContext } from "../context";
 import type { EmbeddingAdapter } from "./embedding";
-import { getMuninnConfig } from "../muninn/config";
-import { createMuninnClient } from "../muninn/client";
+import { getSettings } from "../settings";
+import { createVectorStore } from "./vector-store";
+
+/**
+ * @brief Returns ISO cutoff for archive exclusion when configured.
+ * @param ctx App context
+ */
+function getArchiveCutoff(ctx: AppContext): string | undefined {
+  const s = getSettings(ctx);
+  if (s.archiveDurationValue <= 0) return undefined;
+  const now = Date.now();
+  const unitMs: Record<string, number> = {
+    seconds: 1000,
+    minutes: 60 * 1000,
+    hours: 60 * 60 * 1000,
+    days: 24 * 60 * 60 * 1000,
+    months: 30 * 24 * 60 * 60 * 1000,
+    years: 365 * 24 * 60 * 60 * 1000,
+  };
+  const ms =
+    (unitMs[s.archiveDurationUnit] ?? unitMs.days) * s.archiveDurationValue;
+  return new Date(now - ms).toISOString();
+}
 
 export interface KnowledgeSearchResult {
   path: string;
@@ -39,12 +59,12 @@ export interface SearchKnowledgeOptions {
 }
 
 /**
- * Semantic search over indexed data files. Returns top-k documents with last_modified.
- * @param ctx - App context (db)
- * @param embedder - Embedding adapter
- * @param query - Search query text
- * @param limit - Max results (default 5)
- * @param options - scope, includeArchived, agentId
+ * @brief Semantic search over indexed knowledge files.
+ * @param ctx App context
+ * @param embedder Embedding adapter
+ * @param query Search text
+ * @param limit Max results
+ * @param options Scope and archive options
  */
 export async function searchKnowledge(
   ctx: AppContext,
@@ -53,30 +73,26 @@ export async function searchKnowledge(
   limit = 5,
   options: SearchKnowledgeOptions = {},
 ): Promise<KnowledgeSearchResult[]> {
-  const muninnConfig = getMuninnConfig(ctx);
-  if (!muninnConfig.enabled) {
-    return [];
-  }
   try {
-    const client = createMuninnClient(ctx.http, muninnConfig.baseUrl);
-    const res = await client.activate("default", [query], limit);
-    const results: KnowledgeSearchResult[] = [];
-    for (const a of res.activations) {
-      const tags = a.tags ?? [];
-      if (tags[0] === "knowledge" && typeof tags[1] === "string") {
-        results.push({
-          path: tags[1],
-          content: a.content,
-          score: a.score,
-          last_modified: "",
-        });
-      }
-    }
-    return results.slice(0, limit);
+    const store = createVectorStore(ctx.db);
+    const queryEmbedding =
+      options.queryEmbedding ?? (await embedder.embed(query));
+    const hits = store.searchKnowledge(queryEmbedding, limit, {
+      pathPrefix: options.agentId ? `agents/${options.agentId}/` : undefined,
+      excludeArchivedBefore: options.includeArchived
+        ? undefined
+        : getArchiveCutoff(ctx),
+    });
+    return hits.map((h) => ({
+      path: h.path,
+      content: h.content,
+      score: h.score,
+      last_modified: h.last_modified,
+    }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(
-      "[Knowledge search] searchKnowledge (Muninn): failed, returning empty:",
+      "[Knowledge search] searchKnowledge (vector store): failed, returning empty:",
       msg,
     );
     return [];
@@ -84,8 +100,8 @@ export async function searchKnowledge(
 }
 
 /**
- * Semantic search over history entries. Returns top-k entries.
- * @param queryEmbedding - Optional precomputed embedding; when provided, embedder.embed(query) is skipped.
+ * @brief Semantic search over history vectors.
+ * @param queryEmbedding Optional precomputed embedding
  */
 export async function searchHistory(
   ctx: AppContext,
@@ -94,37 +110,22 @@ export async function searchHistory(
   limit = 5,
   queryEmbedding?: number[],
 ): Promise<HistorySearchResult[]> {
-  const muninnConfig = getMuninnConfig(ctx);
-  if (!muninnConfig.enabled) {
-    return [];
-  }
   try {
-    const client = createMuninnClient(ctx.http, muninnConfig.baseUrl);
-    const res = await client.activate("default", [query], limit);
-    const results: HistorySearchResult[] = [];
-    for (const a of res.activations) {
-      const tags = a.tags ?? [];
-      if (
-        tags[0] === "history" &&
-        tags.length >= 3 &&
-        typeof tags[1] === "string" &&
-        typeof tags[2] === "string"
-      ) {
-        results.push({
-          sessionId: tags[1],
-          entryId: tags[2],
-          content: a.content,
-          isCompressed: tags.includes("compressed"),
-          score: a.score,
-          createdAt: "",
-        });
-      }
-    }
-    return results.slice(0, limit);
+    const store = createVectorStore(ctx.db);
+    const embedding = queryEmbedding ?? (await embedder.embed(query));
+    const hits = store.searchHistory(embedding, limit);
+    return hits.map((h) => ({
+      sessionId: h.sessionId,
+      entryId: h.entryId,
+      content: h.content,
+      isCompressed: h.isCompressed,
+      score: h.score,
+      createdAt: h.createdAt,
+    }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(
-      "[Knowledge search] searchHistory (Muninn): failed, returning empty:",
+      "[Knowledge search] searchHistory (vector store): failed, returning empty:",
       msg,
     );
     return [];

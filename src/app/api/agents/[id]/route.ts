@@ -15,8 +15,8 @@ export async function GET(
   const { id } = await params;
   const data = getAgentIdentity(ctx, id);
   if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const { soul, memory, user, agentsMd, ...agent } = data;
-  return NextResponse.json({ agent, soul, memory, user, agentsMd });
+  const { persona, user, ...agent } = data;
+  return NextResponse.json({ agent, persona, user });
 }
 
 export async function PATCH(
@@ -54,7 +54,7 @@ export async function PATCH(
   if (!updated)
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   const updatedData = getAgentIdentity(ctx, id);
-  const { soul, memory, user, agentsMd, ...agent } = updatedData!;
+  const { persona, user, ...agent } = updatedData!;
   return NextResponse.json({ agent });
 }
 

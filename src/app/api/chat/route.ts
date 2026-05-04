@@ -13,8 +13,13 @@ import {
   setActiveSessionId,
 } from "@/lib/history";
 import { initMessagingService } from "@/lib/messaging-service";
+import { getAgentIdentity, normalizeReasoningEffort } from "@/lib/agent/identity";
+import { getSettings } from "@/lib/settings";
+import { getPersonaById } from "@/lib/personas/registry";
+import { parseLeadingPersonaMention } from "@/lib/personas/mentions";
 import type { AppContext } from "@/lib/context";
 import type { SSEEvent } from "@/lib/types";
+import type { RunAgentOptions } from "@/lib/agent/runner";
 
 const bodySchema = z.object({
   message: z.string(),
@@ -31,14 +36,18 @@ export async function POST(req: NextRequest) {
   }
 
   const ctx = await ensureAppContext();
-  const agentId = body.targetAgent ?? "maia";
+  const mention = parseLeadingPersonaMention(body.message);
+  const personaFromMention = mention.personaId
+    ? getPersonaById(mention.personaId)
+    : null;
 
-  // Resolve session
+  const agentId = personaFromMention ? "maia" : body.targetAgent ?? "maia";
+
+  // Resolve session (unified user threads: user + maia)
   const activeId = getActiveSessionId(ctx);
   let sessionId = body.sessionId ?? activeId;
-  const created = !sessionId;
   if (!sessionId) {
-    sessionId = createSession(ctx, ["user", agentId]);
+    sessionId = createSession(ctx, ["user", "maia"]);
     setActiveSessionId(ctx, sessionId);
   }
 
@@ -58,7 +67,6 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      type RunAgentOptions = { emitHistoryEntries?: boolean };
       const runAgentFn = async (
         c: AppContext,
         toAgentId: string,
@@ -70,14 +78,40 @@ export async function POST(req: NextRequest) {
       };
       initMessagingService(ctx, runAgentFn);
 
+      const settings = getSettings(ctx);
+      let runMessage = body.message;
+      let runOpts: RunAgentOptions = {
+        emitHistoryEntries: true,
+        queueCaller: "user",
+      };
+
+      if (personaFromMention) {
+        const maiaModel = getAgentIdentity(ctx, "maia")?.model;
+        const model =
+          maiaModel && settings.whitelistedModels.includes(maiaModel)
+            ? maiaModel
+            : settings.whitelistedModels[0] ?? "openrouter/free";
+        runMessage =
+          mention.rest.trim() || "Please help with the user's request.";
+        runOpts = {
+          ...runOpts,
+          personaTurn: {
+            id: personaFromMention.id,
+            name: personaFromMention.name,
+            instructions: personaFromMention.instructions,
+            model,
+            reasoningEffort: normalizeReasoningEffort(
+              personaFromMention.suggestedReasoningEffort ?? "medium",
+            ),
+          },
+        };
+      }
+
       try {
         // Run agent directly so the queue worker stays free to process extractSearchQueries
         // and other smart-context jobs that the agent awaits. Pass send so tokens and done
         // are streamed to the client.
-        await runAgent(ctx, createProvider, agentId, sessionId!, body.message, send, {
-          emitHistoryEntries: true,
-          queueCaller: "user",
-        });
+        await runAgent(ctx, createProvider, agentId, sessionId!, runMessage, send, runOpts);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         send({ type: "error", message });

@@ -32,13 +32,18 @@ All API routes that can throw (Zod parse, `ensureAppContext`, domain, DB) should
 Send a message to an agent. Starts or continues a session.
 
 **Request body:**
+
 ```typescript
 {
   message: string;
   sessionId?: string;          // omit to use active session
-  targetAgent?: string;        // agent_id for @mention routing; defaults to "maia"
+  targetAgent?: string;        // defaults to "maia"; orchestrator agent id for the session
 }
 ```
+
+Leading `@<persona-id>` in `message` may be parsed as a **persona turn** on the same session (see `src/app/api/chat/route.ts`). New user threads use participants `["user", "maia"]`.
+
+The runner builds context in-process: embeddings refresh for `data/` and history, **pre-prompt recall** (SQLite registry, episodes, on-disk PARA under `life/`, daily notes) is merged into the smart-context block, then per-turn semantic search uses **`knowledge_vectors` / `history_vectors`** only (no external vector DB).
 
 **Response:** Server-Sent Events (streaming)
 
@@ -60,9 +65,11 @@ Send a message to an agent. Starts or continues a session.
 List all sessions with metadata.
 
 **Query params:**
+
 - `type`: `"user"` | `"agents"` | `"all"` (default: `"all"`)
 
 **Response:**
+
 ```typescript
 {
   sessions: Array<{
@@ -73,7 +80,7 @@ List all sessions with metadata.
     tags: string[];
     createdAt: string;
     updatedAt: string;
-  }>
+  }>;
 }
 ```
 
@@ -82,13 +89,17 @@ List all sessions with metadata.
 Create a new session.
 
 **Request body:**
+
 ```typescript
 { participants?: string[] }   // defaults to ["user", "maia"]
 ```
 
 **Response:**
+
 ```typescript
-{ sessionId: string }
+{
+  sessionId: string;
+}
 ```
 
 ### `GET /api/sessions/active`
@@ -96,6 +107,7 @@ Create a new session.
 Get the currently active user session.
 
 **Response:**
+
 ```typescript
 {
   sessionId: string | null;
@@ -108,8 +120,11 @@ Get the currently active user session.
 Set the active session.
 
 **Request body:**
+
 ```typescript
-{ sessionId: string }
+{
+  sessionId: string;
+}
 ```
 
 ### `GET /api/sessions/[id]`
@@ -117,6 +132,7 @@ Set the active session.
 Get full session data.
 
 **Query params:**
+
 - `mode`: `"compressed"` | `"original"` | `"both"` (default: `"both"`)
 
 **Response:** `Session` object
@@ -126,10 +142,12 @@ Get full session data.
 Fuzzy search within a session.
 
 **Query params:**
+
 - `q`: search string
 - `mode`: `"compressed"` | `"original"` | `"both"`
 
 **Response:**
+
 ```typescript
 { entries: HistoryEntry[] }
 ```
@@ -143,6 +161,7 @@ Fuzzy search within a session.
 List all agents.
 
 **Response:**
+
 ```typescript
 {
   agents: AgentDefinition[]
@@ -154,6 +173,7 @@ List all agents.
 Get a specific agent.
 
 **Response:** `AgentDefinition` with identity file contents included:
+
 ```typescript
 {
   agent: AgentDefinition;
@@ -170,6 +190,40 @@ Delete an agent (Maia only — enforced server-side).
 
 ---
 
+## Personas
+
+Templates live under `defaults/personas/catalog` and `data/personas/catalog` (Codex-style `.toml`); optional markdown overrides in `data/personas/overrides/<id>.md`.
+
+### `GET /api/personas`
+
+**Response:**
+
+```typescript
+{
+  personas: Array<{
+    id: string;
+    name: string;
+    description: string;
+    suggestedModelHint?: string;
+    sandboxMode?: string;
+  }>;
+}
+```
+
+### `GET /api/personas/[id]`
+
+**Response:** Full persona definition for one id (including `instructions` text), or 404.
+
+---
+
+## Dashboard
+
+### `GET /api/dashboard`
+
+Aggregates monitor data for the UI: agents, **personas** (catalog summary), task counts, recent `type: "user"` / agent sessions, and cron jobs.
+
+---
+
 ## History Search
 
 ### `GET /api/history/search`
@@ -177,18 +231,20 @@ Delete an agent (Maia only — enforced server-side).
 Search across all sessions.
 
 **Query params:**
+
 - `q`: fuzzy search string
 - `mode`: `"compressed"` | `"original"` | `"both"`
 - `tags`: comma-separated tag list (filter)
 
 **Response:**
+
 ```typescript
 {
   results: Array<{
     sessionId: string;
     sessionName: string;
     entries: HistoryEntry[];
-  }>
+  }>;
 }
 ```
 
@@ -201,6 +257,7 @@ Search across all sessions.
 Get current settings (API keys are not returned — only presence indicated).
 
 **Response:**
+
 ```typescript
 {
   whitelistedModels: string[];
@@ -216,6 +273,27 @@ Get current settings (API keys are not returned — only presence indicated).
 Update settings.
 
 **Request body:** Partial settings object (same shape as GET response, no key values).
+
+### `GET /api/model-capabilities`
+
+Returns capabilities for all whitelisted models (provider, reasoning support, tools support). Used by the Settings page to enable/disable reasoning effort and to know if a model supports tool calling.
+
+**Response:**
+
+```typescript
+{
+  modelCapabilities: Record<
+    string,
+    {
+      provider: "ollama" | "openrouter";
+      supportsReasoning: boolean;
+      supportsTools?: boolean; // Ollama: from /api/show capabilities; OpenRouter: true
+    }
+  >;
+}
+```
+
+For Ollama models, when `ollamaBaseUrl` is set, the server queries each model via Ollama `POST /api/show` and reads the `capabilities` array (`thinking` and `tools`). On failure or when baseUrl is empty, reasoning falls back to heuristics (e.g. embedding models do not support reasoning); tools default to true.
 
 ---
 
@@ -262,6 +340,7 @@ data: { timestamp: string }
 List credential keys (values never exposed).
 
 **Response:**
+
 ```typescript
 { keys: string[] }
 ```
@@ -271,8 +350,12 @@ List credential keys (values never exposed).
 Create a credential.
 
 **Request body:**
+
 ```typescript
-{ key: string; value: string }
+{
+  key: string;
+  value: string;
+}
 ```
 
 ### `PUT /api/credentials/[key]`
@@ -280,8 +363,11 @@ Create a credential.
 Update a credential's value.
 
 **Request body:**
+
 ```typescript
-{ value: string }
+{
+  value: string;
+}
 ```
 
 ### `DELETE /api/credentials/[key]`
@@ -301,6 +387,7 @@ Triggered by the internal cron scheduler. Fires the heartbeat to all active agen
 List active cron jobs.
 
 **Response:**
+
 ```typescript
 {
   jobs: CronJob[]

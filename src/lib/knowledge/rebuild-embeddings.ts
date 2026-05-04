@@ -1,15 +1,14 @@
 /**
- * @fileoverview Rebuild or build Muninn engrams from knowledge files and history.
+ * @fileoverview Rebuild or build embeddings from knowledge files and history.
  * @module lib/knowledge/rebuild-embeddings
  *
- * When Muninn is configured, (re)indexes knowledge files and history entries to Muninn.
- * When not configured, returns zeros.
+ * Uses SQLite vector tables (knowledge_vectors, history_vectors) and the configured embedder.
  */
 
 import { runKnowledgeIndex } from "./index";
 import { refreshEmbeddings } from "./refresh-embeddings";
 import { indexHistoryEntry } from "./history-index";
-import { getMuninnConfig } from "../muninn/config";
+import { createVectorStore } from "./vector-store";
 import type { AppContext } from "../context";
 
 export interface RebuildEmbeddingsResult {
@@ -19,15 +18,14 @@ export interface RebuildEmbeddingsResult {
 }
 
 /**
- * Rebuilds Muninn from current knowledge files and history entries.
- * When Muninn is not configured, returns zeros.
+ * @brief Rebuild semantic memory: clear vectors, re-index knowledge and all history entries.
+ * @param ctx App context
  */
 export async function rebuildEmbeddings(
   ctx: AppContext,
 ): Promise<RebuildEmbeddingsResult> {
-  if (!getMuninnConfig(ctx).enabled) {
-    return { knowledgeIndexed: 0, knowledgeRemoved: 0, historyIndexed: 0 };
-  }
+  const store = createVectorStore(ctx.db);
+  store.clearAll();
   const { indexed: knowledgeIndexed, removed: knowledgeRemoved } =
     await runKnowledgeIndex(ctx, {});
   await refreshEmbeddings(ctx);
@@ -53,15 +51,13 @@ export interface BuildEmbeddingsResult {
 }
 
 /**
- * Indexes new/changed knowledge files and history entries to Muninn without clearing.
- * When Muninn is not configured, returns zeros.
+ * @brief Incremental index: new/changed knowledge and history without full clear.
+ * @param ctx App context
  */
 export async function buildEmbeddings(
   ctx: AppContext,
 ): Promise<BuildEmbeddingsResult> {
-  if (!getMuninnConfig(ctx).enabled) {
-    return { knowledgeIndexed: 0, knowledgeRemoved: 0, historyIndexed: 0 };
-  }
+  const store = createVectorStore(ctx.db);
   const { indexed: knowledgeIndexed, removed: knowledgeRemoved } =
     await runKnowledgeIndex(ctx, {});
   await refreshEmbeddings(ctx);
@@ -71,6 +67,7 @@ export async function buildEmbeddings(
     )
     .all() as { id: string }[];
   for (const row of historyRows) {
+    store.deleteHistoryByEntryId(row.id);
     await indexHistoryEntry(ctx, row.id);
   }
   return {

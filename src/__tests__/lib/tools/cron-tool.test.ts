@@ -7,6 +7,7 @@ import {
 import { makeTestContext } from "../../helpers/fakes";
 import type { ToolContext } from "@/lib/tools/types";
 import type { CronJob } from "@/lib/types";
+import { getSettings } from "@/lib/settings";
 
 function makeToolCtx(): ToolContext {
   const ctx = makeTestContext();
@@ -126,6 +127,81 @@ describe("cronScheduleTool", () => {
       ctx,
     );
     expect(id1).not.toBe(id2);
+  });
+
+  it("stores persona wake metadata with default task-review message", async () => {
+    const ctx = makeToolCtx();
+    const whitelistedModel = getSettings(ctx).whitelistedModels[0];
+    expect(whitelistedModel).toBeDefined();
+    ctx.db
+      .prepare("DELETE FROM cron_jobs WHERE id != 'builtin-heartbeat'")
+      .run();
+    await cronScheduleTool.execute(
+      {
+        id: "maia",
+        expr: "0 10 * * *",
+        persona_id: "typescript-pro",
+        persona_model: whitelistedModel,
+        desc: "Delegated sweep",
+      },
+      ctx,
+    );
+    const rows = ctx.db
+      .prepare(
+        "SELECT persona_id, persona_model, cron_message FROM cron_jobs WHERE id != 'builtin-heartbeat'",
+      )
+      .all() as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].persona_id).toBe("typescript-pro");
+    expect(rows[0].persona_model).toBe(whitelistedModel);
+    expect(String(rows[0].cron_message).toLowerCase()).toContain("task_list");
+  });
+
+  it("stores prompt_wake with default cron message", async () => {
+    const ctx = makeToolCtx();
+    ctx.db
+      .prepare("DELETE FROM cron_jobs WHERE id != 'builtin-heartbeat'")
+      .run();
+    await cronScheduleTool.execute(
+      {
+        id: "maia",
+        expr: "0 11 * * *",
+        prompt_wake: true,
+        desc: "Board hygiene",
+      },
+      ctx,
+    );
+    const rows = ctx.db
+      .prepare(
+        "SELECT persona_id, cron_message FROM cron_jobs WHERE id != 'builtin-heartbeat'",
+      )
+      .all() as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].persona_id).toBeNull();
+    expect(String(rows[0].cron_message).toLowerCase()).toContain("task_list");
+  });
+
+  it("throws when persona_id targets non-maia agent", async () => {
+    const ctx = makeToolCtx();
+    const whitelistedModel = getSettings(ctx).whitelistedModels[0];
+    expect(whitelistedModel).toBeDefined();
+    const now = new Date().toISOString();
+    ctx.db
+      .prepare(
+        "INSERT OR IGNORE INTO agents (id, name, model, system_prompt_extra, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run("worker", "Worker", whitelistedModel!, null, "active", now, now);
+    await expect(
+      cronScheduleTool.execute(
+        {
+          id: "worker",
+          expr: "0 * * * *",
+          persona_id: "typescript-pro",
+          persona_model: whitelistedModel,
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(/maia/i);
   });
 });
 

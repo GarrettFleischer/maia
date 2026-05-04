@@ -13,6 +13,7 @@ import type { AgentDefinition, CronJob } from "@/lib/types";
 /** Dashboard payload from GET /api/dashboard. */
 interface DashboardData {
   agents: AgentDefinition[];
+  personas: { id: string; name: string; description: string }[];
   taskCountsByStatus: { todo: number; in_progress: number; done: number };
   taskCountsByAgent: Record<
     string,
@@ -93,11 +94,12 @@ export default function AgentsView() {
   const recentSessions = data?.recentAgentSessions ?? [];
   const cronJobs = data?.cronJobs ?? [];
   const agents = data?.agents ?? [];
+  const personas = data?.personas ?? [];
 
   return (
-    <div className="min-h-full bg-zinc-950 text-zinc-100 overflow-auto">
+    <div className="h-full min-h-0 overflow-auto bg-zinc-950 text-zinc-100">
       <main className="max-w-6xl mx-auto px-4 py-8">
-        <h1 className="text-xl font-semibold mb-6">Agent monitor</h1>
+        <h1 className="text-xl font-semibold mb-6">Orchestrator &amp; personas</h1>
 
         {loading && <p className="text-zinc-500 text-sm">Loading...</p>}
         {error && (
@@ -152,9 +154,7 @@ export default function AgentsView() {
             <section className="mb-8" aria-label="Agent status">
               <h2 className="text-sm font-medium text-zinc-400 mb-3">Agents</h2>
               {agents.length === 0 ? (
-                <p className="text-zinc-500 text-sm">
-                  No agents yet. Maia will create agents as needed.
-                </p>
+                <p className="text-zinc-500 text-sm">No agent records.</p>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {agents.map((agent) => {
@@ -223,6 +223,35 @@ export default function AgentsView() {
                     );
                   })}
                 </div>
+              )}
+            </section>
+
+            <section className="mb-8" aria-label="Persona templates">
+              <h2 className="text-sm font-medium text-zinc-400 mb-3">
+                Persona templates
+              </h2>
+              {personas.length === 0 ? (
+                <p className="text-zinc-500 text-sm">
+                  No personas loaded. Add `.toml` files under defaults/personas/catalog or
+                  data/personas/catalog.
+                </p>
+              ) : (
+                <ul className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {personas.map((p) => (
+                    <li
+                      key={p.id}
+                      className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3 text-sm"
+                    >
+                      <div className="font-medium text-zinc-200">{p.name}</div>
+                      <div className="text-xs text-zinc-500 font-mono mt-0.5">
+                        {p.id}
+                      </div>
+                      <p className="text-zinc-400 text-xs mt-2 line-clamp-3">
+                        {p.description}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
               )}
             </section>
 

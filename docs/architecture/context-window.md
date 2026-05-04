@@ -23,7 +23,7 @@ When building the prompt for an AI call:
 Token budget breakdown (example, 128k context model):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 System prompt + security preamble:       ~1,500 tokens
-Agent identity (SOUL.md, AGENTS.md, skills): ~2,000 tokens
+Persona (`PERSONA.md`) + matched skills: ~2,000 tokens
 Compressed session history:             ~8,000 tokens  (would be ~40,000 uncompressed)
 Current message (original, full):       ~2,000 tokens
 Available tool definitions:             ~3,000 tokens
@@ -51,11 +51,11 @@ flowchart LR
   runner --> llm
 ```
 
-- **Session / history**: `getSession(ctx, sessionId)` returns `{ original, compressed }` arrays. Search query extraction uses only the **clarified commands** for the chat (Round 1: …, Round 2: …), not full rounds; the agent uses **find_tool** to discover how to read specific round numbers (e.g. `rounds: [1, 2]`) when it needs full context for those rounds. The last N rounds are still formatted with `formatRecentThreadTurns(session, n)` for the visible recent-thread block in the system prompt; they are not passed into query extraction. When reasoning/thinking is included (e.g. `chat_read` with `include_reasoning: true`), only the **most recent thinking entry per round** (in `formatRoundsByIndex`) or the single most recent in the slice (in `formatRecentThreadTurns`) is included so the context window is not filled by reasoning tokens.
+- **Session / history**: `getSession(ctx, sessionId)` returns `{ original, compressed }` arrays. Search query extraction uses only the **clarified commands** for the chat (Round 1: …, Round 2: …), not full rounds; the agent uses **find_tool** to discover how to read specific round numbers (e.g. `rounds: [1, 2]`) when it needs full context for those rounds. The **recent-thread** block uses `formatRecentThreadTurns` on the session **before** the current user message is appended (so the first user message in a thread does not produce a redundant “recent thread” section, and the current turn is not duplicated in system and user messages). Thinking is omitted from that block (`skipThinking: true`). When reasoning/thinking is included elsewhere (e.g. `chat_read` with `include_reasoning: true`), only the **most recent thinking entry per round** (in `formatRoundsByIndex`) or the single most recent in the slice (in `formatRecentThreadTurns`) is included so the context window is not filled by reasoning tokens.
 - **transformContext**: In `src/lib/agent/context-query.ts`, `transformContext(recentThreadBlock, smartContextBlock, systemPromptContent)` combines the blocks into a single system string. The runner passes a recent-thread block (last N rounds) plus a note to use **find_tool** to discover how to read earlier rounds when more exist; prior context is also supplied via the smart context block.
 - **convertToLlm**: Same module; maps that system string plus the user message (and optional initial tool result) to the `Message[]` format for the provider.
-- **Runner**: `src/lib/agent/runner.ts` runs `buildEmbeddings(ctx)` (when Muninn is configured: knowledge index and history sync to Muninn) **before** smart context so retrieval sees current data; then calls `buildSmartContextBlock`, `buildSystemPrompt`, `transformContext`, and `convertToLlm` when building the prompt for each LLM request.
-- **Semantic retrieval**: When the MuninnDB URL is set in Settings, smart context and the knowledge tool use **MuninnDB** only: `buildRawRetrievedContext` and `searchKnowledge` / `searchHistory` call Muninn’s ACTIVATE API; history entries and knowledge files are written to Muninn as engrams on append and on index. Without Muninn URL, semantic search returns no results.
+- **Runner**: `src/lib/agent/runner.ts` runs `buildEmbeddings(ctx)` **before** smart context so `knowledge_vectors` / `history_vectors` reflect the latest files and history; awaits `buildPrepromptMemoryBlock` (registry, episodes, PARA, daily note) and prepends that markdown to the smart-context block; then calls `buildSmartContextBlock`, `buildSystemPrompt`, `transformContext`, and `convertToLlm` when building the prompt for each LLM request.
+- **Semantic retrieval**: `buildRawRetrievedContext` and `searchKnowledge` / `searchHistory` embed the query and search SQLite vector tables via `src/lib/knowledge/search.ts`. History rows with role `thinking` are not indexed, so they do not surface in semantic search.
 
 ## Compression Agent Behavior
 

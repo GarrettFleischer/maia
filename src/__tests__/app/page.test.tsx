@@ -422,7 +422,7 @@ describe("Home page", () => {
     });
   });
 
-  it("creates new thread with chosen agent via picker (POST sessions has participants)", async () => {
+  it("creates new thread with Maia orchestrator (POST sessions has user + maia)", async () => {
     let sessionsPostBody: { participants?: string[]; type?: string } = {};
     installFetchMockForShell([
       {
@@ -464,14 +464,8 @@ describe("Home page", () => {
       expect(screen.getByText(/Welcome to Maia/i)).toBeInTheDocument(),
     );
     screen.getByRole("button", { name: /new thread/i }).click();
-    await waitFor(() =>
-      expect(
-        screen.getByRole("option", { name: "Helper" }),
-      ).toBeInTheDocument(),
-    );
-    screen.getByRole("option", { name: "Helper" }).click();
     await waitFor(() => {
-      expect(sessionsPostBody.participants).toEqual(["user", "agent-2"]);
+      expect(sessionsPostBody.participants).toEqual(["user", "maia"]);
       expect(sessionsPostBody.type).toBe("user");
     });
   });

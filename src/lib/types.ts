@@ -20,6 +20,14 @@ export interface HistoryEntry {
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   timestamp: string;
+  /**
+   * Who produced this entry (e.g. `maia` or a persona slug). Used for unified multi-speaker transcripts.
+   */
+  speakerId?: string;
+  /** Human-readable label for the speaker in the UI. */
+  speakerLabel?: string;
+  /** When set, the persona template id applied for this turn (may match speakerId for delegated personas). */
+  personaId?: string;
 }
 
 export interface Session {
@@ -50,6 +58,33 @@ export interface SessionMeta {
 
 /** Reasoning effort applied when using this agent's model (Ollama think / OpenRouter reasoning.effort). */
 export type ReasoningEffort = "off" | "low" | "medium" | "high";
+
+/**
+ * Loaded Codex-style persona template (e.g. from awesome-codex-subagents `.toml`).
+ * @note `suggestedModelHint` is informational only; Maia uses the whitelist + persona_run model.
+ */
+export interface PersonaDefinition {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  suggestedModelHint?: string;
+  suggestedReasoningEffort?: string;
+  sandboxMode?: string;
+  /** Absolute path to the primary `.toml` file (for debugging). */
+  sourcePath: string;
+}
+
+/**
+ * Per-turn persona overlay when running as Maia with a delegated persona (see `runAgent` options).
+ */
+export interface PersonaTurnOptions {
+  id: string;
+  name: string;
+  instructions: string;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+}
 
 /** Provider identifier for AI models used in Maia. */
 export type ModelProviderId = "ollama" | "openrouter";
@@ -92,10 +127,15 @@ export interface ModelCapabilities {
   provider: ModelProviderId;
   /**
    * Whether the model supports structured reasoning / "thinking" parameters.
-   * When false, reasoning effort dropdowns should be disabled and providers
-   * should avoid sending think/reasoning parameters.
+   * When false, reasoning effort dropdowns should be disabled. When undefined,
+   * capabilities are unknown (e.g. model not installed, provider has no API).
    */
-  supportsReasoning: boolean;
+  supportsReasoning?: boolean;
+  /**
+   * Whether the model supports tool/function calling. When false, providers
+   * should avoid sending tools. When undefined, unknown (don't show capability icon).
+   */
+  supportsTools?: boolean;
 }
 
 export interface AgentDefinition {
@@ -111,19 +151,18 @@ export interface AgentDefinition {
 }
 
 export interface AgentWithIdentity extends AgentDefinition {
-  soul: string;
-  memory: string;
+  /** Markdown persona (`data/agents/<id>/PERSONA.md`). */
+  persona: string;
+  /** Reserved; user facts live under user/ and are retrieved via knowledge_search. */
   user: string;
-  /** Content of AGENTS.md from the agent's directory (data/agents/<id>/AGENTS.md). */
-  agentsMd: string;
 }
 
 export interface AgentCreateConfig {
   name: string;
   model: string;
   reasoningEffort?: ReasoningEffort;
-  soul?: string;
-  memory?: string;
+  /** Initial PERSONA.md body when provisioning an agent directory. */
+  persona?: string;
   user?: string;
   systemPromptExtra?: string;
 }
@@ -135,10 +174,16 @@ export interface CronJob {
   agentId: string;
   isBuiltIn: boolean;
   createdAt: string;
-  /** Tool to call when the job fires. */
+  /** Tool to call when the job fires (legacy tool-first wake only). */
   toolName: string;
   /** Arguments for the tool (JSON object). */
   toolArgs: Record<string, unknown>;
+  /** Delegated catalog persona slug when wake runs as Maia + persona_turn. */
+  personaId?: string | null;
+  /** Model id for delegated persona wake (whitelist). */
+  personaModel?: string | null;
+  /** Non-null → prompt-first wake using this message (trimmed); legacy wakes use NULL and `[CRON]` + initialToolCall. */
+  cronMessage?: string | null;
   /** Human-readable schedule (e.g. "Every 30 minutes"). Set by API when listing jobs. */
   scheduleDescription?: string;
   /** Next run time in ISO format. Set by API when listing jobs. */
@@ -178,8 +223,6 @@ export interface Settings {
   ollamaBaseUrl: string;
   /** Optional API key for Ollama Cloud (Bearer token). When set, sent as Authorization header. */
   ollamaApiKey?: string;
-  /** Base URL for MuninnDB (cognitive memory). When set, Maia uses Muninn for semantic memory. */
-  muninnUrl: string;
   openRouterApiKey?: string;
   /** Embedding model for knowledge base and history semantic search (e.g. nomic-embed-text). */
   embeddingModel: string;
@@ -191,18 +234,12 @@ export interface Settings {
    */
   contextQueryModel: string;
   /**
-   * Model used for relevance filtering and verbatim quote extraction from retrieved sources.
-   * Filters which retrieved sources are relevant, then extracts focused quotes per source (with cleanup).
-   * When empty, falls back to contextQueryModel; if both are empty smart context is disabled.
-   */
-  contextSummaryModel: string;
-  /**
    * Number of most recent user rounds to include verbatim in context.
    * A round is one user message plus all assistant/tool entries until the next user message.
    * Default 3, min 1.
    */
   contextRecentTurns: number;
-  /** Reasoning effort for smart context (query, relevance filter, and quote extraction models). Same API as per-agent effort. */
+  /** Reasoning effort for smart context (query and relevance filter). Same API as per-agent effort. */
   contextReasoningEffort: ReasoningEffort;
   /** Auto-archive: files with updated_at older than this duration are excluded from knowledge_search unless include_archived is true. Value (positive integer). */
   archiveDurationValue: number;
@@ -223,8 +260,6 @@ export interface SettingsPublic {
   heartbeatIntervalMinutes: number;
   ollamaBaseUrl: string;
   hasOllamaKey: boolean;
-  /** MuninnDB REST base URL (e.g. http://localhost:8475). Empty = not configured. */
-  muninnUrl: string;
   hasOpenRouterKey: boolean;
   hasBraveKey: boolean;
   hasBraveAnswersKey: boolean;
@@ -232,8 +267,6 @@ export interface SettingsPublic {
   embedMaxContentLength: number;
   /** @see Settings.contextQueryModel */
   contextQueryModel: string;
-  /** @see Settings.contextSummaryModel */
-  contextSummaryModel: string;
   /**
    * Number of most recent user rounds to include verbatim in context.
    * A round is one user message plus all assistant/tool entries until the next user message.

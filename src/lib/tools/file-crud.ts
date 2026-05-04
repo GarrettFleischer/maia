@@ -6,8 +6,8 @@
  * (2) Read before write — when editing an existing file, use file_read then file_write
  * with the full new content. Tool descriptions are written so the LLM sees these requirements.
  *
- * Path roots: Paths are relative to your agent directory (agents/<id>/). Your working
- * directory for saving files is the workspace: use the workspace/ prefix (e.g. workspace/notes.md).
+ * Path roots: Paths are relative to your agent directory (agents/<id>/). Identity prose lives in
+ * PERSONA.md at that root; your working directory for saving files is workspace/ (e.g. workspace/notes.md).
  * Paths starting with "knowledge/" or "tools/" resolve to the shared knowledge base or custom tools.
  */
 import { z } from "zod";

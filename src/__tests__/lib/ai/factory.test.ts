@@ -19,11 +19,12 @@ describe("createProvider", () => {
 
   it("throws when model is not whitelisted", () => {
     expect(() => createProvider("ollama/unknown-model", ctx)).toThrow(
-      "Model not whitelisted"
+      "Model not whitelisted",
     );
   });
 
   it("returns OllamaProvider for ollama/ models", () => {
+    updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"] });
     const provider = createProvider("ollama/llama3.2", ctx);
     expect(provider).toBeInstanceOf(OllamaProvider);
   });
@@ -31,22 +32,33 @@ describe("createProvider", () => {
   it("returns OpenRouterProvider for openrouter/ models when API key is set", () => {
     updateSettings(ctx, {
       openRouterApiKey: "sk-test-key",
-      whitelistedModels: ["ollama/llama3.2", "openrouter/anthropic/claude-3.5-haiku"],
+      whitelistedModels: [
+        "ollama/llama3.2",
+        "openrouter/anthropic/claude-3.5-haiku",
+      ],
     });
-    const provider = createProvider("openrouter/anthropic/claude-3.5-haiku", ctx);
+    const provider = createProvider(
+      "openrouter/anthropic/claude-3.5-haiku",
+      ctx,
+    );
     expect(provider).toBeInstanceOf(OpenRouterProvider);
   });
 
   it("returns OpenRouterProvider for openrouter/free when API key is set", () => {
-    updateSettings(ctx, { openRouterApiKey: "sk-test-key", whitelistedModels: ["ollama/llama3.2", "openrouter/free"] });
+    updateSettings(ctx, {
+      openRouterApiKey: "sk-test-key",
+      whitelistedModels: ["ollama/llama3.2", "openrouter/free"],
+    });
     const provider = createProvider("openrouter/free", ctx);
     expect(provider).toBeInstanceOf(OpenRouterProvider);
   });
 
   it("throws for openrouter/ when API key is not configured", () => {
-    updateSettings(ctx, { whitelistedModels: ["openrouter/anthropic/claude-3.5-haiku"] });
+    updateSettings(ctx, {
+      whitelistedModels: ["openrouter/anthropic/claude-3.5-haiku"],
+    });
     expect(() =>
-      createProvider("openrouter/anthropic/claude-3.5-haiku", ctx)
+      createProvider("openrouter/anthropic/claude-3.5-haiku", ctx),
     ).toThrow("OpenRouter API key not configured");
   });
 
@@ -55,7 +67,7 @@ describe("createProvider", () => {
       whitelistedModels: ["ollama/llama3.2", "custom/my-model"],
     });
     expect(() => createProvider("custom/my-model", ctx)).toThrow(
-      "Unknown model provider"
+      "Unknown model provider",
     );
   });
 
@@ -67,9 +79,12 @@ describe("createProvider", () => {
       modelParams: { "ollama/llama3.2": { temperature: 0.6, top_p: 0.95 } },
     });
     let capturedBody: Record<string, unknown> = {};
-    const ollamaLine = JSON.stringify({ message: { content: "" }, done: true }) + "\n";
+    const ollamaLine =
+      JSON.stringify({ message: { content: "" }, done: true }) + "\n";
     http.on(/\/api\/chat/, async (_url: string, init?: RequestInit) => {
-      capturedBody = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
+      capturedBody = init?.body
+        ? (JSON.parse(init.body as string) as Record<string, unknown>)
+        : {};
       const stream = new ReadableStream<Uint8Array>({
         start(c) {
           c.enqueue(new TextEncoder().encode(ollamaLine));

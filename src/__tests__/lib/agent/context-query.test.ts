@@ -31,6 +31,7 @@ import {
   FakeResponse,
 } from "@/__tests__/helpers/fakes";
 import { updateSettings } from "@/lib/settings";
+import { createVectorStore } from "@/lib/knowledge/vector-store";
 import type { AppContext } from "@/lib/context";
 import type { AIProvider, AIResponse } from "@/lib/ai/types";
 import type { Session } from "@/lib/types";
@@ -327,6 +328,13 @@ describe("buildRawRetrievedContext", () => {
     (
       ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
     ).on(
+      "/api/show",
+      async () =>
+        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 8192" })),
+    );
+    (
+      ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
+    ).on(
       "/api/embed",
       async () =>
         new FakeResponse(200, JSON.stringify({ embeddings: [[0.9, 0.1]] })),
@@ -334,44 +342,30 @@ describe("buildRawRetrievedContext", () => {
   });
 
   it("returns text with history and knowledge sections", async () => {
-    ctx.db
-      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
-      .run("muninnUrl", "http://localhost:8475");
-    const http = new FakeHttp();
-    http.on("/api/activate", async (_url, init) => {
-      const body =
-        init?.body && typeof init.body === "string"
-          ? JSON.parse(init.body)
-          : {};
-      expect(body.context).toBeDefined();
-      return new FakeResponse(
-        200,
-        JSON.stringify({
-          activations: [
-            {
-              id: "1",
-              concept: "session:sess-1 entry:entry-1",
-              content: "past conversation about GDPR",
-              score: 0.9,
-              tags: ["history", "sess-1", "entry-1", "user", "original"],
-            },
-            {
-              id: "2",
-              concept: "knowledge/law.md",
-              content: "GDPR regulation content",
-              score: 0.9,
-              tags: ["knowledge", "knowledge/law.md"],
-            },
-          ],
-        }),
-      );
-    });
-    const ctxWithMuninn: AppContext = { ...ctx, http };
-
-    const { text, sources, contents } = await buildRawRetrievedContext(
-      ctxWithMuninn,
-      ["GDPR law"],
+    const store = createVectorStore(ctx.db);
+    const emb = [0.9, 0.1];
+    const now = new Date().toISOString();
+    store.insertHistory(
+      "hv1",
+      "sess-1",
+      "entry-1",
+      "past conversation about GDPR",
+      emb,
+      false,
+      now,
     );
+    store.upsertKnowledge(
+      "k1",
+      "knowledge/law.md",
+      "GDPR regulation content",
+      "hash1",
+      emb,
+      now,
+    );
+
+    const { text, sources, contents } = await buildRawRetrievedContext(ctx, [
+      "GDPR law",
+    ]);
 
     expect(text).toContain("## History results");
     expect(text).toContain("past conversation about GDPR");
@@ -391,34 +385,22 @@ describe("buildRawRetrievedContext", () => {
   });
 
   it("deduplicates history results across multiple queries", async () => {
-    ctx.db
-      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
-      .run("muninnUrl", "http://localhost:8475");
-    const http = new FakeHttp();
-    http.on(
-      "/api/activate",
-      async () =>
-        new FakeResponse(
-          200,
-          JSON.stringify({
-            activations: [
-              {
-                id: "1",
-                concept: "session:sess-1 entry:entry-1",
-                content: "unique content",
-                score: 0.9,
-                tags: ["history", "sess-1", "entry-1", "original"],
-              },
-            ],
-          }),
-        ),
+    const store = createVectorStore(ctx.db);
+    const emb = [0.9, 0.1];
+    store.insertHistory(
+      "hv1",
+      "sess-1",
+      "entry-1",
+      "unique content",
+      emb,
+      false,
+      new Date().toISOString(),
     );
-    const ctxWithMuninn: AppContext = { ...ctx, http };
 
-    const { sources, contents } = await buildRawRetrievedContext(
-      ctxWithMuninn,
-      ["query one", "query two"],
-    );
+    const { sources, contents } = await buildRawRetrievedContext(ctx, [
+      "query one",
+      "query two",
+    ]);
 
     const histSources = sources.filter((s) => s.type === "history");
     const ids = histSources.map((s) => s.id);
@@ -427,34 +409,21 @@ describe("buildRawRetrievedContext", () => {
   });
 
   it("deduplicates knowledge results across multiple queries", async () => {
-    ctx.db
-      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
-      .run("muninnUrl", "http://localhost:8475");
-    const http = new FakeHttp();
-    http.on(
-      "/api/activate",
-      async () =>
-        new FakeResponse(
-          200,
-          JSON.stringify({
-            activations: [
-              {
-                id: "1",
-                concept: "docs/report.md",
-                content: "report content",
-                score: 0.9,
-                tags: ["knowledge", "docs/report.md"],
-              },
-            ],
-          }),
-        ),
+    const store = createVectorStore(ctx.db);
+    const emb = [0.9, 0.1];
+    store.upsertKnowledge(
+      "k1",
+      "docs/report.md",
+      "report content",
+      "hashr",
+      emb,
+      new Date().toISOString(),
     );
-    const ctxWithMuninn: AppContext = { ...ctx, http };
 
-    const { sources, contents } = await buildRawRetrievedContext(
-      ctxWithMuninn,
-      ["query a", "query b"],
-    );
+    const { sources, contents } = await buildRawRetrievedContext(ctx, [
+      "query a",
+      "query b",
+    ]);
 
     const knowledgeSources = sources.filter((s) => s.type === "knowledge");
     const ids = knowledgeSources.map((s) => s.id);
@@ -462,7 +431,7 @@ describe("buildRawRetrievedContext", () => {
     expect(contents).toHaveLength(sources.length);
   });
 
-  it("returns no-results message when Muninn not configured or no activations", async () => {
+  it("returns no-results message when vectors are empty", async () => {
     const { text, sources, contents } = await buildRawRetrievedContext(ctx, [
       "unknown query",
     ]);
@@ -472,41 +441,15 @@ describe("buildRawRetrievedContext", () => {
   });
 
   it("source ids follow the expected format", async () => {
-    ctx.db
-      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
-      .run("muninnUrl", "http://localhost:8475");
-    const http = new FakeHttp();
-    http.on(
-      "/api/activate",
-      async () =>
-        new FakeResponse(
-          200,
-          JSON.stringify({
-            activations: [
-              {
-                id: "1",
-                concept: "session:sess-1 entry:entry-1",
-                content: "content",
-                score: 0.9,
-                tags: ["history", "sess-1", "entry-1", "original"],
-              },
-              {
-                id: "2",
-                concept: "docs/file.md",
-                content: "knowledge",
-                score: 0.9,
-                tags: ["knowledge", "docs/file.md"],
-              },
-            ],
-          }),
-        ),
-    );
-    const ctxWithMuninn: AppContext = { ...ctx, http };
+    const store = createVectorStore(ctx.db);
+    const emb = [0.9, 0.1];
+    const now = new Date().toISOString();
+    store.insertHistory("hv1", "sess-1", "entry-1", "content", emb, false, now);
+    store.upsertKnowledge("k1", "docs/file.md", "knowledge", "hf", emb, now);
 
-    const { sources, contents } = await buildRawRetrievedContext(
-      ctxWithMuninn,
-      ["test"],
-    );
+    const { sources, contents } = await buildRawRetrievedContext(ctx, [
+      "test",
+    ]);
 
     const histSrc = sources.find((s) => s.type === "history");
     const knowledgeSrc = sources.find((s) => s.type === "knowledge");
@@ -551,34 +494,28 @@ describe("buildSmartContextBlock", () => {
       contextQueryModel: "ollama/llama3.2",
       embeddingModel: "ollama/nomic-embed-text",
     });
-    ctx.db
-      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
-      .run("muninnUrl", "http://localhost:8475");
+    const store = createVectorStore(ctx.db);
+    store.insertHistory(
+      "hv1",
+      "sess-1",
+      "entry-1",
+      "We decided to use smart context.",
+      [0.9, 0.1],
+      false,
+      new Date().toISOString(),
+    );
     const http = new FakeHttp();
     http.on(
-      "/api/activate",
+      "/api/show",
       async () =>
-        new FakeResponse(
-          200,
-          JSON.stringify({
-            activations: [
-              {
-                id: "1",
-                concept: "session:sess-1 entry:entry-1",
-                content: "We decided to use smart context.",
-                score: 0.9,
-                tags: ["history", "sess-1", "entry-1", "original"],
-              },
-            ],
-          }),
-        ),
+        new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 8192" })),
     );
     http.on(
       "/api/embed",
       async () =>
         new FakeResponse(200, JSON.stringify({ embeddings: [[0.9, 0.1]] })),
     );
-    const ctxWithMuninn: AppContext = { ...ctx, http };
+    const ctxWithHttp: AppContext = { ...ctx, http };
     const responses = [
       '["decision", "outcome"]',
       '["history:sess-1/entry-1"]',
@@ -594,7 +531,7 @@ describe("buildSmartContextBlock", () => {
       },
     };
     const result = await buildSmartContextBlock(
-      ctxWithMuninn,
+      ctxWithHttp,
       () => provider,
       "What did we decide?",
     );
@@ -945,7 +882,7 @@ describe("extractRelevantQuotes", () => {
     const ctx = makeTestContext();
     updateSettings(ctx, {
       whitelistedModels: ["ollama/llama3.2"],
-      contextSummaryModel: "ollama/llama3.2",
+      contextQueryModel: "ollama/llama3.2",
     });
     const provider = makeProvider(
       '[{"text": "verbatim snippet one"}, {"text": "snippet two"}]',
@@ -974,7 +911,6 @@ describe("extractRelevantQuotes", () => {
     const ctx = makeTestContext();
     updateSettings(ctx, {
       whitelistedModels: ["ollama/llama3.2"],
-      contextSummaryModel: "",
       contextQueryModel: "",
     });
     const sources = [{ type: "history" as const, id: "history:s1/e1" }];
@@ -993,7 +929,7 @@ describe("extractRelevantQuotes", () => {
     const ctx = makeTestContext();
     updateSettings(ctx, {
       whitelistedModels: ["ollama/llama3.2"],
-      contextSummaryModel: "ollama/llama3.2",
+      contextQueryModel: "ollama/llama3.2",
     });
     const provider = makeProvider("not json");
     const sources = [{ type: "knowledge" as const, id: "knowledge:doc.md" }];
@@ -1133,28 +1069,11 @@ describe("summarizeRetrievedContext", () => {
     expect(block).toContain("the raw context");
   });
 
-  it("uses contextSummaryModel when set, contextQueryModel as fallback", async () => {
-    const ctx = makeTestContext();
-    updateSettings(ctx, {
-      whitelistedModels: ["ollama/llama3.2", "ollama/qwen2.5"],
-      contextQueryModel: "ollama/llama3.2",
-      contextSummaryModel: "ollama/qwen2.5",
-    });
-    const calledModels: string[] = [];
-    const providerFactory = (model: string): AIProvider => {
-      calledModels.push(model);
-      return makeProvider("summary output");
-    };
-    await summarizeRetrievedContext(ctx, providerFactory, "raw", []);
-    expect(calledModels[0]).toBe("ollama/qwen2.5");
-  });
-
-  it("uses contextQueryModel when contextSummaryModel is empty", async () => {
+  it("uses contextQueryModel for summary", async () => {
     const ctx = makeTestContext();
     updateSettings(ctx, {
       whitelistedModels: ["ollama/llama3.2"],
       contextQueryModel: "ollama/llama3.2",
-      contextSummaryModel: "",
     });
     const calledModels: string[] = [];
     const providerFactory = (model: string): AIProvider => {

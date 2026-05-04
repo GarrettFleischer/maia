@@ -86,14 +86,12 @@ export const settingsPublic: SettingsPublic = {
   heartbeatIntervalMinutes: 30,
   ollamaBaseUrl: "http://localhost:11434",
   hasOllamaKey: false,
-  muninnUrl: "",
   hasOpenRouterKey: false,
   hasBraveKey: false,
   hasBraveAnswersKey: false,
   embeddingModel: "ollama/nomic-embed-text",
   embedMaxContentLength: 4000,
   contextQueryModel: "",
-  contextSummaryModel: "",
   contextRecentTurns: 3,
   contextReasoningEffort: "medium",
   archiveDurationValue: 0,
@@ -105,16 +103,29 @@ export const settingsPublic: SettingsPublic = {
 export const modelCapabilitiesFixture: {
   modelCapabilities: Record<
     string,
-    { provider: string; supportsReasoning: boolean }
+    { provider: string; supportsReasoning: boolean; supportsTools?: boolean }
   >;
 } = {
   modelCapabilities: {
-    "ollama/llama3.2": { provider: "ollama", supportsReasoning: true },
-    "ollama/qwen2.5-coder": { provider: "ollama", supportsReasoning: true },
-    "ollama/nomic-embed-text": { provider: "ollama", supportsReasoning: false },
+    "ollama/llama3.2": {
+      provider: "ollama",
+      supportsReasoning: true,
+      supportsTools: true,
+    },
+    "ollama/qwen2.5-coder": {
+      provider: "ollama",
+      supportsReasoning: true,
+      supportsTools: true,
+    },
+    "ollama/nomic-embed-text": {
+      provider: "ollama",
+      supportsReasoning: false,
+      supportsTools: false,
+    },
     "openrouter/anthropic/claude-3.5-sonnet": {
       provider: "openrouter",
       supportsReasoning: true,
+      supportsTools: true,
     },
   },
 };
@@ -157,6 +168,7 @@ export const agentsList: { agents: AgentDefinition[] } = {
 /** Dashboard response shape for GET /api/dashboard. */
 export interface DashboardFixture {
   agents: AgentDefinition[];
+  personas: { id: string; name: string; description: string }[];
   taskCountsByStatus: { todo: number; in_progress: number; done: number };
   taskCountsByAgent: Record<
     string,
@@ -181,6 +193,7 @@ export interface DashboardFixture {
 /** GET /api/dashboard — empty (no agents). */
 export const dashboardEmpty: DashboardFixture = {
   agents: [],
+  personas: [],
   taskCountsByStatus: { todo: 0, in_progress: 0, done: 0 },
   taskCountsByAgent: {},
   recentAgentSessions: [],
@@ -190,6 +203,7 @@ export const dashboardEmpty: DashboardFixture = {
 /** GET /api/dashboard — with agents, task counts, recent sessions, cron. */
 export const dashboardWithData: DashboardFixture = {
   agents: agentsList.agents,
+  personas: [],
   taskCountsByStatus: { todo: 2, in_progress: 1, done: 3 },
   taskCountsByAgent: {
     maia: { todo: 0, in_progress: 1, done: 2 },

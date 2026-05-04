@@ -59,7 +59,7 @@ describe("Agents page (monitor dashboard)", () => {
     ]);
     await renderAgentsPage();
     await waitFor(() => {
-      expect(screen.getByText(/No agents yet/i)).toBeInTheDocument();
+      expect(screen.getByText(/No agent records/i)).toBeInTheDocument();
     });
   });
 

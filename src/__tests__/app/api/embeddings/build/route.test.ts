@@ -27,6 +27,16 @@ describe("POST /api/embeddings/build", () => {
           h: (url: string, init?: RequestInit) => Promise<FakeResponse>,
         ) => void;
       }
+    ).on("/api/show", async () =>
+      new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 8192" })),
+    );
+    (
+      ctx.http as {
+        on: (
+          p: string,
+          h: (url: string, init?: RequestInit) => Promise<FakeResponse>,
+        ) => void;
+      }
     ).on("/api/embed", async (_url: string, init?: RequestInit) => {
       const body = init?.body
         ? (JSON.parse(init.body as string) as { input?: string | string[] })
@@ -53,15 +63,18 @@ describe("POST /api/embeddings/build", () => {
     expect(typeof body.historyIndexed).toBe("number");
   });
 
-  it("indexes unindexed history without clearing when Muninn configured", async () => {
+  it("indexes unindexed history into history_vectors", async () => {
     const ctx = makeTestContext();
-    ctx.db
-      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
-      .run("muninnUrl", "http://localhost:8475");
+    updateSettings(ctx, {
+      whitelistedModels: ["ollama/nomic-embed-text"],
+      embeddingModel: "ollama/nomic-embed-text",
+    });
     const http = new FakeHttp();
-    http.on(
-      "/api/engrams",
-      async () => new FakeResponse(200, JSON.stringify({ id: "eng-1" })),
+    http.on("/api/show", async () =>
+      new FakeResponse(200, JSON.stringify({ parameters: "num_ctx 8192" })),
+    );
+    http.on("/api/embed", async () =>
+      new FakeResponse(200, JSON.stringify({ embeddings: [[0.1, 0.2]] })),
     );
     const sessionId = createSession(ctx, ["user", "maia"]);
     appendEntry(ctx, sessionId, {

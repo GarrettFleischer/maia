@@ -18,6 +18,7 @@
 import { NextResponse } from "next/server";
 import { ensureAppContext } from "@/instrumentation";
 import { listAgents } from "@/lib/agent/identity";
+import { getPersonaCatalog } from "@/lib/personas/registry";
 import { listSessions } from "@/lib/history";
 import type { CronJob } from "@/lib/types";
 import { describeCronSchedule, getNextCronRun } from "@/lib/cron/describe";
@@ -28,6 +29,11 @@ export async function GET() {
   const ctx = await ensureAppContext();
 
   const agents = listAgents(ctx);
+  const personas = getPersonaCatalog().map((p) => ({
+    id: p.id,
+    name: p.name,
+    description: p.description,
+  }));
 
   const statusRows = ctx.db
     .prepare("SELECT status, COUNT(*) as count FROM tasks GROUP BY status")
@@ -89,6 +95,9 @@ export async function GET() {
         r.tool_args != null
           ? (JSON.parse(r.tool_args as string) as Record<string, unknown>)
           : {},
+      personaId: (r.persona_id as string | null | undefined) ?? null,
+      personaModel: (r.persona_model as string | null | undefined) ?? null,
+      cronMessage: (r.cron_message as string | null | undefined) ?? null,
       scheduleDescription: describeCronSchedule(expression),
       nextRunAt: getNextCronRun(expression) ?? undefined,
     };
@@ -96,6 +105,7 @@ export async function GET() {
 
   return NextResponse.json({
     agents,
+    personas,
     taskCountsByStatus,
     taskCountsByAgent,
     recentAgentSessions,

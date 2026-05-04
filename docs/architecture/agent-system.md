@@ -1,54 +1,62 @@
 # Agent System Architecture
 
-## Agent behavior (AGENTS.md)
+Maia is the **single long-lived orchestrator** (`agent_id` `maia`). **Delegated personas** are Codex-style `.toml` templates loaded from `defaults/personas/catalog` plus `data/personas/catalog`, with optional layered markdown at `data/personas/overrides/<id>.md`. Maia-only tools register new templates (**`persona_catalog_upsert`**) or replace overrides (**`persona_override_write`**).
 
-`AGENTS.md` is loaded from the agent's directory (`data/agents/<id>/AGENTS.md`) or project root and injected into the system prompt with explicit attribution (see System prompt order below). It describes how agents should function—context tools, workspace, safety, tools—and can be edited per agent. If the per-agent file is missing or empty, the system falls back to `AGENTS.md` at project root.
+Maia’s **orchestrator persona** lives as markdown in **`data/agents/maia/PERSONA.md`** (seeded from `defaults/maia/PERSONA.md`). Edits accumulate over time via **`file_write`** or Maia-initiated updates—there is **no separate SOUL / AGENTS / MEMORY trio** going forward.
 
-## Agent Identity
+**Persona turns** still reuse Maia’s workspace, honor history speaker labels, and run through **`persona_run`** / **`message_send`** / `@persona` mentions inside one **user session** (`["user","maia"]`).
 
-Each agent has a directory at `data/agents/<agent_id>/`. Identity files at the root are **SOUL.md** and **AGENTS.md** only. Memory and user facts live in **memory/** and **user/** as small files and are retrieved via **knowledge_search** with scope (self, user, global, or another agent id); they are not injected as blocks into the system prompt.
+## Orchestrator persona (`PERSONA.md`)
+
+`getAgentIdentity` surfaces `persona` as the trimmed contents of `data/agents/<id>/PERSONA.md`. Stray **`AGENTS.md`**, **`SOUL.md`**, or **`MEMORY.md`** files at the agent root are ignored for persona loading and excluded from semantic indexing.
+
+Optional fallback: project-root **`PERSONA.md`** is used only when agent-level **`PERSONA.md`** is absent or blank (`buildSystemPrompt` in `src/lib/agent/runner.ts`).
+
+## Delegated personas (catalog)
+
+Catalog personas ship under **`defaults/personas/catalog`** and can be extended/overridden under **`data/personas/catalog/<slug>.toml`**. Overrides merge **after** base instructions—exact precedence lives in `src/lib/personas/registry.ts`.
+
+## Agent directory layout
 
 ```
-data/agents/agent_007/
-├── AGENTS.md    # How this agent should function (fallback: project root AGENTS.md)
-├── SOUL.md      # Who the agent is (included in system prompt with attribution)
-├── workspace/   # Agent file work
-├── memory/      # Small fact files (e.g. fact.md); retrieved via knowledge_search
-└── user/        # Small fact files about the user; retrieved via knowledge_search
+data/agents/maia/
+├── PERSONA.md   # Orchestrator persona + evolving guidance (indexed separately from rag corpus)
+├── workspace/   # Working tree Maia edits via file tools / terminal
+├── life/        # PARA tree (projects, areas, resources, archives)
+├── memory/      # Markdown facts retrieved via knowledge_search (scoped self)
+└── user/        # Markdown facts retrieved via knowledge_search (scoped user)
 ```
 
-### SOUL.md
+Facts stay under **`memory/`** and **`user/`**; they are excluded from wholesale prompt stuffing and remain accessible via **knowledge_search** plus layered-memory helpers.
 
-The agent's self-concept (name, personality, expertise). Included in the system prompt with attribution. Edited via the **terminal** from the agent directory.
+## System prompt order (`buildSystemPrompt`)
 
-### memory/ and user/
+The orchestrator prompt is assembled as follows (`src/lib/agent/runner.ts`):
 
-Persistent facts the agent deems important (user preferences, decisions, lessons learned) live as small files under `memory/` and `user/`. Agents retrieve them via **knowledge_search** with the appropriate scope. Results include **last_modified**; files older than the archive duration are excluded unless **include_archived: true**. Agents create and edit these files via the **terminal**.
+1. **`SECURITY_PREAMBLE`** — immutable rules (`src/lib/security/preamble.ts`).
+2. **Agent identity line** — `You are agent \`<agent_id>\``.
+3. **System date and time** — ISO/local timestamps + timezone.
+4. **Persona attribution** — cites `data/agents/<id>/PERSONA.md`, project-root fallback, or compiled fallback messaging.
+5. **Persona markdown / fallback instructions** — primary behavioral prose plus optional `system_prompt_extra` from SQLite.
+6. **Matched skills block** — optional `## Active skills` appended when skill routing succeeds.
 
-## System prompt order
-
-The system prompt is built in this order (in `buildSystemPrompt` and `transformContext`):
-
-1. **Agent ID** — e.g. "You are agent \`<agent_id>\`".
-2. **System date and time** — Current ISO/local datetime and timezone.
-3. **AGENTS.md** — A line stating that the following instructions are from `data/agents/<agent_id>/AGENTS.md`, then the full AGENTS content.
-4. **SOUL.md** — A line stating that the following is from `data/agents/<agent_id>/SOUL.md`, then the SOUL content.
-
-There are no "Memory" or "User" blocks in the prompt; memory and user facts are in `memory/` and `user/` and are retrieved via **knowledge_search** when the agent needs them.
+Delegated persona prompts (`buildPersonaSystemPrompt`) prepend **`SECURITY_PREAMBLE`** plus persona-specific scaffolding before template instructions.
 
 ## Context pipeline
 
 Context is built and passed to the LLM as follows:
 
-1. **transformContext** — Combines (optionally empty) recent-thread and smart-context blocks with the system prompt into a single system string. By default, recent thread and smart context are not included; agents discover tools via **find_tool** and skills via **find_skill** (the only two tools in the minimal set); they use these to get prior context and other capabilities as needed. Implemented in `src/lib/agent/context-query.ts` as `transformContext(recentThreadBlock, smartContextBlock, systemPromptContent)`.
+1. **Recent thread** — Last N **prior** user rounds (excluding the message being sent now), formatted with thinking omitted; see [Context window](context-window.md).
 
-2. **convertToLlm** — Maps that system string plus the user message (and optional initial tool result) to the `Message[]` format the AI provider expects.
+2. **Smart context block** — Pre-prompt recall (`buildPrepromptMemoryBlock`: registry, episodes, PARA scan, daily note excerpt) is prepended, then per-turn semantic retrieval (`buildSmartContextBlock`: queries → vector search → filter/summary) and matched skills.
 
-Flow: `systemPromptContent` (agent ID → date/time → AGENTS with attribution → SOUL with attribution) → `transformContext` → `convertToLlm` → `Message[]` → LLM.
+3. **transformContext** — Combines `recentThreadBlock`, `smartContextBlock`, and `systemPromptContent` in `src/lib/agent/context-query.ts`.
+
+4. **convertToLlm** — Maps that system string plus the user message (and optional initial tool result) to the `Message[]` format the AI provider expects.
+
+Flow: `(recent thread + smart context)` → `transformContext(..., systemPromptContent)` → `convertToLlm` → `Message[]` → LLM. Agents still discover most tools via **find_tool** / **find_skill** in the minimal tool set; layered-memory tools are available from the full registry once discovered.
 
 ## Agent Execution Loop
-
-The diagram below refines the ASCII flow into a Mermaid diagram that matches the implementation in `src/lib/agent/runner.ts`.
 
 ```mermaid
 flowchart TD
@@ -58,8 +66,8 @@ flowchart TD
   validateModel -->|yes| buildContext["BuildContext(system+identity+tools)"]
   buildContext --> callLlm["CallLLM"]
   callLlm --> parseResp["ParseResponse"]
-  parseResp -->|\"text only\"| finalText["FinalTextResponse"]
-  parseResp -->|\"tool calls\"| execTools["ExecuteTools"]
+  parseResp -->|"text only"| finalText["FinalTextResponse"]
+  parseResp -->|"tool calls"| execTools["ExecuteTools"]
   execTools --> appendResults["AppendToolResults"]
   appendResults --> callLlm
   finalText --> compress["CompressionAgent"]
@@ -67,119 +75,59 @@ flowchart TD
   storeHistory --> emitSse["EmitSSEEvent"]
 ```
 
-- **Trigger**: a user message (`/api/chat`), a heartbeat, or an agent-to-agent message.
+- **Trigger**: user chat (`/api/chat`), heartbeat payload, queued `message_send`, or delegated persona entry points.
 - **Load agent**: `getAgentIdentity(ctx, agentId)` plus settings from `getSettings(ctx)`.
 - **Validate model**: checks `settings.whitelistedModels` before running.
-- **Build context**: uses `buildSystemPrompt`, `formatRecentThreadTurns`, and `buildSmartContextBlock` to assemble system, recent history, and smart context.
-- **Call LLM**: uses a provider from `createProvider` with streaming callbacks for `thinking` and `token` events.
-- **Execute tools**: runs tools from `getToolsForAgent(agent.id)` via the tool registry.
-- **Store history**: appends user, tool, thinking, and agent entries to `history_entries` and schedules indexing.
-- **Emit SSE**: uses `ctx.events.emit` so `/api/events` can stream updates to the UI.
+- **Build context**: uses `buildSystemPrompt`, `formatRecentThreadTurns`, and `buildSmartContextBlock`.
+- **Call LLM**: uses `createProvider` with streaming callbacks for thinking/token/tool phases.
+- **Execute tools**: routes through `getToolsForAgent(agent.id)` registrations.
+- **Store history**: persists transcripts + schedules embeddings/index passes.
 
-## Agent Communication
+## Communication (unified transcript)
 
 ### Agent → User
 
-An agent can post to the active user session at any time using `message_send({ to: "user", text: "..." })`. This:
+Agents append `"agent"` role entries via `message_send({ to: "user", text })`, tagging speaker metadata when present.
 
-1. Adds the agent to the session's `participants` array if not already present.
-2. Appends the message as an `"agent"` role entry.
-3. Emits an SSE event causing the UI to update.
+### Agent → Maia, persona, or another agent id
 
-### Agent → Agent
+`message_send({ to: "maia" | personaId | agentId, text })` never forks another thread—it schedules **`runAgent`** against the caller session (`src/lib/messaging-service.ts`).
 
-An agent uses `message_send({ to: targetAgentId, text: content })`. This:
+### User → persona (chat)
 
-1. Searches for an existing session where `participants` contains exactly `[senderAgentId, targetAgentId]`.
-2. If found, appends to that session.
-3. If not found, creates a new session in `data/history/agents/`.
-4. The target agent is triggered to respond (either synchronously or at next heartbeat).
-
-### User → Specific Agent
-
-The user prefixes their message with `@agent_name`. The system:
-
-1. Resolves `agent_name` to an `agent_id`.
-2. Adds that agent to the active user session.
-3. Routes the message to that agent's execution loop.
-4. The agent responds within the user session.
+Leading `@persona-id` mentions route through `/api/chat` persona-turn handling without spawning parallel sessions.
 
 ```mermaid
 sequenceDiagram
   participant User
   participant Home as UI(/)
   participant ChatAPI as /api/chat
-  participant Runner as AgentRunner
+  participant Runner as runAgent
 
-  User->>Home: @agent_name message
-  Home->>ChatAPI: POST /api/chat { message, targetAgent }
-  ChatAPI->>Runner: runAgent(ctx, targetAgent, sessionId, message, onEvent)
-  Runner-->>ChatAPI: SSE events (thinking/token/tool_result/done)
+  User->>Home: @persona_id message
+  Home->>ChatAPI: POST /api/chat { message, sessionId, targetAgent }
+  ChatAPI->>Runner: persona turn or Maia run (same session)
+  Runner-->>ChatAPI: SSE (thinking/token/tool_result/done)
   ChatAPI-->>Home: text/event-stream
-  Home-->>User: Updated message list
+  Home-->>User: Transcript with speaker labels
 ```
 
-## Heartbeat and per-agent cron
+## Heartbeat + cron
 
-Every N minutes (configurable via `heartbeatIntervalMinutes`), a **heartbeat** runs that wakes **only Maia**. She receives:
+The heartbeat scheduler wakes **Maia only**. Her injected checklist emphasizes tasks and cron hygiene plus persona delegation reminders (`src/lib/tools/heartbeat-tool.ts`). Cron targets typically remain **`maia`**, though SQLite still stores arbitrary `agent_id` references for scheduled jobs and messaging.
 
-- A prompt to **check the task board and the cron job list**, assign unassigned tasks, and ensure each active agent has a cron job. She does not message agents—they run on their own cron schedule.
-- The current task board (unassigned and in-progress tasks), cron jobs table, and agents list.
+## Maia-only tooling snapshot
 
-Maia does not wake other agents directly via the heartbeat. There are **no automatic per-agent cron jobs** (no staggered agent-run job creation in code). Maia schedules each agent’s cron via **cron_schedule** at her chosen time and frequency (e.g. so agents do not overlap). When an agent’s cron fires, that agent is run with the scheduled tool (typically `cron_echo`) and a reminder to review tasks and take action. The heartbeat thus coordinates via tasks and cron; agents run when their Maia-scheduled jobs fire.
+Beyond universal tools, Maia receives persona orchestration helpers:
 
-```mermaid
-flowchart LR
-  settingsNode["Settings(heartbeatInterval)"]
-  cronJobs["cron_jobs table"]
-  cronScheduler["CronScheduler(src/lib/cron/service.ts)"]
-  heartbeatJob["builtin-heartbeat job"]
-  maia["Maia agent"]
-  agents["Other agents"]
+- **`persona_list`**, **`persona_get`**, **`persona_run`**
+- **`persona_catalog_upsert`** — writes/replaces `data/personas/catalog/<slug>.toml`
+- **`persona_override_write`** — replaces markdown overrides layered atop catalog personas
 
-  settingsNode --> cronScheduler
-  cronScheduler --> cronJobs
-  cronScheduler --> heartbeatJob
+Cron scheduling, thread helpers, credential tooling, and custom-tool manifests remain Maia-only per `src/lib/tools/registry.ts`.
 
-  heartbeatJob --> maia
-  maia --> cronJobs
-  maia --> agents
-  cronJobs --> agents
-```
+## Model assignment
 
-- **Heartbeat job**: Implemented as a built-in cron job that runs an internal heartbeat tool. Wakes Maia, who inspects tasks and cron jobs and creates or adjusts agent cron jobs via **cron_schedule** so every active agent has a run schedule.
-- **Per-agent jobs**: Created by Maia via **cron_schedule** (not automatic). When they fire, they run the agent with the scheduled tool (e.g. `cron_echo`) and a reminder to review tasks and memory. Agent creation and lifecycle (instantiate, soul, task, cron) is documented in a Maia-only skill in `defaults/maia/skills/agent-creation-and-lifecycle.md` (seeded to `data/agents/maia/skills/`).
-
-## Maia — The Orchestrator
-
-Maia is the only agent that can:
-
-- Create new agents
-- Delete agents
-- Schedule cron jobs
-- Manage the cron job list
-
-Maia's responsibility is to:
-
-1. Understand the user's high-level goals.
-2. Break them into discrete, assignable tasks.
-3. Create specialized agents for those tasks (see the agent-creation skill in `defaults/maia/skills/`).
-4. Monitor the task board and cron jobs on each heartbeat; ensure each agent has a cron job (via **cron_schedule**) at times that do not overlap.
-5. Synthesize agent outputs for the user.
-
-Maia should NOT directly implement features or run commands when she can delegate. Her value is in coordination and synthesis.
-
-## Model Assignment
-
-Each agent has a model assigned at creation:
-
-- `ollama/llama3.2` — local lightweight model
-- `ollama/qwen2.5-coder` — local code-specialized model
-- `openrouter/anthropic/claude-3.5-haiku` — cloud model
-
-The system validates the model against `settings.whitelistedModels` before:
-
-- Creating an agent
-- Triggering an agent (heartbeat or message)
-
-If the model is not whitelisted, the agent is silently skipped (not triggered) and a warning is logged.
+- **`agents` table**: Maia keeps her orchestrator model default here.
+- **Persona turns**: explicit model overrides must remain whitelisted (`readModelsConfig`).
+- Vendor `.toml` model hints remain informational unless mirrored into settings.

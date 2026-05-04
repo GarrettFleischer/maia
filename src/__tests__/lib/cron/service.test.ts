@@ -10,7 +10,7 @@ import {
   refreshHeartbeatJob,
 } from "@/lib/cron/service";
 import { registerLlmQueueHandlers } from "@/lib/queue/llm-queue-handlers";
-import { updateSettings } from "@/lib/settings";
+import { updateSettings, getSettings } from "@/lib/settings";
 import { makeTestContext, FakeEvents } from "../../helpers/fakes";
 import type { AppContext } from "@/lib/context";
 import { _resetHeartbeatIdempotencyForTests } from "@/lib/heartbeat";
@@ -34,6 +34,9 @@ function seedCronJob(
     isBuiltIn?: number;
     toolName?: string;
     toolArgs?: Record<string, unknown>;
+    personaId?: string | null;
+    personaModel?: string | null;
+    cronMessage?: string | null;
   } = {},
 ) {
   const id =
@@ -44,8 +47,8 @@ function seedCronJob(
   const toolArgs = opts.toolArgs ?? { message: taskDescription };
   ctx.db
     .prepare(
-      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args, persona_id, persona_model, cron_message)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -56,6 +59,9 @@ function seedCronJob(
       now,
       toolName,
       JSON.stringify(toolArgs),
+      opts.personaId ?? null,
+      opts.personaModel ?? null,
+      opts.cronMessage ?? null,
     );
   return id;
 }
@@ -172,6 +178,79 @@ describe("CronService", () => {
         name: "cron_echo",
         args: { message: "Review backlog" },
       });
+    });
+
+    it("invokes runAgentFn with personaTurn when persona_id is set", async () => {
+      ctx.db
+        .prepare("DELETE FROM cron_jobs WHERE id = 'builtin-heartbeat'")
+        .run();
+      seedAgent(ctx, "maia");
+      const personaModel = getSettings(ctx).whitelistedModels[0];
+      expect(personaModel).toBeDefined();
+      seedCronJob(ctx, {
+        id: "persona-job",
+        expression: "0 9 * * *",
+        taskDescription: "Persona sweep",
+        agentId: "maia",
+        personaId: "typescript-pro",
+        personaModel,
+        cronMessage: null,
+        toolName: "cron_echo",
+        toolArgs: {},
+      });
+      const runAgentCalls: {
+        agentId: string;
+        message: string;
+        options?: { personaTurn?: { id: string; model: string } };
+      }[] = [];
+      startCronScheduler(
+        ctx,
+        async (_c, agentId, _sid, message, options) => {
+          runAgentCalls.push({ agentId, message, options });
+        },
+        { runOnInit: true },
+      );
+
+      await new Promise((r) => setTimeout(r, 25));
+      expect(runAgentCalls.length).toBeGreaterThanOrEqual(1);
+      const call = runAgentCalls.find((c) => c.options?.personaTurn);
+      expect(call).toBeDefined();
+      expect(call!.agentId).toBe("maia");
+      expect(call!.options?.personaTurn?.id).toBe("typescript-pro");
+      expect(call!.options?.personaTurn?.model).toBe(personaModel);
+      expect(call!.message.toLowerCase()).toContain("task_list");
+    });
+
+    it("invokes runAgentFn with plain message when cron_message is set", async () => {
+      ctx.db
+        .prepare("DELETE FROM cron_jobs WHERE id = 'builtin-heartbeat'")
+        .run();
+      seedAgent(ctx, "maia");
+      seedCronJob(ctx, {
+        id: "prompt-job",
+        expression: "0 9 * * *",
+        taskDescription: "Prompt wake",
+        agentId: "maia",
+        cronMessage: "Custom ping",
+        toolName: "cron_echo",
+        toolArgs: {},
+      });
+      const runAgentCalls: {
+        message: string;
+        options?: { initialToolCall?: { name: string } };
+      }[] = [];
+      startCronScheduler(
+        ctx,
+        async (_c, _agentId, _sid, message, options) => {
+          runAgentCalls.push({ message, options });
+        },
+        { runOnInit: true },
+      );
+
+      await new Promise((r) => setTimeout(r, 25));
+      const call = runAgentCalls.find((c) => c.message === "Custom ping");
+      expect(call).toBeDefined();
+      expect(call!.options?.initialToolCall).toBeUndefined();
     });
 
     it("emits cron_fired event when a job runs", async () => {

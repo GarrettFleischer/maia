@@ -24,15 +24,15 @@ import type { ProviderFactory } from "@/lib/agent/runner";
 function seedIdentityFiles(
   fs: FakeFs,
   agentId: string,
-  options?: { agentsMd?: string },
+  options?: { personaAppend?: string },
 ) {
   const dir = path.join(getAgentsDir(), agentId);
-  fs.seed(path.join(dir, "SOUL.md"), "# Soul\nI am Maia, the orchestrator.");
-  fs.seed(path.join(dir, "MEMORY.md"), "# Memory\nUser prefers TDD.");
-  fs.seed(path.join(dir, "USER.md"), "# User\nThe user is a developer.");
-  if (options?.agentsMd !== undefined) {
-    fs.seed(path.join(dir, "AGENTS.md"), options.agentsMd);
-  }
+  const base =
+    "# Persona\n\nYou are Maia, the orchestrator for this workspace.\n\n## Facts pointers\nRetrieve durable facts via knowledge_search (memory/ and user/).";
+  fs.seed(
+    path.join(dir, "PERSONA.md"),
+    options?.personaAppend ? `${base}\n\n${options.personaAppend}` : base,
+  );
 }
 
 function seedAgent(ctx: AppContext, id = "maia", model = "ollama/llama3.2") {
@@ -276,7 +276,7 @@ describe("runAgent", () => {
     expect(toolEvents.some((e) => e.type === "tool_result")).toBe(true);
   });
 
-  it("system prompt omits last 3 rounds (smart context used instead); current user message is the only user turn in messages", async () => {
+  it("system prompt includes recent thread; current user message is the only user turn in messages", async () => {
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
     appendEntry(
@@ -318,14 +318,15 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(capturedSystem).not.toContain("## Recent thread");
+    expect(capturedSystem).toContain("## Recent thread");
+    expect(capturedSystem).toContain("prior user message");
     expect(capturedSystem).toContain("You are agent");
     expect(capturedNonSystem).toHaveLength(1);
     expect(capturedNonSystem[0].content).toBe("current");
     expect(capturedNonSystem[0].role).toBe("user");
   });
 
-  it("system prompt omits last 3 rounds with prior message and reply", async () => {
+  it("system prompt includes recent thread with prior message and reply", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     appendEntry(
@@ -358,11 +359,12 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("prior message");
     expect(systemContent).toContain("You are agent");
   });
 
-  it("system message omits last 3 rounds (smart context and find_tool used for prior context)", async () => {
+  it("system message includes recent thread plus smart context", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     appendEntry(
@@ -395,11 +397,12 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("first user");
     expect(systemContent).toContain("You are agent");
   });
 
-  it("system omits last 3 rounds when session has history (tool_call and agent)", async () => {
+  it("system includes recent thread when session has history (tool_call and agent)", async () => {
     const t0 = "2020-01-01T00:00:00.000Z";
     const t1 = "2020-01-01T00:00:01.000Z";
     const t2 = "2020-01-01T00:00:02.000Z";
@@ -456,11 +459,12 @@ describe("runAgent", () => {
       () => {},
     );
 
-    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).toContain("only user");
     expect(systemContent).toContain("You are agent");
   });
 
-  it("when more than 3 rounds exist, system includes find_tool note (no verbatim recent thread)", async () => {
+  it("when more than 3 rounds exist, system includes recent thread and find_tool note", async () => {
     const ts = "2020-01-01T00:00:00.000Z";
     for (let i = 0; i < 4; i++) {
       appendEntry(
@@ -494,12 +498,12 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("## Recent thread");
     expect(systemContent).toContain("**find_tool**");
     expect(systemContent).toContain("You are agent");
   });
 
-  it("system omits recent thread (no verbatim thinking or prior turns in system)", async () => {
+  it("system recent thread omits thinking but includes user and agent turns", async () => {
     const ts = "2020-01-01T00:00:00.000Z";
     appendEntry(
       ctx,
@@ -537,11 +541,12 @@ describe("runAgent", () => {
       "current",
       () => {},
     );
-    expect(systemContent).not.toContain("## Recent thread");
+    expect(systemContent).toContain("## Recent thread");
+    expect(systemContent).not.toContain("internal reasoning");
     expect(systemContent).toContain("You are agent");
   });
 
-  it("puts system prompt in order: agent id, date/time, AGENTS, SOUL", async () => {
+  it("puts system prompt in order: security, agent id, PERSONA attribution", async () => {
     seedIdentityFiles(ctx.fs as FakeFs, "maia");
     let systemContent = "";
     const provider: AIProvider = {
@@ -561,12 +566,12 @@ describe("runAgent", () => {
       "Hello",
       () => {},
     );
+    const secPos = systemContent.indexOf("SECURITY NOTICE");
     const agentIdPos = systemContent.indexOf("You are agent `maia`");
-    const securityPos = systemContent.indexOf("SECURITY NOTICE");
-    const soulPos = systemContent.indexOf("data/agents/maia/SOUL.md");
-    expect(agentIdPos).toBeGreaterThanOrEqual(0);
-    expect(securityPos).toBeGreaterThan(agentIdPos);
-    expect(soulPos).toBeGreaterThan(securityPos);
+    const personaPos = systemContent.indexOf("data/agents/maia/PERSONA.md");
+    expect(secPos).toBeGreaterThanOrEqual(0);
+    expect(agentIdPos).toBeGreaterThan(secPos);
+    expect(personaPos).toBeGreaterThan(agentIdPos);
   });
 
   it("system omits recent thread when first message (no prior rounds)", async () => {
@@ -647,7 +652,7 @@ describe("runAgent", () => {
     expect(systemContent).toContain("Current system local datetime:");
   });
 
-  it("includes the running agent's SOUL and AGENTS content in the system prompt (memory/user are in folders, retrieved via knowledge_search)", async () => {
+  it("includes the running agent PERSONA content in the system prompt", async () => {
     seedIdentityFiles(ctx.fs as FakeFs, "maia");
     (
       ctx.http as { on: (p: string, h: () => Promise<FakeResponse>) => void }
@@ -680,13 +685,11 @@ describe("runAgent", () => {
       () => {},
     );
 
-    expect(systemContent).toContain("You are agent `maia`");
-    expect(systemContent).toContain("I am Maia, the orchestrator.");
-    expect(systemContent).toContain("data/agents/maia/AGENTS.md");
-    expect(systemContent).toContain("data/agents/maia/SOUL.md");
+    expect(systemContent).toContain("You are Maia, the orchestrator");
+    expect(systemContent).toContain("data/agents/maia/PERSONA.md");
   });
 
-  it("does not include How you function section when AGENTS.md is absent (agent dir and project root)", async () => {
+  it("does not include obsolete AGENTS scaffold heading when PERSONA backs the prompt", async () => {
     seedIdentityFiles(ctx.fs as FakeFs, "maia");
     let systemContent = "";
     const provider: AIProvider = {
@@ -709,7 +712,7 @@ describe("runAgent", () => {
     );
     expect(systemContent).not.toContain("## How you function");
     expect(systemContent).toContain("SECURITY NOTICE");
-    expect(systemContent).toContain("data/agents/maia/SOUL.md");
+    expect(systemContent).toContain("data/agents/maia/PERSONA.md");
   });
 
   it("when options.initialToolCall is set, executes that tool and sends result as first turn to the model", async () => {
@@ -945,11 +948,11 @@ describe("runAgent", () => {
     expect(new Set(phaseNames).size).toBe(phaseNames.length);
   });
 
-  it("includes AGENTS.md from agent dir as full system command when present", async () => {
+  it("includes appended PERSONA markdown after attribution when personaAppend is provided", async () => {
     const customInstruction =
       "Review GOALS every turn. Update MEMORY when you learn something important.";
     seedIdentityFiles(ctx.fs as FakeFs, "maia", {
-      agentsMd: customInstruction,
+      personaAppend: customInstruction,
     });
     let systemContent = "";
     const provider: AIProvider = {
@@ -975,21 +978,16 @@ describe("runAgent", () => {
       () => {},
     );
     expect(systemContent).toContain(customInstruction);
-    const agentIdPos = systemContent.indexOf("You are agent `maia`");
+    const personaAttrPos = systemContent.indexOf("data/agents/maia/PERSONA.md");
     const customPos = systemContent.indexOf(customInstruction);
-    const soulAttributionPos = systemContent.indexOf(
-      "data/agents/maia/SOUL.md",
-    );
-    expect(agentIdPos).toBeGreaterThanOrEqual(0);
-    expect(customPos).toBeGreaterThan(agentIdPos);
-    expect(soulAttributionPos).toBeGreaterThan(customPos);
+    expect(personaAttrPos).toBeGreaterThanOrEqual(0);
+    expect(customPos).toBeGreaterThan(personaAttrPos);
   });
 
-  it("falls back to project root AGENTS.md when agent dir has no AGENTS.md", async () => {
-    seedIdentityFiles(ctx.fs as FakeFs, "maia");
-    const agentsMdPath = path.join(process.cwd(), "AGENTS.md");
-    const agentsContent = "Fallback content from project root.";
-    (ctx.fs as FakeFs).seed(agentsMdPath, agentsContent);
+  it("falls back to project root PERSONA.md when agent PERSONA.md is absent", async () => {
+    const personaRootPath = path.join(process.cwd(), "PERSONA.md");
+    const personaRootBody = "Fallback content from project root.";
+    (ctx.fs as FakeFs).seed(personaRootPath, personaRootBody);
     let systemContent = "";
     const provider: AIProvider = {
       async complete(messages, _tools, onToken) {
@@ -998,7 +996,7 @@ describe("runAgent", () => {
           system && typeof system.content === "string" ? system.content : "";
         if (
           content.includes("You are agent `maia`") &&
-          content.includes(agentsContent)
+          content.includes(personaRootBody)
         )
           systemContent = content;
         onToken("Hi");
@@ -1013,8 +1011,8 @@ describe("runAgent", () => {
       "Hello",
       () => {},
     );
-    expect(systemContent).toContain(agentsContent);
-    expect(systemContent).toContain("data/agents/maia/SOUL.md");
+    expect(systemContent).toContain(personaRootBody);
+    expect(systemContent).toContain("project-root `PERSONA.md`");
   });
 
   it("emits tool_result with error when registered tool receives invalid args (parse throws)", async () => {
@@ -1026,7 +1024,7 @@ describe("runAgent", () => {
           onToken("");
           return {
             content: "",
-            toolCalls: [{ id: "tc-1", name: "agent_create", args: {} }],
+            toolCalls: [{ id: "tc-1", name: "persona_run", args: {} }],
             stopped: false,
           };
         }

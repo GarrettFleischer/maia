@@ -378,8 +378,8 @@ export function appendEntry(
   const id = uuidv4();
   ctx.db
     .prepare(
-      `INSERT INTO history_entries (id, session_id, role, content, resolved_content, round_index, tool_name, tool_args, timestamp, is_compressed)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO history_entries (id, session_id, role, content, resolved_content, round_index, tool_name, tool_args, timestamp, is_compressed, speaker_id, speaker_label, persona_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -392,6 +392,9 @@ export function appendEntry(
       entry.toolArgs ? JSON.stringify(entry.toolArgs) : null,
       entry.timestamp,
       isCompressed ? 1 : 0,
+      entry.speakerId ?? null,
+      entry.speakerLabel ?? null,
+      entry.personaId ?? null,
     );
   // bump session updated_at
   ctx.db
@@ -527,6 +530,9 @@ function rowToMeta(r: Record<string, unknown>): SessionMeta {
 }
 
 function rowToEntry(r: Record<string, unknown>): HistoryEntry {
+  const speakerId = r.speaker_id as string | null | undefined;
+  const speakerLabel = r.speaker_label as string | null | undefined;
+  const personaId = r.persona_id as string | null | undefined;
   return {
     id: r.id as string,
     role: r.role as HistoryEntry["role"],
@@ -536,5 +542,12 @@ function rowToEntry(r: Record<string, unknown>): HistoryEntry {
     toolName: r.tool_name as string | undefined,
     toolArgs: r.tool_args ? JSON.parse(r.tool_args as string) : undefined,
     timestamp: r.timestamp as string,
+    ...(speakerId != null && speakerId !== ""
+      ? { speakerId }
+      : {}),
+    ...(speakerLabel != null && speakerLabel !== ""
+      ? { speakerLabel }
+      : {}),
+    ...(personaId != null && personaId !== "" ? { personaId } : {}),
   };
 }

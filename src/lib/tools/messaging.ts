@@ -23,19 +23,23 @@ export function registerMessagingImpls(
 }
 
 const messageSendSchema = z.object({
-  to: z.string().describe("Target: 'user' (message in active session) or agent ID (agent-to-agent; replies until [DONE])"),
+  to: z
+    .string()
+    .describe(
+      "Target: 'user' (message in active session), 'maia', or a persona id from persona_list (same thread)",
+    ),
   text: z.string().describe("Message content"),
 });
 
 export const messageSendTool: Tool<z.infer<typeof messageSendSchema>, string> = {
   name: "message_send",
   description:
-    "Send a message. Use to: 'user' to message the user in the active session, or to: '<agent-id>' to message another agent (replies forwarded until [DONE]). Example: message_send({ to: 'user', text: 'Done.' }) or message_send({ to: 'agent-uuid', text: 'Please review.' }).",
+    "Send a message. Use to: 'user' for the user in this session, 'maia' for the orchestrator, or a persona id (see persona_list). Replies appear in this thread. Example: message_send({ to: 'user', text: 'Done.' }) or message_send({ to: 'typescript-pro', text: 'Please review.' }).",
   schema: messageSendSchema,
   toDefinition: () => ({
     name: "message_send",
     description:
-      "Send a message. Use to: 'user' to message the user in the active session, or to: '<agent-id>' to message another agent (replies forwarded until [DONE]). Example: message_send({ to: 'user', text: 'Done.' }) or message_send({ to: 'agent-uuid', text: 'Please review.' }).",
+      "Send a message. Use to: 'user' for the user in this session, 'maia' for the orchestrator, or a persona id (see persona_list). Replies appear in this thread. Example: message_send({ to: 'user', text: 'Done.' }) or message_send({ to: 'typescript-pro', text: 'Please review.' }).",
     parameters: zodToJsonSchema(messageSendSchema),
   }),
   async execute({ to: toTarget, text: content }, ctx) {

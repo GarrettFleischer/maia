@@ -39,7 +39,7 @@ The `AppContext` is created once per Node.js process via **instrumentation**:
     - Initializes Maia’s core services:
       - `initMaiaAgent(ctx)` – registers Maia’s agent definition.
       - Creates `runAgentFn` wrapper around `runAgent` from `src/lib/agent/runner.ts`.
-      - `initMessagingService(ctx, runAgentFn)` – enables `message_send` between agents and to user.
+      - `initMessagingService(ctx, runAgentFn)` – wires `message_send` to the user and to **same-session** targets (Maia, persona ids, or other agent ids via the LLM queue).
       - `registerLlmQueueHandlers()` from `src/lib/queue/llm-queue-handlers.ts`.
       - Starts the LLM queue processor and ticks it immediately.
       - Starts the cron scheduler via `startCronScheduler(ctx, runAgentFn)` from `src/lib/cron/service.ts`.
@@ -179,7 +179,7 @@ Key modules:
 - **Agent runner (`src/lib/agent/runner.ts`)**
   - Implements the core agentic loop (`runAgent` and `_runLoop`):
     - Loads agent identity (`getAgentIdentity`) and validates models against settings.
-    - Builds system prompt including security preamble (`SECURITY_PREAMBLE`), AGENTS/SOUL, and matched skills.
+    - Builds system prompt including security preamble (`SECURITY_PREAMBLE`), persona markdown (`PERSONA.md`), and matched skills.
     - Computes recent thread block and smart context via `buildSmartContextBlock`.
     - Builds LLM messages with `transformContext` and `convertToLlm`.
     - Drives the loop of:
@@ -212,22 +212,10 @@ Key modules:
   - `describe.ts`:
     - `describeCronSchedule` and `getNextCronRun` used by `/api/cron/jobs`.
 
-- **Knowledge and semantic memory (`src/lib/knowledge/**`, `src/lib/muninn/**`)**
-  - When **MuninnDB URL** is set in Settings, semantic memory uses Muninn only: knowledge files and history entries are written as engrams; smart context and the knowledge tool use Muninn’s ACTIVATE API. See [MuninnDB integration](#muninndb-integration) below.
-  - Knowledge base: files under `data/` (indexed when Muninn is configured). Utilities for building smart context and semantic search surfaces.
-
-### MuninnDB integration
-
-When the **MuninnDB URL** is set in Settings (AI Providers → MuninnDB URL), Maia uses MuninnDB as its semantic memory layer.
-
-- **Config**: `src/lib/muninn/config.ts` – reads `getSettings(ctx).muninnUrl`; when non-empty, Muninn is enabled.
-- **Client**: `src/lib/muninn/client.ts` – thin REST client: `writeEngram(vault, concept, content, tags)`, `activate(vault, context[], maxResults)`, `writeEngramBatch(items)` for migration.
-- **Vault**: A single **default** vault is used for both history and knowledge engrams; vault names follow Muninn rules (1–64 chars, lowercase/digits/hyphens/underscores). `src/lib/muninn/vault.ts` – `vaultFromKnowledgePath(path)` maps `agents/<id>/...` to vault `<id>`, others to `default`.
-- **Writes**:
-  - **History**: On each history append (and after compression), `indexHistoryEntry(ctx, entryId)` is enqueued; when Muninn is enabled, it writes one engram per entry (concept `session:<id> entry:<id>`, content ≤16KB, tags `["history", sessionId, entryId, role, original|compressed]`).
-  - **Knowledge**: `runKnowledgeIndex(ctx)` scans `data/` and writes each markdown file as an engram (concept = path, tags `["knowledge", path]`). Rebuild/build embeddings re-run index and sync history to Muninn.
-- **Retrieval**: `buildRawRetrievedContext` and `searchKnowledge` / `searchHistory` (in `src/lib/knowledge/search.ts`) call `client.activate("default", context, k)` and map activations to `ContextSource` and result types. When Muninn URL is empty, retrieval returns no results.
-- **Migration**: One-time transfer of existing `knowledge_vectors` and `history_vectors` to Muninn via `POST /api/embeddings/migrate-to-muninn` (see `src/lib/muninn/migrate-vectors-to-muninn.ts`).
+- **Knowledge and layered memory (`src/lib/knowledge/**`, `src/lib/memory/**`)**
+  - **Semantic index**: Knowledge files under `data/` and history rows (except `thinking` and `smart_context`) are embedded via the configured model into SQLite `knowledge_vectors` and `history_vectors`. `buildRawRetrievedContext`, `searchKnowledge`, and `searchHistory` use the embedder + these tables.
+  - **Layered memory**: `src/lib/memory/*` implements pre-prompt recall (`preprompt.ts`), PARA on-disk facts under `data/agents/<id>/life/`, daily notes, episodic graph tables, session compactions, and the `memory_registry`. Agent-facing tools are registered from `src/lib/tools/layered-memory-tools.ts`.
+  - See [Runtime and operations](runtime-and-ops.md#layered-memory-and-semantic-search-sqlite) and [Data model](data-model.md#semantic-memory-and-layered-memory).
 
 - **Security (`src/lib/security/**`)\*\*
   - `injection-filter.ts` – sanitizes untrusted text before exposing it to the LLM.
@@ -238,18 +226,19 @@ When the **MuninnDB URL** is set in Settings (AI Providers → MuninnDB URL), Ma
 
 The table below links a sample of key routes to the domain modules they primarily invoke.
 
-| Route / File                              | Primary domain modules                                                                                   | Notes                                                                                               |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `/api/chat` (`src/app/api/chat/route.ts`) | `src/lib/history.ts`, `src/lib/agent/runner.ts`, `src/lib/ai/factory.ts`, `src/lib/messaging-service.ts` | Streams SSE events while running an agent with `runAgent`. Uses history helpers to manage sessions. |
-| `/api/sessions/*`                         | `src/lib/history.ts`                                                                                     | Lists, creates, and updates sessions; fetches compressed/original history.                          |
-| `/api/history/search`                     | `src/lib/history.ts`                                                                                     | Performs fuzzy search across sessions via `searchAcrossSessions`.                                   |
-| `/api/tasks`                              | `src/lib/tasks.ts`                                                                                       | CRUD over tasks via task service; service uses `ctx.db` and `ctx.events`.                           |
-| `/api/agents`                             | `src/lib/agent/identity.ts`, `src/lib/data-dir.ts`                                                       | Manages agent definitions and identity files on disk.                                               |
-| `/api/credentials`                        | `src/lib/security/credential-vault.ts`                                                                   | Uses the credential vault to create and list keys (values never leave the vault).                   |
-| `/api/cron/jobs`                          | `ctx.db` (cron_jobs), `src/lib/cron/describe.ts`                                                         | Lists cron jobs with human-readable descriptions and next run time.                                 |
-| `/api/cron/heartbeat`                     | `src/lib/heartbeat.ts`                                                                                   | Triggers the internal heartbeat tool to wake Maia and reconcile agent cron jobs.                    |
-| `/api/queue`                              | `src/lib/queue/llm-queue.ts`                                                                             | Exposes a snapshot of queued jobs and their priorities.                                             |
-| `/api/events`                             | `src/lib/events.ts` and `AppContext.events`                                                              | Bridges the event bus to an SSE stream consumed by the UI.                                          |
+| Route / File                              | Primary domain modules                                                                                   | Notes                                                                                                                                                                                                                         |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/chat` (`src/app/api/chat/route.ts`) | `src/lib/history.ts`, `src/lib/agent/runner.ts`, `src/lib/ai/factory.ts`, `src/lib/messaging-service.ts` | Streams SSE events while running an agent with `runAgent`. Uses history helpers to manage sessions.                                                                                                                           |
+| `/api/sessions/*`                         | `src/lib/history.ts`                                                                                     | Lists, creates, and updates sessions; fetches compressed/original history.                                                                                                                                                    |
+| `/api/history/search`                     | `src/lib/history.ts`                                                                                     | Performs fuzzy search across sessions via `searchAcrossSessions`.                                                                                                                                                             |
+| `/api/tasks`                              | `src/lib/tasks.ts`                                                                                       | CRUD over tasks via task service; service uses `ctx.db` and `ctx.events`.                                                                                                                                                     |
+| `/api/agents`                             | `src/lib/agent/identity.ts`, `src/lib/data-dir.ts`                                                       | Manages agent definitions and identity files on disk.                                                                                                                                                                         |
+| `/api/credentials`                        | `src/lib/security/credential-vault.ts`                                                                   | Uses the credential vault to create and list keys (values never leave the vault).                                                                                                                                             |
+| `/api/model-capabilities`                 | `src/lib/ai/model-capabilities.ts`                                                                       | For Ollama: queries `POST /api/show` per model for `capabilities` (thinking, tools); if "thinking" is missing, treats known reasoning model names (e.g. Qwen3.5, \*-Reasoning) as supporting reasoning. OpenRouter: defaults. |
+| `/api/cron/jobs`                          | `ctx.db` (cron_jobs), `src/lib/cron/describe.ts`                                                         | Lists cron jobs with human-readable descriptions and next run time.                                                                                                                                                           |
+| `/api/cron/heartbeat`                     | `src/lib/heartbeat.ts`                                                                                   | Triggers the internal heartbeat tool to wake Maia and reconcile agent cron jobs.                                                                                                                                              |
+| `/api/queue`                              | `src/lib/queue/llm-queue.ts`                                                                             | Exposes a snapshot of queued jobs and their priorities.                                                                                                                                                                       |
+| `/api/events`                             | `src/lib/events.ts` and `AppContext.events`                                                              | Bridges the event bus to an SSE stream consumed by the UI.                                                                                                                                                                    |
 
 ### How to extend or debug the backend
 

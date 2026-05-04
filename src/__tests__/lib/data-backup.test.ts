@@ -44,7 +44,7 @@ describe("runDataBackup", () => {
       calls.push({ cmd, cwd: opts?.cwd });
 
       if (cmd.startsWith("git status")) {
-        return { stdout: " M agents/maia/MEMORY.md\n", stderr: "", exitCode: 0 };
+        return { stdout: " M agents/maia/PERSONA.md\n", stderr: "", exitCode: 0 };
       }
       if (cmd === "git add -A") {
         return { stdout: "", stderr: "", exitCode: 0 };

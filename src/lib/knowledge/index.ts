@@ -1,32 +1,28 @@
 /**
- * @fileoverview Data folder index: scan all files under data/, write to MuninnDB when configured.
+ * @fileoverview Data folder index: scan all files under data/, write to SQLite knowledge_vectors.
  * @module lib/knowledge/index
- *
- * When Muninn URL is set, discovers markdown files and writes each as an engram (no vector store).
- * When not set, indexing is a no-op.
  */
 
+import crypto from "crypto";
 import path from "path";
 import type { AppContext } from "../context";
 import type { EmbeddingAdapter } from "./embedding";
+import {
+  createEmbeddingAdapter,
+  getEffectiveEmbedMaxLength,
+} from "./embedding";
 import { getDataDir } from "../data-dir";
-import { getMuninnConfig } from "../muninn/config";
-import { createMuninnClient } from "../muninn/client";
-import { vaultFromKnowledgePath } from "../muninn/vault";
+import { getSettings } from "../settings";
+import { createVectorStore } from "./vector-store";
 
 /** Identity filenames at agent root (data/agents/<id>/) to exclude from indexing. */
-const IDENTITY_FILES = new Set([
-  "SOUL.md",
-  "MEMORY.md",
-  "USER.md",
-  "AGENTS.md",
-]);
+const IDENTITY_FILES = new Set(["PERSONA.md", "USER.md", "AGENTS.md", "SOUL.md", "MEMORY.md"]);
 
 /**
- * List markdown files under dir, relative to baseDir.
- * @param fs - File system adapter
- * @param dir - Absolute path to current directory
- * @param baseDir - Base directory (data dir) for relative paths
+ * @brief List markdown files under dir, relative to baseDir.
+ * @param fs File system adapter
+ * @param dir Absolute path to current directory
+ * @param baseDir Base directory (data dir) for relative paths
  */
 function listMarkdownFiles(
   fs: AppContext["fs"],
@@ -53,7 +49,8 @@ function listMarkdownFiles(
 }
 
 /**
- * Check if a file path (relative to data/) is an identity file: agents/<id>/SOUL.md etc.
+ * @brief True if path is agents/<id>/<identity markdown> (persona + obsolete root filenames).
+ * @param relPath Path relative to data/
  */
 function isIdentityPath(relPath: string): boolean {
   const norm = relPath.replace(/\\/g, "/");
@@ -65,56 +62,68 @@ function isIdentityPath(relPath: string): boolean {
 }
 
 export interface RunKnowledgeIndexOptions {
-  /** Unused when Muninn is the only backend; kept for API compatibility. */
+  /** Optional embedder; default from settings + ctx.http */
   embedder?: EmbeddingAdapter;
 }
 
 /**
- * Scan all files under data/ and write each as an engram to Muninn when configured.
- * Excludes agent identity files. When Muninn URL is not set, returns { indexed: 0, removed: 0 }.
- * @param ctx - App context (fs, http)
- * @param _options - Optional embedder (ignored; Muninn embeds server-side)
+ * @brief Scan data/ and upsert each markdown file into knowledge_vectors (excluding identity files).
+ * @param ctx App context (fs, http, db)
+ * @param options Optional embedder override
+ * @returns Counts indexed and removed (paths deleted from disk)
  */
 export async function runKnowledgeIndex(
   ctx: AppContext,
-  _options: RunKnowledgeIndexOptions = {},
+  options: RunKnowledgeIndexOptions = {},
 ): Promise<{ indexed: number; removed: number }> {
-  const muninnConfig = getMuninnConfig(ctx);
-  if (!muninnConfig.enabled) {
-    return { indexed: 0, removed: 0 };
-  }
-
   const dataDir = getDataDir();
   if (!ctx.fs.exists(dataDir)) {
     ctx.fs.mkdirp(dataDir);
-    return { indexed: 0, removed: 0 };
   }
 
   const files = listMarkdownFiles(ctx.fs, dataDir, dataDir).filter(
     (rel) => !isIdentityPath(rel),
   );
+  const settings = getSettings(ctx);
+  const embedder =
+    options.embedder ?? createEmbeddingAdapter(settings, ctx.http);
+  const effectiveMax = await getEffectiveEmbedMaxLength(settings, ctx.http);
+  const store = createVectorStore(ctx.db);
+  const existingPaths = new Set(store.getAllKnowledgePaths());
   let indexed = 0;
-  const client = createMuninnClient(ctx.http, muninnConfig.baseUrl);
-
+  const updatedAt = new Date().toISOString();
   for (const relPath of files) {
     const fullPath = path.join(dataDir, relPath);
     const content = ctx.fs.readFile(fullPath);
+    const contentHash = crypto
+      .createHash("sha256")
+      .update(content)
+      .digest("hex");
+    if (store.getKnowledgeHash(relPath) === contentHash) continue;
     try {
-      const concept = relPath.slice(0, 512);
-      const contentForMuninn = content.slice(0, 16 * 1024);
-      const vault = vaultFromKnowledgePath(relPath);
-      await client.writeEngram(vault, concept, contentForMuninn, [
-        "knowledge",
+      const embedding = await embedder.embed(content.slice(0, effectiveMax));
+      store.upsertKnowledge(
         relPath,
-      ]);
+        relPath,
+        content,
+        contentHash,
+        embedding,
+        updatedAt,
+      );
       indexed++;
       console.info(`[Embedding] Indexing data file: ${relPath}`);
     } catch (err) {
-      console.error(`Knowledge index: Muninn write skip ${relPath}:`, err);
+      console.error(`Knowledge index: vector write skip ${relPath}:`, err);
     }
   }
-
-  return { indexed, removed: 0 };
+  let removed = 0;
+  for (const p of existingPaths) {
+    if (!files.includes(p)) {
+      store.deleteKnowledgeByPath(p);
+      removed++;
+    }
+  }
+  return { indexed, removed };
 }
 
 /** Data directory root (for tests that seed files). Paths under this are indexed relative to it. */

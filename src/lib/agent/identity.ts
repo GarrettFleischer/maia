@@ -1,3 +1,7 @@
+/**
+ * @fileoverview Loads agent rows plus persona markdown from `data/agents/<id>/PERSONA.md`.
+ * @module lib/agent/identity
+ */
 import path from "path";
 import type { AppContext } from "../context";
 import type { AgentDefinition, AgentWithIdentity, ReasoningEffort } from "../types";
@@ -12,6 +16,12 @@ export function normalizeReasoningEffort(value: unknown): ReasoningEffort {
   return "medium";
 }
 
+/**
+ * @brief Loads one non-deleted agent and its trimmed `PERSONA.md` body (empty when missing).
+ * @param ctx - App context (db, fs)
+ * @param agentId - Agent primary key
+ * @returns Identity row plus `persona` and empty `user`, or null when missing/deleted
+ */
 export function getAgentIdentity(ctx: AppContext, agentId: string): AgentWithIdentity | null {
   const row = ctx.db
     .prepare("SELECT * FROM agents WHERE id = ? AND status != 'deleted'")
@@ -19,9 +29,12 @@ export function getAgentIdentity(ctx: AppContext, agentId: string): AgentWithIde
   if (!row) return null;
 
   const dir = path.join(getAgentsDir(), agentId);
-  const read = (file: string) => {
-    try { return ctx.fs.readFile(path.join(dir, file)); } catch { return ""; }
-  };
+  let persona = "";
+  try {
+    persona = ctx.fs.readFile(path.join(dir, "PERSONA.md")).trim();
+  } catch {
+    persona = "";
+  }
 
   return {
     id: row.id as string,
@@ -32,16 +45,17 @@ export function getAgentIdentity(ctx: AppContext, agentId: string): AgentWithIde
     systemPromptExtra: row.system_prompt_extra as string | undefined,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
-    soul: read("SOUL.md"),
-    memory: "", // Memory lives in memory/ folder; use knowledge_search with scope to retrieve.
-    user: "", // User facts live in user/ folder; use knowledge_search with scope to retrieve.
-    agentsMd: read("AGENTS.md"),
+    persona,
+    user: "",
   };
 }
 
 export function listAgents(ctx: AppContext): AgentDefinition[] {
   return (
-    ctx.db.prepare("SELECT * FROM agents WHERE status != 'deleted' ORDER BY created_at").all() as Record<string, unknown>[]
+    ctx.db.prepare("SELECT * FROM agents WHERE status != 'deleted' ORDER BY created_at").all() as Record<
+      string,
+      unknown
+    >[]
   ).map((r) => ({
     id: r.id as string,
     name: r.name as string,
@@ -58,7 +72,7 @@ export function setAgentStatus(ctx: AppContext, agentId: string, status: "idle" 
   ctx.db.prepare("UPDATE agents SET status = ?, updated_at = ? WHERE id = ?").run(
     status,
     new Date().toISOString(),
-    agentId
+    agentId,
   );
 }
 
@@ -73,7 +87,7 @@ export function setAgentStatus(ctx: AppContext, agentId: string, status: "idle" 
 export function updateAgent(
   ctx: AppContext,
   agentId: string,
-  partial: { model?: string; name?: string; reasoningEffort?: ReasoningEffort }
+  partial: { model?: string; name?: string; reasoningEffort?: ReasoningEffort },
 ): boolean {
   const row = ctx.db
     .prepare("SELECT model, name, reasoning_effort FROM agents WHERE id = ? AND status != 'deleted'")
@@ -83,10 +97,12 @@ export function updateAgent(
   const name = partial.name ?? row.name;
   const reasoningEffort =
     partial.reasoningEffort !== undefined
-      ? (REASONING_EFFORT_VALUES.includes(partial.reasoningEffort) ? partial.reasoningEffort : "medium")
-      : (row.reasoning_effort && REASONING_EFFORT_VALUES.includes(row.reasoning_effort as ReasoningEffort)
+      ? REASONING_EFFORT_VALUES.includes(partial.reasoningEffort)
+        ? partial.reasoningEffort
+        : "medium"
+      : row.reasoning_effort && REASONING_EFFORT_VALUES.includes(row.reasoning_effort as ReasoningEffort)
         ? row.reasoning_effort
-        : "medium");
+        : "medium";
   const now = new Date().toISOString();
   ctx.db
     .prepare("UPDATE agents SET model = ?, name = ?, reasoning_effort = ?, updated_at = ? WHERE id = ?")

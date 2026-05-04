@@ -17,6 +17,7 @@
     "test:e2e:ui": "bun run scripts/start-e2e-server.ts -- --ui"
   },
   "dependencies": {
+    "@iarna/toml": "^2.2.5",
     "better-sqlite3": "^12.6.2",
     "cron-parser": "^5.5.0",
     "cronstrue": "^3.13.0",

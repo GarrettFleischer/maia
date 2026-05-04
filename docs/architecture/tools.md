@@ -317,45 +317,34 @@ Full API in [PLAN.md — History Tool API](../PLAN.md#history-tool-api).
 Skills are markdown files with YAML frontmatter (`name`, `description`) and a body of instructions. They are matched to the user message (semantic or LLM-based) and injected into context when relevant.
 
 - **Global skills**: `data/skills/` — available to all agents. Seeded from `defaults/skills/` on first run when no skills exist. Example: `defaults/skills/building-skills.md` describes how to create skills (global vs local).
-- **Per-agent skills**: `data/agents/<agent_id>/skills/` — only that agent sees them. Maia’s skills are seeded from `defaults/maia/skills/` when her skills dir is empty (e.g. `agent-creation-and-lifecycle.md` for the full agent-creation workflow).
+- **Per-agent skills**: `data/agents/<agent_id>/skills/` — only that agent sees them. Maia’s skills are seeded from `defaults/maia/skills/` when her skills dir is empty (e.g. `agent-creation-and-lifecycle.md`, which documents persona/catalog workflows).
 
 Smart context and skill matching **only** offer global skills plus the **current agent’s** local skills to the LLM; other agents’ skills are never included.
 
-### `agent_management` — Agent Lifecycle (Maia only)
+### Persona orchestration (Maia only)
 
-| Function       | Args                | Returns             |
-| -------------- | ------------------- | ------------------- |
-| `agent_create` | `AgentCreateConfig` | `string` (agent_id) |
-| `agent_delete` | `agentId: string`   | `void`              |
-| `agent_list`   | _(none)_            | `AgentDefinition[]` |
-| `agent_get`    | `agentId: string`   | `AgentDefinition`   |
+| Tool                     | Purpose                                                                             |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| `persona_list`           | Enumerates merged catalog personas (defaults + `data/personas/catalog`).             |
+| `persona_get`            | Loads instructions + metadata for a persona id.                                     |
+| `persona_run`            | Executes a delegated persona turn inside the caller session with a whitelisted model. |
+| `persona_catalog_upsert` | Writes/replaces `data/personas/catalog/<slug>.toml` using Codex-style fields.       |
+| `persona_override_write` | Replaces layered markdown under `data/personas/overrides/<slug>.md`.                |
 
-The **agent_create** tool accepts:
-
-- `name: string`, `model: string` (required). Model must be in the whitelist (otherwise a default is used).
-- `soul?: string` — initial SOUL.md content; if omitted, defaults are copied from `defaults/agent/`.
-- `extra?: string` — additional system instructions (stored as `system_prompt_extra` in the DB).
-
-On creation:
-
-1. Validate model against whitelist (or use default).
-2. Generate a unique `agent_id`.
-3. Insert into `agents` DB table.
-4. Create `data/agents/<agent_id>/` and copy default template files (e.g. SOUL.md, AGENTS.md) from `defaults/agent/`.
-5. If `soul` was provided, overwrite SOUL.md. No automatic cron jobs are created; Maia schedules each agent’s cron via **cron_schedule** when appropriate.
+Legacy **`agent_*`** CRUD helpers were removed from `TOOL_REGISTRY`; orchestration relies on delegated personas plus Maia’s **`PERSONA.md`** (`copyDefaultAgentFiles` seeds only `PERSONA.md`, workspace skeletons, and optional starter markdown under `memory/` / `user/`).
 
 ### `cron` — Job Scheduling (Maia only)
 
 | Function        | Args                                                                                              | Returns                                             |
 | --------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
 | `cron_echo`     | `message: string`                                                                                 | `string` (echoes message; used by legacy cron jobs) |
-| `cron_schedule` | `expression: string, toolName: string, toolArgs: object or JSON string, taskDescription?: string` | `string` (jobId)                                    |
-| `cron_list`     | _(none)_                                                                                          | `CronJob[]`                                         |
+| `cron_schedule` | `id, expr`, optional **`tool`/`args`** (legacy tool-first wake), optional **`prompt_wake`** or **`cron_message`** (Maia prompt wake; default copy drives **task_list** / **task_update**), optional **`persona_id`** + **`persona_model`** (delegated persona wake on **maia**; message defaults same task-review text), **`desc`** | `string` (jobId)                                    |
+| `cron_list`     | _(none)_                                                                                          | `CronJob[]` (includes persona/prompt fields when set) |
 | `cron_delete`   | `jobId: string`                                                                                   | `{ success: true, message: string }`                |
 
 **cron_delete** can remove any job by ID, including built-in or system jobs (e.g. the heartbeat job). The in-process scheduler unschedules the job immediately so it stops firing.
 
-When a cron job fires, the runner **calls the specified tool with the stored args** (instead of sending a free-form message). The agent sees the tool result as the first turn. Use `cron_echo` with `{ message: "..." }` for a simple reminder, or any other tool (e.g. `web_search`) with appropriate args.
+Scheduled jobs persist **`persona_id`**, **`persona_model`**, and **`cron_message`** on `cron_jobs`. At fire time: **persona wake** runs Maia with **`personaTurn`** and the stored message (default task-review prompt); **prompt wake** (`cron_message` non-null, no persona) runs **`runAgent`** with that message and no **initialToolCall**; **legacy** wakes send **`[CRON]`** plus the configured **initialToolCall**. Use **`cron_echo`** with **`{ message: "..." }`** only when you explicitly want the legacy pattern.
 
 Cron expressions follow standard 5-field format: `* * * * *` (minute, hour, day, month, weekday).
 

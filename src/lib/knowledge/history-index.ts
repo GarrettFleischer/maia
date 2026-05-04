@@ -1,21 +1,25 @@
 /**
- * @fileoverview Index a single history entry for semantic search (MuninnDB only).
+ * @fileoverview Index a single history entry for semantic search in SQLite history_vectors.
  * @module lib/knowledge/history-index
  *
- * When Muninn URL is set, writes the entry as an engram to Muninn. When not set, no-op.
+ * Writes to the SQLite history_vectors table using the configured embedder.
  * Called fire-and-forget after appending entries (original and compressed).
  */
 
-import { getMuninnConfig } from "../muninn/config";
-import { createMuninnClient } from "../muninn/client";
+import { getSettings } from "../settings";
+import {
+  createEmbeddingAdapter,
+  getEffectiveEmbedMaxLength,
+  chunkContentForEmbedding,
+} from "./embedding";
+import { createVectorStore } from "./vector-store";
 import type { AppContext } from "../context";
 
-const MUNINN_CONCEPT_MAX = 512;
-const MUNINN_CONTENT_MAX = 16 * 1024;
-
 /**
- * Load an entry from history_entries and write it to Muninn when configured.
- * Safe to call fire-and-forget; logs errors and does not throw.
+ * @brief Load an entry from history_entries and write embeddings to the vector store.
+ * @param ctx Application context
+ * @param entryId History entry id
+ * @note Safe to call fire-and-forget; logs errors and does not throw.
  */
 export async function indexHistoryEntry(
   ctx: AppContext,
@@ -38,28 +42,43 @@ export async function indexHistoryEntry(
 
   const role = (row as { role?: string }).role;
   if (role === "smart_context") return;
+  if (role === "thinking") return;
   if (row.content.trim() === "") return;
 
-  const muninnConfig = getMuninnConfig(ctx);
-  if (!muninnConfig.enabled) return;
-
   try {
-    const concept = `session:${row.session_id} entry:${row.id}`.slice(
-      0,
-      MUNINN_CONCEPT_MAX,
-    );
-    const content = row.content.slice(0, MUNINN_CONTENT_MAX);
-    const tags = [
-      "history",
-      row.session_id,
-      row.id,
-      ...(role ? [role] : []),
-      row.is_compressed === 1 ? "compressed" : "original",
-    ];
-    const client = createMuninnClient(ctx.http, muninnConfig.baseUrl);
-    await client.writeEngram("default", concept, content, tags);
+    const settings = getSettings(ctx);
+    const maxChars = await getEffectiveEmbedMaxLength(settings, ctx.http);
+    const chunks = chunkContentForEmbedding(row.content, maxChars);
+    const embedder = createEmbeddingAdapter(settings, ctx.http);
+    const store = createVectorStore(ctx.db);
+    const createdAt =
+      (row as { timestamp?: string }).timestamp ?? new Date().toISOString();
+    const vectorId =
+      row.is_compressed === 1 ? `${row.id}-compressed` : row.id;
+    store.deleteHistoryByEntryId(row.id);
+    const embedBatch =
+      embedder.embedBatch ??
+      (async (texts: string[]) => {
+        const out: number[][] = [];
+        for (const text of texts) out.push(await embedder.embed(text));
+        return out;
+      });
+    const embeddings = await embedBatch(chunks);
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkId =
+        chunks.length === 1 ? vectorId : `${vectorId}-chunk-${i}`;
+      store.insertHistory(
+        chunkId,
+        row.session_id,
+        row.id,
+        chunks[i],
+        embeddings[i],
+        row.is_compressed === 1,
+        createdAt,
+      );
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("Muninn history write skipped:", msg, entryId);
+    console.error("History vector write skipped:", msg, entryId);
   }
 }

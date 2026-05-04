@@ -143,7 +143,7 @@ Use `FakeFs` and seed files before the call:
 
 ```typescript
 const fs = new FakeFs();
-fs.seed("/data/agents/maia/SOUL.md", "# Soul\nI am Maia.");
+fs.seed("/data/agents/maia/PERSONA.md", "# Persona\nI am Maia.");
 const ctx = makeTestContext({ fs });
 // call the domain function that reads that file
 ```

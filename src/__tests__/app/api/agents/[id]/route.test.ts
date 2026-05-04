@@ -27,9 +27,9 @@ describe("GET /api/agents/[id]", () => {
       params: Promise.resolve({ id: "maia" }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { agent: { id: string }; soul: string };
+    const body = await res.json() as { agent: { id: string }; persona: string };
     expect(body.agent.id).toBe("maia");
-    expect("soul" in body).toBe(true);
+    expect("persona" in body).toBe(true);
   });
 
   it("returns 404 when agent not found", async () => {

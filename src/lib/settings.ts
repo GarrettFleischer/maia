@@ -53,7 +53,6 @@ export function getSettings(ctx: AppContext): Settings {
     heartbeatIntervalMinutes: parseInt(map.heartbeatIntervalMinutes ?? "30"),
     ollamaBaseUrl: map.ollamaBaseUrl ?? "http://localhost:11434",
     ollamaApiKey: map.ollamaApiKey || undefined,
-    muninnUrl: (map.muninnUrl ?? "").trim(),
     openRouterApiKey: map.openRouterApiKey || undefined,
     embeddingModel: map.embeddingModel ?? "ollama/nomic-embed-text",
     embedMaxContentLength: Math.max(
@@ -64,7 +63,6 @@ export function getSettings(ctx: AppContext): Settings {
       ),
     ),
     contextQueryModel: map.contextQueryModel ?? "",
-    contextSummaryModel: map.contextSummaryModel ?? "",
     contextRecentTurns: Math.max(
       1,
       parseInt(map.contextRecentTurns ?? "3", 10) || 3,
@@ -101,14 +99,12 @@ export function getSettingsPublic(ctx: AppContext): SettingsPublic {
     heartbeatIntervalMinutes: s.heartbeatIntervalMinutes,
     ollamaBaseUrl: s.ollamaBaseUrl,
     hasOllamaKey: !!s.ollamaApiKey,
-    muninnUrl: s.muninnUrl,
     hasOpenRouterKey: !!s.openRouterApiKey,
     hasBraveKey,
     hasBraveAnswersKey,
     embeddingModel: s.embeddingModel,
     embedMaxContentLength: s.embedMaxContentLength,
     contextQueryModel: s.contextQueryModel,
-    contextSummaryModel: s.contextSummaryModel,
     contextRecentTurns: s.contextRecentTurns,
     contextReasoningEffort: s.contextReasoningEffort,
     archiveDurationValue: s.archiveDurationValue,
@@ -180,9 +176,6 @@ export function updateSettings(
   if (partial.ollamaApiKey !== undefined) {
     update.run("ollamaApiKey", partial.ollamaApiKey);
   }
-  if (partial.muninnUrl !== undefined) {
-    update.run("muninnUrl", String(partial.muninnUrl).trim());
-  }
   if (partial.openRouterApiKey !== undefined) {
     update.run("openRouterApiKey", partial.openRouterApiKey);
   }
@@ -203,9 +196,6 @@ export function updateSettings(
   }
   if (partial.contextQueryModel !== undefined) {
     update.run("contextQueryModel", partial.contextQueryModel);
-  }
-  if (partial.contextSummaryModel !== undefined) {
-    update.run("contextSummaryModel", partial.contextSummaryModel);
   }
   if (partial.contextRecentTurns !== undefined) {
     update.run(

@@ -9,7 +9,7 @@ From your perspective:
 
 - `~` is your **workspace directory** where you run commands and edit working files.
 - The **agent root** is `..` from `~`; it contains:
-  - `SOUL.md` and `AGENTS.md` (identity and system instructions).
+  - `PERSONA.md` (identity / persona prose).
   - `memory/` and `user/` (long-term facts and user context).
 
 Always be explicit about where you are operating:
@@ -49,7 +49,7 @@ Use the directory structure intentionally:
 
 - Work primarily in `~` for implementation files, tests, and temporary artifacts.
 - Go up one level to the agent root when you need to:
-  - Inspect or update `SOUL.md` or `AGENTS.md`.
+  - Inspect or update `PERSONA.md`.
   - Add or read facts in `memory/` and `user/`.
 
 Do not assume paths contain a folder literally named `data`; refer instead to:

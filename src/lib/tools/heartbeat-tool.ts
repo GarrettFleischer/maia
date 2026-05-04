@@ -1,11 +1,9 @@
 /**
- * @fileoverview Internal heartbeat tool: wakes Maia only so she can review the task board and manage cron jobs.
+ * @fileoverview Internal heartbeat tool: wakes Maia only so she can review tasks and cron jobs.
  * @module lib/tools/heartbeat-tool
  *
- * This tool is NOT visible to agents. It is invoked by the heartbeat scheduler when the timer fires.
- * Only the "maia" agent is woken (single thread). Maia reviews tasks, assigns unassigned work, and
- * ensures each active agent has a staggered cron job. She messages only agents with no tasks—to
- * tell them to create tasks and mark one in progress, not to start working. Agents run on their cron.
+ * Not visible to agents; invoked by the heartbeat scheduler. Maia inspects tasks and cron targets,
+ * delegates specialized work via personas in user threads, and reports blockers when schedules stall.
  */
 import { z } from "zod";
 import type { AppContext } from "../context";
@@ -17,11 +15,11 @@ import { getOrCreateSession } from "../history";
 import { runDataBackup } from "../data-backup";
 import { enqueue } from "../queue/llm-queue";
 
-/** Agent id for the orchestrator that receives the single heartbeat thread. */
+/** Agent id for the orchestrator that receives the heartbeat thread. */
 const MAIA_AGENT_ID = "maia";
 
 /**
- * @brief Get or create the single Maia heartbeat session.
+ * @brief Get or create the Maia heartbeat session.
  * @param ctx - Application context
  * @returns Session id for the heartbeat thread
  */
@@ -31,13 +29,15 @@ function getOrCreateHeartbeatSession(ctx: AppContext): string {
 
 const HEARTBEAT_BASE_MAIA = `[HEARTBEAT] Timestamp: {{TIMESTAMP}}
 
-Review the task board and cron job list below. Do NOT message agents to start work—they run on their own cron schedule. Only message agents who have no tasks (see below).
+Review the task board and cron jobs below.
 
-Your job:
-1. Assign unassigned tasks to agents using task_update with assignedTo so every agent has work.
-2. For agents with no tasks: message them to create their own tasks and mark one as in_progress—but NOT to start working on them yet. They will run on their cron schedule.
-3. Ensure each active agent (except yourself) has a cron job at a staggered time within the interval so they do not overlap; create or update cron jobs as needed.
-4. Report any blockers if you cannot assign tasks or schedule cron jobs.`;
+You are Maia, the orchestrator. Specialized turns belong in delegated personas (**persona_run**, **persona_list**) inside user sessions—not separate chat identities.
+
+Goals:
+1. Keep tasks flowing (assign via **task_update** when something should move forward).
+2. Keep cron schedules sane—avoid needless overlap between maintenance jobs.
+3. Surface blockers clearly when tasks cannot advance.
+`;
 
 /**
  * Builds the task board section for Maia (unassigned and in-progress tasks).
@@ -62,7 +62,7 @@ function buildTaskBoardSection(ctx: AppContext): string {
 
     if (unassigned.length > 0) {
       lines.push(
-        "### Unassigned Tasks (assign these to agents using task_update with assignedTo)",
+        "### Unassigned Tasks (assign via task_update when appropriate)",
       );
       for (const t of unassigned) {
         lines.push(`- [${t.id}] ${t.title} — created by ${t.created_by}`);
@@ -70,9 +70,7 @@ function buildTaskBoardSection(ctx: AppContext): string {
     }
 
     if (inProgress.length > 0) {
-      lines.push(
-        "### In-Progress Tasks (assigned agents will run on their cron schedule)",
-      );
+      lines.push("### In-Progress Tasks");
       for (const t of inProgress) {
         lines.push(
           `- [${t.id}] ${t.title} — assigned to ${t.assigned_to ?? "unassigned"}`,
@@ -96,7 +94,7 @@ function buildCronListSection(ctx: AppContext): string {
   try {
     const rows = ctx.db
       .prepare(
-        "SELECT id, expression, task_description, agent_id, is_built_in, tool_name FROM cron_jobs ORDER BY created_at",
+        "SELECT id, expression, task_description, agent_id, is_built_in, tool_name, persona_id, persona_model, cron_message FROM cron_jobs ORDER BY created_at",
       )
       .all() as {
       id: string;
@@ -105,16 +103,31 @@ function buildCronListSection(ctx: AppContext): string {
       agent_id: string;
       is_built_in: number;
       tool_name: string;
+      persona_id: string | null;
+      persona_model: string | null;
+      cron_message: string | null;
     }[];
     if (rows.length === 0) return "";
     const lines = [
       "\n\n## Cron Jobs",
-      "| ID | Expression | Description | Agent | Built-in | Tool |",
+      "| ID | Expression | Description | Agent | Built-in | Tool | Persona | Model | Wake |",
     ];
-    lines.push("| --- | --- | --- | --- | --- | --- |");
+    lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
     for (const r of rows) {
+      const personaCell = r.persona_id?.trim() ? r.persona_id.trim() : "—";
+      const modelCell = r.persona_model?.trim() ? r.persona_model.trim() : "—";
+      let wakeCell = "tool-first";
+      if (r.persona_id?.trim()) wakeCell = "persona";
+      else if (r.cron_message != null) wakeCell = "prompt";
+      const msgPreview =
+        r.cron_message != null && String(r.cron_message).trim()
+          ? String(r.cron_message).trim().slice(0, 80).replace(/\|/g, "/") +
+            (String(r.cron_message).trim().length > 80 ? "…" : "")
+          : "";
+      const wakeDetail =
+        wakeCell === "prompt" && msgPreview ? `${wakeCell}: ${msgPreview}` : wakeCell;
       lines.push(
-        `| ${r.id} | ${r.expression} | ${r.task_description} | ${r.agent_id} | ${r.is_built_in ? "yes" : "no"} | ${r.tool_name ?? "cron_echo"} |`,
+        `| ${r.id} | ${r.expression} | ${r.task_description} | ${r.agent_id} | ${r.is_built_in ? "yes" : "no"} | ${r.tool_name ?? "cron_echo"} | ${personaCell} | ${modelCell} | ${wakeDetail} |`,
       );
     }
     return lines.join("\n");
@@ -124,46 +137,11 @@ function buildCronListSection(ctx: AppContext): string {
 }
 
 /**
- * Builds the agents-with-no-tasks section: active agents (except Maia) who have zero todo or
- * in_progress tasks assigned. Maia should message these agents to create tasks and mark one in progress.
+ * Builds a lightweight agents table from SQLite so operators can spot stray rows.
  * @param ctx - Application context
  * @returns Markdown section or empty string if none
  */
-function buildAgentsWithNoTasksSection(ctx: AppContext): string {
-  try {
-    const agentsWithTasks = ctx.db
-      .prepare(
-        `SELECT DISTINCT assigned_to FROM tasks WHERE assigned_to IS NOT NULL AND status IN ('todo', 'in_progress')`,
-      )
-      .all() as { assigned_to: string }[];
-    const assignedSet = new Set(agentsWithTasks.map((r) => r.assigned_to));
-
-    const activeAgents = ctx.db
-      .prepare(
-        "SELECT id, name FROM agents WHERE status != 'deleted' AND status != 'paused' AND id != ?",
-      )
-      .all(MAIA_AGENT_ID) as { id: string; name: string }[];
-
-    const withNoTasks = activeAgents.filter((a) => !assignedSet.has(a.id));
-    if (withNoTasks.length === 0) return "";
-    const lines = [
-      "\n\n## Agents with no tasks (message these to create tasks and mark one in_progress)",
-    ];
-    for (const a of withNoTasks) {
-      lines.push(`- ${a.name} (${a.id})`);
-    }
-    return lines.join("\n");
-  } catch {
-    return "";
-  }
-}
-
-/**
- * Builds the active agents section for Maia (non-deleted agents with status).
- * @param ctx - Application context
- * @returns Active agents markdown
- */
-function buildActiveAgentsSection(ctx: AppContext): string {
+function buildAgentsTableSection(ctx: AppContext): string {
   try {
     const rows = ctx.db
       .prepare(
@@ -171,7 +149,7 @@ function buildActiveAgentsSection(ctx: AppContext): string {
       )
       .all() as { id: string; name: string; status: string }[];
     if (rows.length === 0) return "";
-    const lines = ["\n\n## Agents", "| ID | Name | Status |"];
+    const lines = ["\n\n## Agents table (SQLite rows)", "| ID | Name | Status |"];
     lines.push("| --- | --- | --- |");
     for (const r of rows) {
       lines.push(`| ${r.id} | ${r.name} | ${r.status} |`);
@@ -187,16 +165,13 @@ function buildHeartbeatMessage(ctx: AppContext, timestamp: string): string {
   return (
     base +
     buildTaskBoardSection(ctx) +
-    buildAgentsWithNoTasksSection(ctx) +
     buildCronListSection(ctx) +
-    buildActiveAgentsSection(ctx)
+    buildAgentsTableSection(ctx)
   );
 }
 
 /**
  * Creates the internal heartbeat tool. Not registered for agents; invoked by the heartbeat scheduler.
- * Wakes only Maia; Maia reviews the task board and manages cron jobs. She messages only agents with
- * no tasks (to create tasks and mark one in progress).
  * @param runAgentFn - Used to run Maia with the heartbeat message (single thread).
  * @returns Tool instance (do not add to TOOL_REGISTRY).
  */
@@ -204,7 +179,7 @@ export function createHeartbeatTool(runAgentFn: RunAgentFn): Tool {
   return {
     name: "heartbeat",
     description:
-      "Internal: wake Maia to review tasks, manage cron jobs, and message agents with no tasks.",
+      "Internal: wake Maia to review tasks and cron targets against schedules.",
     schema: z.object({}),
     toDefinition: () => ({
       name: "heartbeat",
@@ -216,8 +191,6 @@ export function createHeartbeatTool(runAgentFn: RunAgentFn): Tool {
       console.debug("[Heartbeat] Tool executing", { timestamp });
       ctx.events.emit({ event: "heartbeat", data: { timestamp } });
 
-      // Refresh embeddings and knowledge index before waking agents so smart context search is current.
-      // If embedding fails, do not run knowledge index or Maia.
       const getCtx = () => ctx;
       try {
         await enqueue(

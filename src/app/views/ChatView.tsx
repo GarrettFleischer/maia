@@ -65,6 +65,8 @@ function entryToItem(entry: HistoryEntry): ChatMessageListItem {
     content: entry.content,
     resolvedContent: entry.resolvedContent,
     roundIndex: entry.roundIndex,
+    speakerLabel: entry.speakerLabel,
+    speakerId: entry.speakerId,
   };
 }
 

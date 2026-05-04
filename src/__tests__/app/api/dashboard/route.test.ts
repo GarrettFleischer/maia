@@ -30,6 +30,7 @@ describe("GET /api/dashboard", () => {
     expect(body.agents).toBeDefined();
     expect(Array.isArray(body.agents)).toBe(true);
     expect(body.agents.some((a) => a.id === "maia")).toBe(true);
+    expect(Array.isArray(body.personas)).toBe(true);
     expect(body.taskCountsByStatus).toBeDefined();
     expect(body.taskCountsByStatus).toEqual({ todo: 0, in_progress: 0, done: 0 });
     expect(body.taskCountsByAgent).toBeDefined();

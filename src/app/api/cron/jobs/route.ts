@@ -31,6 +31,9 @@ export async function GET() {
         r.tool_args != null
           ? (JSON.parse(r.tool_args as string) as Record<string, unknown>)
           : {},
+      personaId: (r.persona_id as string | null | undefined) ?? null,
+      personaModel: (r.persona_model as string | null | undefined) ?? null,
+      cronMessage: (r.cron_message as string | null | undefined) ?? null,
       scheduleDescription: describeCronSchedule(expression),
       nextRunAt: getNextCronRun(expression) ?? undefined,
     };

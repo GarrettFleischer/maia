@@ -37,7 +37,7 @@ describe("refreshEmbeddings", () => {
     );
   });
 
-  it("resolves without error when called (no-op; semantic memory is Muninn on append)", async () => {
+  it("resolves without error when called (no-op; history indexed on append)", async () => {
     const sessionId = createSession(ctx, ["user", "maia"]);
     appendEntry(ctx, sessionId, {
       role: "user",

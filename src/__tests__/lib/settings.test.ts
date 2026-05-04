@@ -140,12 +140,6 @@ describe("settings", () => {
       expect(getSettings(ctx).ollamaBaseUrl).toBe("http://my-ollama:11434");
     });
 
-    it("updates muninnUrl", () => {
-      updateSettings(ctx, { muninnUrl: "http://localhost:8475" });
-      expect(getSettings(ctx).muninnUrl).toBe("http://localhost:8475");
-      expect(getSettingsPublic(ctx).muninnUrl).toBe("http://localhost:8475");
-    });
-
     it("updates whitelistedModels", () => {
       updateSettings(ctx, { whitelistedModels: ["ollama/llama3.2"] });
       expect(getSettings(ctx).whitelistedModels).toEqual(["ollama/llama3.2"]);
