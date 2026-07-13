@@ -78,19 +78,26 @@ interface ActiveSessionResponse {
     original: HistoryEntry[];
     type?: SessionType;
     participants?: string[];
+    defaultPersonaId?: string | null;
     /** Smart context runs per round; used to restore all phase bubbles on refresh. */
     smartContextRuns?: SmartContextRunEntry[];
   };
 }
 
-/** Primary agent id for the current user thread (non-user participant); null when none or agent-only thread. */
-function primaryAgentFromParticipants(
+/** Target agent id for POST /api/chat (catalog persona slug or `maia`). */
+function resolveChatTargetAgent(
   participants: string[] | undefined,
   type: SessionType,
+  defaultPersonaId?: string | null,
 ): string | null {
   if (type !== "user" || !participants?.length) return null;
-  const other = participants.filter((p) => p !== "user")[0];
-  return other ?? null;
+  const nonUser = participants.filter((p) => p !== "user");
+  if (nonUser.length === 1 && nonUser[0] === "maia") {
+    const def = defaultPersonaId;
+    if (def != null && String(def).trim() !== "") return String(def).trim();
+    return "maia";
+  }
+  return nonUser[0] ?? null;
 }
 
 /**
@@ -145,9 +152,10 @@ export default function ChatView() {
     if (data.sessionId) setSessionId(data.sessionId);
     const type = data.session?.type ?? "user";
     if (data.session?.type) setSessionType(type);
-    const primary = primaryAgentFromParticipants(
+    const primary = resolveChatTargetAgent(
       data.session?.participants,
       type,
+      data.session?.defaultPersonaId,
     );
     setCurrentAgentId(primary);
     const original = data.session?.original ?? [];
@@ -169,9 +177,10 @@ export default function ChatView() {
         if (data.sessionId) setSessionId(data.sessionId);
         const type = data.session?.type ?? "user";
         if (data.session?.type) setSessionType(type);
-        const primary = primaryAgentFromParticipants(
+        const primary = resolveChatTargetAgent(
           data.session?.participants,
           type,
+          data.session?.defaultPersonaId,
         );
         setCurrentAgentId(primary);
         currentAgentIdRef.current = primary;
@@ -312,6 +321,27 @@ export default function ChatView() {
       }
     });
     es.addEventListener("ping", () => {});
+    es.addEventListener("session_updated", (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data) as {
+          sessionId?: string;
+          defaultPersonaId?: string | null;
+        };
+        if (!payload.sessionId || payload.sessionId !== sessionIdRef.current) {
+          return;
+        }
+        if (!("defaultPersonaId" in payload)) return;
+        const next =
+          payload.defaultPersonaId != null &&
+          String(payload.defaultPersonaId).trim() !== ""
+            ? String(payload.defaultPersonaId).trim()
+            : "maia";
+        setCurrentAgentId(next);
+        currentAgentIdRef.current = next;
+      } catch {
+        // ignore malformed
+      }
+    });
     return () => es.close();
   }, []);
 

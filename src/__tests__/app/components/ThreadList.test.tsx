@@ -16,6 +16,7 @@ function makeSession(overrides: Partial<SessionMeta>): SessionMeta {
     participants: [],
     tags: [],
     type: "user",
+    defaultPersonaId: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

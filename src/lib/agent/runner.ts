@@ -1122,6 +1122,16 @@ function buildSystemPrompt(
   if (agent.systemPromptExtra) {
     parts.push("", "## Additional Instructions", agent.systemPromptExtra);
   }
+  if (agent.id === "maia") {
+    parts.push(
+      "",
+      "## Thread default persona (routing)",
+      "",
+      "Inspect the user's task. When specialized catalog expertise clearly fits better than a quick orchestrator reply, use **persona_list** / **persona_get** to choose a template, then **persona_run** for bounded work and/or **persona_set_session_default** so **plain** user messages (no leading `@persona-id`) in this user+Maia thread run as that catalog persona until you clear it (`persona_set_session_default` with `persona_id: null`).",
+      "A leading `@persona-id` on a user message **always overrides** the thread default for that turn.",
+      "Clearing the default returns follow-ups to full Maia orchestration without requiring the user to change client settings.",
+    );
+  }
   if (skillsContent && skillsContent.trim()) {
     parts.push("", skillsContent.trim());
   }

@@ -10,13 +10,16 @@ import { createProvider } from "@/lib/ai/factory";
 import {
   createSession,
   getActiveSessionId,
+  getSessionDefaultPersonaId,
+  getSessionMeta,
+  isMaiaUserThread,
   setActiveSessionId,
 } from "@/lib/history";
 import { initMessagingService } from "@/lib/messaging-service";
 import { getAgentIdentity, normalizeReasoningEffort } from "@/lib/agent/identity";
 import { getSettings } from "@/lib/settings";
 import { getPersonaById } from "@/lib/personas/registry";
-import { parseLeadingPersonaMention } from "@/lib/personas/mentions";
+import { resolveCatalogPersonaForUserMessage } from "@/lib/chat/persona-target";
 import type { AppContext } from "@/lib/context";
 import type { SSEEvent } from "@/lib/types";
 import type { RunAgentOptions } from "@/lib/agent/runner";
@@ -36,12 +39,6 @@ export async function POST(req: NextRequest) {
   }
 
   const ctx = await ensureAppContext();
-  const mention = parseLeadingPersonaMention(body.message);
-  const personaFromMention = mention.personaId
-    ? getPersonaById(mention.personaId)
-    : null;
-
-  const agentId = personaFromMention ? "maia" : body.targetAgent ?? "maia";
 
   // Resolve session (unified user threads: user + maia)
   const activeId = getActiveSessionId(ctx);
@@ -49,6 +46,31 @@ export async function POST(req: NextRequest) {
   if (!sessionId) {
     sessionId = createSession(ctx, ["user", "maia"]);
     setActiveSessionId(ctx, sessionId);
+  }
+
+  const sessionMeta = getSessionMeta(ctx, sessionId);
+  const sessionDefaultPersonaId =
+    sessionMeta && isMaiaUserThread(sessionMeta.participants, sessionMeta.type)
+      ? getSessionDefaultPersonaId(ctx, sessionId)
+      : null;
+
+  const { chosen: chosenPersona, mentionRest, usedLeadingMention } =
+    resolveCatalogPersonaForUserMessage(getPersonaById, {
+      message: body.message,
+      clientTargetAgent: body.targetAgent ?? "maia",
+      sessionMeta,
+      sessionDefaultPersonaId,
+    });
+
+  const clientTarget = body.targetAgent?.trim() || "maia";
+  let agentId: string;
+  if (chosenPersona) {
+    agentId = "maia";
+  } else {
+    agentId = clientTarget;
+    if (!getAgentIdentity(ctx, agentId)) {
+      return new Response(JSON.stringify({ error: `Unknown agent: ${agentId}` }), { status: 400 });
+    }
   }
 
   const stream = new ReadableStream({
@@ -85,23 +107,24 @@ export async function POST(req: NextRequest) {
         queueCaller: "user",
       };
 
-      if (personaFromMention) {
+      if (chosenPersona) {
         const maiaModel = getAgentIdentity(ctx, "maia")?.model;
         const model =
           maiaModel && settings.whitelistedModels.includes(maiaModel)
             ? maiaModel
             : settings.whitelistedModels[0] ?? "openrouter/free";
-        runMessage =
-          mention.rest.trim() || "Please help with the user's request.";
+        runMessage = usedLeadingMention
+          ? mentionRest.trim() || "Please help with the user's request."
+          : body.message.trim() || "Please help with the user's request.";
         runOpts = {
           ...runOpts,
           personaTurn: {
-            id: personaFromMention.id,
-            name: personaFromMention.name,
-            instructions: personaFromMention.instructions,
+            id: chosenPersona.id,
+            name: chosenPersona.name,
+            instructions: chosenPersona.instructions,
             model,
             reasoningEffort: normalizeReasoningEffort(
-              personaFromMention.suggestedReasoningEffort ?? "medium",
+              chosenPersona.suggestedReasoningEffort ?? "medium",
             ),
           },
         };

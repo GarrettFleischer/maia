@@ -156,6 +156,17 @@ export function getSession(ctx: AppContext, id: string): Session | null {
   };
 }
 
+/**
+ * Session row only (no history). Cheaper than {@link getSession} for routing and tools.
+ */
+export function getSessionMeta(ctx: AppContext, id: string): SessionMeta | null {
+  const row = ctx.db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  if (!row) return null;
+  return rowToMeta(row);
+}
+
 /** Default max entries to load in getSessionRecent (enough for last few rounds). */
 const DEFAULT_RECENT_ENTRIES = 50;
 
@@ -239,6 +250,46 @@ export function updateSessionMeta(
   ctx.db
     .prepare(`UPDATE sessions SET ${parts.join(", ")} WHERE id = ?`)
     .run(...vals);
+}
+
+/**
+ * True when this is a standard user ↔ Maia chat thread (single non-user participant `maia`).
+ * Session default persona and persona_set_session_default apply only here.
+ */
+export function isMaiaUserThread(
+  participants: string[] | undefined,
+  type: "user" | "agents",
+): boolean {
+  if (type !== "user" || !participants?.length) return false;
+  const nonUser = participants.filter((p) => p !== "user");
+  return nonUser.length === 1 && nonUser[0] === "maia";
+}
+
+/**
+ * Catalog persona id stored for this session so plain user messages run as that persona (until cleared).
+ */
+export function getSessionDefaultPersonaId(
+  ctx: AppContext,
+  sessionId: string,
+): string | null {
+  const row = ctx.db
+    .prepare("SELECT default_persona_id FROM sessions WHERE id = ?")
+    .get(sessionId) as { default_persona_id: string | null } | undefined;
+  const v = row?.default_persona_id;
+  if (v == null || String(v).trim() === "") return null;
+  return String(v).trim();
+}
+
+export function setSessionDefaultPersonaId(
+  ctx: AppContext,
+  sessionId: string,
+  personaId: string | null,
+): void {
+  ctx.db
+    .prepare(
+      "UPDATE sessions SET default_persona_id = ?, updated_at = ? WHERE id = ?",
+    )
+    .run(personaId, new Date().toISOString(), sessionId);
 }
 
 /**
@@ -517,6 +568,7 @@ export function searchAcrossSessions(
 // -- Row mappers --
 
 function rowToMeta(r: Record<string, unknown>): SessionMeta {
+  const rawDefault = r.default_persona_id as string | null | undefined;
   return {
     id: r.id as string,
     name: r.name as string,
@@ -524,6 +576,10 @@ function rowToMeta(r: Record<string, unknown>): SessionMeta {
     participants: JSON.parse(r.participants as string),
     tags: JSON.parse(r.tags as string),
     type: (r.type as string) === "agents" ? "agents" : "user",
+    defaultPersonaId:
+      rawDefault != null && String(rawDefault).trim() !== ""
+        ? String(rawDefault).trim()
+        : null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };

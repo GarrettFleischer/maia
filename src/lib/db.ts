@@ -444,6 +444,22 @@ export function initSchema(db: DbAdapter): void {
         .run();
       currentVersion = 9;
     }
+
+    // Step 10: sessions.default_persona_id — optional catalog persona for plain user turns (Maia threads)
+    if (currentVersion < 10) {
+      const sessionsInfo = database
+        .prepare("PRAGMA table_info(sessions)")
+        .all() as { name: string }[];
+      if (!sessionsInfo.some((c) => c.name === "default_persona_id")) {
+        database.exec("ALTER TABLE sessions ADD COLUMN default_persona_id TEXT");
+      }
+      database
+        .prepare(
+          "UPDATE schema_version SET version = 10, applied_at = datetime('now')",
+        )
+        .run();
+      currentVersion = 10;
+    }
   }
 
   function seedSettings(database: DbAdapter): void {

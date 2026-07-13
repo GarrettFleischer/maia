@@ -9,7 +9,7 @@ From the user typing a message in the home page to the message and agent reply b
 ```mermaid
 sequenceDiagram
   participant User
-  participant Home as Home(src/app/page.tsx)
+  participant Home as ChatView
   participant ChatAPI as POST /api/chat
   participant Instr as ensureAppContext
   participant History as src/lib/history
@@ -36,8 +36,8 @@ sequenceDiagram
 
 **Steps in code:**
 
-1. **Home** (`src/app/page.tsx`): `sendMessage()` builds the request body and calls `fetch("/api/chat", { method: "POST", body: JSON.stringify({ message, sessionId, targetAgent }) })`. It reads the response body as a stream and parses SSE lines to update `messages`, `currentToken`, `currentThinking`, and `loading`.
-2. **Chat route** (`src/app/api/chat/route.ts`): Parses body with Zod, calls `ensureAppContext()`, resolves or creates session via `getActiveSessionId`, `createSession`, `setActiveSessionId`. Creates a `ReadableStream` and inside it calls `runAgent(ctx, createProvider, agentId, sessionId, body.message, send, { emitHistoryEntries: true, queueCaller: "user" })`. The `send` function enqueues SSE `data:` lines to the stream.
+1. **Chat view** (`src/app/views/ChatView.tsx`): `sendMessage()` builds the request body and calls `fetch("/api/chat", { method: "POST", body: JSON.stringify({ message, sessionId, targetAgent }) })`. It reads the response body as a stream and parses SSE lines to update `messages`, `currentToken`, `currentThinking`, and `loading`.
+2. **Chat route** (`src/app/api/chat/route.ts`): Parses body with Zod, calls `ensureAppContext()`, resolves or creates session, then resolves catalog persona vs orchestrator (`resolveCatalogPersonaForUserMessage`: `@mention`, client `targetAgent` as catalog id, `sessions.default_persona_id` on user+Maia threads). Creates a `ReadableStream` and inside it calls `runAgent(...)` with optional `personaTurn`. The `send` callback enqueues SSE `data:` lines to the stream.
 3. **Runner** (`src/lib/agent/runner.ts`): Appends user entry with `appendEntry`, runs the agentic loop (build context, call provider, execute tools, append tool/agent entries), and invokes `onEvent` for each token, tool_call, tool_result, and done. When `emitHistoryEntries` is true, it also emits `ctx.events.emit({ event: "message", data: { sessionId, entry, participants } })` so the events route can push to other clients.
 4. **History** (`src/lib/history.ts`): `appendEntry` inserts into `history_entries`; session metadata lives in `sessions` and `active_session`.
 

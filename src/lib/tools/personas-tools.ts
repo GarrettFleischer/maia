@@ -22,6 +22,11 @@ import {
   buildPersonaCatalogToml,
 } from "../personas/write-catalog";
 import { getPersonasDataCatalogDir, getPersonasOverridesDir } from "../data-dir";
+import {
+  getSessionMeta,
+  isMaiaUserThread,
+  setSessionDefaultPersonaId,
+} from "../history";
 
 function makeTool<S extends z.ZodTypeAny>(
   name: string,
@@ -84,6 +89,15 @@ const personaCatalogUpsertSchema = z.object({
     .string()
     .describe(
       "Primary persona instructions ([instructions].text). Must not contain \"\"\" verbatim.",
+    ),
+});
+
+const personaSetSessionDefaultSchema = z.object({
+  persona_id: z
+    .string()
+    .nullable()
+    .describe(
+      "Catalog persona id from persona_list, or null to clear so plain user messages use Maia only until another default is set.",
     ),
 });
 
@@ -159,6 +173,48 @@ export const personaRunTool = makeTool(
   },
 );
 
+export const personaSetSessionDefaultTool = makeTool(
+  "persona_set_session_default",
+  "Set or clear the catalog persona used for **plain** user messages in this user+Maia thread (no leading @mention). After listing/inspecting personas, call this so follow-up user typing goes to the right specialist; use persona_id null to restore Maia-only turns. Leading @persona on a message always overrides for that turn. Maia only.",
+  personaSetSessionDefaultSchema,
+  async ({ persona_id }, ctx) => {
+    const meta = getSessionMeta(ctx, ctx.sessionId);
+    if (!meta) return "No session found.";
+    if (!isMaiaUserThread(meta.participants, meta.type)) {
+      return "Session default persona only applies to standard user+Maia chat threads.";
+    }
+    if (persona_id === null) {
+      setSessionDefaultPersonaId(ctx, ctx.sessionId, null);
+      ctx.events.emit({
+        event: "session_updated",
+        data: {
+          sessionId: ctx.sessionId,
+          name: meta.name,
+          description: meta.description,
+          tags: meta.tags,
+          defaultPersonaId: null,
+        },
+      });
+      return "Cleared default persona. Plain user messages will use Maia as orchestrator.";
+    }
+    const trimmed = persona_id.trim();
+    const p = getPersonaById(trimmed);
+    if (!p) return `Unknown persona: ${trimmed}. Use persona_list first.`;
+    setSessionDefaultPersonaId(ctx, ctx.sessionId, p.id);
+    ctx.events.emit({
+      event: "session_updated",
+      data: {
+        sessionId: ctx.sessionId,
+        name: meta.name,
+        description: meta.description,
+        tags: meta.tags,
+        defaultPersonaId: p.id,
+      },
+    });
+    return `Default persona for plain user messages set to ${p.name} (\`${p.id}\`). Leading @mentions still override per message.`;
+  },
+);
+
 export const personaOverrideWriteTool = makeTool(
   "persona_override_write",
   "Replace data/personas/overrides/<persona_id>.md so delegated personas pick up layered instructions after persona_list refreshes (Maia only).",
@@ -214,6 +270,7 @@ export const personaManagementTools: Tool[] = [
   personaListTool,
   personaGetTool,
   personaRunTool,
+  personaSetSessionDefaultTool,
   personaOverrideWriteTool,
   personaCatalogUpsertTool,
 ];

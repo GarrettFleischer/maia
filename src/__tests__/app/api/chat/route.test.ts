@@ -26,6 +26,16 @@ describe("POST /api/chat", () => {
     expect(res.status).toBe(400);
   });
 
+  it("returns 400 when targetAgent is not a known agent or catalog persona", async () => {
+    const req = createNextRequest("http://localhost/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Hi", targetAgent: "not-a-real-agent-or-persona-slug-xyz" }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+  });
+
   it("returns stream with text/event-stream when body valid", async () => {
     const req = createNextRequest("http://localhost/api/chat", {
       method: "POST",

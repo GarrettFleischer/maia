@@ -25,6 +25,7 @@ describe("tool registry", () => {
 
       expect(maiaTools.length).toBeGreaterThan(otherTools.length);
       expect(maiaNames.has("persona_list")).toBe(true);
+      expect(maiaNames.has("persona_set_session_default")).toBe(true);
       expect(maiaNames.has("cron_schedule")).toBe(true);
       expect(otherNames.has("persona_list")).toBe(false);
       expect(otherNames.has("cron_schedule")).toBe(false);

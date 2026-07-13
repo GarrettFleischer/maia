@@ -42,6 +42,7 @@ All schema creation and migrations occur inside `initSchema(db: DbAdapter)` in `
     - `name TEXT NOT NULL DEFAULT ''`
     - `description TEXT NOT NULL DEFAULT ''`
     - `participants TEXT NOT NULL DEFAULT '[]'` – JSON array of participant IDs (e.g., `["user", "maia"]`).
+    - `default_persona_id TEXT` – optional catalog persona id: plain user messages in a user+Maia thread run as this persona until cleared (see `persona_set_session_default` tool).
     - `tags TEXT NOT NULL DEFAULT '[]'` – JSON array of tags assigned by the compression agent.
     - `type TEXT NOT NULL DEFAULT 'user'` – `"user"` or `"agents"`.
     - `created_at TEXT NOT NULL` – ISO timestamp.

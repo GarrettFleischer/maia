@@ -5,6 +5,10 @@ import {
   getOrCreateSession,
   listSessions,
   getSession,
+  getSessionMeta,
+  getSessionDefaultPersonaId,
+  setSessionDefaultPersonaId,
+  isMaiaUserThread,
   appendEntry,
   updateSessionMeta,
   deleteSession,
@@ -455,6 +459,29 @@ describe("history", () => {
 
     it("does nothing for non-existent session (no throw)", () => {
       expect(() => truncateHistoryAfterIndex(ctx, "no-such-id", 0)).not.toThrow();
+    });
+  });
+
+  describe("isMaiaUserThread / default persona / getSessionMeta", () => {
+    it("isMaiaUserThread is true only for single maia partner", () => {
+      expect(isMaiaUserThread(["user", "maia"], "user")).toBe(true);
+      expect(isMaiaUserThread(["maia", "user"], "user")).toBe(true);
+      expect(isMaiaUserThread(["user", "other"], "user")).toBe(false);
+      expect(isMaiaUserThread(["user", "maia", "x"], "user")).toBe(false);
+      expect(isMaiaUserThread(["user", "maia"], "agents")).toBe(false);
+    });
+
+    it("getSessionMeta exposes defaultPersonaId and setSessionDefaultPersonaId persists", () => {
+      const id = createSession(ctx);
+      expect(getSessionDefaultPersonaId(ctx, id)).toBeNull();
+      let meta = getSessionMeta(ctx, id);
+      expect(meta?.defaultPersonaId).toBeNull();
+      setSessionDefaultPersonaId(ctx, id, "typescript-pro");
+      expect(getSessionDefaultPersonaId(ctx, id)).toBe("typescript-pro");
+      meta = getSessionMeta(ctx, id);
+      expect(meta?.defaultPersonaId).toBe("typescript-pro");
+      setSessionDefaultPersonaId(ctx, id, null);
+      expect(getSessionDefaultPersonaId(ctx, id)).toBeNull();
     });
   });
 });

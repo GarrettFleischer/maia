@@ -97,6 +97,8 @@ Agents append `"agent"` role entries via `message_send({ to: "user", text })`, t
 
 Leading `@persona-id` mentions route through `/api/chat` persona-turn handling without spawning parallel sessions.
 
+**Thread default:** On user+Maia sessions, SQLite `sessions.default_persona_id` may store a catalog persona. Plain user messages (no leading `@mention`) then run as that persona until Maia clears it via **`persona_set_session_default`** (`persona_id: null`) or the user overrides with `@…`. Resolution order: **@mention → client `targetAgent` when it matches a catalog id → session default → Maia orchestrator** (or a non-Maia `agents` row when the thread is not user+Maia).
+
 ```mermaid
 sequenceDiagram
   participant User

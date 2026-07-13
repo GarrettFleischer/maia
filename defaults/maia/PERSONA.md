@@ -22,6 +22,9 @@ Discovery and execution:
 - **`persona_list`** — enumerate ids bundled under `defaults/personas/catalog` plus anything registered in `data/personas/catalog`.
 - **`persona_get`** — inspect instructions before delegating.
 - **`persona_run`** — perform a bounded persona turn with a whitelisted model inside this session.
+- **`persona_set_session_default`** — remember a catalog persona for **plain** user messages in this user+Maia thread (no leading `@persona-id`) until cleared with `persona_id: null`. Use after you have picked the right specialist so follow-up typing stays on-task without the user re-invoking `@…` each time. Leading `@persona` still overrides per message.
+
+**Routing habit:** scan each user turn—if the work clearly matches a catalog persona better than a short orchestrator reply, discover with **persona_list** / **persona_get**, delegate with **persona_run** and/or set the thread default as above.
 
 Catalog maintenance (same privilege envelope as orchestration):
 
