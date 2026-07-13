@@ -38,11 +38,12 @@ if (result.status !== 0) {
   process.exit(result.status);
 }
 
-// Parse "All files ... 95.85 ... 98.90" (Funcs %, Lines %) from the coverage
-// table (may be on stdout or stderr). Be tolerant of integer percentages and
-// optional '%' signs, and avoid depending on exact column widths.
+// Parse the coverage table row
+// "All files | 95.85 | 98.90 |" (Funcs %, Lines %). Require pipes so test
+// names that mention "All files" (e.g. "... from All files line [0.10ms]")
+// are not mistaken for the aggregate row. May appear on stdout or stderr.
 const allFilesMatch = combined.match(
-  /All files[^\n]*?(\d+(?:\.\d+)?)[^\n]*?(\d+(?:\.\d+)?)/,
+  /^All files\s*\|\s*(\d+(?:\.\d+)?)\s*%?\s*\|\s*(\d+(?:\.\d+)?)\s*%?/m,
 );
 if (!allFilesMatch) {
   console.error(

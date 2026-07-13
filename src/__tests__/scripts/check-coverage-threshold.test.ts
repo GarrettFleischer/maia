@@ -7,19 +7,20 @@
 import { describe, it, expect } from "bun:test";
 
 /**
- * @brief Parses the All files coverage line into function/line percentages.
- * Reimplements the logic from scripts/check-coverage-threshold.ts for testability.
- * @param line - Coverage table line containing two percentages.
+ * @brief Parses the All files coverage table row into function/line percentages.
+ * Mirrors `scripts/check-coverage-threshold.ts` (requires `|` so test names
+ * mentioning "All files" are ignored).
+ * @param text - Coverage output, or a single table line.
  * @returns Tuple of [functionsPct, linesPct] as fractions (0–1).
  */
-function parseAllFilesLine(line: string): [number, number] {
-  const pctNumbers = line.match(/\d+(?:\.\d+)?/g);
-  if (!pctNumbers || pctNumbers.length < 2) {
+function parseAllFilesLine(text: string): [number, number] {
+  const match = text.match(
+    /^All files\s*\|\s*(\d+(?:\.\d+)?)\s*%?\s*\|\s*(\d+(?:\.\d+)?)\s*%?/m,
+  );
+  if (!match) {
     throw new Error("Missing coverage percentages");
   }
-  const functionsPct = Number(pctNumbers[0]) / 100;
-  const linesPct = Number(pctNumbers[1]) / 100;
-  return [functionsPct, linesPct];
+  return [Number(match[1]) / 100, Number(match[2]) / 100];
 }
 
 describe("check-coverage-threshold parser", () => {
@@ -45,6 +46,15 @@ describe("check-coverage-threshold parser", () => {
     const [funcs, lines] = parseAllFilesLine(line);
     expect(funcs).toBeCloseTo(0.9107);
     expect(lines).toBeCloseTo(0.9048);
+  });
+
+  it("ignores test names that mention All files", () => {
+    const noise =
+      "(pass) check-coverage-threshold parser > extracts functions and lines percentages from All files line [0.10ms]\n" +
+      "All files                                            |   90.04 |   91.01 |\n";
+    const [funcs, lines] = parseAllFilesLine(noise);
+    expect(funcs).toBeCloseTo(0.9004);
+    expect(lines).toBeCloseTo(0.9101);
   });
 
   it("throws when the line does not contain two percentages", () => {
