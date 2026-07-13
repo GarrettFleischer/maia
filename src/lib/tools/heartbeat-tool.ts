@@ -116,16 +116,17 @@ function buildCronListSection(ctx: AppContext): string {
     for (const r of rows) {
       const personaCell = r.persona_id?.trim() ? r.persona_id.trim() : "—";
       const modelCell = r.persona_model?.trim() ? r.persona_model.trim() : "—";
-      let wakeCell = "tool-first";
+      let wakeCell = "maia prompt";
       if (r.persona_id?.trim()) wakeCell = "persona";
-      else if (r.cron_message != null) wakeCell = "prompt";
       const msgPreview =
         r.cron_message != null && String(r.cron_message).trim()
           ? String(r.cron_message).trim().slice(0, 80).replace(/\|/g, "/") +
             (String(r.cron_message).trim().length > 80 ? "…" : "")
           : "";
       const wakeDetail =
-        wakeCell === "prompt" && msgPreview ? `${wakeCell}: ${msgPreview}` : wakeCell;
+        wakeCell === "maia prompt" && msgPreview
+          ? `${wakeCell}: ${msgPreview}`
+          : wakeCell;
       lines.push(
         `| ${r.id} | ${r.expression} | ${r.task_description} | ${r.agent_id} | ${r.is_built_in ? "yes" : "no"} | ${r.tool_name ?? "cron_echo"} | ${personaCell} | ${modelCell} | ${wakeDetail} |`,
       );

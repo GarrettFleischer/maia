@@ -66,9 +66,10 @@ Maia keeps **all** semantic search and long-term memory structures in the **same
   - Loads all rows from `cron_jobs`.
   - Registers each job with `node-cron` using the job’s `expression`.
   - For built-in heartbeat: when the `builtin-heartbeat` job fires, it calls `fireHeartbeat(ctx, runAgentFn)` from `src/lib/heartbeat.ts`.
-  - For per-agent run jobs (`agent-run-<agent_id>`): when they fire, the scheduler gets or creates a session for that agent and enqueues a `runAgent` job (or runs the configured tool with stored args).
+  - For user schedules and Maia-created rows: when a job fires, the scheduler gets or creates an **agents** session for **`maia`** and enqueues **`runAgent`** with either a **delegated persona** (`persona_id` + `persona_model`) or a **Maia prompt wake** (`cron_message`, defaulting to the built-in task-board sweep when empty). There is no tool-first `[CRON]` + `initialToolCall` path for `cron_jobs`.
 - **Heartbeat**: The heartbeat is an internal tool (not exposed to agents) that wakes **only Maia**. She is prompted to check the task board and cron list, assign tasks, and ensure each active agent has a staggered cron job. See `docs/architecture/agent-system.md`.
 - **Manual trigger**: `POST /api/cron/heartbeat` triggers `fireHeartbeat` directly. Used by external cron (e.g. system cron) or for testing; the in-process scheduler also fires the built-in heartbeat job on its schedule.
+- **UI**: `POST /api/cron/jobs` creates user schedules (wake-up vs custom, Maia vs delegated persona, optional board task); `PATCH /api/cron/jobs/:id` updates user rows (always `agent_id` = `maia`, built-in rows return `400`); `DELETE /api/cron/jobs/:id` removes non-built-in jobs. See [API Endpoints](../api/endpoints.md).
 
 ## Sandbox container
 

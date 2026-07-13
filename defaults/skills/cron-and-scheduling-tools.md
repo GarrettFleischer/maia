@@ -16,12 +16,13 @@ You can manage scheduled jobs using:
 
 Use `cron_schedule` when:
 
-- The user wants a task to run automatically at specific times (for example, daily summaries, periodic checks).
-- There is a clear, repeatable action that can be expressed as a tool call with fixed arguments.
+- The user wants Maia to wake on a timer with the **default task-board sweep** (`prompt_wake: true`) or **custom instructions** (`cron_message`).
+- The user wants a **catalog persona harness** on Maia (`persona_id` + `persona_model` on `id: "maia"`).
 
 Best practices:
 
-- Be explicit about the schedule (time zone, frequency) and the tool/action to run.
+- Always pass `id: "maia"` — schedules are orchestrator-only.
+- Be explicit about the schedule (cron expression, local server time) and side effects.
 - Confirm the schedule with the user before creating jobs that have side effects.
 
 ## Inspecting and managing jobs
@@ -32,10 +33,11 @@ Best practices:
 - Use `cron_delete` when:
   - A job is no longer needed.
   - The user requests to stop or replace a scheduled task.
+  - Do **not** use `cron_delete` on built-in rows (heartbeat); it will error.
 
 For testing:
 
-- Use `cron_echo` to verify that the scheduling pipeline works end-to-end before scheduling more complex jobs.
+- Use `cron_echo` as a normal tool call to verify tool wiring; scheduled wakes use prompt/persona modes only.
 
 Always clearly communicate in your reasoning (and, when appropriate, to the user) which job ids you have created, modified, or deleted.
 

@@ -328,6 +328,7 @@ Smart context and skill matching **only** offer global skills plus the **current
 | `persona_list`           | Enumerates merged catalog personas (defaults + `data/personas/catalog`).             |
 | `persona_get`            | Loads instructions + metadata for a persona id.                                     |
 | `persona_run`            | Executes a delegated persona turn inside the caller session with a whitelisted model. |
+| `persona_set_session_default` | Sets or clears `sessions.default_persona_id` so plain user messages on user+Maia threads run as that catalog persona until cleared (`persona_id: null`). |
 | `persona_catalog_upsert` | Writes/replaces `data/personas/catalog/<slug>.toml` using Codex-style fields.       |
 | `persona_override_write` | Replaces layered markdown under `data/personas/overrides/<slug>.md`.                |
 
@@ -337,18 +338,18 @@ Legacy **`agent_*`** CRUD helpers were removed from `TOOL_REGISTRY`; orchestrati
 
 | Function        | Args                                                                                              | Returns                                             |
 | --------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `cron_echo`     | `message: string`                                                                                 | `string` (echoes message; used by legacy cron jobs) |
-| `cron_schedule` | `id, expr`, optional **`tool`/`args`** (legacy tool-first wake), optional **`prompt_wake`** or **`cron_message`** (Maia prompt wake; default copy drives **task_list** / **task_update**), optional **`persona_id`** + **`persona_model`** (delegated persona wake on **maia**; message defaults same task-review text), **`desc`** | `string` (jobId)                                    |
+| `cron_echo`     | `msg` / `message` (optional)                                                                      | `string` (echo; ad-hoc testing, not tied to `cron_jobs` rows) |
+| `cron_schedule` | **`id`** must be **`"maia"`**, **`expr`**, optional **`prompt_wake`** or **`cron_message`** (Maia prompt wake; default copy drives **task_list** / **task_update**), optional **`persona_id`** + **`persona_model`** (delegated persona harness), **`desc`** | `string` (jobId)                                    |
 | `cron_list`     | _(none)_                                                                                          | `CronJob[]` (includes persona/prompt fields when set) |
 | `cron_delete`   | `jobId: string`                                                                                   | `{ success: true, message: string }`                |
 
-**cron_delete** can remove any job by ID, including built-in or system jobs (e.g. the heartbeat job). The in-process scheduler unschedules the job immediately so it stops firing.
+**cron_delete** removes user jobs only; **built-in** rows (e.g. heartbeat) throw so the scheduler cannot be accidentally torn down from a tool call. The in-process scheduler unschedules the job immediately so it stops firing.
 
-Scheduled jobs persist **`persona_id`**, **`persona_model`**, and **`cron_message`** on `cron_jobs`. At fire time: **persona wake** runs Maia with **`personaTurn`** and the stored message (default task-review prompt); **prompt wake** (`cron_message` non-null, no persona) runs **`runAgent`** with that message and no **initialToolCall**; **legacy** wakes send **`[CRON]`** plus the configured **initialToolCall**. Use **`cron_echo`** with **`{ message: "..." }`** only when you explicitly want the legacy pattern.
+Scheduled jobs persist **`agent_id` = `maia`**, **`tool_name` = `cron_echo`**, **`tool_args` = `{}`**, plus **`persona_id`**, **`persona_model`**, and **`cron_message`** on `cron_jobs`. At fire time: **persona wake** runs Maia with **`personaTurn`** and the stored message (default task-review prompt when empty); otherwise **Maia prompt wake** runs **`runAgent`** with **`cron_message`** (or the same default when null/empty). Rows are not tool-first: there is no **`[CRON]`** + **`initialToolCall`** path for `cron_jobs`.
 
 Cron expressions follow standard 5-field format: `* * * * *` (minute, hour, day, month, weekday).
 
-The heartbeat is implemented as the built-in cron job `builtin-heartbeat` in `cron_jobs`. When it fires, it invokes an internal **heartbeat tool** (not visible to agents) that wakes **only Maia** so she can check the task board and cron job list, assign tasks, and ensure each active agent has a cron job. There are **no automatic staggered per-agent run jobs**; agent cron jobs are created only when Maia (or an authorized caller) uses **cron_schedule** at her chosen time and frequency (e.g. so agents do not overlap).
+The heartbeat is implemented as the built-in cron job `builtin-heartbeat` in `cron_jobs`. When it fires, it invokes an internal **heartbeat tool** (not visible to agents) that wakes **only Maia** so she can check the task board and cron job list. User and Maia-scheduled wakes use **`cron_schedule`** / the Schedules UI as described above.
 
 ### Custom agent tools (data/tools)
 

@@ -4,10 +4,18 @@
  */
 
 /**
- * @brief Shipped text for `cron_jobs.cron_message` when operators omit a custom message (task-first maintenance).
+ * Shipped text for `cron_jobs.cron_message` when operators choose **Wake up** (task-first
+ * maintenance) for Maia or a delegated persona.
+ *
+ * Instructs the agent to use the task board, advance work, and propose or start new tasks
+ * when broader goals are not yet satisfied.
  */
 export const DEFAULT_CRON_WAKE_PROMPT = `[CRON] Scheduled wake.
 
-Use **task_list** (filter **todo** and **in_progress** as needed) and **task_get** / **task_update** on the shared board: continue **in_progress** work you own or should unblock, advance **todo** items you can take, and leave short notes when you change status.
+**Wake up:** Review the shared task board with **task_list** / **task_get** / **task_update**.
 
-Stay focused on existing commitments; if blocked, say what blocked you briefly.`;
+- Continue **in_progress** work you own or should unblock; move **todo** items forward when you can.
+- Add short notes when you change status or discover blockers.
+- If commitments look healthy but the user’s overall goal is **not** clearly met yet, propose sensible **new** tasks (or break down existing ones) and start the highest-leverage item you can without waiting for the user.
+
+Stay concise; prefer doing over reporting.`;

@@ -314,9 +314,9 @@ data: { sessionId: string; entry: HistoryEntry; participants: string[] }
 event: session_created
 data: { session: Session }
 
-// Session name/description updated by compression agent
+// Session name/description/tags updated (e.g. compression agent), or default delegated persona for plain user messages (`defaultPersonaId`, optional)
 event: session_updated
-data: { sessionId: string; name: string; description: string; tags: string[] }
+data: { sessionId: string; name: string; description: string; tags: string[]; defaultPersonaId?: string | null }
 
 // Agent status change
 event: agent_status
@@ -384,12 +384,22 @@ Triggered by the internal cron scheduler. Fires the heartbeat to all active agen
 
 ### `GET /api/cron/jobs`
 
-List active cron jobs.
+List active cron jobs (with `scheduleDescription` and `nextRunAt`).
 
 **Response:**
 
 ```typescript
-{
-  jobs: CronJob[]
-}
+{ jobs: CronJob[] }
 ```
+
+### `POST /api/cron/jobs`
+
+Create a user schedule from the UI: `{ expression, taskDescription, wakeType: "wake_up" | "custom", delegateTo: "maia" | "persona", personaId?, personaModel?, customMessage?, boardTask?: { title, description?, assignedTo? } }`. Returns `201` with the created job JSON.
+
+### `PATCH /api/cron/jobs/:id`
+
+Update a **non-built-in** schedule (`400` for built-in rows). Body may include `expression`, `taskDescription`, `personaId`, `personaModel`, `cronMessage`. The server always persists `agent_id: "maia"`, `tool_name: "cron_echo"`, and `tool_args: {}`. Empty `cronMessage` with no persona is stored as the default task-board wake paragraph.
+
+### `DELETE /api/cron/jobs/:id`
+
+Delete a non-built-in job (built-in rows return `400`).

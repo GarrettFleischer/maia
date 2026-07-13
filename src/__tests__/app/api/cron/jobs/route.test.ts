@@ -5,7 +5,9 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { _setTestContext } from "@/instrumentation";
 import { makeTestContext } from "@/__tests__/helpers/fakes";
-import { GET } from "@/app/api/cron/jobs/route";
+import { initMaiaAgent } from "@/lib/init";
+import { getSettings } from "@/lib/settings";
+import { GET, POST } from "@/app/api/cron/jobs/route";
 
 describe("GET /api/cron/jobs", () => {
   beforeEach(() => {
@@ -84,5 +86,61 @@ describe("GET /api/cron/jobs", () => {
     expect(job!.scheduleDescription).toMatch(/15 minutes/i);
     expect(job!.nextRunAt).toBeDefined();
     expect(() => new Date(job!.nextRunAt!).toISOString()).not.toThrow();
+  });
+
+  describe("POST /api/cron/jobs", () => {
+    it("creates a wake_up Maia schedule", async () => {
+      const ctx = makeTestContext();
+      initMaiaAgent(ctx);
+      _setTestContext(ctx);
+      const res = await POST(
+        new Request("http://localhost/api/cron/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expression: "0 7 * * *",
+            taskDescription: "Dawn check",
+            wakeType: "wake_up",
+            delegateTo: "maia",
+          }),
+        }),
+      );
+      expect(res.status).toBe(201);
+      const job = (await res.json()) as { id: string; cronMessage: string | null };
+      expect(job.id.length).toBeGreaterThan(0);
+      expect(job.cronMessage).toContain("Wake up");
+    });
+
+    it("optional boardTask inserts a task", async () => {
+      const ctx = makeTestContext();
+      initMaiaAgent(ctx);
+      _setTestContext(ctx);
+      const model = getSettings(ctx).whitelistedModels[0];
+      if (!model) throw new Error("need model");
+      const res = await POST(
+        new Request("http://localhost/api/cron/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expression: "0 12 * * *",
+            taskDescription: "Midday persona",
+            wakeType: "wake_up",
+            delegateTo: "persona",
+            personaId: "typescript-pro",
+            personaModel: model,
+            boardTask: {
+              title: "Follow up scheduled wake",
+              description: "From cron UI test",
+              assignedTo: "maia",
+            },
+          }),
+        }),
+      );
+      expect(res.status).toBe(201);
+      const tasks = ctx.db.prepare("SELECT title FROM tasks WHERE title = ?").all(
+        "Follow up scheduled wake",
+      ) as { title: string }[];
+      expect(tasks.length).toBeGreaterThanOrEqual(1);
+    });
   });
 });

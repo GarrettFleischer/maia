@@ -37,6 +37,8 @@ export interface Session {
   participants: string[];
   tags: string[];
   type: "user" | "agents";
+  /** When set on a user+Maia thread, plain user messages (no leading @mention) run as this catalog persona until cleared. */
+  defaultPersonaId?: string | null;
   original: HistoryEntry[];
   compressed: HistoryEntry[];
   /** Smart context runs per round (afterMessageIndex + run). Restored on refresh so all rounds show their phases. */
@@ -52,6 +54,7 @@ export interface SessionMeta {
   participants: string[];
   tags: string[];
   type: "user" | "agents";
+  defaultPersonaId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -174,15 +177,15 @@ export interface CronJob {
   agentId: string;
   isBuiltIn: boolean;
   createdAt: string;
-  /** Tool to call when the job fires (legacy tool-first wake only). */
+  /** Reserved: rows use cron_echo and {} for all schedules. */
   toolName: string;
-  /** Arguments for the tool (JSON object). */
+  /** Reserved: always {} for persisted schedules. */
   toolArgs: Record<string, unknown>;
   /** Delegated catalog persona slug when wake runs as Maia + persona_turn. */
   personaId?: string | null;
   /** Model id for delegated persona wake (whitelist). */
   personaModel?: string | null;
-  /** Non-null → prompt-first wake using this message (trimmed); legacy wakes use NULL and `[CRON]` + initialToolCall. */
+  /** Wake instructions (Maia prompt or persona context); empty/null at fire time uses the default task-review prompt. */
   cronMessage?: string | null;
   /** Human-readable schedule (e.g. "Every 30 minutes"). Set by API when listing jobs. */
   scheduleDescription?: string;
@@ -426,6 +429,8 @@ export type SystemSSEEvent =
         name: string;
         description: string;
         tags: string[];
+        /** Present when the default delegated persona for plain user messages changed. */
+        defaultPersonaId?: string | null;
       };
     }
   | {

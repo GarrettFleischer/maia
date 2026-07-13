@@ -5,11 +5,33 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { _setTestContext } from "@/instrumentation";
 import { makeTestContext } from "@/__tests__/helpers/fakes";
-import { PATCH } from "@/app/api/cron/jobs/[id]/route";
+import { initMaiaAgent } from "@/lib/init";
+import { getSettings } from "@/lib/settings";
+import { PATCH, DELETE } from "@/app/api/cron/jobs/[id]/route";
 
 describe("PATCH /api/cron/jobs/[id]", () => {
   beforeEach(() => {
     _setTestContext(makeTestContext());
+  });
+
+  it("returns 400 when job is built-in", async () => {
+    const ctx = makeTestContext();
+    const now = new Date().toISOString();
+    ctx.db
+      .prepare(
+        "INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run("builtin-patch", "0 * * * *", "Built", "maia", 1, now, "cron_echo", "{}");
+    _setTestContext(ctx);
+    const req = new Request("http://x/api/cron/jobs/builtin-patch", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ taskDescription: "Nope" }),
+    });
+    const res = await PATCH(req, {
+      params: Promise.resolve({ id: "builtin-patch" }),
+    });
+    expect(res.status).toBe(400);
   });
 
   it("returns 404 when job does not exist", async () => {
@@ -58,6 +80,7 @@ describe("PATCH /api/cron/jobs/[id]", () => {
 
   it("updates job and returns 200 with scheduleDescription and nextRunAt", async () => {
     const ctx = makeTestContext();
+    initMaiaAgent(ctx);
     const now = new Date().toISOString();
     ctx.db
       .prepare(
@@ -107,5 +130,79 @@ describe("PATCH /api/cron/jobs/[id]", () => {
       .get("patch-job-2") as { expression: string; task_description: string };
     expect(row.expression).toBe("*/10 * * * *");
     expect(row.task_description).toBe("Every 10 minutes");
+  });
+
+  it("fills default wake prompt when persona is set and cron message cleared", async () => {
+    const ctx = makeTestContext();
+    initMaiaAgent(ctx);
+    const now = new Date().toISOString();
+    const model = getSettings(ctx).whitelistedModels[0];
+    if (!model) throw new Error("need whitelisted model");
+    ctx.db
+      .prepare(
+        "INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args, persona_id, persona_model, cron_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "persona-patch",
+        "0 9 * * *",
+        "Persona job",
+        "maia",
+        0,
+        now,
+        "cron_echo",
+        "{}",
+        "typescript-pro",
+        model,
+        "",
+      );
+    _setTestContext(ctx);
+
+    const req = new Request("http://x/api/cron/jobs/persona-patch", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cronMessage: "" }),
+    });
+    const res = await PATCH(req, {
+      params: Promise.resolve({ id: "persona-patch" }),
+    });
+    expect(res.status).toBe(200);
+    const row = ctx.db
+      .prepare("SELECT cron_message FROM cron_jobs WHERE id = ?")
+      .get("persona-patch") as { cron_message: string };
+    expect(row.cron_message).toContain("Wake up");
+  });
+
+  it("DELETE returns 400 for built-in job", async () => {
+    const ctx = makeTestContext();
+    const now = new Date().toISOString();
+    ctx.db
+      .prepare(
+        "INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run("builtin-x", "0 * * * *", "Built", "maia", 1, now, "cron_echo", "{}");
+    _setTestContext(ctx);
+    const res = await DELETE(
+      new Request("http://x/api/cron/jobs/builtin-x"),
+      { params: Promise.resolve({ id: "builtin-x" }) },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("DELETE removes user job", async () => {
+    const ctx = makeTestContext();
+    const now = new Date().toISOString();
+    ctx.db
+      .prepare(
+        "INSERT INTO cron_jobs (id, expression, task_description, agent_id, is_built_in, created_at, tool_name, tool_args) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run("del-me", "0 * * * *", "Del", "maia", 0, now, "cron_echo", "{}");
+    _setTestContext(ctx);
+    const res = await DELETE(
+      new Request("http://x/api/cron/jobs/del-me"),
+      { params: Promise.resolve({ id: "del-me" }) },
+    );
+    expect(res.status).toBe(200);
+    const gone = ctx.db.prepare("SELECT 1 FROM cron_jobs WHERE id = ?").get("del-me");
+    expect(gone).toBeUndefined();
   });
 });

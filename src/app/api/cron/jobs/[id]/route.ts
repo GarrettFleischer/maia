@@ -1,12 +1,13 @@
 /**
- * @fileoverview API route: update a single cron job by id (expression, wake mode fields, agent).
+ * @fileoverview API route: update a single cron job by id (expression, wake fields). Maia-only; built-ins read-only.
  * @module app/api/cron/jobs/[id]/route
  */
 import { NextRequest, NextResponse } from "next/server";
 import cron from "node-cron";
 import { ensureAppContext } from "@/instrumentation";
-import { refreshCronJob } from "@/lib/cron/service";
+import { refreshCronJob, unscheduleCronJob } from "@/lib/cron/service";
 import { describeCronSchedule, getNextCronRun } from "@/lib/cron/describe";
+import { DEFAULT_CRON_WAKE_PROMPT } from "@/lib/cron/default-wake-prompt";
 import type { CronJob } from "@/lib/types";
 import { getPersonaById } from "@/lib/personas/registry";
 import { getSettings } from "@/lib/settings";
@@ -25,6 +26,18 @@ type CronRow = {
   cron_message: string | null;
 };
 
+function parseToolArgs(json: string | null | undefined): Record<string, unknown> {
+  if (json == null || json === "") return {};
+  try {
+    const v = JSON.parse(json) as unknown;
+    return typeof v === "object" && v !== null && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function rowToCronJob(row: CronRow): CronJob {
   const expression = row.expression;
   return {
@@ -35,9 +48,7 @@ function rowToCronJob(row: CronRow): CronJob {
     isBuiltIn: Boolean(row.is_built_in),
     createdAt: row.created_at,
     toolName: row.tool_name ?? "cron_echo",
-    toolArgs: row.tool_args
-      ? (JSON.parse(row.tool_args) as Record<string, unknown>)
-      : {},
+    toolArgs: parseToolArgs(row.tool_args),
     personaId: row.persona_id ?? null,
     personaModel: row.persona_model ?? null,
     cronMessage: row.cron_message ?? null,
@@ -49,7 +60,7 @@ function rowToCronJob(row: CronRow): CronJob {
 /**
  * PATCH /api/cron/jobs/:id
  * Update a cron job and re-schedule it in-process.
- * @param req - JSON body: expression?, taskDescription?, toolName?, toolArgs?, agentId?, personaId?, personaModel?, cronMessage?
+ * @param req - JSON body: expression?, taskDescription?, personaId?, personaModel?, cronMessage?
  * @returns 200 with updated job (with scheduleDescription, nextRunAt), 400 if invalid, 404 if not found
  */
 export async function PATCH(
@@ -68,13 +79,16 @@ export async function PATCH(
   if (!row) {
     return NextResponse.json({ error: "Cron job not found" }, { status: 404 });
   }
+  if (row.is_built_in) {
+    return NextResponse.json(
+      { error: "Built-in schedules cannot be modified here." },
+      { status: 400 },
+    );
+  }
 
   let body: {
     expression?: string;
     taskDescription?: string;
-    toolName?: string;
-    toolArgs?: Record<string, unknown>;
-    agentId?: string;
     personaId?: string | null;
     personaModel?: string | null;
     cronMessage?: string | null;
@@ -87,55 +101,22 @@ export async function PATCH(
 
   let expression = row.expression;
   let task_description = row.task_description;
-  let tool_name = row.tool_name;
-  let tool_args = row.tool_args;
-  let agent_id = row.agent_id;
   let persona_id = row.persona_id ?? null;
   let persona_model = row.persona_model ?? null;
   let cron_message = row.cron_message ?? null;
 
   if (body.expression !== undefined) {
-    if (!cron.validate(body.expression)) {
+    const expr = String(body.expression).trim();
+    if (!cron.validate(expr)) {
       return NextResponse.json(
         { error: "Invalid cron expression" },
         { status: 400 },
       );
     }
-    expression = body.expression;
+    expression = expr;
   }
   if (body.taskDescription !== undefined) {
     task_description = String(body.taskDescription);
-  }
-  if (body.toolName !== undefined) {
-    tool_name = String(body.toolName);
-  }
-  if (body.toolArgs !== undefined) {
-    if (typeof body.toolArgs !== "object" || body.toolArgs === null) {
-      return NextResponse.json(
-        { error: "toolArgs must be an object" },
-        { status: 400 },
-      );
-    }
-    tool_args = JSON.stringify(body.toolArgs);
-  }
-  if (body.agentId !== undefined) {
-    const targetId = String(body.agentId).trim();
-    if (!targetId) {
-      return NextResponse.json(
-        { error: "Target agent ID is required and cannot be empty" },
-        { status: 400 },
-      );
-    }
-    const agentExists = ctx.db
-      .prepare("SELECT 1 FROM agents WHERE id = ? AND status != 'deleted'")
-      .get(targetId);
-    if (!agentExists) {
-      return NextResponse.json(
-        { error: `Target agent not found or deleted: ${targetId}` },
-        { status: 400 },
-      );
-    }
-    agent_id = targetId;
   }
 
   if (body.personaId !== undefined) {
@@ -158,17 +139,25 @@ export async function PATCH(
       body.cronMessage === null ? null : String(body.cronMessage);
   }
 
-  const personaSlug = persona_id?.trim();
+  const personaSlugFinal = (persona_id ?? "").trim() || null;
+  if (
+    personaSlugFinal &&
+    (cron_message === null ||
+      (typeof cron_message === "string" && cron_message.trim() === ""))
+  ) {
+    cron_message = DEFAULT_CRON_WAKE_PROMPT;
+  }
+
+  if (
+    !personaSlugFinal &&
+    (cron_message === null ||
+      (typeof cron_message === "string" && cron_message.trim() === ""))
+  ) {
+    cron_message = DEFAULT_CRON_WAKE_PROMPT;
+  }
+
+  const personaSlug = personaSlugFinal;
   if (personaSlug) {
-    if (agent_id !== "maia") {
-      return NextResponse.json(
-        {
-          error:
-            'Delegated persona cron jobs must target agent id "maia".',
-        },
-        { status: 400 },
-      );
-    }
     const pm = persona_model?.trim();
     if (!pm) {
       return NextResponse.json(
@@ -192,6 +181,16 @@ export async function PATCH(
     }
   }
 
+  const maiaExists = ctx.db
+    .prepare("SELECT 1 FROM agents WHERE id = ? AND status != 'deleted'")
+    .get("maia");
+  if (!maiaExists) {
+    return NextResponse.json(
+      { error: 'Orchestrator agent "maia" is required for schedules.' },
+      { status: 400 },
+    );
+  }
+
   ctx.db
     .prepare(
       "UPDATE cron_jobs SET expression = ?, task_description = ?, tool_name = ?, tool_args = ?, agent_id = ?, persona_id = ?, persona_model = ?, cron_message = ? WHERE id = ?",
@@ -199,9 +198,9 @@ export async function PATCH(
     .run(
       expression,
       task_description,
-      tool_name,
-      tool_args,
-      agent_id,
+      "cron_echo",
+      "{}",
+      "maia",
       persona_id,
       persona_model,
       cron_message,
@@ -217,4 +216,31 @@ export async function PATCH(
     .get(id) as CronRow;
 
   return NextResponse.json(rowToCronJob(updated));
+}
+
+/**
+ * DELETE /api/cron/jobs/:id
+ * Removes a user-created job from SQLite and the in-process scheduler. Built-in jobs are rejected.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const ctx = await ensureAppContext();
+  const { id } = await params;
+  const row = ctx.db
+    .prepare("SELECT is_built_in FROM cron_jobs WHERE id = ?")
+    .get(id) as { is_built_in: number } | undefined;
+  if (!row) {
+    return NextResponse.json({ error: "Cron job not found" }, { status: 404 });
+  }
+  if (row.is_built_in) {
+    return NextResponse.json(
+      { error: "Built-in schedules cannot be deleted here." },
+      { status: 400 },
+    );
+  }
+  ctx.db.prepare("DELETE FROM cron_jobs WHERE id = ?").run(id);
+  unscheduleCronJob(id);
+  return NextResponse.json({ ok: true });
 }

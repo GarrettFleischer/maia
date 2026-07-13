@@ -14,6 +14,7 @@ import { updateSettings, getSettings } from "@/lib/settings";
 import { makeTestContext, FakeEvents } from "../../helpers/fakes";
 import type { AppContext } from "@/lib/context";
 import { _resetHeartbeatIdempotencyForTests } from "@/lib/heartbeat";
+import { DEFAULT_CRON_WAKE_PROMPT } from "@/lib/cron/default-wake-prompt";
 
 function seedAgent(ctx: AppContext, id: string, status = "active") {
   const now = new Date().toISOString();
@@ -138,7 +139,7 @@ describe("CronService", () => {
   });
 
   describe("execution behavior (runOnInit)", () => {
-    it("invokes runAgentFn with agentId, sessionId, message, and initialToolCall when a job fires", async () => {
+    it("invokes runAgentFn with default prompt wake when cron_message is null (no persona)", async () => {
       ctx.db
         .prepare("DELETE FROM cron_jobs WHERE id = 'builtin-heartbeat'")
         .run();
@@ -149,7 +150,8 @@ describe("CronService", () => {
         taskDescription: "Review backlog",
         agentId: "maia",
         toolName: "cron_echo",
-        toolArgs: { message: "Review backlog" },
+        toolArgs: {},
+        cronMessage: null,
       });
       const runAgentCalls: {
         agentId: string;
@@ -173,11 +175,8 @@ describe("CronService", () => {
       expect(call.agentId).toBe("maia");
       expect(call.sessionId).toBeDefined();
       expect(call.sessionId.length).toBeGreaterThan(0);
-      expect(call.message).toBe("[CRON]");
-      expect(call.options?.initialToolCall).toEqual({
-        name: "cron_echo",
-        args: { message: "Review backlog" },
-      });
+      expect(call.message).toBe(DEFAULT_CRON_WAKE_PROMPT);
+      expect(call.options?.initialToolCall).toBeUndefined();
     });
 
     it("invokes runAgentFn with personaTurn when persona_id is set", async () => {
@@ -260,6 +259,7 @@ describe("CronService", () => {
         expression: "0 9 * * *",
         taskDescription: "Event check",
         agentId: "maia",
+        cronMessage: "event",
       });
       startCronScheduler(ctx, async () => {}, { runOnInit: true });
 
@@ -289,12 +289,14 @@ describe("CronService", () => {
       ).toBe("maia");
     });
 
-    it("creates a session for the owning agent when job runs", async () => {
-      seedAgent(ctx, "agent-alpha");
+    it("creates a session for Maia when job runs", async () => {
+      seedAgent(ctx, "maia");
       seedCronJob(ctx, {
         id: "job-session",
-        agentId: "agent-alpha",
+        agentId: "maia",
         taskDescription: "Session test",
+        cronMessage: "Ping session",
+        toolArgs: {},
       });
       startCronScheduler(ctx, async () => {}, { runOnInit: true });
 
@@ -306,24 +308,25 @@ describe("CronService", () => {
       const participants = JSON.parse(
         sessions[0].participants as string,
       ) as string[];
-      expect(participants).toContain("agent-alpha");
+      expect(participants).toContain("maia");
     });
 
     it("schedules multiple jobs and runs each on runOnInit", async () => {
       ctx.db
         .prepare("DELETE FROM cron_jobs WHERE id = 'builtin-heartbeat'")
         .run();
-      seedAgent(ctx, "agent-a", "paused");
-      seedAgent(ctx, "agent-b", "paused");
+      seedAgent(ctx, "maia", "paused");
       seedCronJob(ctx, {
         id: "a",
-        agentId: "agent-a",
+        agentId: "maia",
         taskDescription: "Task A",
+        cronMessage: "A",
       });
       seedCronJob(ctx, {
         id: "b",
-        agentId: "agent-b",
+        agentId: "maia",
         taskDescription: "Task B",
+        cronMessage: "B",
       });
       const runAgentCalls: { agentId: string }[] = [];
       startCronScheduler(
@@ -337,25 +340,27 @@ describe("CronService", () => {
       await new Promise((r) => setTimeout(r, 20));
       expect(runAgentCalls.length).toBe(2);
       const agentIds = runAgentCalls.map((c) => c.agentId).sort();
-      expect(agentIds).toEqual(["agent-a", "agent-b"]);
+      expect(agentIds).toEqual(["maia", "maia"]);
     });
 
     it("reuses same session when multiple jobs share agent and task description", async () => {
       ctx.db
         .prepare("DELETE FROM cron_jobs WHERE id = 'builtin-heartbeat'")
         .run();
-      seedAgent(ctx, "worker-a", "paused");
+      seedAgent(ctx, "maia", "paused");
       seedCronJob(ctx, {
         id: "job-1",
-        agentId: "worker-a",
+        agentId: "maia",
         taskDescription: "Hourly heartbeat",
         expression: "0 * * * *",
+        cronMessage: "one",
       });
       seedCronJob(ctx, {
         id: "job-2",
-        agentId: "worker-a",
+        agentId: "maia",
         taskDescription: "Hourly heartbeat",
         expression: "30 * * * *",
+        cronMessage: "two",
       });
       const runAgentCalls: { sessionId: string }[] = [];
       startCronScheduler(

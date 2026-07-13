@@ -1,7 +1,7 @@
 /**
  * @fileoverview In-process cron job scheduler: loads jobs from cron_jobs table,
  * registers them with node-cron, and runs agent messages when they fire.
- * Agent cron jobs are created by Maia via cron_schedule; no automatic per-agent jobs.
+ * Agent cron jobs are created via the Schedules UI or Maia's `cron_schedule` tool (Maia-only).
  * @module lib/cron/service
  */
 import cron from "node-cron";
@@ -28,13 +28,11 @@ export interface CronSchedulerOptions {
   runOnInit?: boolean;
 }
 
-/** Parsed cron row fields used to choose legacy vs prompt vs persona wake. */
+/** Parsed cron row fields used to choose persona vs Maia prompt wake. */
 interface CronWakeRowParts {
   persona_id: string | null | undefined;
   persona_model: string | null | undefined;
   cron_message: string | null | undefined;
-  toolNameSafe: string;
-  toolArgs: Record<string, unknown>;
 }
 
 /**
@@ -42,7 +40,7 @@ interface CronWakeRowParts {
  * @param ctx - Application context (settings whitelist)
  * @param agentId - Owning agent id from the cron row
  * @param jobId - Cron job id (logging)
- * @param parts - Tool/persona/message payload from SQLite
+ * @param parts - Persona/message payload from SQLite
  * @returns Envelope or null when the job should be skipped (misconfiguration)
  */
 function buildCronWakeEnvelope(
@@ -107,22 +105,11 @@ function buildCronWakeEnvelope(
     };
   }
 
-  if (parts.cron_message != null) {
-    const trimmed = String(parts.cron_message).trim();
-    const message =
-      trimmed !== "" ? trimmed : DEFAULT_CRON_WAKE_PROMPT;
-    return { message, options: {} };
-  }
-
-  return {
-    message: "[CRON]",
-    options: {
-      initialToolCall: {
-        name: parts.toolNameSafe,
-        args: parts.toolArgs,
-      },
-    },
-  };
+  const raw = parts.cron_message;
+  const trimmed =
+    raw != null && String(raw).trim() !== "" ? String(raw).trim() : "";
+  const message = trimmed !== "" ? trimmed : DEFAULT_CRON_WAKE_PROMPT;
+  return { message, options: {} };
 }
 
 let _taskMap = new Map<string, ScheduledTask>();
@@ -140,7 +127,7 @@ export function isCronSchedulerRunning(): boolean {
 
 /**
  * Schedules a single job and adds it to _taskMap. Used by startCronScheduler and refreshHeartbeatJob.
- * Non-heartbeat jobs enqueue **runAgent** with legacy tool-first wake, prompt wake, or delegated persona wake.
+ * Non-heartbeat jobs enqueue **runAgent** with Maia prompt wake or delegated persona wake.
  * @param ctx - Application context
  * @param runAgentFn - RunAgentFn to invoke when job fires
  * @param row - cron_jobs row
@@ -154,8 +141,6 @@ function scheduleJob(
     expression: string;
     task_description: string;
     agent_id: string;
-    tool_name: string;
-    tool_args: string;
     persona_id: string | null;
     persona_model: string | null;
     cron_message: string | null;
@@ -167,12 +152,12 @@ function scheduleJob(
     expression,
     task_description: taskDescription,
     agent_id: agentId,
-    tool_name: toolName,
-    tool_args: toolArgsJson,
     persona_id,
     persona_model,
     cron_message,
   } = row;
+
+  const isHeartbeat = jobId === BUILTIN_HEARTBEAT_JOB_ID;
 
   const agentExists = ctx.db
     .prepare("SELECT 1 FROM agents WHERE id = ? AND status != 'deleted'")
@@ -184,23 +169,19 @@ function scheduleJob(
     return;
   }
 
+  if (!isHeartbeat && agentId !== "maia") {
+    console.warn(
+      `CronService: skipping job ${jobId} — schedules must use agent id "maia"`,
+    );
+    return;
+  }
+
   if (!cron.validate(expression)) {
     console.error(
       `CronService: invalid expression for job ${jobId}, skipping: ${expression}`,
     );
     return;
   }
-  let toolArgs: Record<string, unknown> = {};
-  try {
-    toolArgs = toolArgsJson
-      ? (JSON.parse(toolArgsJson) as Record<string, unknown>)
-      : {};
-  } catch {
-    console.error(`CronService: invalid tool_args for job ${jobId}, using {}`);
-  }
-  const toolNameSafe = toolName || "cron_echo";
-
-  const isHeartbeat = jobId === BUILTIN_HEARTBEAT_JOB_ID;
   let task: ScheduledTask;
   try {
     task = cron.schedule(
@@ -232,8 +213,6 @@ function scheduleJob(
             persona_id,
             persona_model,
             cron_message,
-            toolNameSafe,
-            toolArgs,
           });
           if (!wake) return;
           enqueue(
