@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maia · Empty and error states (Mint Ledger)</title>
+<style>
+:root{--pg-bg:#101215;--pg-surface:#171A1F;--pg-fg:#E8EAEE;--pg-muted:#9AA2AE;--pg-border:#262A31;--pg-link:#7FA6FF}
+*{box-sizing:border-box}
+body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;padding:24px 16px 64px}
+.page{max-width:1480px;margin:0 auto;display:grid;gap:16px}
+.page h1{margin:0;font-size:20px;line-height:28px;font-weight:650}
+.page header p{margin:0;color:var(--pg-muted);max-width:100ch}
+.seg{display:inline-flex;border:1px solid var(--pg-border);border-radius:8px;padding:2px;background:var(--pg-surface);width:max-content}
+.seg button{border:0;background:none;color:var(--pg-muted);font:inherit;font-size:13px;padding:6px 12px;border-radius:6px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--pg-fg);color:var(--pg-bg)}
+.seg button:focus-visible{outline:2px solid var(--pg-link);outline-offset:2px}
+.pg-bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.pg-cap{margin:0;font-size:13px;line-height:18px;color:var(--pg-muted)}
+.notes{border:1px solid var(--pg-border);border-radius:10px;padding:16px 20px;background:var(--pg-surface)}
+.notes h2{margin:0 0 8px;font-size:15px;line-height:20px;font-weight:650}
+.notes ul{margin:0;padding-left:18px;color:var(--pg-muted);max-width:120ch}
+.notes li{margin:4px 0}
+.notes b{color:var(--pg-fg);font-weight:600}
+
+/* ===== tokens (Mint Ledger, same as 05) ===== */
+.tok{--ui:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;--mono:"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;--r:6px;
+  --bg:#0C0E10;--surface:#14171A;--border:#252A2E;--text:#E4E8E6;--muted:#8A9490;--accent:#3DDDB0;--warning:#F5A524;--danger:#F0584F;--success:#A6D95B;--on-accent:#04140F;
+  font:14px/20px var(--ui);color:var(--text);color-scheme:dark}
+html[data-theme="light"] .tok{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--text:#14181A;--muted:#5C6560;--accent:#00775A;--warning:#B45F00;--danger:#C22F2F;--success:#4D7A1A;--on-accent:#FFFFFF;color-scheme:light}
+.tok *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.tok button,.tok input{font:inherit;color:inherit}
+.tok button{cursor:pointer}
+.tok button:disabled{opacity:.45;cursor:not-allowed}
+.tok :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tok [hidden]{display:none!important}
+.tok .ic{width:16px;height:16px;flex:none}
+.tok .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.tok .lbl{font-size:11px;line-height:16px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0}
+.tok .meta{font-size:12px;line-height:16px;color:var(--muted);margin:0}
+.tok p{margin:0}
+.btn{min-height:32px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font-size:13px;font-weight:550;white-space:nowrap}
+.btn.sm{min-height:28px;padding:0 8px;font-size:12px}
+.btn.ghost{border-color:transparent;background:none}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+.btn.danger{border-color:var(--danger);color:var(--danger);background:none;font-weight:600}
+.btn[aria-expanded="true"]{border-color:var(--accent)}
+.chip{display:inline-flex;align-items:center;height:22px;padding:0 6px;border:1px solid var(--border);border-radius:var(--r);font-size:11px;line-height:16px;font-weight:600;color:var(--muted);white-space:nowrap}
+.taint{display:inline-flex;align-items:center;height:22px;padding:0 8px;border:1px dashed var(--muted);border-radius:var(--r);font-size:12px;line-height:16px;white-space:nowrap}
+
+/* ===== state cards ===== */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(460px,1fr));gap:16px;align-items:start}
+.scard{display:grid;gap:12px;padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text);font:14px/20px var(--ui);min-width:0}
+.scard-h{display:flex;gap:12px;align-items:flex-start}
+.scard-h h2{margin:0;font-size:15px;line-height:20px;font-weight:650}
+.num{flex:none;width:24px;height:24px;border-radius:50%;border:1px solid var(--border);display:grid;place-items:center;font:12px/1 var(--mono);color:var(--muted)}
+.scard-h .spec{margin-left:auto;flex:none}
+.copy{font-size:13px;line-height:18px;color:var(--muted)}
+.mock{border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden;min-width:0}
+.mock-h{height:36px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)}
+.mock-b{padding:16px;display:grid;gap:12px;align-content:start;min-width:0}
+.rowline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.grow{flex:1}
+
+/* state pieces */
+.empty-c{display:grid;gap:8px;justify-items:start;padding:12px 4px}
+.empty-c h3{margin:0;font-size:15px;line-height:20px;font-weight:650}
+.empty-c p{margin:0;color:var(--muted);max-width:52ch}
+.agent-row{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 8px;border-radius:var(--r);font-size:13px}
+.agent-row[aria-current="true"]{background:color-mix(in srgb,var(--accent) 14%,var(--surface))}
+.agent-row .meta{margin-left:auto}
+.rail-mini{display:grid;gap:4px;align-content:start;padding:8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg)}
+.split{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px;min-width:0}
+.bubble-h{font-size:13px;line-height:18px;color:var(--muted)}
+.draft{border:1px solid var(--border);border-radius:var(--r);background:var(--bg);padding:8px 10px;min-height:40px}
+.err{display:grid;gap:8px;border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--r);padding:10px 12px;background:var(--bg)}
+.err b{color:var(--danger);font-weight:650}
+.err .meta{color:var(--text)}
+.status-line{font-size:12px;line-height:16px;color:var(--muted)}
+.slot{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:8px;align-items:center;min-height:30px;font-size:13px}
+.slot .n{font:12px/1 var(--mono);color:var(--muted)}
+.slot .s{color:var(--muted);font-size:12px}
+.bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden}
+.bar i{display:block;height:100%;width:74%;background:var(--accent)}
+.graph-empty{display:grid;gap:8px;place-items:center;text-align:center;min-height:160px;padding:16px;border:1px dashed var(--border);border-radius:var(--r)}
+.graph-empty p{margin:0;color:var(--muted);max-width:40ch}
+.ep{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:center;min-height:32px;font-size:13px;border-top:1px solid var(--border)}
+.ep .mono{font-size:12px;color:var(--muted)}
+
+/* phone (390 wide, cropped) */
+.phone-m{width:390px;max-width:100%;height:560px;overflow:hidden;position:relative;border:1px solid var(--border);border-radius:22px;background:var(--bg);display:flex;flex-direction:column}
+.phone-m .hdr{display:flex;align-items:center;gap:8px;min-height:48px;padding:0 12px;border-bottom:1px solid var(--border)}
+.phone-m .hdr b{font-size:15px;font-weight:650}
+.phone-m .body{padding:12px;display:grid;gap:10px;align-content:start;flex:1;min-height:0;overflow:hidden}
+.phone-m .foot{padding:10px 12px;border-top:1px solid var(--border);display:grid;gap:8px}
+.phone-m .btn{min-height:44px}
+.phone-m .draft{min-height:44px}
+
+/* file overlay (mini) */
+.ov{display:grid;grid-template-rows:auto 1fr;min-height:300px;border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden}
+.ov-h{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 10px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.ov-h b{font-size:13px;font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ov-b{padding:16px;display:grid;gap:12px;align-content:center;justify-items:start;min-width:0}
+.ov-b > *{width:100%}
+.ov-b h3{margin:0;font-size:15px;line-height:20px;font-weight:650}
+.ov-b p{margin:0;color:var(--muted);max-width:56ch}
+.banner-e{width:100%;display:grid;gap:4px;padding:10px 12px;border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--r);background:var(--bg)}
+.banner-e b{color:var(--danger);font-weight:650}
+.banner-n{width:100%;display:grid;gap:4px;padding:10px 12px;border:1px solid var(--border);border-left:3px solid var(--muted);border-radius:var(--r);background:var(--bg);font-size:13px}
+.acts{display:flex;gap:8px;flex-wrap:wrap}
+.csv{width:100%;border-collapse:collapse;font:12px/16px var(--mono)}
+.csv th,.csv td{border-bottom:1px solid var(--border);padding:6px 8px;text-align:left}
+.csv th{color:var(--muted);font-weight:600}
+
+/* toast */
+.toast{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);max-width:calc(100% - 24px);padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);color:var(--text);font-size:13px;line-height:18px;opacity:0;pointer-events:none;transition:opacity .15s}
+.toast.on{opacity:1}
+.scard,.mock{position:relative}
+@media (prefers-reduced-motion: reduce){.toast{transition:none}}
+</style>
+</head>
+<body>
+<main class="page">
+<header>
+  <h1>Maia · Empty and error states</h1>
+  <p>Nine states on the Mint Ledger tokens, one card each. Every card names the spec rule it follows (09 or 12). Choose a theme, then press the controls: retry, try again, show details, and preview anyway behave as in the spec.</p>
+</header>
+
+<div class="pg-bar">
+  <div class="seg" role="group" aria-label="Theme">
+    <button type="button" data-theme-btn="dark" aria-pressed="true">Dark</button>
+    <button type="button" data-theme-btn="light" aria-pressed="false">Light</button>
+  </div>
+  <p class="pg-cap">Each card is self-contained. Controls run locally; nothing reaches a router, a network, or a file.</p>
+</div>
+
+<section class="cards" aria-label="Empty and error states">
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">1</span><div><h2>No agents</h2><p class="meta">Desktop · the vault has no agent folders yet</p></div><span class="chip spec">09 · Empty</span></header>
+  <div class="mock">
+    <div class="mock-h"><span>Maia</span><span class="grow"></span><span>Agents: 0</span></div>
+    <div class="mock-b split">
+      <div class="rail-mini"><p class="lbl">Agents</p><p class="meta">None yet</p></div>
+      <div class="empty-c">
+        <h3>No agents yet</h3>
+        <p>An agent is a folder in your vault with a <span class="mono">personality.md</span> file. Maia lists the agents it finds there.</p>
+        <p class="meta mono">F:\Notes\Maia</p>
+        <div class="acts">
+          <button type="button" class="btn sm" data-note="Copied the vault path">Copy vault path</button>
+          <button type="button" class="btn sm" data-note="Rescanning the vault. Agents appear here when found">Rescan vault</button>
+        </div>
+        <p class="meta">Create the folder on this computer, then rescan.</p>
+      </div>
+    </div>
+  </div>
+  <p class="copy">Phone: “Create agents on the desktop.” The phone does not create agent folders.</p>
+  <p class="toast" role="status" aria-live="polite"></p>
+</article>
+
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">2</span><div><h2>Agent with no threads</h2><p class="meta">Desktop · Archivist exists, no conversation yet</p></div><span class="chip spec">09 · Empty</span></header>
+  <div class="mock">
+    <div class="mock-h"><span>Maia</span><span class="grow"></span><span>Archivist · no threads</span></div>
+    <div class="mock-b split">
+      <div class="rail-mini">
+        <p class="lbl">Agents</p>
+        <div class="agent-row" aria-current="true">Archivist <span class="meta">no threads</span></div>
+        <div class="agent-row">Scout <span class="meta">idle</span></div>
+        <div class="agent-row">Scribe <span class="meta">idle</span></div>
+      </div>
+      <div class="empty-c">
+        <h3>Archivist</h3>
+        <p>No conversations yet. Start one to ask Archivist about your vault or your files.</p>
+        <div class="acts"><button type="button" class="btn sm pri" data-note="Starts an empty thread with Archivist. Its prompt is compiled from its personality and tools">New conversation</button></div>
+      </div>
+    </div>
+  </div>
+  <p class="copy">Offers New conversation and nothing that implies history exists.</p>
+  <p class="toast" role="status" aria-live="polite"></p>
+</article>
+
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">3</span><div><h2>Cache without facts</h2><p class="meta">Desktop · inspector Cache, new thread, no facts promoted</p></div><span class="chip spec">09 · Empty</span></header>
+  <div class="mock">
+    <div class="mock-h"><span>Inspector</span><span class="grow"></span><span>Cache</span></div>
+    <div class="mock-b">
+      <div class="rowline"><span class="chip">Cache</span><span class="chip">Brain</span><span class="chip">Trace</span></div>
+      <div class="rowline"><b>74%</b><span class="meta">of the prompt is cached</span></div>
+      <div class="bar" role="img" aria-label="74 percent cached"><i></i></div>
+      <div>
+        <div class="slot"><span class="n">1</span><span>Tools</span><span class="s">8 schemas</span></div>
+        <div class="slot"><span class="n">2</span><span>Agents</span><span class="s">3 listed</span></div>
+        <div class="slot"><span class="n">3</span><span>Persona</span><span class="s mono">personality.md · 3f9a.c21</span></div>
+        <div class="slot"><span class="n">4</span><span>Compacted memory</span><span class="s">none yet</span></div>
+        <div class="slot"><span class="n">5</span><span>Memory notes</span><span class="s">none</span></div>
+      </div>
+      <p class="lbl">Recall · not durable</p>
+      <p class="meta">No facts promoted yet. Episode retrieval is active: past episodes are searched on every turn, so recall still works.</p>
+      <p class="meta">Episodes searched this turn: 14. Nothing recalled yet.</p>
+    </div>
+  </div>
+  <p class="copy">Still shows tools, agents, and personas. States that episode retrieval is active.</p>
+  <p class="toast" role="status" aria-live="polite"></p>
+</article>
+
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">4</span><div><h2>Brain without facts</h2><p class="meta">Desktop · inspector Brain, no dream has run</p></div><span class="chip spec">09 · Empty</span></header>
+  <div class="mock">
+    <div class="mock-h"><span>Inspector</span><span class="grow"></span><span>Brain</span></div>
+    <div class="mock-b">
+      <div class="rowline"><span class="chip">Cache</span><span class="chip">Brain</span><span class="chip">Trace</span></div>
+      <div class="graph-empty" role="status">
+        <p><b>No dream has promoted facts yet.</b></p>
+        <p>Facts appear here after a dream reads your conversations. Episodes stay searchable until then.</p>
+      </div>
+      <p class="lbl">Episodes · 14 searchable</p>
+      <div>
+        <div class="ep"><span class="mono">ep_2c10</span><span>Nov 4 build failure</span><span class="chip">episode</span></div>
+        <div class="ep"><span class="mono">ep_7b04</span><span>Tailscale setup</span><span class="chip">episode</span></div>
+        <div class="ep"><span class="mono">ep_5a11</span><span>Scribe style review</span><span class="chip">episode</span></div>
+      </div>
+    </div>
+  </div>
+  <p class="copy">States that no dream has promoted facts, and that episodes remain searchable.</p>
+  <p class="toast" role="status" aria-live="polite"></p>
+</article>
+
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">5</span><div><h2>Router unavailable</h2><p class="meta">Desktop · the composer, after a send failed</p></div><span class="chip spec">FP-ERR-01</span></header>
+  <div class="mock">
+    <div class="mock-h"><span>Scout · with you</span><span class="grow"></span><span>Turn 149</span></div>
+    <div class="mock-b">
+      <p class="bubble-h">You · 10:58</p>
+      <div class="draft" aria-label="Draft kept after the failed send">Can you check the build log again and tell me if the report is ready?</div>
+      <div class="err" role="alert">
+        <b>Router unavailable</b>
+        <span class="meta">openrouter.ai did not answer in 30 s. Your draft is kept.</span>
+        <div class="acts"><button type="button" class="btn sm pri" id="r-retry">Retry</button><button type="button" class="btn sm" data-note="Opens Settings, Model router. The key stays in the Windows Credential Vault">Open settings</button></div>
+      </div>
+      <p class="status-line" id="r-status" aria-live="polite">Last attempt 10:58.</p>
+    </div>
+  </div>
+  <p class="copy">The draft stays. Retry resends the same draft. A failed retry keeps the draft too.</p>
+  <p class="toast" role="status" aria-live="polite"></p>
+</article>
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">6</span><div><h2>Phone can't reach the desktop</h2><p class="meta">Phone · 390 × 844, cropped to the top section</p></div><span class="chip spec">FP-ERR-02 · 03</span></header>
+  <div class="mock">
+    <div class="mock-b" style="justify-items:center">
+      <div class="phone-m" data-host>
+        <header class="hdr"><b>Maia</b><span class="grow"></span><span class="chip">Desktop unreachable</span></header>
+        <div class="body">
+          <div class="banner-e" role="alert">
+            <b>Can't reach your desktop.</b>
+            <span class="meta">Last update 10:52. Maia runs on your desktop; agents, brain, and vault stay there.</span>
+            <div class="acts">
+              <button type="button" class="btn sm pri" id="p-retry">Try again</button>
+              <button type="button" class="btn sm" id="p-details" aria-expanded="false" aria-controls="p-addr">Show details</button>
+            </div>
+          </div>
+          <p id="p-addr" class="meta mono" hidden>Trying: https://maia-pc.tail4c1e.ts.net<br>Tailscale: connection timed out</p>
+          <p class="status-line" id="p-status" aria-live="polite">Showing the view you loaded at 10:52.</p>
+          <div class="draft" aria-label="Draft kept while the desktop is unreachable">Check the build log for me</div>
+        </div>
+        <div class="foot">
+          <button type="button" class="btn danger" disabled aria-describedby="p-stop-note">Stop all</button>
+          <p class="meta" id="p-stop-note">Stop all can't reach the desktop. Stop it on the desktop.</p>
+        </div>
+        <p class="toast" role="status" aria-live="polite"></p>
+      </div>
+    </div>
+  </div>
+  <p class="copy">Keeps the draft. Uploads are not queued. Never implies the brain or vault moved to the phone. Stop all is disabled and says where to stop (OD-2).</p>
+</article>
+
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">7</span><div><h2>File preview failed</h2><p class="meta">Desktop · report.pdf, renderer stopped on page 3</p></div><span class="chip spec">FP-ERR-04</span></header>
+  <div class="mock">
+    <div class="mock-h"><span>Preview</span><span class="grow"></span><span>report.pdf</span></div>
+    <div class="mock-b">
+      <div class="ov">
+        <div class="ov-h"><b>report.pdf</b><span class="chip">PDF · 212 KB</span><span class="grow"></span><button type="button" class="btn sm" data-note="Download is an owner export of the original bytes">Download</button></div>
+        <div class="ov-b">
+          <div class="banner-e" role="alert">
+            <b>Couldn't render report.pdf</b>
+            <span class="meta">The sandboxed renderer stopped on page 3. The file itself is unchanged.</span>
+          </div>
+          <p class="status-line" id="f-status" aria-live="polite">One retry is allowed before this stays failed.</p>
+          <div class="acts">
+            <button type="button" class="btn sm pri" id="f-retry">Try again</button>
+            <button type="button" class="btn sm" data-note="Download is an owner export of the original bytes">Download original</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="copy">The file is unchanged. Try again runs the derivative once more; a second failure stays failed. Download is always offered.</p>
+  <p class="toast" role="status" aria-live="polite"></p>
+</article>
+
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">8</span><div><h2>Unsupported file type</h2><p class="meta">Desktop · installer.msi, detected by content</p></div><span class="chip spec">FP-ERR-05 · PRV-06</span></header>
+  <div class="mock">
+    <div class="mock-h"><span>Preview</span><span class="grow"></span><span>installer.msi</span></div>
+    <div class="mock-b">
+      <div class="ov">
+        <div class="ov-h"><b>installer.msi</b><span class="chip">Detected: Windows Installer</span><span class="grow"></span><button type="button" class="btn sm" data-note="Download is an owner export of the original bytes">Download</button></div>
+        <div class="ov-b">
+          <h3>No preview for installer.msi</h3>
+          <p>Maia doesn't render this type. It recognised a Windows Installer package by its content, not its name.</p>
+          <p class="meta">Open in app is not offered: opening an installer runs it. Download to inspect it yourself.</p>
+          <div class="acts"><button type="button" class="btn sm" data-note="Download is an owner export of the original bytes">Download original</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="copy">Download only, with no Open in app for installers or executables.</p>
+  <p class="toast" role="status" aria-live="polite"></p>
+</article>
+
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">9</span><div><h2>File too large to preview</h2><p class="meta">Desktop · release-export.csv, 48 MB, CSV cap 5 MB</p></div><span class="chip spec">FP-ERR-06 · LIM</span></header>
+  <div class="mock">
+    <div class="mock-h"><span>Preview</span><span class="grow"></span><span>release-export.csv</span></div>
+    <div class="mock-b">
+      <div class="ov">
+        <div class="ov-h"><b>release-export.csv</b><span class="chip">CSV · 48 MB</span></div>
+        <div class="ov-b">
+          <div class="banner-e" id="big-warn" role="alert">
+            <b>release-export.csv is 48 MB.</b>
+            <span class="meta">CSV previews are capped at 5 MB.</span>
+          </div>
+          <div class="acts" id="big-acts">
+            <button type="button" class="btn sm pri" id="big-prev">Preview first 5 MB</button>
+            <button type="button" class="btn sm" data-note="Download is an owner export of the original bytes">Download original</button>
+          </div>
+          <div id="big-view" hidden>
+            <div class="banner-n" role="status">Showing the first 10,000 rows from the first 5 MB of 48 MB.</div>
+            <table class="csv">
+              <thead><tr><th scope="col">date</th><th scope="col">service</th><th scope="col">requests</th></tr></thead>
+              <tbody>
+                <tr><td>2026-07-01</td><td>api</td><td>3120</td></tr>
+                <tr><td>2026-07-01</td><td>phone</td><td>41</td></tr>
+                <tr><td>2026-07-02</td><td>api</td><td>3088</td></tr>
+                <tr><td>2026-07-02</td><td>phone</td><td>57</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="copy">States the size and the cap, and shows a labelled partial preview. The file is never silently truncated.</p>
+  <p class="toast" role="status" aria-live="polite"></p>
+</article>
+</section>
+
+<section class="notes" aria-labelledby="notes-t">
+  <h2 id="notes-t">What this mock settles, and what to check</h2>
+  <ul>
+    <li><b>Empty states use the 09 copy.</b> No agents, agent without threads, Cache without facts, and Brain without facts each say what exists and what to do next. None implies history that does not exist.</li>
+    <li><b>Router failure keeps the draft</b> (FP-ERR-01). Retry resends the same draft; a failed retry keeps it too.</li>
+    <li><b>The phone never implies the desktop's work moved.</b> The unreachable state names the last update and the address tried. Uploads are not queued (FP-CMP-05).</li>
+    <li><b>Stop all is disabled on the phone while the desktop is unreachable,</b> and the copy says where to stop it (FP-ERR-03). This is the gap recorded as OD-2 in 12. It needs an owner decision before the invariant in 09 can read as unconditional.</li>
+    <li><b>A failed preview gets one retry</b>, then stays failed with the file unchanged and Download offered (FP-ERR-04).</li>
+    <li><b>Installers and executables get Download only.</b> Open in app is never offered for them (FP-PRV-06). This refines the 03 chrome.</li>
+    <li><b>A too-large file shows a labelled partial preview</b> and its cap, never a silent truncation (FP-ERR-06, limits in 12). The caps are proposals for owner confirmation.</li>
+  </ul>
+</section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  function $(id) { return document.getElementById(id); }
+  function all(selector, root) {
+    return Array.prototype.slice.call((root || document).querySelectorAll(selector));
+  }
+
+  var toastTimers = new WeakMap();
+  function toast(host, message) {
+    if (host === null) { return; }
+    var node = host.querySelector(':scope > .toast');
+    if (node === null) { return; }
+    node.textContent = message;
+    node.classList.add('on');
+    window.clearTimeout(toastTimers.get(host));
+    toastTimers.set(host, window.setTimeout(function () { node.classList.remove('on'); }, 2200));
+  }
+
+  function setTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    all('[data-theme-btn]').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeBtn === theme));
+    });
+  }
+
+  /* Shows a busy label for a moment, then reports the result. Nothing is really retried here. */
+  function retryWithDelay(button, busyText, resultText, onResult) {
+    button.disabled = true;
+    button.textContent = busyText;
+    window.setTimeout(function () {
+      button.disabled = false;
+      button.textContent = button.dataset.label;
+      onResult(resultText);
+    }, 1200);
+  }
+
+  all('[data-note]').forEach(function (node) {
+    node.addEventListener('click', function () { toast(node.closest('[data-host]'), node.dataset.note); });
+  });
+  all('[data-theme-btn]').forEach(function (b) {
+    b.addEventListener('click', function () { setTheme(b.dataset.themeBtn); });
+  });
+
+  /* 5 · router: retry keeps the draft and reports the result */
+  var retry = $('r-retry');
+  retry.dataset.label = 'Retry';
+  retry.addEventListener('click', function () {
+    $('r-status').textContent = 'Retrying with the same draft…';
+    retryWithDelay(retry, 'Retrying…', 'Still unavailable. Your draft is kept.', function (text) {
+      $('r-status').textContent = text;
+    });
+  });
+
+  /* 6 · phone: try again, show details */
+  var pTry = $('p-retry');
+  pTry.dataset.label = 'Try again';
+  pTry.addEventListener('click', function () {
+    $('p-status').textContent = 'Trying the desktop again…';
+    retryWithDelay(pTry, 'Trying…', 'Still can’t reach the desktop. Showing the view you loaded at 10:52.', function (text) {
+      $('p-status').textContent = text;
+    });
+  });
+  var pDetails = $('p-details');
+  pDetails.addEventListener('click', function () {
+    var open = $('p-addr').hidden;
+    $('p-addr').hidden = !open;
+    pDetails.setAttribute('aria-expanded', String(open));
+    pDetails.textContent = open ? 'Hide details' : 'Show details';
+  });
+
+  /* 7 · file preview: one retry, then it stays failed */
+  var fRetry = $('f-retry');
+  fRetry.dataset.label = 'Try again';
+  fRetry.addEventListener('click', function () {
+    fRetry.disabled = true;
+    $('f-status').textContent = 'Rendering again in the sandbox…';
+    window.setTimeout(function () {
+      $('f-status').textContent = 'Still couldn’t render report.pdf. The file itself is unchanged.';
+      fRetry.textContent = 'Tried once more';
+    }, 1200);
+  });
+
+  /* 9 · too large: show the capped partial preview with its label */
+  $('big-prev').addEventListener('click', function () {
+    $('big-warn').hidden = true;
+    $('big-acts').hidden = true;
+    $('big-view').hidden = false;
+  });
+})();
+</script>
+</body>
+</html>

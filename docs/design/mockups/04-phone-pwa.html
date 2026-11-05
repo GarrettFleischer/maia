@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maia · Phone PWA (Mint Ledger)</title>
+<style>
+:root{--pg-bg:#101215;--pg-surface:#171A1F;--pg-fg:#E8EAEE;--pg-muted:#9AA2AE;--pg-border:#262A31;--pg-link:#7FA6FF}
+*{box-sizing:border-box}
+body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;padding:24px 16px 64px}
+.page{max-width:1480px;margin:0 auto;display:grid;gap:16px}
+.page h1{margin:0;font-size:20px;line-height:28px;font-weight:650}
+.page header p{margin:0;color:var(--pg-muted);max-width:90ch}
+.seg{display:inline-flex;border:1px solid var(--pg-border);border-radius:8px;padding:2px;background:var(--pg-surface);width:max-content}
+.seg button{border:0;background:none;color:var(--pg-muted);font:inherit;font-size:13px;padding:6px 10px;border-radius:6px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--pg-fg);color:var(--pg-bg)}
+.seg button:focus-visible{outline:2px solid var(--pg-link);outline-offset:2px}
+.lineup{display:flex;flex-wrap:wrap;gap:32px 24px;align-items:flex-start}
+.fig{margin:0;display:grid;gap:8px}
+.fig figcaption{font-size:13px;line-height:18px;color:var(--pg-muted);font-weight:600}
+.notes{border:1px solid var(--pg-border);border-radius:10px;padding:16px 20px;background:var(--pg-surface)}
+.notes h2{margin:0 0 8px;font-size:15px;line-height:20px;font-weight:650}
+.notes ul{margin:0;padding-left:18px;color:var(--pg-muted);max-width:120ch}
+.notes li{margin:4px 0}
+.notes b{color:var(--pg-fg);font-weight:600}
+
+/* ===== phone (Mint Ledger tokens, 390 x 844) ===== */
+.ph{--ui:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;--mono:"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;--r:6px;
+  --bg:#0C0E10;--surface:#14171A;--border:#252A2E;--text:#E4E8E6;--muted:#8A9490;--accent:#3DDDB0;--warning:#F5A524;--danger:#F0584F;--success:#A6D95B;--on-accent:#04140F;--paper:#FBFBF8;--paper-ink:#1B1F22;
+  width:390px;height:844px;display:flex;flex-direction:column;position:relative;overflow:hidden;background:var(--bg);color:var(--text);font:14px/20px var(--ui);border:1px solid var(--border);border-radius:32px;color-scheme:dark}
+.ph[data-theme="light"]{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--text:#14181A;--muted:#5C6560;--accent:#00775A;--warning:#B45F00;--danger:#C22F2F;--success:#4D7A1A;--on-accent:#FFFFFF;color-scheme:light}
+.ph *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.ph button,.ph textarea{font:inherit;color:inherit}
+.ph button{cursor:pointer}
+.ph button:disabled,.ph textarea:disabled{opacity:.45;cursor:not-allowed}
+.ph :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ph [hidden]{display:none!important}
+.ph .ic{width:20px;height:20px;flex:none}
+.sbar{height:28px;flex:none;display:flex;justify-content:space-between;align-items:center;padding:0 24px;font:12px/16px var(--mono);color:var(--muted)}
+.scr{flex:1;min-height:0;position:relative;display:flex;flex-direction:column;--dock:120px}
+.hdr{flex:none;min-height:56px;display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--surface)}
+.hdr .who{flex:1;min-width:0;padding:0 4px}
+.who b{display:block;font-size:15px;line-height:20px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who span{display:block;font-size:12px;line-height:16px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tap{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font-size:14px;font-weight:550;white-space:nowrap}
+.tap.ghost{border-color:transparent;background:none}
+.tap.pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+.tap.danger{border-color:var(--danger);color:var(--danger);background:none;font-weight:600}
+.tap.full{width:100%}
+.tap[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--surface))}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none}
+.grow{flex:1}
+
+/* transcript */
+.tx{flex:1;min-height:0;overflow-y:auto;padding:16px 16px 8px;display:flex;flex-direction:column;gap:16px}
+.msg-h{align-self:flex-end;max-width:82%;padding:10px 12px;border-radius:var(--r);background:color-mix(in srgb,var(--text) 9%,var(--bg))}
+.msg-a p{margin:0 0 6px}
+.who-a{display:flex;align-items:center;gap:8px;font-size:13px;line-height:16px;font-weight:600;margin-bottom:6px}
+.av{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;border:1px solid var(--accent);color:var(--accent);font-size:12px;font-weight:600}
+.meta{font-size:12px;line-height:16px;color:var(--muted)}
+.chip-f{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 12px;margin:2px 0;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font-size:13px}
+.chip-f .ic{width:16px;height:16px}
+.att{align-self:flex-end;max-width:86%;display:flex;align-items:center;gap:12px;min-height:56px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);text-align:left}
+.att b{display:block;font-size:14px;font-weight:600}
+.att small{display:block;font-size:12px;line-height:16px;color:var(--muted)}
+
+/* running bar and composer */
+.runbar{flex:none;min-height:52px;display:flex;align-items:center;gap:10px;padding:4px 12px;border-top:1px solid var(--border);background:var(--surface)}
+.runbar .label{flex:1;font-weight:550}
+.comp{flex:none;display:flex;align-items:flex-end;gap:8px;padding:8px 12px 16px;background:var(--bg)}
+.comp textarea{flex:1;min-height:44px;max-height:120px;resize:none;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font-size:14px;line-height:20px}
+.toast{position:absolute;left:50%;bottom:132px;transform:translateX(-50%);z-index:20;width:max-content;max-width:86%;padding:8px 12px;border-radius:8px;border:1px solid var(--accent);background:var(--surface);font-size:13px;line-height:18px;opacity:0;pointer-events:none;transition:opacity .15s}
+.toast.on{opacity:1}
+@media (prefers-reduced-motion: reduce){.toast{transition:none}}
+
+/* full-screen file preview */
+.ptaint{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;padding:0 12px;border-bottom:1px solid var(--border)}
+.taint{display:inline-flex;align-items:center;height:24px;padding:0 8px;border:1px dashed var(--muted);border-radius:var(--r);font-size:12px;white-space:nowrap}
+.pos{font:12px/16px var(--mono);color:var(--muted);white-space:nowrap}
+.pdfbody{flex:1;min-height:0;overflow-y:auto;padding:16px;background:color-mix(in srgb,var(--text) 6%,var(--bg))}
+.paper{min-height:400px;padding:28px 24px;background:var(--paper);color:var(--paper-ink);border-radius:4px}
+.paper h3{margin:0 0 12px;font-size:18px;line-height:24px;font-weight:650}
+.paper p{margin:0 0 10px;font-size:14px;line-height:22px}
+.paper small{display:block;margin-top:16px;font-size:12px;line-height:16px;color:#5C6560}
+.pager{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px;border-top:1px solid var(--border);background:var(--surface)}
+.bar{flex:none;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:6px 8px 14px;border-top:1px solid var(--border);background:var(--surface)}
+.bar .tap{flex-direction:column;min-height:56px;gap:2px;padding:4px;border:0;background:none;font-size:12px;line-height:16px}
+.float{position:absolute;left:12px;right:12px;bottom:84px;z-index:8;display:grid;gap:6px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font-size:13px;line-height:18px}
+.float p{margin:0}
+.float .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+.lbl{font-size:11px;line-height:16px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+[role="tabpanel"]{display:grid;gap:16px}
+
+/* drawer and sheets */
+.scrim{position:absolute;inset:0;z-index:5;background:rgba(0,0,0,.5)}
+.drawer{position:absolute;top:0;bottom:0;left:0;width:312px;z-index:6;display:flex;flex-direction:column;background:var(--surface);border-right:1px solid var(--border)}
+.drawer .hdr{border-top:0}
+.rail{flex:1;min-height:0;overflow-y:auto;padding:8px}
+.rail ul{list-style:none;margin:0;padding:0}
+.row{width:100%;min-height:44px;display:flex;align-items:center;gap:8px;padding:0 10px;border:0;border-radius:var(--r);background:none;text-align:left;font-size:14px;font-weight:550}
+.row.sel{background:color-mix(in srgb,var(--accent) 12%,var(--surface))}
+.row.child{padding-left:30px;font-weight:400;color:var(--muted)}
+.row .end{margin-left:auto;font-size:12px;font-weight:400;color:var(--muted)}
+.activity{flex:none;display:grid;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
+.activity p{margin:0;font-size:13px;line-height:18px;color:var(--muted)}
+.railfoot{flex:none;display:flex;justify-content:space-between;padding:4px 8px 12px}
+.sheet{position:absolute;left:0;right:0;top:56px;bottom:var(--dock);z-index:6;display:flex;flex-direction:column;background:var(--surface);border-top:1px solid var(--border);border-radius:16px 16px 0 0}
+.sheet-h{flex:none;display:flex;align-items:center;gap:8px;padding:8px 8px 4px 12px}
+.seg-s{flex:1;display:flex;gap:2px;padding:2px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg)}
+.seg-s button{flex:1;min-height:44px;border:0;border-radius:4px;background:none;color:var(--muted);font-size:13px;font-weight:600}
+.seg-s button[aria-selected="true"]{background:color-mix(in srgb,var(--text) 12%,var(--bg));color:var(--text)}
+.sbody{flex:1;min-height:0;overflow-y:auto;padding:4px 16px 16px;display:grid;gap:16px;align-content:start}
+.hero{display:flex;align-items:baseline;gap:10px}
+.big{font-size:40px;line-height:44px;font-weight:650;color:var(--accent);font-variant-numeric:tabular-nums}
+.stack{display:flex;height:14px;border-radius:4px;overflow:hidden;border:1px solid var(--border)}
+.stack span{display:block;height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;margin:0;font-size:12px;line-height:16px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.s-fixed{background:color-mix(in srgb,var(--accent) 80%,var(--surface))}
+.s-comp{background:color-mix(in srgb,var(--accent) 40%,var(--surface))}
+.s-new{background:color-mix(in srgb,var(--text) 30%,var(--surface))}
+.slots{list-style:none;margin:0;padding:0;border-top:1px solid var(--border)}
+.slots li{min-height:44px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);font-size:14px}
+.slots .mono{width:22px;font-size:12px;color:var(--muted)}
+.slots em{margin-left:auto;font-style:normal;font-size:12px;color:var(--muted)}
+.divider{font-size:12px;line-height:16px;color:var(--muted);text-align:center;padding:4px 0;border-top:1px dashed var(--border)}
+.scrub{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;min-height:44px}
+.scrub input{width:100%;accent-color:var(--accent)}
+
+/* install banner and NeedsHuman approval */
+.banner-i{flex:none;display:flex;align-items:center;gap:8px;min-height:60px;padding:6px 8px 6px 12px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--accent) 10%,var(--surface))}
+.banner-i .grow{font-size:13px;line-height:18px}
+.banner-i b{font-weight:650}
+.appr{flex:none;display:grid;gap:8px;padding:12px 16px;border-top:2px solid var(--warning);background:var(--surface)}
+.badge-nh{justify-self:start;display:inline-flex;align-items:center;height:22px;padding:0 8px;border:1px solid var(--warning);border-radius:var(--r);color:var(--warning);font-size:12px;font-weight:650}
+.appr h2{margin:0;font-size:16px;line-height:22px;font-weight:600}
+.cmd{margin:0;padding:6px 10px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);font:13px/18px var(--mono);overflow-wrap:anywhere}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:0;font-size:13px;line-height:18px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0}
+.appr .warn{margin:0;font-size:13px;line-height:18px;color:var(--warning);font-weight:550}
+.acts2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.status{margin:0;min-height:20px;font-size:13px;line-height:18px;color:var(--muted)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-inspect" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 10h16M10 10v9" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-7-6 16-2-7-8-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-pdf" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="i-quote" viewBox="0 0 24 24"><path d="M5 9h5v5H5zM14 9h5v5h-5zM5 14c0 3 1 4 3 5M14 14c0 3 1 4 3 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 4v11M8 8l4-4 4 4M5 14v5h14v-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-hist" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4M12 8v4l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="19" cy="12" r="1.7" fill="currentColor"/></symbol>
+  <symbol id="i-install" viewBox="0 0 24 24"><path d="M12 4v11M8 11l4 4 4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-attach" viewBox="0 0 24 24"><path d="M9 12l6-6a3 3 0 1 1 4 4l-8 8a5 5 0 1 1-7-7l8-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+</svg>
+
+<main class="page">
+  <header>
+    <h1>Maia · Phone PWA (Android, 390 × 844)</h1>
+    <p>Task 4 from the frontend plan: five phone screens on the Mint Ledger tokens, side by side in phone frames. The controls match the desktop. Touch targets are 44 px or larger, and global stop stays reachable on every screen where a thread runs. Dark is the default; the switch changes all five.</p>
+  </header>
+  <div class="seg" role="group" aria-label="Theme">
+    <button type="button" data-theme-btn="dark" aria-pressed="true">Dark</button>
+    <button type="button" data-theme-btn="light" aria-pressed="false">Light</button>
+  </div>
+
+  <div class="lineup">
+    <figure class="fig">
+      <figcaption>1 · Thread view</figcaption>
+      <div class="ph" data-theme="dark">
+        <div class="sbar"><span>10:47</span><span>Tailscale · 5G</span></div>
+        <div class="scr">
+          <header class="hdr">
+            <button type="button" class="tap ghost" aria-label="Agents" data-note="Opens the agent drawer (frame 3)"><svg class="ic"><use href="#i-menu"/></svg>Agents</button>
+            <div class="who"><b>Scout</b><span>with you · turn 148</span></div>
+            <button type="button" class="tap" data-note="Opens the inspector sheet (frame 4)"><svg class="ic"><use href="#i-inspect"/></svg>Inspect</button>
+          </header>
+          <div class="tx">
+            <div class="msg-h">Can I open this from my phone?</div>
+            <div class="msg-a">
+              <div class="who-a"><span class="av">S</span>Scout</div>
+              <p>Yes. Same UI over Tailscale. The HTTPS certificate renews in 62 days; I noted that in
+                <button type="button" class="chip-f" data-note="Opens tailscale.md in the preview"><svg class="ic"><use href="#i-file"/></svg>tailscale.md</button>.</p>
+              <p class="meta">2 facts installed</p>
+            </div>
+            <button type="button" class="att" data-note="Opens report.pdf at page 3">
+              <svg class="ic"><use href="#i-pdf"/></svg>
+              <span><b>report.pdf</b><small>PDF · 4 pages · 212 KB · opens at page 3</small></span>
+            </button>
+            <div class="msg-h">Check page 3 against this.</div>
+            <div class="msg-a">
+              <div class="who-a"><span class="av">S</span>Scout</div>
+              <p>Page 3 says the figures are provisional until the September build report is merged.
+                <button type="button" class="chip-f" data-note="Opens report.pdf at page 3"><svg class="ic"><use href="#i-pdf"/></svg>report.pdf p.3</button></p>
+            </div>
+          </div>
+          <div class="runbar" role="status">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="label">2 running</span>
+            <button type="button" class="tap danger" data-note="Stops all running threads">Stop all</button>
+          </div>
+          <div class="comp">
+            <button type="button" class="tap" aria-label="Attach file" data-note="Attach from phone files or camera"><svg class="ic"><use href="#i-attach"/></svg></button>
+            <textarea rows="1" aria-label="Message Scout" placeholder="Message Scout…"></textarea>
+            <button type="button" class="tap pri" aria-label="Send" data-note="Sends this message"><svg class="ic"><use href="#i-send"/></svg></button>
+          </div>
+          <p class="toast" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+    </figure>
+
+    <figure class="fig">
+      <figcaption>2 · File preview, full-screen sheet</figcaption>
+      <div class="ph" data-theme="dark">
+        <div class="sbar"><span>10:48</span><span>Tailscale · 5G</span></div>
+        <div class="scr">
+          <header class="hdr">
+            <button type="button" class="tap ghost" aria-label="Close preview" data-note="Closes the preview and returns to the thread"><svg class="ic"><use href="#i-x"/></svg></button>
+            <div class="who"><b>report.pdf</b><span>from Scout · turn 148 · v1</span></div>
+          </header>
+          <div class="ptaint">
+            <span class="taint">Untrusted · workspace</span>
+            <span class="pos">PDF · 212 KB</span>
+          </div>
+          <div class="pdfbody">
+            <div class="paper">
+              <h3>3 Build</h3>
+              <p>The build passes on the phone path. Two warnings remain in the Tailscale renewal script.</p>
+              <p>Figures in section 3.2 are provisional until the September build report is merged.</p>
+              <small>Generated by Scout · turn 147 · not reviewed by the owner</small>
+            </div>
+          </div>
+          <div class="pager">
+            <button type="button" class="tap ghost" aria-label="Previous page" data-note="Page 2 of 4"><svg class="ic"><use href="#i-left"/></svg></button>
+            <span class="pos">Page 3 of 4</span>
+            <button type="button" class="tap ghost" aria-label="Next page" data-note="Page 4 of 4"><svg class="ic"><use href="#i-right"/></svg></button>
+          </div>
+          <div class="float" id="vers" hidden>
+            <span class="lbl">History</span>
+            <p><b>v1</b> · Scout · Nov 4, 18:20 · current</p>
+            <p class="mono">sha256 3f9a…c21 · binary, compared by hash</p>
+          </div>
+          <div class="float" id="menu" hidden>
+            <button type="button" class="tap full" data-note="Opens report.pdf with the default app on this phone">Open with another app</button>
+            <button type="button" class="tap full" data-note="Copies the file name">Copy file name</button>
+            <button type="button" class="tap full" data-note="Shows the source and the taint label">Details</button>
+          </div>
+          <nav class="bar" aria-label="File actions">
+            <button type="button" class="tap" data-note="Quotes page 3 into the composer with the Untrusted · workspace label"><svg class="ic"><use href="#i-quote"/></svg>Quote</button>
+            <button type="button" class="tap" data-note="Share or download the file"><svg class="ic"><use href="#i-share"/></svg>Share</button>
+            <button type="button" class="tap" data-toggle="vers" aria-expanded="false"><svg class="ic"><use href="#i-hist"/></svg>History</button>
+            <button type="button" class="tap" data-toggle="menu" aria-expanded="false" aria-label="More actions"><svg class="ic"><use href="#i-more"/></svg>More</button>
+          </nav>
+          <p class="toast" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+    </figure>
+
+    <figure class="fig">
+      <figcaption>3 · Agent drawer</figcaption>
+      <div class="ph" data-theme="dark">
+        <div class="sbar"><span>10:49</span><span>Tailscale · 5G</span></div>
+        <div class="scr">
+          <header class="hdr" aria-hidden="true">
+            <button type="button" class="tap ghost" tabindex="-1"><svg class="ic"><use href="#i-menu"/></svg>Agents</button>
+            <div class="who"><b>Scout</b><span>with you · turn 148</span></div>
+            <button type="button" class="tap" tabindex="-1"><svg class="ic"><use href="#i-inspect"/></svg>Inspect</button>
+          </header>
+          <div class="tx" aria-hidden="true">
+            <div class="msg-h">Check page 3 against this.</div>
+            <div class="msg-a"><p>Page 3 says the figures are provisional until the September build report is merged.</p></div>
+          </div>
+          <div class="runbar" aria-hidden="true">
+            <span class="dot"></span><span class="label">2 running</span>
+            <button type="button" class="tap danger" tabindex="-1">Stop all</button>
+          </div>
+          <div class="comp" aria-hidden="true">
+            <button type="button" class="tap" tabindex="-1"><svg class="ic"><use href="#i-attach"/></svg></button>
+            <textarea rows="1" tabindex="-1" placeholder="Message Scout…"></textarea>
+          </div>
+          <div class="scrim" aria-hidden="true"></div>
+          <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-t">
+            <header class="hdr">
+              <div class="who"><b id="drawer-t">Agents</b></div>
+              <button type="button" class="tap ghost" aria-label="Close agents" data-note="Closes the drawer and returns focus to Agents"><svg class="ic"><use href="#i-x"/></svg></button>
+            </header>
+            <nav class="rail" aria-label="Agents and threads">
+              <ul>
+                <li><button type="button" class="row" data-note="Opens Archivist's threads">Archivist<span class="end">idle</span></button></li>
+                <li><button type="button" class="row" data-note="Opens Scout's threads">Scout<span class="end"><span class="dot" aria-label="running"></span></span></button></li>
+                <li><button type="button" class="row child sel" aria-current="true" data-note="Opens the thread with you">with you<span class="end">running</span></button></li>
+                <li><button type="button" class="row child" data-note="Opens the Scout and Scribe thread">with Scribe<span class="end">idle</span></button></li>
+                <li><button type="button" class="row" data-note="Opens Scribe's threads">Scribe<span class="end">idle</span></button></li>
+              </ul>
+            </nav>
+            <section class="activity" aria-label="Activity">
+              <span class="lbl">Activity</span>
+              <p>2 running · 1 needs you</p>
+              <button type="button" class="tap danger full" data-note="Stops all running threads">Stop all</button>
+            </section>
+            <footer class="railfoot">
+              <button type="button" class="tap ghost" data-note="Opens the vault folder list">Vault</button>
+              <button type="button" class="tap ghost" data-note="Opens settings">Settings</button>
+            </footer>
+          </aside>
+          <p class="toast" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+    </figure>
+
+    <figure class="fig">
+      <figcaption>4 · Inspector sheet, Cache tab</figcaption>
+      <div class="ph" data-theme="dark">
+        <div class="sbar"><span>10:50</span><span>Tailscale · 5G</span></div>
+        <div class="scr">
+          <header class="hdr">
+            <button type="button" class="tap ghost" aria-label="Agents" data-note="Opens the agent drawer (frame 3)"><svg class="ic"><use href="#i-menu"/></svg>Agents</button>
+            <div class="who"><b>Scout</b><span>with you · turn 148</span></div>
+            <button type="button" class="tap" aria-pressed="true" data-note="Inspector is open"><svg class="ic"><use href="#i-inspect"/></svg>Inspect</button>
+          </header>
+          <div class="tx" aria-hidden="true">
+            <div class="msg-h">Check page 3 against this.</div>
+            <div class="msg-a"><p>Page 3 says the figures are provisional until the September build report is merged.</p></div>
+          </div>
+          <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="insp-t">
+            <h2 id="insp-t" class="sr-only">Inspector</h2>
+            <div class="sheet-h">
+              <div class="seg-s" role="tablist" aria-label="Inspector tabs" id="insp-tabs">
+                <button type="button" role="tab" id="t-cache" aria-selected="true" aria-controls="p-cache" data-tab="cache">Cache</button>
+                <button type="button" role="tab" id="t-brain" aria-selected="false" aria-controls="p-brain" data-tab="brain">Brain</button>
+                <button type="button" role="tab" id="t-trace" aria-selected="false" aria-controls="p-trace" data-tab="trace">Trace</button>
+              </div>
+              <button type="button" class="tap ghost" aria-label="Close inspector" data-note="Closes the sheet. Reopening keeps Cache and turn 148"><svg class="ic"><use href="#i-x"/></svg></button>
+            </div>
+            <div class="sbody">
+              <section role="tabpanel" id="p-cache" aria-labelledby="t-cache">
+                <div class="hero"><b class="big">81%</b><span class="meta">cached · turn 148</span></div>
+                <div>
+                  <div class="stack" role="img" aria-label="Fixed prefix 58 percent, compacted memory 23 percent, new this turn 19 percent">
+                    <span class="s-fixed" style="width:58%"></span><span class="s-comp" style="width:23%"></span><span class="s-new" style="width:19%"></span>
+                  </div>
+                  <p class="legend"><span><i class="s-fixed"></i>fixed 58%</span><span><i class="s-comp"></i>compacted 23%</span><span><i class="s-new"></i>new 19%</span></p>
+                </div>
+                <ol class="slots">
+                  <li><span class="mono">01</span>tools<em>fixed</em></li>
+                  <li><span class="mono">02</span>agents<em>fixed</em></li>
+                  <li><span class="mono">03</span>Persona · Scout<em>fixed</em></li>
+                  <li><span class="mono">04</span>Compacted memory<em>compacted</em></li>
+                  <li><span class="mono">05</span>mem_7f3a Tailscale<em>compacted</em></li>
+                </ol>
+                <p class="divider">recall · not durable</p>
+                <p class="meta">r1 · ep_2c10 · Untrusted · turn-local</p>
+                <label class="scrub"><span class="lbl">Turn</span><input type="range" min="1" max="148" value="148" aria-label="Turn"><span class="mono">148</span></label>
+              </section>
+              <section role="tabpanel" id="p-brain" aria-labelledby="t-brain" hidden>
+                <p class="meta">Brain has its own layout in the Task 5 mock. Switching tabs keeps the same selection and turn.</p>
+              </section>
+              <section role="tabpanel" id="p-trace" aria-labelledby="t-trace" hidden>
+                <p class="meta">Trace has its own layout in the Task 5 mock. Matched ranges use the labels full, half, and rejected.</p>
+              </section>
+            </div>
+          </section>
+          <div class="runbar">
+            <span class="dot"></span><span class="label">2 running</span>
+            <button type="button" class="tap danger" data-note="Stops all running threads">Stop all</button>
+          </div>
+          <div class="comp">
+            <button type="button" class="tap" aria-label="Attach file" data-note="Attach from phone files or camera"><svg class="ic"><use href="#i-attach"/></svg></button>
+            <textarea rows="1" aria-label="Message Scout" placeholder="Message Scout…"></textarea>
+            <button type="button" class="tap pri" aria-label="Send" data-note="Sends this message"><svg class="ic"><use href="#i-send"/></svg></button>
+          </div>
+          <p class="toast" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+    </figure>
+
+    <figure class="fig">
+      <figcaption>5 · Install banner and NeedsHuman approval</figcaption>
+      <div class="ph" data-theme="dark">
+        <div class="sbar"><span>10:51</span><span>Tailscale · 5G</span></div>
+        <div class="scr">
+          <header class="hdr">
+            <button type="button" class="tap ghost" aria-label="Agents" data-note="Opens the agent drawer (frame 3)"><svg class="ic"><use href="#i-menu"/></svg>Agents</button>
+            <div class="who"><b>Scout</b><span>with you · turn 148</span></div>
+            <button type="button" class="tap" data-note="Opens the inspector sheet (frame 4)"><svg class="ic"><use href="#i-inspect"/></svg>Inspect</button>
+          </header>
+          <div class="banner-i" id="install">
+            <span class="grow"><b>Install Maia</b> — add to home screen</span>
+            <button type="button" class="tap ghost" data-dismiss="install">Not now</button>
+            <button type="button" class="tap pri" data-note="Opens Chrome's install prompt">Install</button>
+          </div>
+          <div class="tx">
+            <div class="msg-h">Regenerate the report from build.ps1.</div>
+            <div class="msg-a">
+              <div class="who-a"><span class="av">S</span>Scout</div>
+              <p>I need to run the build script on this computer to regenerate the report.</p>
+            </div>
+          </div>
+          <section class="appr" role="dialog" aria-labelledby="appr-t" id="appr">
+            <span class="badge-nh">Needs you</span>
+            <h2 id="appr-t">Approve shell command?</h2>
+            <p class="cmd">pwsh -File build.ps1</p>
+            <dl class="kv">
+              <dt>Target</dt><dd>Shell on this computer</dd>
+              <dt>Digest</dt><dd class="mono">ab12…</dd>
+              <dt>Provenance</dt><dd>Context includes content from web: example.com</dd>
+              <dt>Budget</dt><dd>No spend</dd>
+            </dl>
+            <p class="warn">Unattended grant does not cover this target.</p>
+            <div class="acts2">
+              <button type="button" class="tap" data-decide="deny">Deny</button>
+              <button type="button" class="tap pri" data-decide="approve">Approve</button>
+            </div>
+            <button type="button" class="tap danger full" data-note="Stops this thread">Stop thread</button>
+            <p class="status" id="appr-status" role="status"></p>
+          </section>
+          <div class="runbar">
+            <span class="dot"></span><span class="label">2 running · 1 needs you</span>
+            <button type="button" class="tap danger" data-note="Stops all running threads">Stop all</button>
+          </div>
+          <div class="comp">
+            <textarea rows="1" disabled aria-label="Composer paused until you decide" placeholder="Paused until you decide"></textarea>
+            <button type="button" class="tap pri" aria-label="Send" disabled><svg class="ic"><use href="#i-send"/></svg></button>
+          </div>
+          <p class="toast" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+    </figure>
+  </div>
+
+  <section class="notes" aria-labelledby="notes-t">
+    <h2 id="notes-t">What this mock settles, and what to check</h2>
+    <ul>
+      <li><b>Stop all stays reachable.</b> Every frame with a running thread keeps the running bar visible, including under the inspector sheet (frame 4) and the approval sheet (frame 5). Both sheets stop at the bar's top edge.</li>
+      <li><b>Approve appears only for CapabilityApproval.</b> Login, MFA, captcha, consent with a legal effect, and rotation show “Finish this on the desktop.” instead; the Task 5 mock shows those banners. The approval sheet carries the same content as the desktop approval.</li>
+      <li><b>The composer pauses while NeedsHuman holds.</b> Frame 5 disables it, as 09 requires.</li>
+      <li><b>Touch targets are 44 px or larger.</b> Every button, chip, and tab in the five frames is measured in the browser.</li>
+      <li><b>Install banner.</b> Shown in the browser only. In standalone mode it is hidden and Settings shows “Installed”. Not now hides the banner; Settings still offers Install.</li>
+      <li><b>Drawer and sheets.</b> Frames 3 and 4 show open states only. The focus trap and focus restore to the trigger are specified in the accessibility section and are not simulated here.</li>
+      <li><b>Full-screen preview.</b> Quote, Share, History, and More mirror the desktop overlay (Task 3). Quote keeps the source's taint label.</li>
+    </ul>
+  </section>
+</main>
+<script>
+(function () {
+  'use strict';
+  var OUTCOMES = {
+    deny: 'Denied · the thread continues without the command.',
+    approve: 'Approved · Scout runs the command, and the desktop shows the same decision.'
+  };
+  var toastTimers = new WeakMap();
+
+  function showToast(phone, message) {
+    var node = phone.querySelector('.toast');
+    node.textContent = message;
+    node.classList.add('on');
+    window.clearTimeout(toastTimers.get(phone));
+    toastTimers.set(phone, window.setTimeout(function () { node.classList.remove('on'); }, 2200));
+  }
+
+  function setTheme(theme) {
+    document.querySelectorAll('.ph').forEach(function (phone) { phone.dataset.theme = theme; });
+    document.querySelectorAll('[data-theme-btn]').forEach(function (btn) {
+      btn.setAttribute('aria-pressed', String(btn.dataset.themeBtn === theme));
+    });
+  }
+
+  function toggleDisclosure(button) {
+    var panel = document.getElementById(button.dataset.toggle);
+    panel.hidden = !panel.hidden;
+    button.setAttribute('aria-expanded', String(!panel.hidden));
+  }
+
+  function selectTab(tab) {
+    document.querySelectorAll('#insp-tabs [role="tab"]').forEach(function (other) {
+      var selected = other === tab;
+      other.setAttribute('aria-selected', String(selected));
+      document.getElementById(other.getAttribute('aria-controls')).hidden = !selected;
+    });
+  }
+
+  function decide(button) {
+    document.querySelectorAll('#appr [data-decide]').forEach(function (choice) { choice.disabled = true; });
+    document.getElementById('appr-status').textContent = OUTCOMES[button.dataset.decide];
+  }
+
+  document.querySelectorAll('[data-theme-btn]').forEach(function (btn) {
+    btn.addEventListener('click', function () { setTheme(btn.dataset.themeBtn); });
+  });
+  document.querySelectorAll('[data-note]').forEach(function (node) {
+    node.addEventListener('click', function () { showToast(node.closest('.ph'), node.dataset.note); });
+  });
+  document.querySelectorAll('[data-toggle]').forEach(function (btn) {
+    btn.addEventListener('click', function () { toggleDisclosure(btn); });
+  });
+  document.querySelectorAll('[data-dismiss="install"]').forEach(function (btn) {
+    btn.addEventListener('click', function () { document.getElementById('install').hidden = true; });
+  });
+  document.querySelectorAll('#insp-tabs [role="tab"]').forEach(function (tab) {
+    tab.addEventListener('click', function () { selectTab(tab); });
+  });
+  document.querySelectorAll('[data-decide]').forEach(function (btn) {
+    btn.addEventListener('click', function () { decide(btn); });
+  });
+})();
+</script>
+</body>
+</html>

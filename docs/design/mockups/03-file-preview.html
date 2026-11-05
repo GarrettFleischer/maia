@@ -1,0 +1,1710 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maia · File preview overlay (Mint Ledger)</title>
+<style>
+:root{--pg-bg:#101215;--pg-surface:#171A1F;--pg-fg:#E8EAEE;--pg-muted:#9AA2AE;--pg-border:#262A31;--pg-link:#7FA6FF}
+*{box-sizing:border-box}
+body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;padding:24px 16px 64px}
+.page{max-width:1480px;margin:0 auto;display:grid;gap:16px}
+.page h1{margin:0;font-size:20px;line-height:28px;font-weight:650}
+.page header p{margin:0;color:var(--pg-muted);max-width:90ch}
+.demo{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--pg-border);border-radius:8px;padding:2px;background:var(--pg-surface);flex-wrap:wrap}
+.seg button{border:0;background:none;color:var(--pg-muted);font:inherit;font-size:13px;padding:6px 10px;border-radius:6px;cursor:pointer}
+.seg button[aria-selected="true"],.seg button[aria-pressed="true"]{background:var(--pg-fg);color:var(--pg-bg)}
+.seg button:focus-visible{outline:2px solid var(--pg-link);outline-offset:2px}
+.lab{font-size:12px;color:var(--pg-muted)}
+.fit{overflow:hidden;border-radius:10px}
+#fit-in{position:relative}
+
+/* ===== mock tokens (Mint Ledger) ===== */
+.m{--ui:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;--mono:"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;--r:6px;
+  --bg:#0C0E10;--surface:#14171A;--border:#252A2E;--text:#E4E8E6;--muted:#8A9490;--accent:#3DDDB0;--warning:#F5A524;--danger:#F0584F;--success:#A6D95B;--on-accent:#04140F;--paper:#FBFBF8;--paper-ink:#1B1F22;
+  width:1440px;height:900px;display:flex;flex-direction:column;position:relative;background:var(--bg);color:var(--text);font:14px/20px var(--ui);border:1px solid var(--border);border-radius:10px;overflow:hidden;transform-origin:0 0;color-scheme:dark}
+.m[data-theme="light"]{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--text:#14181A;--muted:#5C6560;--accent:#00775A;--warning:#B45F00;--danger:#C22F2F;--success:#4D7A1A;--on-accent:#FFFFFF;color-scheme:light}
+.m *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.m *::-webkit-scrollbar{width:8px;height:8px}
+.m *::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+.m button,.m input,.m select,.m textarea{font:inherit;color:inherit}
+.m button{cursor:pointer}
+.m button:disabled{opacity:.45;cursor:not-allowed}
+.m :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.m .ic{width:16px;height:16px;flex:none}
+.m .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.m .lbl{font-size:11px;line-height:16px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.m [hidden]{display:none!important}
+
+.titlebar{height:32px;display:flex;align-items:center;gap:12px;padding-left:14px;background:var(--surface);border-bottom:1px solid var(--border);font-size:12px;line-height:16px;color:var(--muted);flex:none}
+.titlebar .word{font-size:13px;font-weight:650;color:var(--text)}
+.titlebar .grow{flex:1}
+.caption{display:flex;height:32px}
+.caption i{position:relative;width:44px;height:32px;display:block}
+.c-min::before{content:"";position:absolute;left:17px;top:16px;width:10px;height:1px;background:currentColor}
+.c-max::before{content:"";position:absolute;left:17px;top:11px;width:9px;height:9px;border:1px solid currentColor}
+.c-close::before,.c-close::after{content:"";position:absolute;left:16px;top:16px;width:12px;height:1px;background:currentColor;transform:rotate(45deg)}
+.c-close::after{transform:rotate(-45deg)}
+
+/* host behind the overlay (what the user returns to) */
+.host{flex:1;position:relative;min-height:0;display:grid;place-items:center;background:var(--bg)}
+.host-card{display:grid;gap:10px;justify-items:center;text-align:center;color:var(--muted);font-size:13px}
+.host-card button{height:32px;padding:0 14px;border-radius:var(--r);border:1px solid var(--border);background:var(--surface);color:var(--text);font-weight:550}
+
+/* ===== overlay ===== */
+.pv{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;background:var(--bg);min-height:0;outline:none}
+.pv-head{display:flex;align-items:center;gap:12px;height:56px;padding:0 16px 0 12px;border-bottom:1px solid var(--border);background:var(--surface);flex:none}
+.pv-id{display:flex;align-items:center;gap:10px;min-width:0;flex:1}
+.pv-ico{width:32px;height:32px;border-radius:6px;border:1px solid var(--border);display:grid;place-items:center;color:var(--muted);flex:none}
+.pv-ico .ic{width:18px;height:18px}
+.pv-title{min-width:0}
+.pv-title b{display:block;font-size:15px;line-height:20px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pv-title span{display:block;font:12px/16px var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acts{display:flex;align-items:center;gap:4px;flex:none}
+.abtn{height:32px;display:inline-flex;align-items:center;gap:6px;padding:0 10px;border:1px solid transparent;border-radius:var(--r);background:none;color:var(--text);font-size:13px;font-weight:550;white-space:nowrap}
+.abtn:hover{background:color-mix(in srgb,var(--text) 8%,var(--surface));border-color:var(--border)}
+.abtn[aria-pressed="true"]{background:color-mix(in srgb,var(--accent) 14%,var(--surface));border-color:color-mix(in srgb,var(--accent) 50%,var(--border))}
+.abtn.pri{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:600}
+.abtn.pri:hover{filter:brightness(1.08);background:var(--accent)}
+.abtn.close{width:32px;padding:0;justify-content:center}
+.kbd{font:11px/16px var(--mono);border:1px solid var(--border);border-radius:3px;padding:0 4px;color:var(--muted)}
+
+.pv-tool{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px 0 16px;border-bottom:1px solid var(--border);flex:none;min-width:0;overflow:hidden}
+.pv-tool .grow{flex:1;min-width:0}
+.badge{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--r);border:1px solid var(--border);font-size:11px;line-height:16px;font-weight:600;letter-spacing:.02em;color:var(--muted);white-space:nowrap}
+.taint{display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 8px;border-radius:var(--r);border:1px dashed var(--muted);font-size:12px;line-height:16px;color:var(--text);white-space:nowrap}
+.taint.ok{border-style:solid;border-color:var(--accent)}
+.tlink{height:28px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border:0;border-radius:var(--r);background:none;color:var(--muted);font-size:12px;line-height:16px;white-space:nowrap}
+.tlink:hover{color:var(--text);background:color-mix(in srgb,var(--text) 7%,var(--bg))}
+.vsel{height:28px;padding:0 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);font-size:12px;line-height:16px}
+.seg2{display:inline-flex;border:1px solid var(--border);border-radius:var(--r);padding:2px;background:var(--bg)}
+.seg2 button{height:24px;padding:0 10px;border:0;border-radius:4px;background:none;color:var(--muted);font-size:12px;font-weight:550}
+.seg2 button[aria-selected="true"]{background:color-mix(in srgb,var(--text) 12%,var(--bg));color:var(--text)}
+.tbtn{height:28px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);font-size:12px;line-height:16px;font-weight:550}
+.tbtn:hover{border-color:var(--muted)}
+.tbtn[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--bg))}
+.tbtn .ic{width:14px;height:14px}
+.pos{font:12px/16px var(--mono);color:var(--muted);white-space:nowrap;min-width:64px;text-align:center}
+
+.pv-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 320px}
+.pv-body.nodet{grid-template-columns:minmax(0,1fr) 0}
+.pv-body.nodet .pv-det{display:none}
+.pv-view{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
+.findbar{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;border-bottom:1px solid var(--border);background:var(--surface);flex:none}
+.findbar input{height:28px;width:260px;padding:0 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);font-size:13px;outline:none}
+.findbar input:focus{border-color:var(--accent)}
+.findbar .cnt{font:12px/16px var(--mono);color:var(--muted);min-width:72px}
+.banner{display:flex;align-items:center;gap:12px;padding:8px 16px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--text) 5%,var(--bg));font-size:13px;line-height:18px;flex:none}
+.banner .grow{flex:1;min-width:0}
+.bbtn{height:28px;padding:0 10px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font-size:13px;font-weight:550;white-space:nowrap}
+.bbtn:hover{border-color:var(--muted)}
+.bbtn.pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.scroll{flex:1;min-height:0;overflow:auto;position:relative}
+.stage{min-height:100%}
+.pad{padding:24px}
+
+/* PDF */
+.pdf{display:flex;gap:16px;padding:20px 24px;min-height:100%;justify-content:center}
+.thumbs{display:grid;gap:10px;align-content:start;width:104px;flex:none}
+.thumb{display:grid;gap:4px;justify-items:center;padding:6px;border:1px solid transparent;border-radius:var(--r);background:none;color:var(--muted);font-size:11px}
+.thumb i{display:block;width:80px;height:104px;background:var(--paper);border:1px solid var(--border);border-radius:2px}
+.thumb[aria-current="true"]{border-color:var(--accent);color:var(--text)}
+.pdfpage{width:var(--pw,640px);flex:none;background:var(--paper);color:var(--paper-ink);border:1px solid var(--border);border-radius:2px;padding:56px 60px;font:14px/22px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;min-height:calc(var(--pw,640px) * 1.294);align-self:flex-start}
+.pdfpage h2{margin:0 0 12px;font-size:22px;line-height:28px;font-weight:650}
+.pdfpage p{margin:0 0 12px}
+.pdfpage table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+.pdfpage td{padding:5px 0;border-bottom:1px solid #DADCD5}
+.pdfpage td:last-child{text-align:right;font-family:var(--mono)}
+.pdfpage .fn{margin-top:28px;font-size:11px;color:#5C6560}
+
+/* image */
+.imgwrap{flex:1;min-height:0;overflow:auto;cursor:grab;background:var(--bg)}
+.imgwrap.drag{cursor:grabbing}
+.imgwrap svg{display:block;width:var(--iw,100%);height:auto;margin:auto;user-select:none;-webkit-user-drag:none}
+
+/* markdown note */
+.note{max-width:720px;margin:0 auto;padding:24px 28px 40px;font-size:15px;line-height:24px}
+.props{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;padding:10px 12px;margin-bottom:20px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font-size:13px;line-height:18px}
+.props dt{color:var(--muted)}
+.props dd{margin:0;min-width:0}
+.props code{font:12px/18px var(--mono)}
+.wl{display:inline-block;padding:0 6px;border:1px solid var(--border);border-radius:4px;font:12.5px/18px var(--mono);color:var(--text)}
+.gen{position:relative;margin:0 0 20px;border:1px dashed var(--muted);border-radius:var(--r);background:color-mix(in srgb,var(--text) 3%,var(--bg))}
+.gen-band{display:flex;align-items:center;gap:8px;padding:4px 10px;border-bottom:1px dashed var(--muted);font-size:12px;line-height:16px;color:var(--muted);font-weight:600}
+.gen-band .ic{width:14px;height:14px}
+.gen ul{margin:0;padding:8px 12px 8px 30px;font-size:14px;line-height:22px}
+.gen code{font:12.5px/18px var(--mono);padding:0 4px;border-radius:3px;background:color-mix(in srgb,var(--text) 9%,var(--bg))}
+.human{margin:0;padding:0 2px}
+.human h3{margin:0 0 6px;font-size:16px;line-height:22px;font-weight:600}
+.human p{margin:0 0 10px}
+.ed{width:100%;display:block;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);padding:10px 12px;font:13.5px/21px var(--mono);resize:vertical;min-height:120px;outline:none}
+.ed:focus{border-color:var(--accent)}
+.ed-lab{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:12px;line-height:16px;color:var(--muted)}
+.ed-lab .grow{flex:1}
+.ed-warn{display:flex;align-items:center;gap:10px;margin:6px 0 0;padding:6px 10px;border:1px dashed var(--muted);border-radius:var(--r);font-size:12.5px;line-height:18px}
+.ed-warn .grow{flex:1}
+.approval{margin:0 0 16px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+.approval b{display:block;font-size:14px;line-height:20px}
+.approval p{margin:4px 0 10px;color:var(--muted);font-size:13px;line-height:18px}
+.approval .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.approval .row .hash{font:12px/16px var(--mono);color:var(--muted);margin-right:auto}
+
+/* code / text */
+.code{display:grid;grid-template-columns:auto minmax(0,1fr);font:13px/21px var(--mono);padding:14px 0;min-height:100%}
+.code .gut{text-align:right;padding:0 14px 0 16px;color:var(--muted);user-select:none;border-right:1px solid var(--border);white-space:pre}
+.code pre{margin:0;padding:0 16px;white-space:pre;overflow:visible;tab-size:4}
+.code .tk-c{color:var(--muted);font-style:italic}
+.code .tk-s{color:var(--success)}
+.code .tk-k{color:var(--accent)}
+.code .tk-v{color:var(--text);font-weight:600}
+mark{background:color-mix(in srgb,var(--warning) 35%,transparent);color:inherit;border-radius:2px}
+mark.cur{background:var(--warning);color:#111}
+
+/* csv */
+.tbl-wrap{padding:0 0 24px}
+.tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;line-height:18px}
+.tbl th{position:sticky;top:0;z-index:1;background:var(--surface);border-bottom:1px solid var(--border);text-align:left;padding:0}
+.tbl th button{width:100%;height:32px;display:flex;align-items:center;gap:6px;padding:0 12px;border:0;background:none;color:var(--muted);font-size:12px;font-weight:600;text-align:left}
+.tbl th button:hover{color:var(--text)}
+.tbl th button .arr{margin-left:auto;font-size:11px;color:var(--text)}
+.tbl td{padding:6px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+.tbl td.n,.tbl th.n button{text-align:right;justify-content:flex-end;font-family:var(--mono)}
+.tbl tr:hover td{background:color-mix(in srgb,var(--text) 4%,var(--bg))}
+.csvstat{font:12px/16px var(--mono);color:var(--muted)}
+
+/* artifact frame + diagram */
+.frame{display:block;width:100%;height:640px;border:1px solid var(--border);border-radius:var(--r);background:#fff}
+.sandbox-pill{display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 8px;border-radius:var(--r);border:1px dashed var(--muted);font-size:11px;line-height:16px;color:var(--text);white-space:nowrap}
+.diagram{padding:24px;display:grid;place-items:start center}
+.diagram svg{width:920px;height:auto}
+.diagram text{font-family:var(--ui);font-size:14px;fill:var(--text)}
+.diagram .sm{font-size:12px;fill:var(--muted)}
+.diagram .nd{fill:var(--surface);stroke:var(--border);stroke-width:1.5}
+.diagram .nd.acc{stroke:var(--accent)}
+.diagram .ar{stroke:var(--muted);stroke-width:1.5;fill:none}
+.diagram .arh{fill:var(--muted)}
+.srcview{margin:0;padding:16px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);font:13px/20px var(--mono);white-space:pre;overflow:auto;min-height:320px}
+
+/* browser capture */
+.urlbar{display:flex;align-items:center;gap:8px;margin:0 0 12px;height:32px;padding:0 10px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font:12.5px/16px var(--mono);color:var(--muted);overflow:hidden;white-space:nowrap}
+.urlbar .grow{flex:1;overflow:hidden;text-overflow:ellipsis}
+.cap-stage{padding:20px 24px}
+.cap-stage svg{display:block;width:100%;max-width:960px;height:auto;margin:0 auto;border:1px solid var(--border);border-radius:var(--r)}
+
+/* side details */
+.pv-det{border-left:1px solid var(--border);background:var(--surface);overflow:auto;min-height:0;padding:14px 16px 24px;display:grid;align-content:start;gap:16px}
+.sec{display:grid;gap:8px}
+.sec h4{margin:0;font-size:11px;line-height:16px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.kv{display:grid;grid-template-columns:86px minmax(0,1fr);gap:6px 10px;font-size:13px;line-height:18px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.kv .lnk{color:var(--text);text-decoration:underline;text-decoration-color:var(--muted);text-underline-offset:2px;background:none;border:0;padding:0;font:inherit;text-align:left}
+.note-t{font-size:12.5px;line-height:18px;color:var(--muted)}
+.vlist{list-style:none;margin:0;padding:0;border:1px solid var(--border);border-radius:var(--r);background:var(--bg)}
+.vlist li{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);font-size:13px;line-height:18px}
+.vlist li:last-child{border-bottom:0}
+.vlist .mono{font:12px/16px var(--mono)}
+.vlist .tag{margin-left:auto;font-size:11px;line-height:16px;padding:0 6px;border:1px solid var(--border);border-radius:4px;color:var(--muted)}
+.vlist .tag.acc{border-color:var(--accent);color:var(--accent)}
+.qcard{display:grid;gap:6px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);font-size:13px;line-height:18px}
+.qcard q{color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+.qcard .meta{display:flex;align-items:center;gap:8px;font-size:12px;line-height:16px;color:var(--muted)}
+.qcard .meta button{margin-left:auto;height:24px;padding:0 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font-size:12px}
+.qcard .tnt{font-size:12px;line-height:16px;color:var(--muted)}
+.empty{font-size:13px;line-height:18px;color:var(--muted)}
+
+/* history sheet */
+.sheet{position:absolute;top:100px;right:0;bottom:28px;width:380px;z-index:6;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0;box-shadow:none}
+.sheet-h{display:flex;align-items:center;gap:8px;height:52px;padding:0 12px 0 16px;border-bottom:1px solid var(--border);flex:none}
+.sheet-h b{font-size:15px;line-height:20px;font-weight:600;flex:1}
+.sheet-c{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border);flex:none;flex-wrap:wrap;font-size:13px}
+.sheet-c label{display:flex;align-items:center;gap:6px;color:var(--muted)}
+.sheet-b{flex:1;min-height:0;overflow:auto;padding:0 0 16px}
+.diff{font:12.5px/19px var(--mono);margin:0;padding:0}
+.diff div{display:grid;grid-template-columns:18px minmax(0,1fr);padding:0 12px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.diff span.sg{text-align:center;color:var(--muted);user-select:none}
+.diff .add{background:color-mix(in srgb,var(--accent) 14%,var(--surface))}
+.diff .add .sg{color:var(--accent)}
+.diff .del{background:color-mix(in srgb,var(--danger) 12%,var(--surface))}
+.diff .del .sg{color:var(--danger)}
+.sheet-f{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--border);flex:none;justify-content:flex-end}
+
+/* floating quote button */
+.qfloat{position:absolute;z-index:8;height:30px;display:inline-flex;align-items:center;gap:6px;padding:0 10px;border-radius:var(--r);border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);font-size:13px;font-weight:600;transform:translate(-50%,-100%);box-shadow:none}
+.qfloat .kbd{border-color:color-mix(in srgb,var(--on-accent) 40%,transparent);color:var(--on-accent)}
+
+/* status bar */
+.pv-status{display:flex;align-items:center;gap:16px;height:28px;padding:0 16px;border-top:1px solid var(--border);background:var(--surface);font-size:12px;line-height:16px;color:var(--muted);flex:none;overflow:hidden;white-space:nowrap}
+.pv-status .grow{flex:1}
+
+/* toast */
+.toast{position:absolute;left:50%;bottom:44px;transform:translateX(-50%);z-index:20;padding:8px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--surface);font-size:13px;line-height:18px;opacity:0;pointer-events:none;transition:opacity .15s;max-width:70%}
+.toast.on{opacity:1}
+
+.grp{display:flex;align-items:center;gap:6px;flex:none}
+.ed-lab.gap{margin-top:14px}
+.start{justify-self:start}
+.ed.full{min-height:560px;border-radius:0}
+.vbtn{flex:1;min-width:0;text-align:left;background:none;border:0;padding:0;font:inherit;color:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vbtn[aria-current="true"]{color:var(--accent)}
+.sheet-msg{margin:0;padding:12px 16px;font-size:13px;line-height:18px;color:var(--muted)}
+.diff .fold,.diff .fold .sg{color:var(--muted)}
+.notes{display:grid;gap:8px;max-width:90ch}
+.notes h2{margin:0;font-size:15px;line-height:20px}
+.notes ul{margin:0;padding-left:20px;color:var(--pg-muted)}
+.notes li{margin:2px 0}
+@media (prefers-reduced-motion:no-preference){.sheet{animation:slide .14s ease-out}@keyframes slide{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-pdf" viewBox="0 0 16 16"><path d="M4 1.75h5.5L13 5.25v9H4v-12.5zM9.5 1.75v3.5H13M6 11.5h4M6 9.5h4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-image" viewBox="0 0 16 16"><path d="M2.5 3h11v10h-11zM2.5 11l3.5-3.5 3 3 2-2 2.5 2.5M10.5 5.5h.01" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-note" viewBox="0 0 16 16"><path d="M3 2.5h10v11H3zM5.5 6h5M5.5 8.5h5M5.5 11h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-code" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5M9 3l-2 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-table" viewBox="0 0 16 16"><path d="M2 3h12v10H2zM2 6.5h12M2 10h12M6.5 3v10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+  <symbol id="i-art" viewBox="0 0 16 16"><path d="M2.5 2.5h4v4h-4zM9.5 9.5h4v4h-4zM6.5 4.5h3a2 2 0 0 1 2 2v3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 16 16"><path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM2 8h12M8 2c2 2.2 2 9.8 0 12M8 2c-2 2.2-2 9.8 0 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+  <symbol id="i-link" viewBox="0 0 16 16"><path d="M6.5 9.5a2.5 2.5 0 0 0 3.5 0l2-2a2.5 2.5 0 0 0-3.5-3.5l-.7.7M9.5 6.5a2.5 2.5 0 0 0-3.5 0l-2 2a2.5 2.5 0 0 0 3.5 3.5l.7-.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16"><path d="M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2 1.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-quote" viewBox="0 0 16 16"><path d="M2.5 4.5h11v6h-6l-3 2.5v-2.5h-2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+  <symbol id="i-dl" viewBox="0 0 16 16"><path d="M8 2.5v7.5M5 7l3 3 3-3M3 12.5h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-open" viewBox="0 0 16 16"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-hist" viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v3h3M8 5v3.5l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<div class="page">
+  <header>
+    <h1>Maia · File preview overlay</h1>
+    <p>Task 3 on the locked Mint Ledger direction, at 1440 × 900. Use the strip to switch between the eight mock types. Everything here runs: find, zoom, paging, editing with save rules, the generated-region warning, the personality.md approval prompt, version diff, quote from a selection, Esc, and the focus trap.</p>
+  </header>
+  <div class="demo">
+    <span class="lab">Theme</span>
+    <div class="seg" role="group" aria-label="Theme">
+      <button type="button" aria-pressed="true" data-theme-btn="dark">Dark</button>
+      <button type="button" aria-pressed="false" data-theme-btn="light">Light</button>
+    </div>
+    <span class="lab">File type</span>
+    <div class="seg" role="tablist" aria-label="Mock file type" id="types">
+      <button type="button" role="tab" aria-selected="true" data-type="pdf">PDF</button>
+      <button type="button" role="tab" aria-selected="false" data-type="img">Image</button>
+      <button type="button" role="tab" aria-selected="false" data-type="vault">Vault note</button>
+      <button type="button" role="tab" aria-selected="false" data-type="code">Code</button>
+      <button type="button" role="tab" aria-selected="false" data-type="csv">CSV</button>
+      <button type="button" role="tab" aria-selected="false" data-type="html">HTML artifact</button>
+      <button type="button" role="tab" aria-selected="false" data-type="diagram">Diagram</button>
+      <button type="button" role="tab" aria-selected="false" data-type="capture">Web capture</button>
+    </div>
+  </div>
+  <div class="fit" id="fit"><div id="fit-in">
+  <div class="m" id="m" data-theme="dark">
+    <div class="titlebar"><span class="word">Maia</span><span>Daemon running · Tailscale on · 1 phone paired</span><span class="grow"></span><span class="caption" aria-hidden="true"><i class="c-min"></i><i class="c-max"></i><i class="c-close"></i></span></div>
+    <div class="host" id="host">
+      <div class="host-card" id="hostcard" hidden>
+        <span>Preview closed. The chat is behind it.</span>
+        <button type="button" id="reopen">Reopen preview</button>
+      </div>
+      <section class="pv" id="pv" role="dialog" aria-modal="true" aria-labelledby="pv-title" tabindex="-1">
+        <header class="pv-head">
+          <button type="button" class="abtn close" id="close" aria-label="Close preview" title="Close (Esc)"><svg class="ic"><use href="#i-x"/></svg></button>
+          <div class="pv-id">
+            <span class="pv-ico"><svg class="ic"><use id="pv-ico" href="#i-pdf"/></svg></span>
+            <div class="pv-title"><b id="pv-title">report.pdf</b><span id="pv-path">workspace/scout/reports/report.pdf</span></div>
+          </div>
+          <div class="acts">
+            <button type="button" class="abtn" data-act="copy" title="Copy the selection, or the whole text">Copy</button>
+            <button type="button" class="abtn" data-act="download" title="Save a copy (Ctrl+Shift+S)"><svg class="ic"><use href="#i-dl"/></svg>Download</button>
+            <button type="button" class="abtn" data-act="open" title="Open with the default app (Ctrl+Shift+O)"><svg class="ic"><use href="#i-open"/></svg>Open in app</button>
+            <button type="button" class="abtn" data-act="history" title="Version history (Ctrl+Shift+H)"><svg class="ic"><use href="#i-hist"/></svg>History</button>
+            <button type="button" class="abtn pri" data-act="quote" title="Quote the selection in chat (Ctrl+Shift+Q)"><svg class="ic"><use href="#i-quote"/></svg>Quote in chat</button>
+            <button type="button" class="abtn" data-act="details" aria-pressed="true" title="Show or hide details">Details</button>
+          </div>
+        </header>
+        <div class="pv-tool">
+          <span class="badge" id="src">Workspace</span>
+          <span class="taint" id="taint">Untrusted · workspace</span>
+          <button type="button" class="tlink" id="thread"><svg class="ic" style="width:14px;height:14px"><use href="#i-link"/></svg><span id="thread-t">from Scout · turn 148</span></button>
+          <select class="vsel" id="vsel" aria-label="Version"></select>
+          <span class="grow"></span>
+          <div class="seg2" id="g-vault" hidden role="group" aria-label="Vault document">
+            <button type="button" data-part="note" aria-selected="true">Scout note</button>
+            <button type="button" data-part="pers" aria-selected="false">personality.md</button>
+          </div>
+          <button type="button" class="tbtn" id="obs" hidden>Open in Obsidian</button>
+          <div class="grp" id="g-pdf" hidden>
+            <button type="button" class="tbtn" id="pdf-prev" aria-label="Previous page">‹</button>
+            <span class="pos" id="pdf-pos">Page 3 of 4</span>
+            <button type="button" class="tbtn" id="pdf-next" aria-label="Next page">›</button>
+          </div>
+          <div class="grp" id="g-zoom" hidden>
+            <button type="button" class="tbtn" id="zoom-out" aria-label="Zoom out">−</button>
+            <span class="pos" id="zoom-val">100%</span>
+            <button type="button" class="tbtn" id="zoom-in" aria-label="Zoom in">+</button>
+            <button type="button" class="tbtn" id="zoom-fit">Fit</button>
+          </div>
+          <span class="csvstat" id="csv-stat" hidden></span>
+          <div class="seg2" id="g-src" hidden role="group" aria-label="View">
+            <button type="button" data-view="preview" aria-selected="true">Preview</button>
+            <button type="button" data-view="source" aria-selected="false">Source</button>
+          </div>
+          <button type="button" class="tbtn" id="btn-find" title="Find (Ctrl+F)">Find</button>
+          <button type="button" class="tbtn" id="btn-edit" aria-pressed="false" title="Edit (Ctrl+E)">Edit</button>
+        </div>
+        <div class="pv-body" id="pvbody">
+          <div class="pv-view">
+            <div class="findbar" id="findbar" hidden>
+              <input type="search" id="find-in" placeholder="Find in this file" aria-label="Find in this file">
+              <span class="cnt" id="find-cnt" aria-live="polite">0 of 0</span>
+              <button type="button" class="tbtn" id="find-prev" aria-label="Previous match">Previous</button>
+              <button type="button" class="tbtn" id="find-next" aria-label="Next match">Next</button>
+              <span class="grow"></span>
+              <button type="button" class="tbtn" id="find-close" aria-label="Close find">Close</button>
+            </div>
+            <div class="banner" id="banner" role="status" hidden>
+              <span class="grow" id="ban-text"></span>
+              <button type="button" class="bbtn" id="ban-alt" hidden></button>
+              <button type="button" class="bbtn pri" id="ban-act" hidden></button>
+            </div>
+            <div class="scroll" id="scroll">
+              <div class="stage" id="st-pdf" hidden>
+                <div class="pdf">
+                  <nav class="thumbs" id="thumbs" aria-label="Pages"></nav>
+                  <section class="pdfpage" data-page="1" aria-label="Page 1" hidden>
+                    <h2>Q3 traffic report</h2>
+                    <p>Prepared by Scout for the owner. Figures cover July to September and come from the daemon’s own counters, not from a third party.</p>
+                    <p>Contents: 1 Summary · 2 Method · 3 Request volume · 4 Notes</p>
+                    <p>Phone sessions are counted per paired device, so one phone that reconnects several times counts once per day.</p>
+                  </section>
+                  <section class="pdfpage" data-page="2" aria-label="Page 2" hidden>
+                    <h2>2 Method</h2>
+                    <p>Counts are taken at the daemon listener on 127.0.0.1:7420 and at the Tailscale HTTPS front end. Latency runs from first byte to last byte of each request.</p>
+                    <p>Sessions group by paired device. Dropped connections leave the latency figures but stay in the request count.</p>
+                  </section>
+                  <section class="pdfpage" data-page="3" aria-label="Page 3">
+                    <h2>3 Request volume</h2>
+                    <p>Requests rose in August, when the phone PWA went live. The headline numbers are below.</p>
+                    <table>
+                      <tr><td>Tailnet peers</td><td>14</td></tr>
+                      <tr><td>Phone sessions</td><td>212</td></tr>
+                      <tr><td>Median latency</td><td>38 ms</td></tr>
+                      <tr><td>p95 latency</td><td>112 ms</td></tr>
+                    </table>
+                    <svg viewBox="0 0 480 200" width="100%" role="img" aria-label="Requests per month: July 3.1 thousand, August 6.8 thousand, September 9.4 thousand">
+                      <rect x="90" y="127" width="80" height="43" fill="#00775A"/>
+                      <rect x="230" y="75" width="80" height="95" fill="#00775A"/>
+                      <rect x="370" y="38" width="80" height="132" fill="#00775A"/>
+                      <line x1="40" y1="170" x2="460" y2="170" stroke="#DADCD5"/>
+                      <text x="130" y="118" text-anchor="middle" font-size="13" fill="#14181A">3.1k</text>
+                      <text x="270" y="66" text-anchor="middle" font-size="13" fill="#14181A">6.8k</text>
+                      <text x="410" y="29" text-anchor="middle" font-size="13" fill="#14181A">9.4k</text>
+                      <text x="130" y="190" text-anchor="middle" font-size="13" fill="#5C6560">Jul</text>
+                      <text x="270" y="190" text-anchor="middle" font-size="13" fill="#5C6560">Aug</text>
+                      <text x="410" y="190" text-anchor="middle" font-size="13" fill="#5C6560">Sep</text>
+                    </svg>
+                    <p class="fn">Figure 1. Requests per month, thousands.</p>
+                  </section>
+                  <section class="pdfpage" data-page="4" aria-label="Page 4" hidden>
+                    <h2>4 Notes</h2>
+                    <p>Figures are provisional until the September build report is merged.</p>
+                    <p class="fn">Generated by Scout · turn 147 · not reviewed by the owner.</p>
+                  </section>
+                </div>
+              </div>
+
+              <div class="stage" id="st-img" hidden>
+                <div class="imgwrap" id="imgwrap">
+                  <svg id="shot" viewBox="0 0 1920 1080" role="img" aria-label="screenshot.png: Tailscale admin with Serve on port 7420 and Funnel off">
+                    <rect width="1920" height="1080" fill="#16191D"/>
+                    <rect width="1920" height="96" fill="#1E2227"/>
+                    <text x="48" y="62" font-size="34" fill="#E4E8E6" font-family="Segoe UI, sans-serif">Tailscale · Machines</text>
+                    <rect x="48" y="150" width="1824" height="150" rx="10" fill="#1E2227" stroke="#2C3238"/>
+                    <text x="90" y="215" font-size="32" fill="#E4E8E6" font-family="Segoe UI, sans-serif">maia-pc</text>
+                    <text x="90" y="262" font-size="26" fill="#8A9490" font-family="Segoe UI, sans-serif">100.101.12.7 · Windows 11</text>
+                    <text x="1560" y="230" font-size="30" fill="#A6D95B" font-family="Segoe UI, sans-serif">Connected</text>
+                    <rect x="48" y="330" width="1824" height="150" rx="10" fill="#1E2227" stroke="#2C3238"/>
+                    <text x="90" y="395" font-size="32" fill="#E4E8E6" font-family="Segoe UI, sans-serif">Serve</text>
+                    <text x="90" y="442" font-size="26" fill="#8A9490" font-family="Segoe UI, sans-serif">https://maia-pc.tail4c1e.ts.net → 127.0.0.1:7420</text>
+                    <text x="1560" y="410" font-size="30" fill="#A6D95B" font-family="Segoe UI, sans-serif">On</text>
+                    <rect x="48" y="510" width="1824" height="150" rx="10" fill="#1E2227" stroke="#2C3238"/>
+                    <text x="90" y="575" font-size="32" fill="#E4E8E6" font-family="Segoe UI, sans-serif">Funnel</text>
+                    <text x="90" y="622" font-size="26" fill="#8A9490" font-family="Segoe UI, sans-serif">public internet access</text>
+                    <text x="1560" y="590" font-size="30" fill="#8A9490" font-family="Segoe UI, sans-serif">Off</text>
+                    <rect x="48" y="690" width="1824" height="150" rx="10" fill="#1E2227" stroke="#2C3238"/>
+                    <text x="90" y="755" font-size="32" fill="#E4E8E6" font-family="Segoe UI, sans-serif">Certificate</text>
+                    <text x="90" y="802" font-size="26" fill="#8A9490" font-family="Segoe UI, sans-serif">valid · renews in 62 days</text>
+                  </svg>
+                </div>
+              </div>
+
+              <div class="stage" id="st-vault" hidden>
+                <div class="note" id="appr" hidden>
+                  <div class="approval" role="group" aria-labelledby="appr-t">
+                    <b id="appr-t">Approve this version for new threads?</b>
+                    <p id="appr-text"></p>
+                    <div class="row">
+                      <span class="hash" id="appr-hash"></span>
+                      <button type="button" class="bbtn" id="appr-keep">Keep as draft</button>
+                      <button type="button" class="bbtn pri" id="appr-ok">Approve for new threads</button>
+                    </div>
+                  </div>
+                </div>
+                <article class="note" id="note-view"></article>
+                <div class="note" id="note-edit" hidden>
+                  <div class="gen" id="gen-box">
+                    <div class="gen-band"><svg class="ic"><use href="#i-clock"/></svg>Generated region — regenerated on next dream</div>
+                    <textarea class="ed" id="ed-gen" aria-label="Generated region text"></textarea>
+                  </div>
+                  <div class="ed-warn" id="gen-warn" hidden>
+                    <span class="grow">Edits here are replaced on the next dream. Move them to the human region to keep them.</span>
+                    <button type="button" class="bbtn" id="gen-revert">Revert region</button>
+                    <button type="button" class="bbtn" id="gen-keep">Keep until next dream</button>
+                  </div>
+                  <div class="ed-lab gap"><span>Human region · yours</span></div>
+                  <textarea class="ed" id="ed-hum" aria-label="Human region text"></textarea>
+                </div>
+                <div class="note" id="pers-edit" hidden>
+                  <div class="ed-lab"><span>personality.md · body, human-authored</span></div>
+                  <textarea class="ed" id="ed-pers" aria-label="personality.md body text"></textarea>
+                </div>
+              </div>
+
+              <div class="stage" id="st-code" hidden>
+                <div class="code" id="code-view"><div class="gut" id="gut" aria-hidden="true"></div><pre id="code-pre"></pre></div>
+                <textarea class="ed full" id="code-edit" hidden aria-label="build.ps1 source"></textarea>
+              </div>
+              <div class="stage" id="st-csv" hidden>
+                <div class="tbl-wrap" id="csv-view"><table class="tbl" id="csv-tbl"></table></div>
+                <textarea class="ed full srcview" id="csv-edit" hidden aria-label="quarterly.csv source"></textarea>
+              </div>
+
+              <div class="stage" id="st-html" hidden>
+                <div class="pad">
+                  <span class="sandbox-pill">Sandboxed · no network</span>
+                  <iframe class="frame" id="html-frame" sandbox="" title="Setup checklist, rendered in a sandbox with no network"></iframe>
+                  <textarea class="ed full srcview" id="html-src" hidden readonly aria-label="HTML source"></textarea>
+                </div>
+              </div>
+
+              <div class="stage" id="st-diagram" hidden>
+                <div class="diagram" id="dg-view">
+                  <svg viewBox="0 0 960 500" role="img" aria-label="Architecture: phone to Tailscale HTTPS to the Maia daemon; the daemon reaches the model router, Chrome over a pipe, a thread sandbox, and the Obsidian vault">
+                    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arh"/></marker></defs>
+                    <line class="ar" x1="170" y1="240" x2="228" y2="240" marker-end="url(#ah)"/>
+                    <line class="ar" x1="400" y1="240" x2="458" y2="240" marker-end="url(#ah)"/>
+                    <line class="ar" x1="650" y1="220" x2="738" y2="95" marker-end="url(#ah)"/>
+                    <line class="ar" x1="650" y1="240" x2="738" y2="235" marker-end="url(#ah)"/>
+                    <line class="ar" x1="555" y1="290" x2="555" y2="378" marker-end="url(#ah)"/>
+                    <line class="ar" x1="650" y1="270" x2="738" y2="400" marker-end="url(#ah)"/>
+                    <rect class="nd" x="20" y="200" width="150" height="80" rx="8"/>
+                    <text x="95" y="236" text-anchor="middle">Phone PWA</text><text class="sm" x="95" y="258" text-anchor="middle">Android Chrome</text>
+                    <rect class="nd" x="228" y="200" width="172" height="80" rx="8"/>
+                    <text x="314" y="236" text-anchor="middle">Tailscale HTTPS</text><text class="sm" x="314" y="258" text-anchor="middle">tailnet only</text>
+                    <rect class="nd acc" x="458" y="190" width="192" height="100" rx="8"/>
+                    <text x="554" y="232" text-anchor="middle">Maia daemon</text><text class="sm" x="554" y="256" text-anchor="middle">Rust · 127.0.0.1:7420</text>
+                    <rect class="nd" x="738" y="60" width="200" height="70" rx="8"/>
+                    <text x="838" y="96" text-anchor="middle">Model router</text><text class="sm" x="838" y="116" text-anchor="middle">OpenAI-compatible</text>
+                    <rect class="nd" x="738" y="200" width="200" height="70" rx="8"/>
+                    <text x="838" y="236" text-anchor="middle">Chrome</text><text class="sm" x="838" y="256" text-anchor="middle">pipe-only</text>
+                    <rect class="nd" x="458" y="378" width="192" height="70" rx="8"/>
+                    <text x="554" y="414" text-anchor="middle">Thread sandbox</text><text class="sm" x="554" y="434" text-anchor="middle">AppContainer per thread</text>
+                    <rect class="nd" x="738" y="378" width="200" height="70" rx="8"/>
+                    <text x="838" y="414" text-anchor="middle">Obsidian vault</text><text class="sm" x="838" y="434" text-anchor="middle">human regions</text>
+                  </svg>
+                </div>
+                <textarea class="ed full srcview" id="dg-src" hidden readonly aria-label="Mermaid source"></textarea>
+              </div>
+
+              <div class="stage" id="st-capture" hidden>
+                <div class="cap-stage" id="cap-img">
+                  <span class="sandbox-pill">Untrusted · web · shown inert</span>
+                  <div class="urlbar"><span class="grow">https://status.example.com/tailnet</span><span>Captured Nov 5 · 11:12 · Chrome, pipe-only</span></div>
+                  <svg viewBox="0 0 960 560" role="img" aria-label="Captured page: Tailnet status, all systems operational">
+                    <rect width="960" height="560" fill="#FFFFFF"/>
+                    <rect width="960" height="64" fill="#F1F3F5"/>
+                    <text x="32" y="41" font-size="22" fill="#1B1F22" font-family="Segoe UI, sans-serif">Tailnet status</text>
+                    <text x="32" y="126" font-size="30" fill="#1B1F22" font-family="Segoe UI, sans-serif">All systems operational</text>
+                    <circle cx="40" cy="176" r="7" fill="#4D7A1A"/><text x="60" y="182" font-size="19" fill="#1B1F22" font-family="Segoe UI, sans-serif">maia-pc · Connected</text>
+                    <circle cx="40" cy="222" r="7" fill="#4D7A1A"/><text x="60" y="228" font-size="19" fill="#1B1F22" font-family="Segoe UI, sans-serif">laptop-02 · Connected</text>
+                    <circle cx="40" cy="268" r="7" fill="#B45F00"/><text x="60" y="274" font-size="19" fill="#1B1F22" font-family="Segoe UI, sans-serif">phone-01 · Idle</text>
+                    <rect x="32" y="320" width="896" height="90" rx="6" fill="#EEF0EC"/>
+                    <text x="52" y="356" font-size="18" fill="#5C6560" font-family="Segoe UI, sans-serif">Maintenance window: Thu 02:00 UTC</text>
+                    <text x="52" y="384" font-size="16" fill="#5C6560" font-family="Segoe UI, sans-serif">No change for Maia. Subscribe for updates.</text>
+                  </svg>
+                </div>
+                <div class="cap-stage" id="cap-text" hidden>
+                  <span class="sandbox-pill">Untrusted · web · plain text</span>
+                  <pre class="srcview" id="cap-pre"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+          <aside class="pv-det" id="det" aria-label="Details">
+            <section class="sec">
+              <h4>Source</h4>
+              <dl class="kv">
+                <dt>Source</dt><dd id="d-src">Workspace</dd>
+                <dt>Created by</dt><dd><button type="button" class="lnk" id="d-by">Scout · turn 148</button></dd>
+                <dt>Modified</dt><dd id="d-mod">Nov 4, 18:20</dd>
+                <dt>Size</dt><dd id="d-size">212 KB</dd>
+                <dt>Hash</dt><dd class="mono" id="d-hash"></dd>
+              </dl>
+            </section>
+            <section class="sec">
+              <h4>Trust</h4>
+              <p class="note-t" id="d-trust"></p>
+            </section>
+            <section class="sec">
+              <h4>Versions</h4>
+              <ul class="vlist" id="d-vlist"></ul>
+              <button type="button" class="tbtn start" id="d-compare">Compare versions</button>
+            </section>
+            <section class="sec">
+              <h4>Quoted for your next message</h4>
+              <div class="sec" id="d-quotes"></div>
+            </section>
+            <section class="sec">
+              <h4>Cited in</h4>
+              <p class="note-t" id="d-cited"></p>
+            </section>
+          </aside>
+        </div>
+        <div class="pv-status" id="status">
+          <span id="st-pos"></span>
+          <span id="st-size"></span>
+          <span class="grow"></span>
+          <span>Esc close · Ctrl F find · Ctrl E edit · Ctrl S save · Ctrl Shift Q quote · Ctrl Shift H history</span>
+        </div>
+        <section class="sheet" id="sheet" aria-labelledby="sh-title" hidden>
+          <div class="sheet-h"><b id="sh-title">Version history</b><button type="button" class="tbtn" id="sh-close">Close</button></div>
+          <div class="sheet-c">
+            <label>From <select class="vsel" id="sh-from"></select></label>
+            <label>To <select class="vsel" id="sh-to"></select></label>
+          </div>
+          <div class="sheet-b">
+            <p class="sheet-msg" id="sh-msg" hidden></p>
+            <div class="diff" id="sh-diff"></div>
+          </div>
+          <div class="sheet-f"><button type="button" class="tbtn" id="sh-restore">Restore as new version</button></div>
+        </section>
+        <button type="button" class="qfloat" id="qfloat" hidden>Quote in chat</button>
+        <div class="toast" id="toast" role="status"></div>
+      </section>
+    </div>
+  </div>
+  </div></div>
+
+  <section class="notes">
+    <h2>Design notes for this overlay</h2>
+    <ul>
+      <li><b>Placement:</b> a full-window modal over the chat, not a side pane. Esc closes it. Tab cycles inside it, and focus returns to the trigger when it closes.</li>
+      <li><b>Chrome:</b> Copy, Download, Open in app, History, and Quote in chat appear for every file. Find, zoom, paging, edit, and the source toggle appear only where they apply.</li>
+      <li><b>Edits:</b> vault notes, personality.md, code, CSV, HTML source, and diagram source are editable. PDF and image files are not, and web captures are read-only as evidence. Save writes a new version. Older versions open read-only, and Restore writes a new version.</li>
+      <li><b>Risk handlers:</b> a generated region shows a band and a revert-or-keep warning. personality.md asks “Approve this version for new threads?” before a draft reaches new threads. Existing threads keep their bytes.</li>
+      <li><b>Trust:</b> every header carries its taint. Quotes keep the source taint and go out as untrusted text unless the owner marks the message trusted.</li>
+    </ul>
+  </section>
+</div>
+<script>
+(function () {
+'use strict';
+var PAGES = 4;
+var ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+var EDITABLE = {vault: true, code: true, csv: true, html: true, diagram: true};
+var EDITOR_IDS = ['ed-gen', 'ed-hum', 'ed-pers', 'code-edit', 'csv-edit', 'html-src', 'dg-src'];
+var S = {theme: 'dark', type: 'pdf', part: 'note', view: 'preview', page: 3, zoom: 1, fit: false,
+  editing: false, askDiscard: false, findOpen: false, sheetOpen: false, detailsOpen: true, genKept: false,
+  draftKept: -1, sortCol: -1, sortDir: 1, quotes: [], match: 0};
+var marks = [];
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function marker(name, edge) { return '<!-- maia:' + name + ':' + edge + ' -->'; }
+function joinNote(front, gen, hum) {
+  return front + marker('generated', 'start') + '\n' + gen + marker('generated', 'end') + '\n' +
+    marker('human', 'start') + '\n' + hum + marker('human', 'end') + '\n';
+}
+function splitFront(text) {
+  var end = text.indexOf('\n---\n', 4);
+  if (text.indexOf('---\n') !== 0 || end < 0) { return {front: '', body: text}; }
+  return {front: text.slice(0, end + 5), body: text.slice(end + 5)};
+}
+function region(body, name) {
+  var open = marker(name, 'start') + '\n', close = marker(name, 'end');
+  var i = body.indexOf(open), j = body.indexOf(close);
+  return i < 0 || j < 0 ? null : body.slice(i + open.length, j);
+}
+function fnv(s) {
+  var h = 0x811c9dc5;
+  for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return ('00000000' + (h >>> 0).toString(16)).slice(-8);
+}
+
+/* Sample files. Vault and personality bytes follow 01-vault.md; the rest is fixture data. */
+var FRONT = ['---', 'id: entity_tailscale', 'description: Tailscale tailnet used for HTTPS access to Maia.',
+  'see:', '  - "[[agents/scout/index]]"', 'kind: entity', '---', ''].join('\n');
+var PFRONT = ['---', 'id: personality_scout', "description: Scout's human-authored operating character.",
+  'see:', '  - "[[agents/scout/index]]"', 'kind: personality', '---', ''].join('\n');
+var GEN1 = '- `fact_01JABC`: Serve is on for port 7420 over the tailnet.\n';
+var GEN2 = GEN1 + '- `fact_01JAD2`: The certificate was reissued on Nov 2 and renews in 62 days.\n';
+var HUM_OLD = '## Notes\n\n';
+var HUM_NOW = '## Notes\n\nKeep Serve on for port 7420. Funnel stays off, so phone access stays on the tailnet.\nRenew the certificate before the window closes.\n';
+var CODE_V1 = ['param(', '    [switch]$Release', ')', '# Build the daemon and the PWA shell.', "$ErrorActionPreference = 'Stop'",
+  "$flags = @('build')", "if ($Release) { $flags += '--release' }", 'cargo @flags', 'Write-Host "Build finished"', ''].join('\n');
+var CODE_V2 = ['param(', '    [switch]$Release', ')', "$ErrorActionPreference = 'Stop'", "$flags = @('build')",
+  "if ($Release) { $flags += '--release' }", "$env:RUST_LOG = 'warn'", 'cargo @flags',
+  'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }', 'Write-Host "Build finished"', ''].join('\n');
+var HTML_V1 = ['<!doctype html>', '<meta charset="utf-8">', '<title>Setup checklist</title>',
+  '<style>body{font:15px/22px system-ui;margin:24px;color:#14181a}label{display:block;margin:6px 0}</style>',
+  '<h2>Tailscale HTTPS checklist</h2>', '<label><input type="checkbox" checked> Serve is on for port 7420</label>',
+  '<label><input type="checkbox"> Phone reaches https://maia-pc.tail4c1e.ts.net</label>', ''].join('\n');
+var HTML_V2 = [HTML_V1.trimEnd(), '<label><input type="checkbox"> Install the PWA from Chrome on Android</label>',
+  '<label><input type="checkbox"> Certificate renewal reminder set</label>', ''].join('\n');
+var DIAG_V1 = ['flowchart LR', '  phone[Phone PWA] --> tailnet[Tailscale HTTPS]', '  tailnet --> daemon[Maia daemon]',
+  '  daemon --> router[Model router]', '  daemon --> chrome[Chrome, pipe-only]', ''].join('\n');
+var DIAG_V2 = [DIAG_V1.trimEnd(), '  daemon --> sandbox[Thread sandbox]', '  daemon --> vault[Obsidian vault]', ''].join('\n');
+var CAP_TEXT = ['Tailnet status', 'All systems operational', '', 'maia-pc      Connected   last seen 12 s ago',
+  'laptop-02    Connected   last seen 4 min ago', 'phone-01     Idle        last seen 6 min ago', '',
+  'Maintenance window: Thu 02:00 UTC (no change for Maia)', ''].join('\n');
+
+function note(gen, hum) { return joinNote(FRONT, gen, hum); }
+function csvText(bumped) {
+  var lines = ['week,region,requests,p50_ms,errors'], regions = ['eu-west', 'us-east', 'ap-south'];
+  for (var i = 0; i < 412; i++) {
+    var requests = 1200 + ((i * 37) % 900) + (bumped && i % 50 === 0 ? 100 : 0);
+    lines.push([(i % 52) + 1, regions[i % 3], requests, 30 + ((i * 13) % 25), (i * 7) % 9].join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+/* Each doc: header facts, trust label, and versions. binary docs keep one version (no text diff). */
+var DOCS = {
+  pdf: {name: 'report.pdf', path: 'workspace/scout/reports/report.pdf', ico: 'i-pdf', src: 'Workspace',
+    taint: 'Untrusted · workspace', thread: 'from Scout · turn 148', by: 'Scout · turn 148', mod: 'Nov 4, 18:20',
+    size: '212 KB', hash: 'sha256 3f9a…c21', cited: 'Cited in turn 148, page 3',
+    trust: 'Untrusted. Written by a sandboxed run. Quotes from it keep this label in the chat.',
+    versions: [{who: 'Scout', when: 'Nov 4, 18:20'}]},
+  img: {name: 'screenshot.png', path: 'uploads/2026-11-05/screenshot.png', ico: 'i-image', src: 'Upload',
+    taint: 'Untrusted · upload', thread: 'from you · today', by: 'You · today', mod: 'Today, 4:02 PM',
+    size: '1.4 MB', hash: 'sha256 91fd…03', cited: 'Cited in this turn',
+    trust: 'Untrusted upload. Shown as pixels only. Metadata is not parsed.',
+    versions: [{who: 'You', when: 'Today, 4:02 PM'}]},
+  vault: {name: 'Tailscale', path: 'agents/scout/entities/tailscale.md', ico: 'i-note', src: 'Vault',
+    taint: 'Untrusted · vault', thread: 'from Dream · Nov 4', by: 'Dream · Nov 4', mod: 'Today, 4:02 PM',
+    size: '0.4 KB', cited: 'Cited in turns 131 and 148',
+    trust: 'Untrusted. Note bodies come from Obsidian, sync, and clippers, so they carry this label. A generated region carries the join of the facts rendered in it.',
+    versions: [
+      {who: 'Import', when: 'Nov 1, 09:00', text: note(GEN1, HUM_OLD)},
+      {who: 'Dream', when: 'Nov 4, 02:10', text: note(GEN2, HUM_OLD)},
+      {who: 'You', when: 'Today, 4:02 PM', text: note(GEN2, HUM_NOW)}]},
+  pers: {name: 'personality.md', path: 'agents/scout/personality.md', ico: 'i-note', src: 'Vault',
+    thread: 'from you · Nov 2', by: 'You · Nov 2', mod: 'Nov 2', size: '0.2 KB', cited: 'Used by Scout’s new threads',
+    trust: 'Scout reads this file only at an approved hash. New threads get the approved bytes. Threads already running keep theirs.',
+    approved: 0,
+    versions: [
+      {who: 'You', when: 'Nov 1', text: PFRONT + 'You investigate before proposing a change.\n'},
+      {who: 'You', when: 'Nov 2', text: PFRONT + 'You investigate before proposing a change.\nAsk before touching shared entities, and name the file you read.\n'}]},
+  code: {name: 'build.ps1', path: 'workspace/scout/scripts/build.ps1', ico: 'i-code', src: 'Workspace',
+    taint: 'Untrusted · workspace', thread: 'from Scout · turn 148', by: 'Scout · turn 148', mod: 'Today, 4:01 PM',
+    size: '0.3 KB', cited: 'Cited in turn 148, the approval command',
+    trust: 'Untrusted. A workspace file written by Scout. The workspace label rises when a write-capable run changes it.',
+    versions: [
+      {who: 'Scout', when: 'Nov 4, turn 131', text: CODE_V1},
+      {who: 'Scout', when: 'Today, turn 148', text: CODE_V2}]},
+  csv: {name: 'quarterly.csv', path: 'uploads/2026-11-05/quarterly.csv', ico: 'i-table', src: 'Upload',
+    taint: 'Untrusted · upload', thread: 'from you · today', by: 'You · today', mod: 'Today, 10:20 AM',
+    size: '38 KB', cited: 'Cited in this turn',
+    trust: 'Untrusted. Uploaded data. Cells are shown as text, and formulas are never evaluated.',
+    versions: [
+      {who: 'Upload', when: 'Nov 5, 10:02', text: csvText(false)},
+      {who: 'You', when: 'Today, 10:20', text: csvText(true)}]},
+  html: {name: 'Setup checklist', path: 'artifacts/setup-checklist.html', ico: 'i-art', src: 'Artifact',
+    taint: 'Untrusted · artifact', thread: 'from Scout · turn 148', by: 'Scout · turn 148', mod: 'Today, 4:20 PM',
+    size: '0.6 KB', cited: 'Cited in turn 148',
+    trust: 'Untrusted artifact. It renders in a sandbox with no page scripts and no network. Its links are inert.',
+    versions: [
+      {who: 'Scout', when: 'Today, 4:03 PM', text: HTML_V1},
+      {who: 'Scout', when: 'Today, 4:20 PM', text: HTML_V2}]},
+  diagram: {name: 'Architecture diagram', path: 'artifacts/architecture.mmd', ico: 'i-art', src: 'Artifact',
+    taint: 'Untrusted · artifact', thread: 'from Scout · turn 148', by: 'Scout · turn 148', mod: 'Today, 4:22 PM',
+    size: '0.5 KB', cited: 'Cited in turn 148, topology',
+    trust: 'Untrusted artifact. Mermaid labels are text. Links and HTML labels are off.',
+    versions: [
+      {who: 'Scout', when: 'Today, 4:10 PM', text: DIAG_V1},
+      {who: 'Scout', when: 'Today, 4:22 PM', text: DIAG_V2}]},
+  capture: {name: 'Tailnet status', path: 'https://status.example.com/tailnet', ico: 'i-globe', src: 'Web',
+    taint: 'Untrusted · web', thread: 'from Scout · turn 147', by: 'Scout · turn 147', mod: 'Nov 5, 11:12',
+    size: '0.2 KB text', cited: 'Cited in turn 147',
+    trust: 'Untrusted web content. Shown inert: no scripts, no links, no remote images. Quotes from it are sent as untrusted text. Captures are read-only evidence.',
+    versions: [{who: 'Scout', when: 'Nov 5, 11:12', text: CAP_TEXT}]}
+};
+Object.keys(DOCS).forEach(function (k) {
+  DOCS[k].cur = DOCS[k].versions.length - 1;
+  DOCS[k].view = DOCS[k].cur;
+});
+
+function docKey() { return S.type === 'vault' && S.part === 'pers' ? 'pers' : S.type; }
+function doc() { return DOCS[docKey()]; }
+function viewText(d) { return d.versions[d.view].text; }
+function curText(d) { return d.versions[d.cur].text; }
+function hashOf(d) { var t = viewText(d); return t === undefined ? d.hash : 'hash ' + fnv(t); }
+function regionOf(d, name) { return region(splitFront(curText(d)).body, name); }
+
+function renderNote(raw) {
+  var p = splitFront(raw), gen = region(p.body, 'generated'), hum = region(p.body, 'human');
+  var html = '<dl class="props">' + propsHtml(p.front) + '</dl>';
+  if (gen !== null) {
+    html += '<div class="gen"><div class="gen-band"><svg class="ic"><use href="#i-clock"/></svg>Generated region — regenerated on next dream</div><ul>' + genItems(gen) + '</ul></div>';
+  }
+  return html + '<div class="human">' + paragraphs(hum !== null ? hum : p.body) + '</div>';
+}
+function propsHtml(front) {
+  var rows = [], links = [];
+  front.split('\n').forEach(function (ln) {
+    var kv = /^(id|kind|description):\s*(.*)$/.exec(ln), see = /^\s+-\s+"?\[\[([^\]]+)\]\]"?$/.exec(ln);
+    if (kv) { rows.push('<dt>' + kv[1] + '</dt><dd>' + esc(kv[2]) + '</dd>'); }
+    if (see) { links.push('<span class="wl">' + esc(see[1]) + '</span>'); }
+  });
+  if (links.length) { rows.push('<dt>see</dt><dd>' + links.join(' ') + '</dd>'); }
+  return rows.join('');
+}
+function genItems(gen) {
+  return gen.split('\n').filter(function (ln) { return ln.indexOf('- ') === 0; })
+    .map(function (ln) { return '<li>' + inline(ln.slice(2)) + '</li>'; }).join('');
+}
+function paragraphs(md) {
+  return md.split(/\n\s*\n/).map(function (block) {
+    var b = block.trim();
+    if (!b) { return ''; }
+    return b.indexOf('## ') === 0 ? '<h3>' + inline(b.slice(3)) + '</h3>' : '<p>' + inline(b.replace(/\n/g, ' ')) + '</p>';
+  }).join('');
+}
+function inline(s) {
+  return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\[\[([^\]]+)\]\]/g, '<span class="wl">$1</span>');
+}
+
+function hlLine(line) {
+  var re = /(#.*$)|("[^"]*"|'[^']*')|(\$[A-Za-z_][\w:]*)|(\b(?:param|if|else|foreach|function|return|exit|try|catch|throw|switch)\b)/g;
+  var out = '', last = 0, m;
+  while ((m = re.exec(line)) !== null) {
+    var cls = m[1] !== undefined ? 'tk-c' : m[2] !== undefined ? 'tk-s' : m[3] !== undefined ? 'tk-v' : 'tk-k';
+    out += esc(line.slice(last, m.index)) + '<span class="' + cls + '">' + esc(m[0]) + '</span>';
+    last = m.index + m[0].length;
+  }
+  return out + esc(line.slice(last));
+}
+
+function diffLines(a, b) {
+  var n = a.length, m = b.length, t = [], i, j, out = [];
+  for (i = 0; i <= n; i++) { t.push(new Array(m + 1).fill(0)); }
+  for (i = n - 1; i >= 0; i--) {
+    for (j = m - 1; j >= 0; j--) {
+      t[i][j] = a[i] === b[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+    }
+  }
+  i = 0; j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push([' ', a[i]]); i++; j++; }
+    else if (t[i + 1][j] >= t[i][j + 1]) { out.push(['-', a[i]]); i++; }
+    else { out.push(['+', b[j]]); j++; }
+  }
+  while (i < n) { out.push(['-', a[i++]]); }
+  while (j < m) { out.push(['+', b[j++]]); }
+  return out;
+}
+function compact(rows) {
+  var near = function (i) { return rows[i][0] !== ' '; };
+  var out = [], skipped = 0;
+  rows.forEach(function (r, i) {
+    var keep = near(i) || (i > 0 && near(i - 1)) || (i < rows.length - 1 && near(i + 1));
+    if (keep) {
+      if (skipped) { out.push(['…', skipped + ' unchanged lines']); skipped = 0; }
+      out.push(r);
+    } else { skipped++; }
+  });
+  if (skipped) { out.push(['…', skipped + ' unchanged lines']); }
+  return out;
+}
+/* Helpers. DOM text always goes in through textContent or el(), never innerHTML, except
+   for hlLine, which escapes every piece. */
+function el(tag, cls, text) {
+  var node = document.createElement(tag);
+  if (cls) { node.className = cls; }
+  if (text !== undefined) { node.textContent = text; }
+  return node;
+}
+function markChoice(selector, key, value, attr) {
+  document.querySelectorAll(selector).forEach(function (node) {
+    node.setAttribute(attr, String(node.dataset[key] === String(value)));
+  });
+}
+function onEach(selector, handler) {
+  document.querySelectorAll(selector).forEach(function (node) {
+    node.addEventListener('click', function () { handler(node); });
+  });
+}
+function scaleOf() {
+  var m = $('m');
+  return m.getBoundingClientRect().width / m.offsetWidth;
+}
+function textLines(text) { return text.replace(/\n$/, '').split('\n'); }
+function isText(d) { return d.versions[0].text !== undefined; }
+function viewingOld(d) { return d.view !== d.cur; }
+function canEdit() { return EDITABLE[S.type] === true && !viewingOld(doc()); }
+function taintOf(d) {
+  if (d.approved === undefined) { return {label: d.taint, ok: false}; }
+  var ok = d.approved === d.view;
+  return {label: ok ? 'Trusted · approved hash' : 'Untrusted · not approved', ok: ok};
+}
+function needsApproval() {
+  var p = DOCS.pers;
+  return docKey() === 'pers' && p.view === p.cur && p.approved !== p.cur && S.draftKept !== p.cur;
+}
+var EDITOR_OF = {code: 'code-edit', csv: 'csv-edit', html: 'html-src', diagram: 'dg-src'};
+function editedText(d) {
+  if (S.type !== 'vault') { return $(EDITOR_OF[S.type]).value; }
+  if (docKey() === 'pers') { return splitFront(curText(d)).front + $('ed-pers').value; }
+  return joinNote(splitFront(curText(d)).front, $('ed-gen').value, $('ed-hum').value);
+}
+function isDirty(d) { return S.editing && editedText(d) !== curText(d); }
+function genChanged() {
+  return S.editing && docKey() === 'vault' && $('ed-gen').value !== (regionOf(DOCS.vault, 'generated') || '');
+}
+function viewMode() {
+  if (S.editing || (S.type === 'diagram' && viewingOld(doc()))) { return 'source'; }
+  return S.view;
+}
+
+/* CSV: fixture data has no quoted commas, so a plain split is exact here. */
+var CSV_TEXT_COL = 1;
+function parseCsv(text) {
+  var rows = textLines(text).map(function (ln) { return ln.split(','); });
+  return {head: rows[0], body: rows.slice(1)};
+}
+function sortRows(body, col, dir) {
+  var numeric = col !== CSV_TEXT_COL;
+  return body.slice().sort(function (a, b) {
+    var x = numeric ? Number(a[col]) : a[col], y = numeric ? Number(b[col]) : b[col];
+    return (x < y ? -1 : x > y ? 1 : 0) * dir;
+  });
+}
+function csvHead(names) {
+  var row = el('tr'), head = el('thead');
+  names.forEach(function (name, col) {
+    var active = S.sortCol === col, th = el('th', col === CSV_TEXT_COL ? '' : 'n'), btn = el('button', '', name);
+    btn.type = 'button';
+    btn.dataset.col = String(col);
+    th.setAttribute('aria-sort', active ? (S.sortDir > 0 ? 'ascending' : 'descending') : 'none');
+    btn.appendChild(el('span', 'arr', active ? (S.sortDir > 0 ? '▲' : '▼') : ''));
+    th.appendChild(btn);
+    row.appendChild(th);
+  });
+  head.appendChild(row);
+  return head;
+}
+function csvBody(rows) {
+  var body = el('tbody');
+  rows.forEach(function (cells) {
+    var row = el('tr');
+    cells.forEach(function (cell, col) { row.appendChild(el('td', col === CSV_TEXT_COL ? '' : 'n', cell)); });
+    body.appendChild(row);
+  });
+  return body;
+}
+
+/* Stage renderers. Each one paints only its own stage and reads only its own document. */
+var STAGES = {pdf: 'st-pdf', img: 'st-img', vault: 'st-vault', code: 'st-code', csv: 'st-csv',
+  html: 'st-html', diagram: 'st-diagram', capture: 'st-capture'};
+var SOURCE_TYPES = {html: true, diagram: true, capture: true};
+var SOURCE_LABELS = {html: ['Preview', 'Source'], diagram: ['Preview', 'Source'], capture: ['Image', 'Text']};
+function renderStages() {
+  Object.keys(STAGES).forEach(function (type) { $(STAGES[type]).hidden = type !== S.type; });
+}
+function renderVault() {
+  if (S.type !== 'vault') { return; }
+  var d = doc(), pers = docKey() === 'pers', appr = needsApproval();
+  $('note-view').hidden = S.editing;
+  $('note-view').innerHTML = renderNote(viewText(d));
+  $('note-edit').hidden = !S.editing || pers;
+  $('pers-edit').hidden = !S.editing || !pers;
+  $('gen-warn').hidden = !genChanged() || S.genKept;
+  $('appr').hidden = !appr;
+  if (appr) {
+    $('appr-text').textContent = 'Scout reads personality.md from new threads only after you approve this exact version. Threads already running keep the bytes they started with. New threads use v' + (DOCS.pers.approved + 1) + ' until then.';
+    $('appr-hash').textContent = 'hash ' + fnv(curText(d));
+  }
+}
+function renderCode() {
+  if (S.type !== 'code') { return; }
+  var lines = textLines(viewText(DOCS.code));
+  $('gut').textContent = lines.map(function (_, i) { return i + 1; }).join('\n');
+  $('code-pre').innerHTML = lines.map(hlLine).join('\n');
+  $('code-view').hidden = S.editing;
+  $('code-edit').hidden = !S.editing;
+}
+function renderCsv() {
+  if (S.type !== 'csv') { return; }
+  var parsed = parseCsv(viewText(DOCS.csv)), rows = S.sortCol < 0 ? parsed.body : sortRows(parsed.body, S.sortCol, S.sortDir);
+  $('csv-tbl').replaceChildren(csvHead(parsed.head), csvBody(rows));
+  $('csv-stat').textContent = rows.length + ' rows · ' + parsed.head.length + ' columns' +
+    (S.sortCol < 0 ? '' : ' · sorted by ' + parsed.head[S.sortCol]);
+  $('csv-view').hidden = S.editing;
+  $('csv-edit').hidden = !S.editing;
+}
+function renderHtml() {
+  if (S.type !== 'html') { return; }
+  var text = viewText(DOCS.html), frame = $('html-frame'), src = $('html-src'), source = viewMode() === 'source';
+  frame.hidden = source;
+  src.hidden = !source;
+  src.readOnly = !S.editing;
+  if (!S.editing) { src.value = text; }
+  if (frame.getAttribute('srcdoc') !== text) { frame.srcdoc = text; }
+}
+function renderDiagram() {
+  if (S.type !== 'diagram') { return; }
+  var src = $('dg-src'), source = viewMode() === 'source';
+  $('dg-view').hidden = source;
+  src.hidden = !source;
+  src.readOnly = !S.editing;
+  if (!S.editing) { src.value = viewText(DOCS.diagram); }
+}
+function renderCapture() {
+  if (S.type !== 'capture') { return; }
+  var text = viewMode() === 'source';
+  $('cap-img').hidden = text;
+  $('cap-text').hidden = !text;
+  $('cap-pre').textContent = viewText(DOCS.capture);
+}
+function renderPdf() {
+  if (S.type !== 'pdf') { return; }
+  document.querySelectorAll('.pdfpage').forEach(function (page) {
+    page.hidden = page.dataset.page !== String(S.page);
+  });
+  markChoice('.thumb', 'page', S.page, 'aria-current');
+  $('pdf-pos').textContent = 'Page ' + S.page + ' of ' + PAGES;
+  $('pdf-prev').disabled = S.page <= 1;
+  $('pdf-next').disabled = S.page >= PAGES;
+}
+function renderZoom() {
+  $('zoom-val').textContent = S.fit ? 'Fit' : Math.round(S.zoom * 100) + '%';
+  $('st-pdf').style.setProperty('--pw', Math.round(640 * S.zoom) + 'px');
+  $('imgwrap').style.setProperty('--iw', S.fit ? '100%' : Math.round(1920 * S.zoom) + 'px');
+}
+function renderPageStrip() {
+  $('m').dataset.theme = S.theme;
+  markChoice('[data-theme-btn]', 'themeBtn', S.theme, 'aria-pressed');
+  markChoice('[data-type]', 'type', S.type, 'aria-selected');
+}
+function renderHeader() {
+  var d = doc(), taint = taintOf(d);
+  $('pv-ico').setAttribute('href', '#' + d.ico);
+  $('pv-title').textContent = d.name;
+  $('pv-path').textContent = d.path;
+  $('src').textContent = d.src;
+  $('taint').textContent = taint.label;
+  $('taint').classList.toggle('ok', taint.ok);
+  $('thread-t').textContent = d.thread;
+  fillVersionSelect($('vsel'), d, d.view);
+  $('vsel').disabled = S.editing;
+}
+function renderTools() {
+  var labels = SOURCE_LABELS[S.type] || ['Preview', 'Source'], edit = $('btn-edit');
+  $('g-vault').hidden = S.type !== 'vault';
+  markChoice('[data-part]', 'part', S.part, 'aria-selected');
+  $('obs').hidden = S.type !== 'vault';
+  $('g-pdf').hidden = S.type !== 'pdf';
+  $('g-zoom').hidden = S.type !== 'pdf' && S.type !== 'img';
+  $('csv-stat').hidden = S.type !== 'csv';
+  $('g-src').hidden = !SOURCE_TYPES[S.type];
+  $('g-src').querySelector('[data-view="preview"]').textContent = labels[0];
+  $('g-src').querySelector('[data-view="source"]').textContent = labels[1];
+  markChoice('[data-view]', 'view', S.view, 'aria-selected');
+  $('btn-find').hidden = S.type === 'img';
+  edit.disabled = !canEdit();
+  edit.setAttribute('aria-pressed', String(S.editing));
+}
+function renderDetails() {
+  var d = doc();
+  $('d-src').textContent = d.src;
+  $('d-by').textContent = d.by;
+  $('d-mod').textContent = d.mod;
+  $('d-size').textContent = d.size;
+  $('d-hash').textContent = hashOf(d);
+  $('d-trust').textContent = d.trust;
+  $('d-cited').textContent = d.cited;
+  renderVersionList(d);
+  renderQuotes();
+  $('pvbody').classList.toggle('nodet', !S.detailsOpen);
+  $('pv').querySelector('[data-act="details"]').setAttribute('aria-pressed', String(S.detailsOpen));
+}
+function renderVersionList(d) {
+  $('d-vlist').replaceChildren(...d.versions.map(function (v, i) {
+    var item = el('li'), btn = el('button', 'vbtn', 'v' + (i + 1) + ' · ' + v.who + ' · ' + v.when);
+    btn.type = 'button';
+    btn.dataset.ver = String(i);
+    btn.setAttribute('aria-current', String(i === d.view));
+    item.appendChild(btn);
+    if (i === d.cur) { item.appendChild(el('span', 'tag acc', 'current')); }
+    if (i === d.approved) { item.appendChild(el('span', 'tag', 'approved')); }
+    return item;
+  }));
+}
+function renderQuotes() {
+  if (S.quotes.length === 0) {
+    $('d-quotes').replaceChildren(el('p', 'empty', 'Nothing quoted yet. Select text, then press Quote in chat.'));
+    return;
+  }
+  $('d-quotes').replaceChildren(...S.quotes.map(quoteCard));
+}
+function quoteCard(quote, index) {
+  var card = el('div', 'qcard'), meta = el('div', 'meta'), remove = el('button', '', 'Remove');
+  remove.type = 'button';
+  remove.dataset.remove = String(index);
+  meta.appendChild(el('span', '', quote.name));
+  meta.appendChild(remove);
+  card.appendChild(meta);
+  card.appendChild(el('q', '', quote.text));
+  card.appendChild(el('span', 'tnt', quote.taint));
+  return card;
+}
+function bannerState(d) {
+  if (S.askDiscard) {
+    return {text: 'Discard unsaved edits and close?', alt: ['Keep editing', 'keep'], act: ['Discard and close', 'discard-close']};
+  }
+  if (isDirty(d)) {
+    return {text: 'Unsaved edits. Save creates a new version.', alt: ['Discard', 'discard'], act: ['Save version', 'save']};
+  }
+  if (viewingOld(d)) {
+    return {text: 'Viewing v' + (d.view + 1) + ' · read-only.', alt: ['Back to current', 'current'], act: ['Restore as new version', 'restore']};
+  }
+  return null;
+}
+function renderBanner() {
+  var state = bannerState(doc()), banner = $('banner');
+  banner.hidden = state === null;
+  if (state === null) { return; }
+  $('ban-text').textContent = state.text;
+  showBannerAction('ban-alt', state.alt);
+  showBannerAction('ban-act', state.act);
+}
+function showBannerAction(id, pair) {
+  var btn = $(id);
+  btn.textContent = pair[0];
+  btn.dataset.do = pair[1];
+  btn.hidden = false;
+}
+function renderStatus() {
+  var d = doc();
+  $('st-pos').textContent = positionText(d);
+  $('st-size').textContent = d.size;
+}
+function positionText(d) {
+  if (S.type === 'pdf') { return 'Page ' + S.page + ' of ' + PAGES; }
+  if (S.type === 'csv') { return parseCsv(viewText(DOCS.csv)).body.length + ' rows'; }
+  return 'Version v' + (d.view + 1) + ' of ' + d.versions.length;
+}
+var DIFF_CLASS = {'+': 'add', '-': 'del', '…': 'fold', ' ': ''};
+function sheetNote(d) {
+  if (!isText(d)) { return 'Binary file. Versions are compared by hash, not by text.'; }
+  if (d.versions.length < 2) { return 'One version so far. Versions appear here after you save an edit.'; }
+  return '';
+}
+function diffRow(row) {
+  var sign = row[0], line = el('div', DIFF_CLASS[sign]);
+  line.appendChild(el('span', 'sg', sign === ' ' ? '' : sign));
+  line.appendChild(el('span', '', row[1]));
+  return line;
+}
+function renderSheet() {
+  if (!S.sheetOpen) { return; }
+  var d = doc(), note = sheetNote(d);
+  $('sh-msg').hidden = note === '';
+  $('sh-msg').textContent = note;
+  $('sh-restore').disabled = note !== '';
+  if (note !== '') {
+    $('sh-diff').replaceChildren();
+    return;
+  }
+  var before = textLines(d.versions[Number($('sh-from').value)].text),
+    after = textLines(d.versions[Number($('sh-to').value)].text);
+  $('sh-diff').replaceChildren(...compact(diffLines(before, after)).map(diffRow));
+}
+function fillVersionSelect(select, d, selected) {
+  select.replaceChildren(...d.versions.map(function (v, i) {
+    var option = el('option', '', 'v' + (i + 1) + ' · ' + v.who + ' · ' + v.when);
+    option.value = String(i);
+    return option;
+  }));
+  select.value = String(selected);
+}
+function renderAll() {
+  renderPageStrip();
+  renderStages();
+  renderHeader();
+  renderTools();
+  renderPdf();
+  renderZoom();
+  renderVault();
+  renderCode();
+  renderCsv();
+  renderHtml();
+  renderDiagram();
+  renderCapture();
+  renderDetails();
+  renderBanner();
+  renderStatus();
+  renderSheet();
+  if (S.findOpen) { runFind(); }
+}
+/* Overlay state. Each action changes S or a document, then calls renderAll or a narrow renderer. */
+function resetOverlay() {
+  S.editing = false;
+  S.askDiscard = false;
+  S.findOpen = false;
+  S.sheetOpen = false;
+  S.genKept = false;
+  clearMarks();
+  $('findbar').hidden = true;
+  $('sheet').hidden = true;
+  $('qfloat').hidden = true;
+}
+function showPreview() {
+  $('pv').hidden = false;
+  $('hostcard').hidden = true;
+}
+function setType(type) {
+  S.type = type;
+  S.part = 'note';
+  S.view = 'preview';
+  S.page = 3;
+  S.zoom = type === 'img' ? 0.5 : 1;
+  S.fit = type === 'img';
+  S.sortCol = -1;
+  S.sortDir = 1;
+  S.draftKept = -1;
+  resetOverlay();
+  showPreview();
+  $('scroll').scrollTop = 0;
+  renderAll();
+}
+function closePreview() {
+  if (isDirty(doc())) {
+    S.askDiscard = true;
+    renderBanner();
+    return;
+  }
+  resetOverlay();
+  $('pv').hidden = true;
+  $('hostcard').hidden = false;
+  $('reopen').focus({preventScroll: true});
+}
+function blockedWhileEditing() {
+  if (!S.editing) { return false; }
+  toast('Save or discard edits first');
+  return true;
+}
+function setPart(part) {
+  if (blockedWhileEditing()) { return; }
+  S.part = part;
+  renderAll();
+}
+function setView(view) {
+  if (blockedWhileEditing()) { return; }
+  S.view = view;
+  renderAll();
+}
+function selectVersion(index) {
+  if (blockedWhileEditing()) { return; }
+  doc().view = index;
+  renderAll();
+}
+function setPage(page) {
+  S.page = Math.min(PAGES, Math.max(1, page));
+  renderAll();
+}
+function zoomStep(zoom, dir) {
+  var next = ZOOMS.indexOf(zoom) + dir;
+  return ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, next))];
+}
+function zoomBy(dir) {
+  S.fit = false;
+  S.zoom = zoomStep(S.zoom, dir);
+  renderAll();
+}
+function zoomFit() {
+  S.fit = S.type === 'img';
+  S.zoom = S.fit ? 0.5 : 1;
+  renderAll();
+}
+
+/* Edit flow: Edit loads the current version into editors. Save writes a new version. Discard drops edits. */
+function loadEditors() {
+  var vault = DOCS.vault, body = splitFront(curText(vault)).body;
+  $('ed-gen').value = regionOf(vault, 'generated') || '';
+  $('ed-hum').value = region(body, 'human') || '';
+  $('ed-pers').value = splitFront(curText(DOCS.pers)).body;
+  $('code-edit').value = curText(DOCS.code);
+  $('csv-edit').value = curText(DOCS.csv);
+  $('html-src').value = curText(DOCS.html);
+  $('dg-src').value = curText(DOCS.diagram);
+}
+function enterEdit() {
+  loadEditors();
+  S.editing = true;
+  S.genKept = false;
+  renderAll();
+}
+function exitEdit() {
+  S.editing = false;
+  S.askDiscard = false;
+  renderAll();
+}
+function toggleEdit() {
+  if (!canEdit()) { return; }
+  if (!S.editing) {
+    enterEdit();
+    return;
+  }
+  if (isDirty(doc())) {
+    saveEdits();
+    return;
+  }
+  exitEdit();
+}
+function commitVersion(d, text) {
+  d.versions.push({who: 'You', when: 'Just now', text: text});
+  d.cur = d.view = d.versions.length - 1;
+  S.editing = false;
+  S.askDiscard = false;
+  return d.cur;
+}
+function saveEdits() {
+  var d = doc(), index = commitVersion(d, editedText(d));
+  toast('Saved as v' + (index + 1));
+  renderAll();
+}
+function saveShortcut() {
+  if (!S.editing || !isDirty(doc())) {
+    toast('No changes to save');
+    return;
+  }
+  saveEdits();
+}
+function restoreVersion(index) {
+  var d = doc(), copy = commitVersion(d, d.versions[index].text);
+  toast('Restored as v' + (copy + 1));
+  renderAll();
+}
+function revertRegion() {
+  $('ed-gen').value = regionOf(DOCS.vault, 'generated') || '';
+  S.genKept = false;
+  onEdit();
+}
+function keepRegionEdits() {
+  S.genKept = true;
+  renderVault();
+}
+function onEdit() {
+  renderBanner();
+  renderVault();
+  renderTools();
+}
+function approveVersion() {
+  var p = DOCS.pers;
+  p.approved = p.cur;
+  toast('Approved · new threads use v' + (p.cur + 1));
+  renderAll();
+}
+function keepDraft() {
+  S.draftKept = DOCS.pers.cur;
+  toast('Kept as draft · new threads still use v' + (DOCS.pers.approved + 1));
+  renderAll();
+}
+function removeQuote(e) {
+  var btn = e.target.closest('[data-remove]');
+  if (btn === null) { return; }
+  S.quotes.splice(Number(btn.dataset.remove), 1);
+  renderDetails();
+}
+var BANNER_ACTIONS = {
+  keep: function () {
+    S.askDiscard = false;
+    renderAll();
+  },
+  discard: exitEdit,
+  'discard-close': function () {
+    exitEdit();
+    closePreview();
+  },
+  save: saveEdits,
+  current: function () {
+    doc().view = doc().cur;
+    renderAll();
+  },
+  restore: function () { restoreVersion(doc().view); }
+};
+function runBannerAction(e) {
+  BANNER_ACTIONS[e.currentTarget.dataset.do]();
+}
+function onEscape() {
+  if (!$('qfloat').hidden) {
+    $('qfloat').hidden = true;
+    return;
+  }
+  if (S.askDiscard) {
+    S.askDiscard = false;
+    renderBanner();
+    return;
+  }
+  if (S.sheetOpen) {
+    closeSheet();
+    return;
+  }
+  if (S.findOpen) {
+    closeFind();
+    return;
+  }
+  closePreview();
+}
+/* Find: wraps matches in mark elements inside the visible text root. */
+var FIND_ROOTS = ['.pdfpage:not([hidden])', '#note-view', '#code-pre', '#csv-tbl', '#cap-pre'];
+function findRoot() {
+  for (var i = 0; i < FIND_ROOTS.length; i++) {
+    var root = document.querySelector(FIND_ROOTS[i]);
+    if (root !== null && root.offsetParent !== null) { return root; }
+  }
+  return null;
+}
+function clearMarks() {
+  marks.forEach(function (mark) {
+    var parent = mark.parentNode;
+    if (parent === null) { return; }
+    parent.replaceChild(document.createTextNode(mark.textContent), mark);
+    parent.normalize();
+  });
+  marks = [];
+}
+function wrapMatches(textNode, query) {
+  var text = textNode.nodeValue, lower = text.toLowerCase(), frag = document.createDocumentFragment();
+  var last = 0, at = lower.indexOf(query);
+  if (at < 0) { return; }
+  while (at >= 0) {
+    var mark = document.createElement('mark');
+    frag.appendChild(document.createTextNode(text.slice(last, at)));
+    mark.textContent = text.slice(at, at + query.length);
+    frag.appendChild(mark);
+    marks.push(mark);
+    last = at + query.length;
+    at = lower.indexOf(query, last);
+  }
+  frag.appendChild(document.createTextNode(text.slice(last)));
+  textNode.parentNode.replaceChild(frag, textNode);
+}
+function highlight(root, query) {
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes = [], node;
+  while ((node = walker.nextNode()) !== null) { nodes.push(node); }
+  nodes.forEach(function (textNode) { wrapMatches(textNode, query); });
+}
+function revealInScroll(node) {
+  var box = $('scroll').getBoundingClientRect(), target = node.getBoundingClientRect();
+  $('scroll').scrollTop += ((target.top + target.height / 2) - (box.top + box.height / 2)) / scaleOf();
+}
+function showMatch() {
+  marks.forEach(function (mark) { mark.classList.remove('cur'); });
+  $('find-cnt').textContent = marks.length > 0 ? S.match + ' of ' + marks.length : '0 of 0';
+  if (marks.length === 0) { return; }
+  var current = marks[S.match - 1];
+  current.classList.add('cur');
+  revealInScroll(current);
+}
+function runFind() {
+  clearMarks();
+  var root = findRoot(), query = $('find-in').value.trim().toLowerCase();
+  if (root !== null && query !== '') { highlight(root, query); }
+  S.match = marks.length > 0 ? 1 : 0;
+  showMatch();
+}
+function moveMatch(delta) {
+  if (marks.length === 0) { return; }
+  S.match = ((S.match - 1 + delta + marks.length) % marks.length) + 1;
+  showMatch();
+}
+function openFind() {
+  if (findRoot() === null) {
+    toast('Find works on the text in view. Leave Edit to search.');
+    return;
+  }
+  S.findOpen = true;
+  $('findbar').hidden = false;
+  $('find-in').focus({preventScroll: true});
+  runFind();
+}
+function closeFind() {
+  S.findOpen = false;
+  $('findbar').hidden = true;
+  clearMarks();
+}
+
+/* Quote and copy. A quote keeps the source taint label. */
+function selectionInFile() {
+  var sel = document.getSelection();
+  if (sel.isCollapsed || sel.toString().trim() === '') { return null; }
+  return $('scroll').contains(sel.anchorNode) ? sel : null;
+}
+function updateQfloat() {
+  var chip = $('qfloat'), sel = S.editing || S.sheetOpen ? null : selectionInFile();
+  chip.hidden = sel === null;
+  if (sel === null) { return; }
+  var range = sel.getRangeAt(0).getBoundingClientRect(), box = $('pv').getBoundingClientRect(), s = scaleOf();
+  chip.style.left = ((range.left + range.width / 2 - box.left) / s) + 'px';
+  chip.style.top = ((range.top - box.top) / s) + 'px';
+}
+function quoteSelection() {
+  var sel = selectionInFile();
+  if (sel === null) {
+    toast('Select text in the file first');
+    return;
+  }
+  var d = doc(), taint = taintOf(d).label;
+  S.quotes.push({name: d.name, text: sel.toString().trim().slice(0, 240), taint: taint});
+  $('qfloat').hidden = true;
+  renderDetails();
+  toast('Quoted in chat · ' + taint);
+}
+function copySelection() {
+  var sel = selectionInFile(), text = sel === null ? viewText(doc()) : sel.toString();
+  if (!navigator.clipboard) {
+    toast('Copy is not available here');
+    return;
+  }
+  navigator.clipboard.writeText(text).then(function () {
+    toast('Copied');
+  }, function () {
+    toast('The browser blocked the copy');
+  });
+}
+var toastTimer = 0;
+function toast(message) {
+  var node = $('toast');
+  node.textContent = message;
+  node.classList.add('on');
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(function () { node.classList.remove('on'); }, 2200);
+}
+function downloadFile() { toast('Download started · ' + doc().name); }
+function openInApp() { toast('Opening with the default app'); }
+function openThread() { toast('Opens Scout · turn 148 in the thread'); }
+function toggleDetails() {
+  S.detailsOpen = !S.detailsOpen;
+  renderAll();
+}
+
+/* History sheet: pick two versions, read the diff, or restore the newer one as a new version. */
+function openSheet() {
+  var d = doc();
+  S.sheetOpen = true;
+  $('sheet').hidden = false;
+  fillVersionSelect($('sh-from'), d, Math.max(0, d.view - 1));
+  fillVersionSelect($('sh-to'), d, d.view);
+  renderSheet();
+  $('sh-close').focus({preventScroll: true});
+}
+function closeSheet() {
+  S.sheetOpen = false;
+  $('sheet').hidden = true;
+  document.querySelector('[data-act="history"]').focus({preventScroll: true});
+}
+function toggleSheet() {
+  if (S.sheetOpen) {
+    closeSheet();
+    return;
+  }
+  openSheet();
+}
+var ACTIONS = {
+  copy: copySelection,
+  download: downloadFile,
+  open: openInApp,
+  history: toggleSheet,
+  quote: quoteSelection,
+  details: toggleDetails
+};
+
+/* Image pan: drag scrolls the wrap. Pointer deltas are divided by the mock's fit scale. */
+function wirePan() {
+  var wrap = $('imgwrap'), start = null;
+  wrap.addEventListener('pointerdown', function (e) {
+    start = {x: e.clientX, y: e.clientY, left: wrap.scrollLeft, top: wrap.scrollTop};
+    wrap.classList.add('drag');
+    wrap.setPointerCapture(e.pointerId);
+  });
+  wrap.addEventListener('pointermove', function (e) {
+    if (start === null) { return; }
+    var s = scaleOf();
+    wrap.scrollLeft = start.left - (e.clientX - start.x) / s;
+    wrap.scrollTop = start.top - (e.clientY - start.y) / s;
+  });
+  var endPan = function () {
+    start = null;
+    wrap.classList.remove('drag');
+  };
+  wrap.addEventListener('pointerup', endPan);
+  wrap.addEventListener('pointercancel', endPan);
+}
+
+function buildThumbs() {
+  var nav = $('thumbs');
+  for (var page = 1; page <= PAGES; page++) {
+    var thumb = el('button', 'thumb');
+    thumb.type = 'button';
+    thumb.dataset.page = String(page);
+    thumb.appendChild(el('i'));
+    thumb.appendChild(el('span', '', 'Page ' + page));
+    nav.appendChild(thumb);
+  }
+}
+function onSortClick(e) {
+  var btn = e.target.closest('button[data-col]');
+  if (btn === null) { return; }
+  var col = Number(btn.dataset.col);
+  if (S.sortCol === col) {
+    S.sortDir = -S.sortDir;
+  } else {
+    S.sortCol = col;
+    S.sortDir = 1;
+  }
+  renderCsv();
+}
+function focusStops(pv) {
+  return Array.from(pv.querySelectorAll('button, input, select, textarea, iframe')).filter(function (node) {
+    return !node.disabled && node.offsetParent !== null;
+  });
+}
+function trapTab(e) {
+  var pv = $('pv'), stops = focusStops(pv);
+  if (stops.length === 0) { return; }
+  var first = stops[0], last = stops[stops.length - 1], active = document.activeElement;
+  var outside = !pv.contains(active);
+  if (e.shiftKey && (active === first || outside)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (active === last || outside)) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+var SHORTCUTS = {
+  f: openFind,
+  e: toggleEdit,
+  s: saveShortcut,
+  'shift+q': quoteSelection,
+  'shift+h': toggleSheet,
+  'shift+s': downloadFile,
+  'shift+o': openInApp
+};
+function onKey(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    onEscape();
+    return;
+  }
+  if (e.key === 'Tab') {
+    trapTab(e);
+    return;
+  }
+  if (e.key === 'Enter' && e.target.id === 'find-in') {
+    e.preventDefault();
+    moveMatch(e.shiftKey ? -1 : 1);
+    return;
+  }
+  if (!e.ctrlKey && !e.metaKey) { return; }
+  var action = SHORTCUTS[(e.shiftKey ? 'shift+' : '') + e.key.toLowerCase()];
+  if (action !== undefined) {
+    e.preventDefault();
+    action();
+  }
+}
+function onKeyWhileOpen(e) {
+  if (!$('pv').hidden) { onKey(e); }
+}
+function fit() {
+  var box = $('fit'), s = Math.min(1, box.clientWidth / 1440);
+  $('fit-in').style.transformOrigin = '0 0';
+  $('fit-in').style.transform = 'scale(' + s + ')';
+  box.style.height = Math.round(900 * s) + 'px';
+}
+function wire() {
+  onEach('[data-theme-btn]', function (btn) {
+    S.theme = btn.dataset.themeBtn;
+    renderAll();
+  });
+  onEach('[data-type]', function (btn) { setType(btn.dataset.type); });
+  onEach('[data-act]', function (btn) { ACTIONS[btn.dataset.act](); });
+  onEach('[data-part]', function (btn) { setPart(btn.dataset.part); });
+  onEach('#g-src [data-view]', function (btn) { setView(btn.dataset.view); });
+  $('close').addEventListener('click', closePreview);
+  $('reopen').addEventListener('click', function () {
+    showPreview();
+    $('pv').focus({preventScroll: true});
+  });
+  $('thread').addEventListener('click', openThread);
+  $('d-by').addEventListener('click', openThread);
+  $('obs').addEventListener('click', function () { toast('Opening the configured vault in Obsidian'); });
+  $('vsel').addEventListener('change', function () { selectVersion(Number(this.value)); });
+  $('d-vlist').addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-ver]');
+    if (btn !== null) { selectVersion(Number(btn.dataset.ver)); }
+  });
+  $('d-quotes').addEventListener('click', removeQuote);
+  $('d-compare').addEventListener('click', openSheet);
+  $('pdf-prev').addEventListener('click', function () { setPage(S.page - 1); });
+  $('pdf-next').addEventListener('click', function () { setPage(S.page + 1); });
+  $('thumbs').addEventListener('click', function (e) {
+    var thumb = e.target.closest('.thumb');
+    if (thumb !== null) { setPage(Number(thumb.dataset.page)); }
+  });
+  $('zoom-out').addEventListener('click', function () { zoomBy(-1); });
+  $('zoom-in').addEventListener('click', function () { zoomBy(1); });
+  $('zoom-fit').addEventListener('click', zoomFit);
+  $('btn-find').addEventListener('click', openFind);
+  $('btn-edit').addEventListener('click', toggleEdit);
+  $('find-in').addEventListener('input', runFind);
+  $('find-prev').addEventListener('click', function () { moveMatch(-1); });
+  $('find-next').addEventListener('click', function () { moveMatch(1); });
+  $('find-close').addEventListener('click', closeFind);
+  $('ban-alt').addEventListener('click', runBannerAction);
+  $('ban-act').addEventListener('click', runBannerAction);
+  $('appr-ok').addEventListener('click', approveVersion);
+  $('appr-keep').addEventListener('click', keepDraft);
+  $('gen-revert').addEventListener('click', revertRegion);
+  $('gen-keep').addEventListener('click', keepRegionEdits);
+  EDITOR_IDS.forEach(function (id) { $(id).addEventListener('input', onEdit); });
+  $('csv-tbl').addEventListener('click', onSortClick);
+  $('sh-close').addEventListener('click', closeSheet);
+  $('sh-from').addEventListener('change', renderSheet);
+  $('sh-to').addEventListener('change', renderSheet);
+  $('sh-restore').addEventListener('click', function () {
+    closeSheet();
+    restoreVersion(Number($('sh-to').value));
+  });
+  $('qfloat').addEventListener('mousedown', function (e) { e.preventDefault(); });
+  $('qfloat').addEventListener('click', quoteSelection);
+  document.addEventListener('keydown', onKeyWhileOpen);
+  document.addEventListener('selectionchange', updateQfloat);
+  window.addEventListener('resize', fit);
+  wirePan();
+}
+function init() {
+  buildThumbs();
+  wire();
+  fit();
+  setType('pdf');
+  $('pv').focus({preventScroll: true});
+}
+init();
+})();
+</script>
+</body>
+</html>

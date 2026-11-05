@@ -1,0 +1,617 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Maia Visual Directions</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one long review page. Intro, three directions (each a scaled 1440x820 desktop mock, then palette and type spec), then a recommendation. */
+:root{
+  --pg-bg:#F6F6F4; --pg-surface:#FFFFFF; --pg-fg:#16181C; --pg-muted:#5C6470; --pg-border:#DADDE2; --pg-link:#1F4FD8;
+  --pg-ui:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --pg-mono:"Cascadia Mono",Consolas,"SF Mono","Roboto Mono",monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){--pg-bg:#101215;--pg-surface:#171A1F;--pg-fg:#E8EAEE;--pg-muted:#9AA2AE;--pg-border:#262A31;--pg-link:#7FA6FF;color-scheme:dark}
+}
+:root[data-theme="dark"]{--pg-bg:#101215;--pg-surface:#171A1F;--pg-fg:#E8EAEE;--pg-muted:#9AA2AE;--pg-border:#262A31;--pg-link:#7FA6FF;color-scheme:dark}
+
+body{background:var(--pg-bg);color:var(--pg-fg);font:15px/24px var(--pg-ui);padding-block:32px 72px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+*{box-sizing:border-box}
+.wrap{max-width:1480px;margin:0 auto;display:grid;gap:72px}
+.intro{display:grid;gap:12px;max-width:72ch}
+h1{margin:0;font-size:28px;line-height:36px;font-weight:650;letter-spacing:-.01em;text-wrap:balance}
+h2{margin:0;font-size:22px;line-height:28px;font-weight:650;letter-spacing:-.005em;text-wrap:balance}
+h3{margin:0 0 12px;font-size:12px;line-height:16px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--pg-muted)}
+h4{margin:0 0 8px;font-size:13px;line-height:20px;font-weight:600}
+p{margin:0}
+.lede,.mood,.note{color:var(--pg-muted)}
+.eyebrow{font-size:12px;line-height:16px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--pg-muted);margin-bottom:4px}
+.dirs{display:grid;gap:80px}
+.dir{display:grid;gap:20px;min-width:0}
+.dir-head{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between}
+.dir-head > div:first-child{min-width:0;max-width:64ch}
+.seg{display:inline-flex;border:1px solid var(--pg-border);border-radius:8px;padding:2px;background:var(--pg-surface)}
+.seg button{border:0;background:none;color:var(--pg-muted);font:inherit;font-size:13px;line-height:20px;padding:6px 14px;border-radius:6px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--pg-fg);color:var(--pg-bg)}
+button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--pg-link);outline-offset:2px}
+.fit{overflow-x:auto;border-radius:10px}
+.fit-in{margin:0 auto}
+.spec{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:40px}
+.pal + .pal{margin-top:20px}
+.sws{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px 12px}
+.sw{display:grid;gap:2px;min-width:0}
+.sw-c{height:36px;border-radius:4px;border:1px solid var(--pg-border);display:block;margin-bottom:4px}
+.sw-n{font-size:12px;line-height:16px;font-weight:600}
+.sw-h{font:12px/16px var(--pg-mono);color:var(--pg-muted)}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px;line-height:20px}
+th{text-align:left;font-weight:600;color:var(--pg-muted);font-size:12px;line-height:16px;padding:0 12px 8px 0;border-bottom:1px solid var(--pg-border)}
+td{padding:8px 12px 8px 0;border-bottom:1px solid var(--pg-border);vertical-align:top}
+td.num{font-family:var(--pg-mono);font-size:12px;white-space:nowrap}
+.rec{display:grid;gap:20px;max-width:100%}
+.rec > p{max-width:72ch}
+.cmp td:first-child,.cmp th:first-child{width:18%;font-weight:600}
+.cmp td{min-width:180px}
+.cmp table{min-width:940px}
+.pick{border-top:1px solid var(--pg-border);padding-top:20px;display:grid;gap:12px;max-width:72ch}
+@media (max-width:900px){.spec{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:640px){.sws{grid-template-columns:repeat(2,minmax(0,1fr))}.seg button{min-height:40px}}
+
+/* ---------- Mock window: every colour comes from the tokens set on .m ---------- */
+.m{--ui:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;--mono:"Cascadia Mono",Consolas,"SF Mono",Menlo,"Roboto Mono","DejaVu Sans Mono","Liberation Mono",monospace;--tr:var(--ui);--row:32px;--r:6px;--wr:10px;--pill:999px;
+  width:1440px;height:820px;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font:14px/20px var(--ui);border:1px solid var(--border);border-radius:var(--wr);overflow:hidden;transform-origin:0 0}
+.m *{box-sizing:border-box}
+.m button,.m textarea,.m input{font:inherit;color:inherit}
+.m button{cursor:default}
+.m :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.m code,.m .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.m .ic{width:16px;height:16px;flex:none}
+.m .lbl{font-size:11px;line-height:16px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.m.d2{--tr:Georgia,Cambria,"Noto Serif",serif;--r:3px;--row:36px;--wr:4px}
+.m.d3{--r:2px;--row:28px;--wr:3px;--pill:2px}
+.m.d4{--row:30px;--r:6px;--wr:10px}
+.m.d2 .pill{border-radius:3px}
+
+.titlebar{height:32px;display:flex;align-items:center;gap:12px;padding-left:14px;background:var(--surface);border-bottom:1px solid var(--border);font-size:12px;line-height:16px;color:var(--muted)}
+.titlebar .word{font-size:13px;font-weight:650;color:var(--text);letter-spacing:.01em}
+.m.d2 .titlebar .word{font-family:var(--tr);font-style:italic;font-weight:400;font-size:16px}
+.titlebar .grow{flex:1}
+.caption{display:flex;height:32px}
+.caption i{position:relative;width:44px;height:32px;display:block}
+.c-min::before{content:"";position:absolute;left:17px;top:16px;width:10px;height:1px;background:currentColor}
+.c-max::before{content:"";position:absolute;left:17px;top:11px;width:9px;height:9px;border:1px solid currentColor}
+.c-close::before,.c-close::after{content:"";position:absolute;left:16px;top:16px;width:12px;height:1px;background:currentColor;transform:rotate(45deg)}
+.c-close::after{transform:rotate(-45deg)}
+
+.app{flex:1;display:grid;grid-template-columns:248px minmax(0,1fr) 336px;min-height:0}
+
+.st{display:inline-block;width:8px;height:8px;flex:none}
+.st-run{background:var(--accent);border-radius:50%}
+.st-sleep{border:1.5px solid var(--muted);border-radius:50%}
+.st-need{background:var(--warning);transform:rotate(45deg)}
+.st-stop{background:var(--muted)}
+
+/* Rail */
+.rail{display:flex;flex-direction:column;min-height:0;background:var(--surface);border-right:1px solid var(--border)}
+.rail-top{display:flex;align-items:center;justify-content:space-between;padding:12px 16px 4px}
+.sbtn{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg);color:var(--muted);font-size:12px;line-height:16px}
+.sbtn kbd{font:11px/16px var(--mono);border:1px solid var(--border);border-radius:3px;padding:0 4px;color:var(--muted)}
+.activity{display:grid;gap:2px;margin:8px 16px 4px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.act-row{display:flex;align-items:center;gap:8px;height:24px}
+.act-row b{margin-left:auto;font-weight:600;font-variant-numeric:tabular-nums}
+.agents{flex:1;min-height:0;overflow:hidden;padding:4px 8px}
+.agent{margin-top:8px}
+.agent-h{display:flex;align-items:center;gap:8px;height:var(--row);padding:0 8px}
+.mono-av{width:20px;height:20px;border-radius:calc(var(--r) - 1px);display:grid;place-items:center;font-size:11px;line-height:16px;font-weight:600;background:color-mix(in srgb,var(--text) 10%,var(--surface));flex:none}
+.m.d2 .mono-av{border-radius:50%}
+.aname{font-weight:600}
+.m.d2 .aname{font-family:var(--tr);font-size:15px}
+.astate{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--muted)}
+.agent ul{list-style:none;margin:0;padding:0}
+.agent li{position:relative;display:flex;align-items:center;gap:8px;height:var(--row);padding:0 8px 0 36px;border-radius:var(--r);color:var(--muted)}
+.agent li .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent li .tm{font-size:12px;line-height:16px;font-variant-numeric:tabular-nums}
+.agent li[aria-current="true"]{background:color-mix(in srgb,var(--accent) 14%,var(--surface));color:var(--text)}
+.m.d2 .agent li[aria-current="true"]{background:none;font-weight:600}
+.m.d2 .agent li[aria-current="true"]::before{content:"";position:absolute;left:20px;top:15px;width:6px;height:6px;background:var(--accent)}
+.m.d3 .agent li[aria-current="true"]{background:color-mix(in srgb,var(--accent) 10%,var(--surface));color:var(--accent)}
+.m.d3 .agent li[aria-current="true"]::before{content:"\203A";position:absolute;left:24px;color:var(--accent)}
+.bud{display:none;align-items:center;gap:8px;margin:2px 8px 0 36px;font:11px/16px var(--mono);color:var(--muted)}
+.m.dense .bud{display:flex}
+.bud .bar{flex:1}
+.rail-foot{display:grid;gap:8px;padding:12px 16px 14px;border-top:1px solid var(--border)}
+.stopall{display:flex;align-items:center;justify-content:center;gap:8px;height:36px;border-radius:var(--r);border:1px solid var(--danger);background:color-mix(in srgb,var(--danger) 12%,var(--surface));font-weight:600}
+.stopall svg{color:var(--danger)}
+.m.d2 .stopall{background:none}
+.m.d3 .stopall{height:30px;background:var(--danger);color:#1A0505;border-color:var(--danger);text-transform:uppercase;letter-spacing:.06em;font-size:12px}
+.m.d3 .stopall svg{color:currentColor}
+.m.light.d3 .stopall{color:#fff}
+.foot-links{display:flex;gap:20px;color:var(--muted)}
+.foot-links span{display:flex;align-items:center;gap:6px}
+
+/* Conversation */
+.conv{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
+.chead{display:flex;align-items:center;gap:16px;height:56px;padding:0 24px;border-bottom:1px solid var(--border)}
+.who{display:flex;align-items:center;gap:12px;min-width:0}
+.ttl{font-weight:600;font-size:15px;line-height:20px}
+.m.d2 .ttl{font-family:var(--tr);font-weight:400;font-size:18px;line-height:24px}
+.sub{font-size:12px;line-height:16px;color:var(--muted)}
+.head-r{margin-left:auto;display:flex;align-items:center;gap:16px}
+.pill{display:inline-flex;align-items:center;gap:8px;height:24px;padding:0 10px;border-radius:var(--pill);border:1px solid color-mix(in srgb,var(--warning) 55%,var(--border));background:color-mix(in srgb,var(--warning) 10%,var(--bg));font-size:12px;line-height:16px;font-weight:600}
+.budget{display:flex;align-items:center;gap:8px;font-size:12px;line-height:16px;color:var(--muted);font-variant-numeric:tabular-nums}
+.bar{width:72px;height:4px;border-radius:2px;background:var(--border);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.banner{display:flex;align-items:center;gap:12px;padding:10px 24px;border-bottom:1px solid color-mix(in srgb,var(--warning) 50%,var(--border));background:color-mix(in srgb,var(--warning) 11%,var(--bg))}
+.btxt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btxt code{font-size:12.5px}
+.btxt .dg{color:var(--muted);font-family:var(--mono);font-size:12px}
+.bbtns{display:flex;gap:8px}
+.btn{height:32px;padding:0 14px;border-radius:var(--r);border:1px solid var(--border);background:var(--surface);font-weight:550}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.dng{background:transparent;border-color:var(--danger)}
+.m.d3 .btn{height:28px;padding:0 12px;font-size:13px;line-height:18px}
+.scroll{flex:1;min-height:0;overflow:hidden;padding:24px}
+.tr{max-width:680px;margin:0 auto;display:flex;flex-direction:column;gap:24px}
+.m.d3 .tr{gap:18px}
+.run{display:flex;flex-direction:column;gap:8px}
+.m.d2 .run + .run{padding-top:20px;border-top:1px solid var(--border)}
+.spk{display:flex;align-items:center;gap:8px;font-size:13px;line-height:16px;font-weight:600}
+.spk .mono-av{width:18px;height:18px;font-size:10px}
+.spk time{font-weight:400;font-size:12px;color:var(--muted)}
+.m.d2 .spk{font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.msg{font-family:var(--tr);font-size:15px;line-height:24px;max-width:68ch}
+.fold{display:flex;align-items:center;gap:6px;height:24px;padding:0;border:0;background:none;color:var(--muted);font-size:13px;line-height:20px}
+.fold .ic{width:14px;height:14px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;margin:0 1px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);color:var(--text);font-family:var(--ui);font-size:13px;line-height:16px}
+.chip .ic{width:14px;height:14px;color:var(--muted)}
+.facts{align-self:flex-start;height:24px;padding:0 10px;border-radius:var(--pill);border:1px dashed var(--muted);background:none;color:var(--muted);font-size:12px;line-height:16px;display:inline-flex;align-items:center;gap:6px}
+.facts:hover{color:var(--text);border-color:var(--text)}
+.att{display:flex;align-items:center;gap:12px;width:280px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface)}
+.att .ic{width:20px;height:20px;color:var(--muted)}
+.att b{display:block;font-size:13px;line-height:16px;font-weight:600}
+.att span{display:block;font-size:12px;line-height:16px;color:var(--muted)}
+.composer{padding:0 24px 20px}
+.cbox{max-width:680px;margin:0 auto;border:1px solid var(--border);border-radius:calc(var(--r) + 2px);background:var(--surface)}
+.cbox:focus-within{border-color:var(--accent)}
+.cbox textarea{display:block;width:100%;height:60px;resize:none;border:0;background:transparent;padding:12px 16px 0;font:15px/24px var(--tr);outline:none}
+.cbox textarea::placeholder{color:var(--muted)}
+.crow{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 8px}
+.ibtn{width:32px;height:32px;display:grid;place-items:center;border:0;background:none;color:var(--muted);border-radius:var(--r)}
+.hint{flex:1;font-size:12px;line-height:16px;color:var(--muted)}
+.send{display:flex;align-items:center;gap:8px}
+.hint{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.to{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--border);border-radius:var(--pill);background:var(--bg);font-size:12px;line-height:16px;white-space:nowrap}
+.to span{color:var(--muted)}
+.to b{font-weight:600}
+.to .ic{width:12px;height:12px;color:var(--muted);transform:rotate(90deg)}
+.m.d2 .to{border-radius:3px}
+.pill-run{border-color:color-mix(in srgb,var(--accent) 55%,var(--border));background:color-mix(in srgb,var(--accent) 10%,var(--bg))}
+.chans{padding:8px;border-top:1px solid var(--border)}
+.chan-h{display:flex;align-items:center;justify-content:space-between;padding:0 8px 4px}
+.chan-h .ibtn{width:24px;height:24px;font-size:16px;line-height:16px}
+.chans ul{list-style:none;margin:0;padding:0}
+.chans li{display:flex;align-items:center;gap:8px;height:var(--row);padding:0 8px;border-radius:var(--r);color:var(--muted)}
+.chans .hash{width:10px;font-family:var(--mono);color:var(--muted)}
+.chans .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chans .astate{margin-left:0}
+[data-view-btn]{cursor:pointer}
+.run.you{align-items:flex-end}
+.run.you .spk{justify-content:flex-end;color:var(--muted)}
+.run.you .msg{max-width:520px;padding:10px 14px;border:1px solid var(--border);border-radius:calc(var(--r) * 2);background:color-mix(in srgb,var(--text) 9%,var(--bg))}
+.run.bot .spk{color:var(--text)}
+.run.bot .spk .mono-av{width:22px;height:22px;font-size:11px}
+.chans li[aria-current="true"]{background:color-mix(in srgb,var(--accent) 14%,var(--surface));color:var(--text)}
+.m.d2 .chans li[aria-current="true"]{background:none;font-weight:600}
+.m.d3 .chans li[aria-current="true"]{background:color-mix(in srgb,var(--accent) 10%,var(--surface));color:var(--accent)}
+
+/* Inspector */
+.insp{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--surface);border-left:1px solid var(--border)}
+.tabs{display:flex;gap:4px;height:44px;padding:0 12px;align-items:flex-end;border-bottom:1px solid var(--border)}
+.tabs button{height:36px;padding:0 12px;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;background:none;color:var(--muted);font-weight:550;display:flex;align-items:center;gap:6px;align-self:flex-end}
+.tabs button[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent)}
+.tabs .cnt{display:none;font:11px/16px var(--mono);color:var(--muted)}
+.m.dense .tabs .cnt{display:inline}
+.panel{flex:1;min-height:0;overflow:hidden;padding:16px;display:flex;flex-direction:column;gap:12px}
+.m.dense .rail,.m.dense .insp{font-size:13px;line-height:18px}
+.m.dense .panel{gap:10px}
+.hero{display:flex;align-items:baseline;gap:8px}
+.big{font-size:32px;line-height:36px;font-weight:600;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.m.d2 .big{font-family:var(--tr);font-weight:400;font-size:36px;line-height:40px}
+.bl{color:var(--muted)}
+.bs{margin-left:auto;font:12px/16px var(--mono);color:var(--muted)}
+.stack{display:flex;gap:2px;height:12px}
+.stack i{display:block;border-radius:2px;min-width:2px}
+.s1{background:color-mix(in srgb,var(--accent) 95%,var(--surface))}
+.s2{background:color-mix(in srgb,var(--accent) 78%,var(--surface))}
+.s3{background:color-mix(in srgb,var(--accent) 62%,var(--surface))}
+.s4{background:color-mix(in srgb,var(--accent) 46%,var(--surface))}
+.s5{background:color-mix(in srgb,var(--accent) 32%,var(--surface))}
+.s6{border:1px dashed var(--muted)}
+.s7{background:color-mix(in srgb,var(--text) 22%,var(--surface))}
+.slots{list-style:none;margin:0;padding:0;border:1px solid var(--border);border-radius:var(--r);background:var(--bg)}
+.slots li{display:grid;grid-template-columns:14px minmax(0,1fr) auto 48px;align-items:center;column-gap:8px;row-gap:0;min-height:var(--row);padding:0 10px;border-bottom:1px solid var(--border);font-size:13px;line-height:16px}
+.m.dense .slots li{padding-block:6px}
+.slots li:last-child{border-bottom:0}
+.slots .n{width:14px;color:var(--muted);font:12px/16px var(--mono)}
+.slots .nm{flex:1;min-width:0;display:flex;align-items:center;gap:8px}
+.tag{font-size:11px;line-height:16px;padding:0 6px;border-radius:var(--r);border:1px solid var(--border);color:var(--muted)}
+.slots .by{font:12px/16px var(--mono);font-variant-numeric:tabular-nums}
+.slots .cs{text-align:right;font-size:12px;color:var(--muted)}
+.slots .nm{white-space:nowrap}
+.dense-only{display:none}
+.m.dense .dense-only{display:inline-block}
+.m.dense .slots .dense-only{grid-column:2 / -1;grid-row:2;display:block;font:11px/16px var(--mono);color:var(--muted)}
+.rcl{list-style:none;margin:0;padding:8px 10px;display:grid;gap:6px;border:1px dashed var(--muted);border-radius:var(--r)}
+.rcl li{display:flex;gap:8px;font-size:13px;line-height:18px}
+.rcl li span:first-child{flex:1;min-width:0}
+.rcl .rk{font:12px/18px var(--mono);color:var(--muted)}
+.rcl-n{font-size:12px;line-height:16px;color:var(--muted)}
+.scrub{margin-top:auto;padding-top:12px;border-top:1px solid var(--border);display:grid;gap:6px}
+.scrub-h{display:flex;justify-content:space-between;font-size:12px;line-height:16px;color:var(--muted)}
+.scrub input{width:100%;margin:0;accent-color:var(--accent);height:20px}
+.ticks{display:flex;justify-content:space-between;font:11px/14px var(--mono);color:var(--muted);padding:0 4px}
+
+.graph{display:block;width:100%;height:auto;background:var(--bg);border:1px solid var(--border);border-radius:var(--r)}
+.graph text{font-family:var(--ui);font-size:11px;fill:var(--muted)}
+.graph .ln{stroke:var(--border);stroke-width:1}
+.graph .nd{fill:color-mix(in srgb,var(--accent) 24%,var(--bg));stroke:var(--accent);stroke-width:1.5}
+.graph .lo{fill:color-mix(in srgb,var(--text) 10%,var(--bg));stroke:var(--muted)}
+.graph .held{opacity:.4}
+.graph .ring{fill:none;stroke:var(--text);stroke-dasharray:3 3;stroke-width:1.2}
+.graph .u{fill:var(--text);font-weight:700}
+.legend{display:grid;gap:6px;font-size:12px;line-height:16px;color:var(--muted)}
+.legend div{display:flex;align-items:center;gap:8px}
+.lg{width:14px;height:14px;flex:none;display:inline-block}
+.lg-big{border-radius:50%;border:1.5px solid var(--accent);background:color-mix(in srgb,var(--accent) 24%,var(--bg))}
+.lg-unt{border-radius:50%;border:1.5px dashed var(--text)}
+.lg-held{border-radius:50%;border:1.5px solid var(--muted);opacity:.4}
+.sel{border:1px solid var(--border);border-radius:var(--r);background:var(--bg);padding:10px 12px;display:grid;gap:2px}
+.sel b{font-weight:600}
+.sel span{font-size:12px;line-height:16px;color:var(--muted)}
+
+.tstep{display:grid;gap:4px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg)}
+.th{display:flex;align-items:center;gap:8px}
+.mt{margin-left:auto;display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border-radius:var(--r);border:1px solid var(--border);font-size:11px;line-height:16px;font-weight:600}
+.mt-full{border-color:var(--success)}
+.mt-half{border-color:var(--muted)}
+.mt-rej{border-color:var(--danger)}
+.tbody{font-size:13px;line-height:18px}
+.tout{font:12px/16px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tms{font:11px/16px var(--mono);color:var(--muted)}
+
+@media (prefers-reduced-motion:no-preference){.m .tabs button,.m .btn,.seg button{transition:color .12s,background-color .12s,border-color .12s}}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-file" viewBox="0 0 16 16"><path d="M4 1.75h5.5L13 5.25v9H4v-12.5zM9.5 1.75v3.5H13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-note" viewBox="0 0 16 16"><path d="M3 2.5h10v11H3zM5.5 6h5M5.5 8.5h5M5.5 11h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 16 16"><path d="M10.5 5.5 6 10a1.4 1.4 0 0 0 2 2l5-5a3 3 0 0 0-4.2-4.2L4 8.2a4.5 4.5 0 0 0 6.4 6.4l3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 16 16"><path d="M14 2 7 9M14 2l-4.5 12L7 8.5 1.5 6z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16"><path d="M4 4h8v8H4z" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+  <symbol id="i-book" viewBox="0 0 16 16"><path d="M2.5 3h4.5a1 1 0 0 1 1 1v9a1 1 0 0 0-1-1H2.5zM13.5 3H9a1 1 0 0 0-1 1v9a1 1 0 0 1 1-1h4.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 16 16"><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-image" viewBox="0 0 16 16"><path d="M2 3h12v10H2zM2 11l3.5-3.5 3 3 2-2L14 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><path d="M7 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zM11 11l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+</svg>
+
+<div class="wrap">
+  <header class="intro">
+    <h1>Maia: four visual directions</h1>
+    <p class="lede">Each direction is a 1440 × 820 desktop screen: agent rail, a Scout thread waiting on approval, and the inspector. Direction 4 combines the strongest parts of the first three. Use the Dark / Light switch on each, click the Cache, Brain and Trace tabs, and drag the turn scrubber. The palette hex values below are the same values the mocks use. Fonts are system stacks (no downloads): Segoe UI Variable for the interface, Cascadia Mono for data, and Georgia where a direction sets the transcript in serif.</p>
+    <p class="lede">Agents talk to each other through tool calls that appear as collapsed lines inside your conversation, so there are no separate agent-to-agent threads. Channels put several agents in one room: click # build-crew in the rail to see one, and use the To control in the composer to address one agent or everyone at once.</p>
+  </header>
+
+  <div id="dirs" class="dirs"></div>
+
+  <section class="rec" aria-labelledby="rec-h">
+    <h2 id="rec-h">Recommendation</h2>
+    <div class="tbl cmp">
+      <table>
+        <thead><tr><th>Question</th><th>Graphite Signal</th><th>Ink and Amber</th><th>Night Mint</th><th>Mint Ledger</th></tr></thead>
+        <tbody>
+          <tr><td>Accent vs. NeedsHuman warning</td><td>Blue against orange. Unmistakable in both themes.</td><td>Amber against vermilion. Close in hue, so the banner depends on its tint and text label.</td><td>Mint against amber. Clear, though success green sits near the accent.</td><td>Mint against orange. Clear in both themes, and success is a yellow-green so it does not blur into the accent.</td></tr>
+          <tr><td>Light theme</td><td>Clean and near-neutral.</td><td>The paper theme is the best of the three.</td><td>Works, but loses much of its character.</td><td>Neutral light theme with a slight warm tint and a deep mint accent.</td></tr>
+          <tr><td>Density</td><td>Medium.</td><td>Airy, built for reading.</td><td>Highest. Rows are 28px.</td><td>Dense chrome around a relaxed reading column. Rows are 30px.</td></tr>
+          <tr><td>Android PWA fallback</td><td>Safe. System sans looks the same everywhere.</td><td>Serif transcript falls back to Noto Serif.</td><td>Same system sans as direction 1, so nothing falls back.</td><td>System sans everywhere, so nothing falls back.</td></tr>
+          <tr><td>Main risk</td><td>Looks like other well-made tools.</td><td>Accent and warning share a neighborhood.</td><td>Dense chrome around a conversation tires the eye.</td><td>Dense chrome needs discipline so the density stays out of the reading column.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pick">
+      <h3>Build on direction 4, Mint Ledger</h3>
+      <p>It keeps what you liked in Night Mint: the mint accent, the dense monospace inspector, per-agent budgets in the rail and counts on the tabs. It adds Graphite Signal's clean split between accent and warning, its rounded controls, its tinted selection and its transcript type, which was the easiest to read. From Ink and Amber it keeps the warm-tinted light theme and the ruled ledger tables in the inspector. In every direction your messages now sit right-aligned in a filled block, and each agent's messages run flush left under its avatar and name, so who said what is clear at a glance.</p>
+      <p>Mint is used only for running, selection and primary actions, and orange only for the approval banner and its pill, so a NeedsHuman state cannot be mistaken for an active agent. Everything uses system fonts, so Windows and the Android PWA look the same.</p>
+      <p class="note">Open question: I treated the full / half / rejected match labels as a per-step badge in Trace. If they mean something else, such as recall matches or cache prefix matches, tell me and I will move them.</p>
+    </div>
+  </section>
+</div>
+
+<template id="mock-tpl">
+  <div class="titlebar"><span class="word">Maia</span><span>Daemon running · Tailscale on</span><span class="grow"></span><span class="caption" aria-hidden="true"><i class="c-min"></i><i class="c-max"></i><i class="c-close"></i></span></div>
+  <div class="app">
+    <aside class="rail" aria-label="Agents">
+      <div class="rail-top"><span class="lbl">Agents</span><button type="button" class="sbtn"><svg class="ic"><use href="#i-search"/></svg>Search<kbd>Ctrl K</kbd></button></div>
+      <div class="activity">
+        <span class="lbl">Activity</span>
+        <div class="act-row"><span class="st st-run"></span>Running<b>1</b></div>
+        <div class="act-row"><span class="st st-need"></span>Needs you<b>1</b></div>
+      </div>
+      <nav class="agents">
+        <div class="agent">
+          <div class="agent-h"><span class="mono-av">A</span><span class="aname">Archivist</span><span class="astate"><span class="st st-sleep"></span>Sleeping</span></div>
+          <ul><li><span class="t">Nightly dream review</span><span class="tm">6h</span></li><li><span class="t">Vault cleanup</span><span class="tm">2d</span></li></ul>
+          <div class="bud"><span>$0.04 · 3k tok</span><span class="bar"><i style="width:6%"></i></span></div>
+        </div>
+        <div class="agent">
+          <div class="agent-h"><span class="mono-av">S</span><span class="aname">Scout</span><span class="astate"><span class="st st-need"></span>Needs you</span></div>
+          <ul><li aria-current="true" data-view-btn="dm" tabindex="0"><span class="t">Tailscale HTTPS setup</span><span class="tm">now</span></li><li><span class="t">Build digest watch</span><span class="tm">1h</span></li></ul>
+          <div class="bud"><span>$0.76 · 38k tok</span><span class="bar"><i style="width:38%"></i></span></div>
+        </div>
+        <div class="agent">
+          <div class="agent-h"><span class="mono-av">S</span><span class="aname">Scribe</span><span class="astate"><span class="st st-run"></span>Running</span></div>
+          <ul><li><span class="t">Chapter 4 draft</span><span class="tm">3m</span></li><li><span class="t">Chapter 5 outline</span><span class="tm">12m</span></li></ul>
+          <div class="bud"><span>$0.31 · 19k tok</span><span class="bar"><i style="width:16%"></i></span></div>
+        </div>
+      </nav>
+      <div class="chans">
+        <div class="chan-h"><span class="lbl">Channels</span><button type="button" class="ibtn" aria-label="New channel">+</button></div>
+        <ul>
+          <li data-view-btn="ch" tabindex="0" aria-current="false"><span class="hash">#</span><span class="t">build-crew</span><span class="astate"><span class="st st-run"></span>Running</span></li>
+          <li><span class="hash">#</span><span class="t">writing-room</span><span class="astate"><span class="st st-sleep"></span>Sleeping</span></li>
+        </ul>
+      </div>
+      <div class="rail-foot">
+        <button type="button" class="stopall"><svg class="ic"><use href="#i-stop"/></svg>Stop all</button>
+        <div class="foot-links"><span><svg class="ic"><use href="#i-book"/></svg>Vault</span><span><svg class="ic"><use href="#i-gear"/></svg>Settings</span></div>
+      </div>
+    </aside>
+
+    <main class="conv" data-view="dm">
+      <header class="chead">
+        <div class="who"><span class="mono-av">S</span><div><div class="ttl">Tailscale HTTPS setup</div><div class="sub">You · Scout</div></div></div>
+        <div class="head-r">
+          <span class="pill"><span class="st st-need"></span>Needs you</span>
+          <span class="budget"><span class="bar"><i style="width:38%"></i></span>$0.76 of $2.00</span>
+        </div>
+      </header>
+      <div class="banner" role="alert">
+        <span class="st st-need"></span>
+        <div class="btxt"><b>Needs you</b> · Approve shell: <code>pwsh -File build.ps1</code> <span class="dg">(digest ab12…)</span></div>
+        <div class="bbtns"><button type="button" class="btn">Deny</button><button type="button" class="btn pri">Approve</button><button type="button" class="btn dng">Stop</button></div>
+      </div>
+      <div class="scroll"><div class="tr">
+        <div class="run">
+          <div class="spk">You <time>4:02 PM</time></div>
+          <div class="att"><svg class="ic"><use href="#i-image"/></svg><div><b>funnel-status.png</b><span>PNG · 84 KB</span></div></div>
+          <p class="msg">Is the PWA reachable from my phone over Tailscale yet? Re-run the build if the certificate changed.</p>
+        </div>
+        <div class="run">
+          <div class="spk"><span class="mono-av">S</span>Scout <time>4:03 PM</time></div>
+          <button type="button" class="fold"><svg class="ic"><use href="#i-chev"/></svg>Reasoning · 3 steps</button>
+          <button type="button" class="fold"><svg class="ic"><use href="#i-chev"/></svg>Shell · 2 calls</button>
+          <button type="button" class="fold"><svg class="ic"><use href="#i-chev"/></svg>Archivist · asked 1 question</button>
+          <p class="msg">It is reachable. The daemon answers on <code>maia-pc.tail4c1e.ts.net</code> with a valid certificate, and your phone's last request arrived six minutes ago. The most recent build finished with 2 warnings, neither about the certificate: <span class="chip"><svg class="ic"><use href="#i-file"/></svg>build-log.txt</span>. I wrote the setup steps and the renewal window to <span class="chip"><svg class="ic"><use href="#i-note"/></svg>Scout/tailscale.md</span>.</p>
+          <p class="msg">The certificate was reissued on Nov 2, so I would like to rebuild. That needs your approval.</p>
+          <button type="button" class="facts">2 facts installed<svg class="ic" style="width:12px;height:12px"><use href="#i-chev"/></svg></button>
+          <button type="button" class="fold"><svg class="ic"><use href="#i-chev"/></svg>Shell · 1 call · waiting for approval</button>
+        </div>
+      </div></div>
+      <div class="composer"><div class="cbox">
+        <textarea aria-label="Message Scout" placeholder="Message Scout"></textarea>
+        <div class="crow"><button type="button" class="ibtn" aria-label="Attach a file"><svg class="ic"><use href="#i-clip"/></svg></button><button type="button" class="to"><span>To</span><b>Scout</b><svg class="ic"><use href="#i-chev"/></svg></button><span class="hint">Scout is waiting for your approval. New messages queue.</span><button type="button" class="btn pri send">Send<svg class="ic"><use href="#i-send"/></svg></button></div>
+      </div></div>
+    </main>
+
+    <main class="conv" data-view="ch" hidden>
+      <header class="chead">
+        <div class="who"><span class="mono-av">#</span><div><div class="ttl">build-crew</div><div class="sub">You · Archivist · Scout · Scribe</div></div></div>
+        <div class="head-r">
+          <span class="pill pill-run"><span class="st st-run"></span>Running</span>
+          <span class="budget"><span class="bar"><i style="width:22%"></i></span>$1.11 of $5.00</span>
+        </div>
+      </header>
+      <div class="scroll"><div class="tr">
+        <div class="run">
+          <div class="spk">You <time>4:11 PM</time><span class="tag">To everyone</span></div>
+          <p class="msg">Is the Tailscale certificate sorted, and does the Chapter 4 export still build?</p>
+        </div>
+        <div class="run">
+          <div class="spk"><span class="mono-av">A</span>Archivist <time>4:11 PM</time></div>
+          <button type="button" class="fold"><svg class="ic"><use href="#i-chev"/></svg>Vault · 1 call</button>
+          <p class="msg">The renewal window is in the vault notes. I will add a reminder fact after tonight's dream.</p>
+        </div>
+        <div class="run">
+          <div class="spk"><span class="mono-av">S</span>Scout <time>4:12 PM</time></div>
+          <button type="button" class="fold"><svg class="ic"><use href="#i-chev"/></svg>Shell · 1 call</button>
+          <p class="msg">The certificate was reissued on Nov 2. A rebuild is waiting for your approval in our direct thread, and the details are in <span class="chip"><svg class="ic"><use href="#i-note"/></svg>Scout/tailscale.md</span>.</p>
+        </div>
+        <div class="run">
+          <div class="spk"><span class="mono-av">S</span>Scribe <time>4:12 PM</time></div>
+          <button type="button" class="fold"><svg class="ic"><use href="#i-chev"/></svg>Scout · asked 1 question</button>
+          <p class="msg">Chapter 4 exports cleanly. I checked with Scout first, since the build shares a machine with the daemon.</p>
+        </div>
+      </div></div>
+      <div class="composer"><div class="cbox">
+        <textarea aria-label="Message build-crew" placeholder="Message #build-crew"></textarea>
+        <div class="crow"><button type="button" class="ibtn" aria-label="Attach a file"><svg class="ic"><use href="#i-clip"/></svg></button><button type="button" class="to"><span>To</span><b>Everyone</b><svg class="ic"><use href="#i-chev"/></svg></button><span class="hint">All three agents see this. Type @Scout to address one.</span><button type="button" class="btn pri send">Send<svg class="ic"><use href="#i-send"/></svg></button></div>
+      </div></div>
+    </main>
+
+    <aside class="insp" aria-label="Inspector">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" aria-selected="true" data-tab="cache">Cache<span class="cnt">81%</span></button>
+        <button type="button" role="tab" aria-selected="false" data-tab="brain">Brain<span class="cnt">8</span></button>
+        <button type="button" role="tab" aria-selected="false" data-tab="trace">Trace<span class="cnt">4</span></button>
+      </div>
+
+      <div class="panel" data-panel="cache" role="tabpanel">
+        <div class="hero"><span class="big">81%</span><span class="bl">cached</span><span class="bs">16,200 of 20,000 B</span></div>
+        <div class="stack" aria-hidden="true"><i class="s1" style="flex:4800"></i><i class="s2" style="flex:1200"></i><i class="s3" style="flex:2400"></i><i class="s4" style="flex:5200"></i><i class="s5" style="flex:2600"></i><i class="s6" style="flex:1900"></i><i class="s7" style="flex:1900"></i></div>
+        <span class="lbl">Prompt slots · in order</span>
+        <ul class="slots">
+          <li><span class="n">1</span><span class="nm">Tools</span><span class="dense-only">1.2k tok · #9f3a</span><span class="by">4,800 B</span><span class="cs">cached</span></li>
+          <li><span class="n">2</span><span class="nm">Agents</span><span class="dense-only">310 tok · #c41e</span><span class="by">1,200 B</span><span class="cs">cached</span></li>
+          <li><span class="n">3</span><span class="nm">Persona</span><span class="dense-only">600 tok · #07bd</span><span class="by">2,400 B</span><span class="cs">cached</span></li>
+          <li><span class="n">4</span><span class="nm">Compacted memory</span><span class="dense-only">1.3k tok · #5a21</span><span class="by">5,200 B</span><span class="cs">cached</span></li>
+          <li><span class="n">5</span><span class="nm">Memory notes<span class="tag">+2 facts</span></span><span class="dense-only">650 tok · #e8d0</span><span class="by">2,600 B</span><span class="cs">cached</span></li>
+        </ul>
+        <span class="lbl">Recall · not durable</span>
+        <ul class="rcl">
+          <li><span>maia-pc serves on 127.0.0.1:7420</span><span class="rk">0.71</span></li>
+          <li><span>Approve before any build runs</span><span class="rk">0.64</span></li>
+        </ul>
+        <span class="rcl-n">Dropped after this turn · 1,900 B</span>
+        <div class="scrub">
+          <div class="scrub-h"><span>Turn <output>7</output> of 7</span><span>Scrub to compare</span></div>
+          <input type="range" min="1" max="7" value="7" step="1" aria-label="Turn scrubber">
+          <div class="ticks" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span></div>
+        </div>
+      </div>
+
+      <div class="panel" data-panel="brain" role="tabpanel" hidden>
+        <svg class="graph" viewBox="0 0 304 290" role="img" aria-label="Fact graph. Cert rotation has the highest activation.">
+          <line class="ln" x1="150" y1="105" x2="62" y2="62"/><line class="ln" x1="150" y1="105" x2="240" y2="62"/><line class="ln" x1="150" y1="105" x2="232" y2="160"/><line class="ln" x1="150" y1="105" x2="100" y2="170"/>
+          <line class="ln" x1="62" y1="62" x2="40" y2="125"/><line class="ln" x1="232" y1="160" x2="252" y2="240"/><line class="ln" x1="232" y1="160" x2="100" y2="170"/><line class="ln" x1="100" y1="170" x2="150" y2="245"/>
+          <circle class="nd" cx="150" cy="105" r="18.6"/><text x="150" y="136" text-anchor="middle">Cert rotation</text>
+          <circle class="nd" cx="62" cy="62" r="13.7"/><text x="62" y="90" text-anchor="middle">Hostname</text>
+          <circle class="nd" cx="240" cy="62" r="13"/><text x="240" y="89" text-anchor="middle">PWA install</text>
+          <circle class="nd" cx="232" cy="160" r="15.8"/><text x="232" y="190" text-anchor="middle">build.ps1</text>
+          <circle class="nd lo" cx="100" cy="170" r="10.9"/><text x="100" y="196" text-anchor="middle">Build warnings</text>
+          <circle class="nd lo" cx="40" cy="125" r="10.2"/><circle class="ring" cx="40" cy="125" r="15"/><text class="u" x="40" y="129" text-anchor="middle">U</text><text x="40" y="151" text-anchor="middle">Port 8443</text>
+          <g class="held"><circle class="nd lo" cx="150" cy="245" r="8.8"/><text x="150" y="268" text-anchor="middle">maia-dev · held</text></g>
+          <circle class="nd lo" cx="252" cy="240" r="9.5"/><text x="252" y="263" text-anchor="middle">Budget cap</text>
+        </svg>
+        <div class="legend">
+          <div><span class="lg lg-big"></span>Size shows activation</div>
+          <div><span class="lg lg-unt"></span>Dashed ring and U mark an Untrusted fact</div>
+          <div><span class="lg lg-held"></span>Dimmed facts are held</div>
+        </div>
+        <div class="sel"><b>Cert rotation</b><span class="mono">activation 0.90 · trusted · 4 links</span><span>Installed on turn 6 from a dream</span></div>
+      </div>
+
+      <div class="panel" data-panel="trace" role="tabpanel" hidden>
+        <div class="tstep"><div class="th"><span class="lbl">Reasoning</span><span class="dense-only tms">0.9 s</span></div><div class="tbody">Serve is probably already on. Compare the certificate date with the last build and rebuild only if it changed.</div></div>
+        <div class="tstep"><div class="th"><span class="lbl">Shell</span><span class="dense-only tms">412 ms</span><span class="mt mt-full">● full match</span></div><div class="tbody"><code>tailscale serve status</code></div><div class="tout">https://maia-pc.tail4c1e.ts.net → 127.0.0.1:7420</div></div>
+        <div class="tstep"><div class="th"><span class="lbl">Shell</span><span class="dense-only tms">96 ms</span><span class="mt mt-half">◐ half match</span></div><div class="tbody"><code>Get-Item build-log.txt</code></div><div class="tout">412 lines · 2 warnings · Nov 2 11:48</div></div>
+        <div class="tstep"><div class="th"><span class="lbl">Agent call</span><span class="dense-only tms">1.1 s</span><span class="mt mt-full">● full match</span></div><div class="tbody"><code>Archivist</code> · When did the certificate last change?</div><div class="tout">Archivist: Nov 2, reissued by Tailscale</div></div>
+        <div class="tstep"><div class="th"><span class="lbl">Shell</span><span class="dense-only tms">0 ms</span><span class="mt mt-rej">✕ rejected</span></div><div class="tbody"><code>nmap 100.64.0.0/10</code></div><div class="tout">Denied by policy: network scan</div></div>
+        <div class="tstep"><div class="th"><span class="lbl">Reply</span><span class="dense-only tms">1.4 s</span><span class="mt mt-full">● full match</span></div><div class="tbody">Reachable. Rebuild needs approval.</div></div>
+      </div>
+    </aside>
+  </div>
+</template>
+
+<script>
+(function(){
+  var TOK=['bg','surface','border','text','muted','accent','warning','danger','success','onAccent'];
+  var dirs=[
+    {id:'d1',n:1,name:'Graphite Signal',
+     mood:'A calm graphite workbench where blue appears only when something is running, selected or ready to approve.',
+     dark:{bg:'#0F1115',surface:'#161A20',border:'#262C35',text:'#E6E9EE',muted:'#8B94A3',accent:'#4F8BFF',warning:'#F5A524',danger:'#F0584F',success:'#3DD68C',onAccent:'#06102B'},
+     light:{bg:'#F6F7F9',surface:'#FFFFFF',border:'#DDE1E7',text:'#14181F',muted:'#5B6573',accent:'#2457E6',warning:'#B26A00',danger:'#C73A32',success:'#167A4B',onAccent:'#FFFFFF'},
+     type:[['Title','18 / 24 · 600','Segoe UI Variable Text'],['Transcript','15 / 24 · 400','Segoe UI Variable Text'],['Body and controls','14 / 20 · 400, buttons 550','Segoe UI Variable Text'],['Labels','12 / 16 · 500. Section labels 11 / 16, caps, +0.08em','Segoe UI Variable Text'],['Monospace: ids, prompt bytes, tool output','12 / 16','Cascadia Mono, then Consolas'],['Fallback','Same sizes','system-ui, Roboto on Android']]},
+    {id:'d2',n:2,name:'Ink and Amber',
+     mood:'A reading room for long agent conversations, with warm ink, paper-white text and one lamp-amber highlight.',
+     dark:{bg:'#16120E',surface:'#1E1914',border:'#342C23',text:'#EEE6D6',muted:'#A39682',accent:'#E6B04B',warning:'#EB6A3F',danger:'#D6455D',success:'#8DB36B',onAccent:'#1B1208'},
+     light:{bg:'#F5F0E4',surface:'#FBF8F0',border:'#DDD3BE',text:'#2A2319',muted:'#6F634F',accent:'#8F5300',warning:'#C2410C',danger:'#B3263F',success:'#4F7A28',onAccent:'#FFF8EA'},
+     type:[['Title','18 / 24 · 400','Georgia'],['Transcript','15 / 24 · 400','Georgia'],['Speaker names','11 / 16 · 600, caps, +0.08em','Segoe UI Variable Text'],['Body and controls','14 / 20 · 400, buttons 550','Segoe UI Variable Text'],['Figures (cache %)','36 / 40 · 400','Georgia'],['Monospace: ids, prompt bytes, tool output','12 / 16','Cascadia Mono, then Consolas'],['Fallback','Same sizes','Cambria, Noto Serif on Android']]},
+    {id:'d3',n:3,dense:true,name:'Night Mint',
+     mood:'A near-black console with mint signals and tight tabular data, built for watching many agents at once.',
+     dark:{bg:'#08090A',surface:'#0E1011',border:'#1E2325',text:'#DCE2E0',muted:'#7F8B89',accent:'#36E2B0',warning:'#FFB020',danger:'#FF5C5C',success:'#8FD14F',onAccent:'#04140F'},
+     light:{bg:'#F1F4F3',surface:'#FFFFFF',border:'#D3DBD9',text:'#0F1514',muted:'#56635F',accent:'#007A5A',warning:'#B45F00',danger:'#C22F2F',success:'#4C7F1E',onAccent:'#FFFFFF'},
+     type:[['Title','15 / 20 · 600','Segoe UI Variable Text'],['Transcript','15 / 24 · 400','Segoe UI Variable Text'],['Rail and inspector rows','13 / 18 · 400. Relaxes the 14 / 20 body spec.','Segoe UI Variable Text'],['Body and controls','14 / 20 in banner and composer, buttons 13 / 18','Segoe UI Variable Text'],['Data and ids','12 / 16, tabular figures','Cascadia Mono, then Consolas'],['Labels','11 / 16 · 600, caps, +0.08em','Segoe UI Variable Text'],['Fallback','Same sizes','system-ui, Roboto on Android']]},
+    {id:'d4',n:4,dense:true,name:'Mint Ledger',
+     mood:'Night Mint\'s dense, tabular inspector on a graphite base, with the easy-reading sans transcript from Graphite Signal and an orange warning that stays clear of the mint accent.',
+     dark:{bg:'#0C0E10',surface:'#14171A',border:'#252A2E',text:'#E4E8E6',muted:'#8A9490',accent:'#3DDDB0',warning:'#F5A524',danger:'#F0584F',success:'#A6D95B',onAccent:'#04140F'},
+     light:{bg:'#F3F4F1',surface:'#FCFCFA',border:'#DADCD5',text:'#14181A',muted:'#5C6560',accent:'#00775A',warning:'#B45F00',danger:'#C22F2F',success:'#4D7A1A',onAccent:'#FFFFFF'},
+     type:[['Title','15 / 20 · 600','Segoe UI Variable Text'],['Transcript','15 / 24 · 400','Segoe UI Variable Text'],['Speaker names','13 / 16 · 600','Segoe UI Variable Text'],['Rail and inspector rows','13 / 18 · 400. Relaxes the 14 / 20 body spec.','Segoe UI Variable Text'],['Body and controls','14 / 20 in banner and composer, buttons 550','Segoe UI Variable Text'],['Data, ids, prompt bytes, tool output','12 / 16, tabular figures','Cascadia Mono, then Consolas'],['Fallback','Same sizes','system-ui, Roboto on Android']]}
+  ];
+  var PCT=[0,48,63,71,76,79,81];
+
+  function setTheme(m,d,theme){
+    var p=d[theme];
+    TOK.forEach(function(k){m.style.setProperty('--'+(k==='onAccent'?'on-accent':k),p[k]);});
+    m.style.colorScheme=theme;
+    m.classList.toggle('light',theme==='light');
+  }
+  function pal(title,p){
+    return '<div class="pal"><h4>'+title+'</h4><div class="sws">'+TOK.map(function(k){
+      return '<div class="sw"><span class="sw-c" style="background:'+p[k]+'"></span><span class="sw-n">'+(k==='onAccent'?'on-accent':k)+'</span><span class="sw-h">'+p[k]+'</span></div>';
+    }).join('')+'</div></div>';
+  }
+  function typeTable(d){
+    return '<div class="tbl"><table><thead><tr><th>Role</th><th>Size / line</th><th>Face</th></tr></thead><tbody>'+
+      d.type.map(function(r){return '<tr><td>'+r[0]+'</td><td class="num">'+r[1]+'</td><td>'+r[2]+'</td></tr>';}).join('')+'</tbody></table></div>';
+  }
+  function section(d){
+    return '<section class="dir" id="'+d.id+'" aria-labelledby="'+d.id+'-h">'+
+      '<div class="dir-head"><div><p class="eyebrow">Direction '+d.n+'</p><h2 id="'+d.id+'-h">'+d.name+'</h2><p class="mood">'+d.mood+'</p></div>'+
+      '<div class="seg" role="group" aria-label="Theme for '+d.name+'"><button type="button" aria-pressed="true" data-theme-btn="dark">Dark</button><button type="button" aria-pressed="false" data-theme-btn="light">Light</button></div></div>'+
+      '<div class="fit"><div class="fit-in"></div></div>'+
+      '<div class="spec"><div><h3>Palette</h3>'+pal('Dark · default',d.dark)+pal('Light',d.light)+'</div><div><h3>Type scale</h3>'+typeTable(d)+'</div></div>'+
+      '</section>';
+  }
+  function showTab(m,name){
+    m.querySelectorAll('.tabs [data-tab]').forEach(function(b){b.setAttribute('aria-selected',b.getAttribute('data-tab')===name?'true':'false');});
+    m.querySelectorAll('.panel').forEach(function(p){p.hidden=p.getAttribute('data-panel')!==name;});
+  }
+  function showView(m,name){
+    m.querySelectorAll('.conv').forEach(function(c){c.hidden=c.getAttribute('data-view')!==name;});
+    m.querySelectorAll('[data-view-btn]').forEach(function(li){li.setAttribute('aria-current',li.getAttribute('data-view-btn')===name?'true':'false');});
+  }
+  function wire(m){
+    m.addEventListener('keydown',function(e){
+      var v=e.target.closest&&e.target.closest('[data-view-btn]');
+      if(v&&(e.key==='Enter'||e.key===' ')){e.preventDefault();showView(m,v.getAttribute('data-view-btn'));}
+    });
+    m.addEventListener('click',function(e){
+      var vb=e.target.closest('[data-view-btn]');
+      if(vb){showView(m,vb.getAttribute('data-view-btn'));return;}
+      var t=e.target.closest('[data-tab]');
+      if(t){showTab(m,t.getAttribute('data-tab'));return;}
+      if(e.target.closest('.facts')){showTab(m,'cache');}
+    });
+    var r=m.querySelector('.scrub input');
+    r.addEventListener('input',function(){
+      var v=parseInt(r.value,10),pc=PCT[v-1];
+      m.querySelector('.big').textContent=pc+'%';
+      m.querySelector('.bs').textContent=(pc*200).toLocaleString('en-US')+' of 20,000 B';
+      m.querySelector('.scrub output').textContent=v;
+      var c=m.querySelector('.tabs .cnt');if(c)c.textContent=pc+'%';
+    });
+  }
+  function fit(){
+    document.querySelectorAll('.fit').forEach(function(f){
+      var s=Math.min(1,Math.max(0.5,f.clientWidth/1440));
+      var i=f.firstElementChild;
+      i.style.width=(1440*s)+'px';i.style.height=(820*s)+'px';
+      var m=i.firstElementChild;if(m)m.style.transform='scale('+s+')';
+    });
+  }
+
+  var root=document.getElementById('dirs'),tpl=document.getElementById('mock-tpl');
+  dirs.forEach(function(d){
+    root.insertAdjacentHTML('beforeend',section(d));
+    var sec=root.lastElementChild,inner=sec.querySelector('.fit-in');
+    var m=document.createElement('div');
+    m.className='m '+d.id+(d.dense?' dense':'');
+    m.appendChild(tpl.content.cloneNode(true));
+    m.querySelectorAll('.run').forEach(function(r){
+      r.classList.add(/^\s*You/.test(r.querySelector('.spk').textContent)?'you':'bot');
+    });
+    inner.appendChild(m);
+    setTheme(m,d,'dark');
+    wire(m);
+    sec.querySelectorAll('[data-theme-btn]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var th=b.getAttribute('data-theme-btn');
+        sec.querySelectorAll('[data-theme-btn]').forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
+        setTheme(m,d,th);
+      });
+    });
+  });
+  fit();
+  window.addEventListener('resize',fit);
+})();
+</script>
+
+</body></html>
