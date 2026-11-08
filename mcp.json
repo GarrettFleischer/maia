@@ -1,0 +1,18 @@
+{
+  "servers": [
+    {
+      "id": "files",
+      "label": "Filesystem",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "data/workspace"]
+    },
+    {
+      "id": "playwright",
+      "label": "Playwright",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    }
+  ]
+}
