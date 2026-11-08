@@ -1,0 +1,88 @@
+[workspace]
+members = [
+    "crates/maia-core",
+    "crates/maia-store",
+    "crates/maia-vault",
+    "crates/maia-router",
+    "crates/maia-embedder",
+    "crates/maia-tools",
+    "crates/maia-secrets",
+    "crates/maia-daemon",
+    "crates/maia-containment",
+    "crates/maia-windows",
+    "crates/maia-linux",
+    "crates/maia-macos",
+    "crates/maia-win32",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.90"
+version = "0.1.0"
+
+[workspace.dependencies]
+maia-containment = { path = "crates/maia-containment", version = "0.1.0" }
+maia-core = { path = "crates/maia-core", version = "0.1.0" }
+maia-daemon = { path = "crates/maia-daemon", version = "0.1.0" }
+maia-embedder = { path = "crates/maia-embedder", version = "0.1.0" }
+maia-linux = { path = "crates/maia-linux", version = "0.1.0" }
+maia-macos = { path = "crates/maia-macos", version = "0.1.0" }
+maia-router = { path = "crates/maia-router", version = "0.1.0" }
+maia-secrets = { path = "crates/maia-secrets", version = "0.1.0" }
+maia-store = { path = "crates/maia-store", version = "0.1.0" }
+maia-tools = { path = "crates/maia-tools", version = "0.1.0" }
+maia-vault = { path = "crates/maia-vault", version = "0.1.0" }
+maia-windows = { path = "crates/maia-windows", version = "0.1.0" }
+maia-win32 = { path = "crates/maia-win32", version = "0.1.0" }
+candle-core = { version = "=0.10.2", default-features = true }
+candle-nn = { version = "=0.10.2", default-features = true }
+candle-transformers = { version = "=0.10.2", default-features = true }
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+reqwest = { version = "0.12.12", default-features = false, features = [
+    "json",
+    "rustls-tls-native-roots",
+    "stream",
+] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+safetensors = "0.8.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.140"
+sha2 = "0.11.1"
+sqlite-vec = "=0.1.9"
+thiserror = "2.0.21"
+tokenizers = { version = "1.0.0-rc.3", default-features = false, features = [
+    "bpe",
+    "normalizers",
+    "serialize",
+    "unicode-scripts",
+    "wordpiece",
+] }
+tokio = { version = "1.43.0", features = ["sync"] }
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Credentials",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"
+borrowed_box = "deny"
+ptr_arg = "deny"
+should_implement_trait = "deny"
+new_without_default = "deny"
+len_without_is_empty = "deny"
+wrong_self_convention = "deny"
+unwrap_used = "deny"
+panic_in_result_fn = "deny"
+await_holding_lock = "deny"

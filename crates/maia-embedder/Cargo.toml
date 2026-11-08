@@ -1,0 +1,19 @@
+[package]
+name = "maia-embedder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+maia-core = { workspace = true }
+safetensors = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokenizers = { workspace = true }
+
+[lints]
+workspace = true

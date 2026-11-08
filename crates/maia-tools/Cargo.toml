@@ -1,0 +1,24 @@
+[package]
+name = "maia-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22"
+maia-core = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+maia-windows = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+maia-linux = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+maia-macos = { workspace = true }
+
+[lints]
+workspace = true

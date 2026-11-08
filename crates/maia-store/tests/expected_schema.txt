@@ -1,0 +1,158 @@
+index|idx_allowlist_enabled|allowlist_entries|CREATE INDEX idx_allowlist_enabled ON allowlist_entries (enabled)
+index|idx_audit_events_thread|audit_events|CREATE INDEX idx_audit_events_thread ON audit_events (thread_id)
+index|idx_child_assignments_parent|child_assignments|CREATE INDEX idx_child_assignments_parent ON child_assignments (parent_task_id)
+index|idx_claims_episode|claims|CREATE INDEX idx_claims_episode ON claims (episode_id)
+index|idx_claims_status|claims|CREATE INDEX idx_claims_status ON claims (status)
+index|idx_context_snapshots_snapshot|context_snapshots|CREATE INDEX idx_context_snapshots_snapshot ON context_snapshots (snapshot_id, ordinal)
+index|idx_dream_queue_open|dream_queue|CREATE INDEX idx_dream_queue_open ON dream_queue (consumed_at)
+index|idx_edges_to|edges|CREATE INDEX idx_edges_to ON edges (edge_kind, to_kind, to_id)
+index|idx_facts_entity|facts|CREATE INDEX idx_facts_entity ON facts (entity_id)
+index|idx_legacy_threads_marked|legacy_threads|CREATE INDEX idx_legacy_threads_marked ON legacy_threads (marked_at, thread_id)
+index|idx_message_submissions_message|message_submissions|CREATE INDEX idx_message_submissions_message ON message_submissions (message_id)
+index|idx_negative_marks_target|negative_marks|CREATE INDEX idx_negative_marks_target ON negative_marks (target_kind, target_id)
+index|idx_presentations_ledger|presentations|CREATE INDEX idx_presentations_ledger ON presentations (ledger_id)
+index|idx_projections_progress|projections|CREATE INDEX idx_projections_progress ON projections (progress)
+index|idx_snapshots_observed|platform_capability_snapshots|CREATE INDEX idx_snapshots_observed ON platform_capability_snapshots (observed_at, snapshot_id)
+index|idx_task_attempts_task|task_attempts|CREATE INDEX idx_task_attempts_task ON task_attempts (task_id)
+index|idx_task_criteria_ordinal|task_criteria|CREATE UNIQUE INDEX idx_task_criteria_ordinal ON task_criteria (task_id, ordinal)
+index|idx_task_criteria_task|task_criteria|CREATE INDEX idx_task_criteria_task ON task_criteria (task_id)
+index|idx_task_evidence_task|task_evidence|CREATE INDEX idx_task_evidence_task ON task_evidence (task_id)
+index|idx_task_inputs_task|task_inputs|CREATE INDEX idx_task_inputs_task ON task_inputs (task_id)
+index|idx_task_reports_task|task_reports|CREATE INDEX idx_task_reports_task ON task_reports (task_id, created_at)
+index|idx_thread_events_event|thread_events|CREATE UNIQUE INDEX idx_thread_events_event ON thread_events (thread_id, event_id)
+index|sqlite_autoindex_allowlist_entries_1|allowlist_entries|
+index|sqlite_autoindex_audit_blobs_1|audit_blobs|
+index|sqlite_autoindex_audit_events_1|audit_events|
+index|sqlite_autoindex_child_assignments_1|child_assignments|
+index|sqlite_autoindex_claim_vec_info_1|claim_vec_info|
+index|sqlite_autoindex_claim_vec_vector_chunks00_1|claim_vec_vector_chunks00|
+index|sqlite_autoindex_claims_1|claims|
+index|sqlite_autoindex_consolidation_batches_1|consolidation_batches|
+index|sqlite_autoindex_context_snapshots_1|context_snapshots|
+index|sqlite_autoindex_correction_holds_1|correction_holds|
+index|sqlite_autoindex_dismissals_1|dismissals|
+index|sqlite_autoindex_dream_queue_1|dream_queue|
+index|sqlite_autoindex_edges_1|edges|
+index|sqlite_autoindex_embedding_models_1|embedding_models|
+index|sqlite_autoindex_embedding_rows_1|embedding_rows|
+index|sqlite_autoindex_embedding_rows_2|embedding_rows|
+index|sqlite_autoindex_entities_1|entities|
+index|sqlite_autoindex_entities_2|entities|
+index|sqlite_autoindex_entity_links_1|entity_links|
+index|sqlite_autoindex_episode_segments_1|episode_segments|
+index|sqlite_autoindex_episode_vec_info_1|episode_vec_info|
+index|sqlite_autoindex_episode_vec_vector_chunks00_1|episode_vec_vector_chunks00|
+index|sqlite_autoindex_episodes_1|episodes|
+index|sqlite_autoindex_fact_claims_1|fact_claims|
+index|sqlite_autoindex_fact_episodes_1|fact_episodes|
+index|sqlite_autoindex_fact_vec_info_1|fact_vec_info|
+index|sqlite_autoindex_fact_vec_vector_chunks00_1|fact_vec_vector_chunks00|
+index|sqlite_autoindex_facts_1|facts|
+index|sqlite_autoindex_ledger_heat_1|ledger_heat|
+index|sqlite_autoindex_ledgers_1|ledgers|
+index|sqlite_autoindex_legacy_threads_1|legacy_threads|
+index|sqlite_autoindex_lexemes_1|lexemes|
+index|sqlite_autoindex_message_submissions_1|message_submissions|
+index|sqlite_autoindex_message_submissions_2|message_submissions|
+index|sqlite_autoindex_negative_marks_1|negative_marks|
+index|sqlite_autoindex_platform_capability_snapshots_1|platform_capability_snapshots|
+index|sqlite_autoindex_presentations_1|presentations|
+index|sqlite_autoindex_projection_entities_1|projection_entities|
+index|sqlite_autoindex_projection_folders_1|projection_folders|
+index|sqlite_autoindex_projections_1|projections|
+index|sqlite_autoindex_proposals_1|proposals|
+index|sqlite_autoindex_router_messages_1|router_messages|
+index|sqlite_autoindex_router_messages_2|router_messages|
+index|sqlite_autoindex_router_sessions_1|router_sessions|
+index|sqlite_autoindex_router_turn_snapshots_1|router_turn_snapshots|
+index|sqlite_autoindex_runtime_id_high_water_1|runtime_id_high_water|
+index|sqlite_autoindex_slot_heat_1|slot_heat|
+index|sqlite_autoindex_task_attempts_1|task_attempts|
+index|sqlite_autoindex_task_criteria_1|task_criteria|
+index|sqlite_autoindex_task_envelopes_1|task_envelopes|
+index|sqlite_autoindex_task_evidence_1|task_evidence|
+index|sqlite_autoindex_task_inputs_1|task_inputs|
+index|sqlite_autoindex_task_reports_1|task_reports|
+index|sqlite_autoindex_task_sessions_1|task_sessions|
+index|sqlite_autoindex_thread_events_1|thread_events|
+index|sqlite_autoindex_threads_1|threads|
+table|allowlist_entries|allowlist_entries|CREATE TABLE allowlist_entries (grant_id TEXT PRIMARY KEY, capability TEXT NOT NULL, matcher_kind TEXT NOT NULL, matcher_canonical TEXT NOT NULL, agent_id TEXT, lifetime_kind TEXT NOT NULL, lifetime_at INTEGER, lifetime_generation INTEGER, enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)), created_at INTEGER NOT NULL, created_by TEXT NOT NULL)
+table|audit_blobs|audit_blobs|CREATE TABLE audit_blobs (payload_hash TEXT PRIMARY KEY, body BLOB NOT NULL)
+table|audit_checkpoints|audit_checkpoints|CREATE TABLE audit_checkpoints (sequence INTEGER PRIMARY KEY, event_hash TEXT NOT NULL, policy_version INTEGER NOT NULL, occurred_at INTEGER NOT NULL)
+table|audit_events|audit_events|CREATE TABLE audit_events (sequence INTEGER PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, thread_id TEXT, actor_kind TEXT NOT NULL, actor_id TEXT, kind TEXT NOT NULL, cause_event_id TEXT, request_id TEXT, occurred_at INTEGER NOT NULL, payload_hash TEXT NOT NULL, previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL, canonical BLOB NOT NULL, profile TEXT NOT NULL, allowlist_entry_id TEXT)
+table|child_assignments|child_assignments|CREATE TABLE child_assignments (child_id TEXT PRIMARY KEY, parent_task_id TEXT NOT NULL, depth INTEGER NOT NULL, subgoal BLOB NOT NULL, budget_tokens INTEGER NOT NULL, budget_turns INTEGER NOT NULL, phase TEXT NOT NULL DEFAULT 'queued')
+table|claim_fts|claim_fts|CREATE VIRTUAL TABLE claim_fts USING fts5(claim_id UNINDEXED, sentence, tokenize='unicode61')
+table|claim_fts_config|claim_fts_config|CREATE TABLE 'claim_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID
+table|claim_fts_content|claim_fts_content|CREATE TABLE 'claim_fts_content'(id INTEGER PRIMARY KEY, c0, c1)
+table|claim_fts_data|claim_fts_data|CREATE TABLE 'claim_fts_data'(id INTEGER PRIMARY KEY, block BLOB)
+table|claim_fts_docsize|claim_fts_docsize|CREATE TABLE 'claim_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB)
+table|claim_fts_idx|claim_fts_idx|CREATE TABLE 'claim_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID
+table|claim_vec|claim_vec|CREATE VIRTUAL TABLE claim_vec USING vec0(embedding float[384])
+table|claim_vec_chunks|claim_vec_chunks|CREATE TABLE "claim_vec_chunks"(chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,validity BLOB NOT NULL,rowids BLOB NOT NULL)
+table|claim_vec_info|claim_vec_info|CREATE TABLE "claim_vec_info" (key text primary key, value any)
+table|claim_vec_rowids|claim_vec_rowids|CREATE TABLE "claim_vec_rowids"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id,chunk_id INTEGER,chunk_offset INTEGER)
+table|claim_vec_vector_chunks00|claim_vec_vector_chunks00|CREATE TABLE "claim_vec_vector_chunks00"(rowid PRIMARY KEY,vectors BLOB NOT NULL)
+table|claims|claims|CREATE TABLE claims (claim_id TEXT PRIMARY KEY, sentence TEXT NOT NULL, episode_id TEXT NOT NULL, taint TEXT NOT NULL CHECK (taint IN ('trusted', 'untrusted')), status TEXT NOT NULL CHECK (status IN ('provisional', 'superseded')), valid_from INTEGER NOT NULL, consolidated_by TEXT, FOREIGN KEY (episode_id) REFERENCES episodes (episode_id), FOREIGN KEY (consolidated_by) REFERENCES facts (fact_id))
+table|consolidation_batches|consolidation_batches|CREATE TABLE consolidation_batches (batch_id TEXT PRIMARY KEY, canonical TEXT NOT NULL, context_taint TEXT NOT NULL, model TEXT NOT NULL, created_at INTEGER NOT NULL)
+table|context_snapshots|context_snapshots|CREATE TABLE context_snapshots (snapshot_id TEXT NOT NULL, ordinal INTEGER NOT NULL, memory_id TEXT NOT NULL, provenance TEXT NOT NULL, trust TEXT NOT NULL, sentence TEXT NOT NULL, PRIMARY KEY (snapshot_id, ordinal))
+table|correction_holds|correction_holds|CREATE TABLE correction_holds (target_kind TEXT NOT NULL, target_id TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (target_kind, target_id))
+table|credential_backend_settings|credential_backend_settings|CREATE TABLE credential_backend_settings (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), active_backend TEXT NOT NULL CHECK (active_backend IN ('native', 'encrypted_file', 'vault_openbao')), encrypted_file_idle_timeout_ms INTEGER NOT NULL)
+table|dismissals|dismissals|CREATE TABLE dismissals (batch_id TEXT NOT NULL, existing_fact_id TEXT NOT NULL, episode_id TEXT NOT NULL, subject_key TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (batch_id, existing_fact_id, episode_id, subject_key), FOREIGN KEY (batch_id) REFERENCES consolidation_batches (batch_id))
+table|dream_queue|dream_queue|CREATE TABLE dream_queue (dream_queue_id TEXT PRIMARY KEY, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, enqueued_at INTEGER NOT NULL, consumed_at INTEGER, ledger_id TEXT NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id))
+table|edges|edges|CREATE TABLE edges (edge_kind TEXT NOT NULL, from_kind TEXT NOT NULL, from_id TEXT NOT NULL, to_kind TEXT NOT NULL, to_id TEXT NOT NULL, weight REAL NOT NULL, PRIMARY KEY (edge_kind, from_kind, from_id, to_kind, to_id))
+table|embedding_models|embedding_models|CREATE TABLE embedding_models (model_id TEXT PRIMARY KEY, dimensions INTEGER NOT NULL, weights_sha256 TEXT NOT NULL, tokenizer_sha256 TEXT NOT NULL, query_prefix TEXT NOT NULL, document_prefix TEXT NOT NULL, recorded_at INTEGER NOT NULL)
+table|embedding_rows|embedding_rows|CREATE TABLE embedding_rows (target_kind TEXT NOT NULL, target_id TEXT NOT NULL, model_id TEXT NOT NULL, vec_rowid INTEGER NOT NULL, PRIMARY KEY (target_kind, target_id), UNIQUE (target_kind, vec_rowid), FOREIGN KEY (model_id) REFERENCES embedding_models (model_id))
+table|entities|entities|CREATE TABLE entities (entity_id TEXT PRIMARY KEY, slug TEXT NOT NULL, description TEXT NOT NULL, scope_kind TEXT NOT NULL CHECK (scope_kind IN ('world', 'agent')), scope_agent TEXT NOT NULL, UNIQUE (scope_kind, scope_agent, slug))
+table|entity_links|entity_links|CREATE TABLE entity_links (from_entity_id TEXT NOT NULL, to_entity_id TEXT NOT NULL, PRIMARY KEY (from_entity_id, to_entity_id), FOREIGN KEY (from_entity_id) REFERENCES entities (entity_id), FOREIGN KEY (to_entity_id) REFERENCES entities (entity_id))
+table|episode_fts|episode_fts|CREATE VIRTUAL TABLE episode_fts USING fts5(episode_id UNINDEXED, body, tokenize='unicode61')
+table|episode_fts_config|episode_fts_config|CREATE TABLE 'episode_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID
+table|episode_fts_content|episode_fts_content|CREATE TABLE 'episode_fts_content'(id INTEGER PRIMARY KEY, c0, c1)
+table|episode_fts_data|episode_fts_data|CREATE TABLE 'episode_fts_data'(id INTEGER PRIMARY KEY, block BLOB)
+table|episode_fts_docsize|episode_fts_docsize|CREATE TABLE 'episode_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB)
+table|episode_fts_idx|episode_fts_idx|CREATE TABLE 'episode_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID
+table|episode_segments|episode_segments|CREATE TABLE episode_segments (episode_id TEXT NOT NULL, ordinal INTEGER NOT NULL, text TEXT NOT NULL, taint TEXT NOT NULL CHECK (taint IN ('trusted', 'untrusted')), sources TEXT NOT NULL, PRIMARY KEY (episode_id, ordinal), FOREIGN KEY (episode_id) REFERENCES episodes (episode_id))
+table|episode_vec|episode_vec|CREATE VIRTUAL TABLE episode_vec USING vec0(embedding float[384])
+table|episode_vec_chunks|episode_vec_chunks|CREATE TABLE "episode_vec_chunks"(chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,validity BLOB NOT NULL,rowids BLOB NOT NULL)
+table|episode_vec_info|episode_vec_info|CREATE TABLE "episode_vec_info" (key text primary key, value any)
+table|episode_vec_rowids|episode_vec_rowids|CREATE TABLE "episode_vec_rowids"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id,chunk_id INTEGER,chunk_offset INTEGER)
+table|episode_vec_vector_chunks00|episode_vec_vector_chunks00|CREATE TABLE "episode_vec_vector_chunks00"(rowid PRIMARY KEY,vectors BLOB NOT NULL)
+table|episodes|episodes|CREATE TABLE episodes (episode_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, body TEXT NOT NULL, taint TEXT NOT NULL CHECK (taint IN ('trusted', 'untrusted')), reasoning TEXT, participants TEXT NOT NULL, created_at INTEGER NOT NULL, write_canonical TEXT NOT NULL, promoted_at INTEGER, promoted_model TEXT, promotion_canonical TEXT, FOREIGN KEY (thread_id) REFERENCES threads (thread_id))
+table|fact_claims|fact_claims|CREATE TABLE fact_claims (fact_id TEXT NOT NULL, claim_id TEXT NOT NULL, PRIMARY KEY (fact_id, claim_id), FOREIGN KEY (fact_id) REFERENCES facts (fact_id), FOREIGN KEY (claim_id) REFERENCES claims (claim_id))
+table|fact_episodes|fact_episodes|CREATE TABLE fact_episodes (fact_id TEXT NOT NULL, episode_id TEXT NOT NULL, PRIMARY KEY (fact_id, episode_id), FOREIGN KEY (fact_id) REFERENCES facts (fact_id), FOREIGN KEY (episode_id) REFERENCES episodes (episode_id))
+table|fact_vec|fact_vec|CREATE VIRTUAL TABLE fact_vec USING vec0(embedding float[384])
+table|fact_vec_chunks|fact_vec_chunks|CREATE TABLE "fact_vec_chunks"(chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,validity BLOB NOT NULL,rowids BLOB NOT NULL)
+table|fact_vec_info|fact_vec_info|CREATE TABLE "fact_vec_info" (key text primary key, value any)
+table|fact_vec_rowids|fact_vec_rowids|CREATE TABLE "fact_vec_rowids"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id,chunk_id INTEGER,chunk_offset INTEGER)
+table|fact_vec_vector_chunks00|fact_vec_vector_chunks00|CREATE TABLE "fact_vec_vector_chunks00"(rowid PRIMARY KEY,vectors BLOB NOT NULL)
+table|facts|facts|CREATE TABLE facts (fact_id TEXT PRIMARY KEY, sentence TEXT NOT NULL, entity_id TEXT, taint TEXT NOT NULL CHECK (taint IN ('trusted', 'untrusted')), sources TEXT NOT NULL, valid_from INTEGER NOT NULL, valid_to INTEGER, replacement_fact_id TEXT, merged_into TEXT, FOREIGN KEY (entity_id) REFERENCES entities (entity_id), FOREIGN KEY (replacement_fact_id) REFERENCES facts (fact_id), FOREIGN KEY (merged_into) REFERENCES facts (fact_id))
+table|ledger_heat|ledger_heat|CREATE TABLE ledger_heat (ledger_id TEXT NOT NULL, slot_id TEXT NOT NULL, weight REAL NOT NULL, PRIMARY KEY (ledger_id, slot_id), FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id))
+table|ledgers|ledgers|CREATE TABLE ledgers (ledger_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, request_id TEXT NOT NULL, compiled_prefix_hash TEXT NOT NULL, applied_at INTEGER NOT NULL, canonical TEXT NOT NULL, FOREIGN KEY (thread_id) REFERENCES threads (thread_id))
+table|legacy_threads|legacy_threads|CREATE TABLE legacy_threads (thread_id TEXT PRIMARY KEY, marked_at INTEGER NOT NULL, FOREIGN KEY (thread_id) REFERENCES threads (thread_id))
+table|lexemes|lexemes|CREATE TABLE lexemes (lexeme_id TEXT PRIMARY KEY)
+table|message_submissions|message_submissions|CREATE TABLE message_submissions (operation_id TEXT PRIMARY KEY, text TEXT NOT NULL, message_id TEXT NOT NULL UNIQUE, state TEXT NOT NULL CHECK (state IN ('pending', 'terminal')), outcome_kind TEXT, outcome_detail TEXT, created_at INTEGER NOT NULL, FOREIGN KEY (message_id) REFERENCES router_messages (message_id), CHECK ((state = 'pending' AND outcome_kind IS NULL AND outcome_detail IS NULL) OR (state = 'terminal' AND outcome_kind IS NOT NULL)))
+table|model_connection|model_connection|CREATE TABLE model_connection (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), base_url TEXT NOT NULL, model_id TEXT NOT NULL, reasoning TEXT NOT NULL CHECK (reasoning IN ('low', 'medium', 'high')))
+table|negative_marks|negative_marks|CREATE TABLE negative_marks (mark_id TEXT PRIMARY KEY, ledger_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, presentation_id TEXT NOT NULL, thread_id TEXT NOT NULL, message_id TEXT NOT NULL, evidence_span_start INTEGER NOT NULL, evidence_span_end INTEGER NOT NULL, occurred_at INTEGER NOT NULL, dream_queue_id TEXT NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id), FOREIGN KEY (presentation_id) REFERENCES presentations (presentation_id), FOREIGN KEY (dream_queue_id) REFERENCES dream_queue (dream_queue_id))
+table|panic_state|panic_state|CREATE TABLE panic_state (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), generation INTEGER NOT NULL, engaged INTEGER NOT NULL CHECK (engaged IN (0, 1)), engaged_by TEXT, engaged_at INTEGER)
+table|platform_capability_snapshots|platform_capability_snapshots|CREATE TABLE platform_capability_snapshots (snapshot_id TEXT PRIMARY KEY, observed_at INTEGER NOT NULL, platform TEXT NOT NULL, adapter_version TEXT NOT NULL, verdict TEXT NOT NULL, kernel TEXT, landlock_abi INTEGER, probe_canonical TEXT NOT NULL)
+table|presentations|presentations|CREATE TABLE presentations (presentation_id TEXT PRIMARY KEY, ledger_id TEXT NOT NULL, candidate_kind TEXT NOT NULL, candidate_id TEXT NOT NULL, source TEXT NOT NULL, weight REAL NOT NULL, source_span_start INTEGER NOT NULL, source_span_end INTEGER NOT NULL, evidence_span_start INTEGER NOT NULL, evidence_span_end INTEGER NOT NULL, thread_id TEXT NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id))
+table|projection_entities|projection_entities|CREATE TABLE projection_entities (batch_id TEXT NOT NULL, entity_id TEXT NOT NULL, PRIMARY KEY (batch_id, entity_id), FOREIGN KEY (batch_id) REFERENCES projections (batch_id))
+table|projection_folders|projection_folders|CREATE TABLE projection_folders (batch_id TEXT NOT NULL, folder TEXT NOT NULL, PRIMARY KEY (batch_id, folder), FOREIGN KEY (batch_id) REFERENCES projections (batch_id))
+table|projections|projections|CREATE TABLE projections (batch_id TEXT PRIMARY KEY, progress TEXT NOT NULL CHECK (progress IN ('pending', 'complete')), created_at INTEGER NOT NULL, completed_at INTEGER, FOREIGN KEY (batch_id) REFERENCES consolidation_batches (batch_id))
+table|proposals|proposals|CREATE TABLE proposals (proposal_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, operation_kind TEXT NOT NULL, left_id TEXT NOT NULL, right_id TEXT NOT NULL, target_fact_id TEXT NOT NULL, batch_taint TEXT NOT NULL, created_at INTEGER NOT NULL, decision TEXT NOT NULL, FOREIGN KEY (batch_id) REFERENCES consolidation_batches (batch_id))
+table|router_messages|router_messages|CREATE TABLE router_messages (message_id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL UNIQUE, role TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL)
+table|router_sessions|router_sessions|CREATE TABLE router_sessions (router_session_id TEXT PRIMARY KEY CHECK (router_session_id = 'router'), created_at INTEGER NOT NULL)
+table|router_turn_snapshots|router_turn_snapshots|CREATE TABLE router_turn_snapshots (ordinal INTEGER PRIMARY KEY, message_id TEXT NOT NULL UNIQUE, slots_json TEXT NOT NULL, usage_json TEXT NOT NULL, recall_json TEXT NOT NULL, thinking TEXT, route TEXT, reply TEXT NOT NULL, created_at INTEGER NOT NULL)
+table|runtime_id_high_water|runtime_id_high_water|CREATE TABLE runtime_id_high_water (namespace TEXT PRIMARY KEY, value TEXT NOT NULL)
+table|schema_migrations|schema_migrations|CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)
+table|security_settings|security_settings|CREATE TABLE security_settings (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), profile TEXT NOT NULL CHECK (profile IN ('protected', 'allowlisted', 'unrestricted')), activated_at INTEGER NOT NULL, activated_by TEXT NOT NULL, confirmation_at INTEGER, confirmation_desktop_client TEXT, confirmation_presence_proof TEXT)
+table|slot_heat|slot_heat|CREATE TABLE slot_heat (thread_id TEXT NOT NULL, slot_id TEXT NOT NULL, heat REAL NOT NULL, PRIMARY KEY (thread_id, slot_id))
+table|sqlite_sequence|sqlite_sequence|CREATE TABLE sqlite_sequence(name,seq)
+table|task_attempts|task_attempts|CREATE TABLE task_attempts (task_id TEXT NOT NULL, attempt_id TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (task_id, attempt_id), FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))
+table|task_criteria|task_criteria|CREATE TABLE task_criteria (criterion_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, source_kind TEXT NOT NULL, source_ref TEXT NOT NULL, span_start INTEGER, span_end INTEGER, text TEXT NOT NULL, ordinal INTEGER NOT NULL DEFAULT 0, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))
+table|task_envelopes|task_envelopes|CREATE TABLE task_envelopes (task_id TEXT PRIMARY KEY, prompt BLOB NOT NULL, brief TEXT NOT NULL, routing_reason TEXT NOT NULL, snapshot_id TEXT NOT NULL, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))
+table|task_evidence|task_evidence|CREATE TABLE task_evidence (evidence_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, attempt_id TEXT NOT NULL, body TEXT NOT NULL, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))
+table|task_inputs|task_inputs|CREATE TABLE task_inputs (task_id TEXT NOT NULL, message_id TEXT NOT NULL, prompt BLOB NOT NULL, PRIMARY KEY (task_id, message_id), FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))
+table|task_reports|task_reports|CREATE TABLE task_reports (report_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, attempt_id TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT NOT NULL, created_at INTEGER NOT NULL, call_id TEXT NOT NULL DEFAULT '', FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))
+table|task_sessions|task_sessions|CREATE TABLE task_sessions (task_id TEXT PRIMARY KEY, phase TEXT NOT NULL, title TEXT NOT NULL, pinned TEXT NOT NULL, completion_view TEXT NOT NULL, prior_task_id TEXT, created_at INTEGER NOT NULL, FOREIGN KEY (prior_task_id) REFERENCES task_sessions (task_id))
+table|thread_events|thread_events|CREATE TABLE thread_events (thread_id TEXT NOT NULL, ordinal INTEGER NOT NULL, event_id TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, occurred_at INTEGER NOT NULL, PRIMARY KEY (thread_id, ordinal), FOREIGN KEY (thread_id) REFERENCES threads (thread_id))
+table|threads|threads|CREATE TABLE threads (thread_id TEXT PRIMARY KEY, version INTEGER NOT NULL, participants TEXT NOT NULL, created_at INTEGER NOT NULL)

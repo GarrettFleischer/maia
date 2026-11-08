@@ -1,0 +1,39 @@
+# Workspace dependency policy (cargo-deny). Run: cargo deny check
+# Licenses v2: only `allow` permits crates. GPL/AGPL and BUSL (Business Source) stay off the allow list.
+# `BSL-1.0` here is Boost Software License 1.0 (SPDX), not Business Source.
+
+[advisories]
+version = 2
+ignore = [
+    # candle-core 0.10.2 pulls zip 7.x; upgrade candle/zip in slice C when upstream resolves zip RUSTSEC advisories.
+    "RUSTSEC-2024-0436",
+    "RUSTSEC-2025-0057",
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+    "RUSTSEC-2026-0429",
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+    "0BSD",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

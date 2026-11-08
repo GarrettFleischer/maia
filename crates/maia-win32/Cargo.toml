@@ -1,0 +1,21 @@
+[package]
+name = "maia-win32"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = "deny"
+borrowed_box = "deny"
+ptr_arg = "deny"
+should_implement_trait = "deny"
+new_without_default = "deny"
+len_without_is_empty = "deny"
+wrong_self_convention = "deny"
+unwrap_used = "deny"
+panic_in_result_fn = "deny"
+await_holding_lock = "deny"
