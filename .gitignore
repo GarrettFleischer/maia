@@ -1,0 +1,13 @@
+/target
+/data/
+data_backup.7z
+*.7z
+.env
+.env.*
+!.env.example
+.playwright-mcp/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+*.pem
+*.key
