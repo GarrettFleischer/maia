@@ -3,11 +3,13 @@
 ## TDD preamble
 
 - **Kind:** new feature
-- **Invariant:** no side effect leaves Maia's trusted computing base unless a fail-closed
-  capability grant covers it, a deterministic sink check has evaluated it under the request's
-  provenance, a durable audit start event exists, and any approval its tier requires is bound to
-  the exact canonical action; no known secret appears in any prompt, durable record, log, or UI
-  projection.
+- **Invariant:** no side effect leaves Maia's trusted computing base unless budget admission and a
+  durable audit start event exist, log redaction has run, and — except under `SecurityProfile::Unrestricted`
+  in accepted `13-platform.md` — a fail-closed capability grant covers it, a deterministic sink
+  check has evaluated it under the request's provenance, and any approval its tier requires is
+  bound to the exact canonical action. Under `Unrestricted`, controllable `check_sink` gates
+  auto-Allow and process containment is not applied. `DesktopConfirm` administration is never
+  bypassed. No known secret appears in any prompt, durable record, log, or UI projection.
 - **Red test(s):** the `check_sink` decision table; taint-monotonicity and grant-attenuation
   property tests; the `classify_destination` address-representation table; the
   `neutralize_inline_markdown` property test; a known-secret canary scan across every egress and
@@ -25,7 +27,7 @@
   `render_approval`, `find_known_secrets`, `authorize_request`, `admit_lease`,
   `classify_policy_change`, `verify_policy_bundle`, and `verify_checkpoint`. Policy, grants, time,
   fingerprints, and inputs arrive as parameters.
-- **Skin (I/O):** the secret provider (Windows credential store), the containment launcher, the
+- **Skin (I/O):** the secret provider (native OS store, encrypted file, or Vault/OpenBao), the containment launcher, the
   egress proxy, the browser navigation interceptor, the approval notifier, the OS user-verification
   prompt, the policy fetcher, the checkpoint signer, and the witness publisher. Each reads the clock
   once and passes `now` down.
@@ -42,8 +44,10 @@
 
 This document is authoritative for Maia's threat model, trust boundaries, capability grants,
 provenance and taint, sink checks, approval tiers, secret handling, process and browser
-containment, egress policy, client authentication, audit integrity, incident response,
-security-policy versioning, and the supply chain.
+containment requirements, egress policy, client authentication, audit integrity, incident response,
+security-policy versioning, and the supply chain. Accepted `13-platform.md` is authoritative for
+security profiles, the structured allowlist, and the per-OS containment matrix where those
+contracts extend this document.
 
 Other documents own their mechanisms. Where this document adds a requirement to another system,
 the requirement appears in [Consistency findings](#consistency-findings) and must be resolved in
@@ -286,9 +290,10 @@ Each threat lists the vector, the impact, the controls (defined under
   persist through Run keys, the Startup folder, or scheduled tasks; inject input into owner
   windows; read the clipboard; reach loopback services; or request elevation.
 - **Impact:** owner account compromise.
-- **Controls:** a per-thread contained identity; Job Object limits; a separate desktop and UI
-  limits; no network by default; an owner-only state directory; absolute executable paths; the
-  containment conformance suite.
+- **Controls:** a per-thread contained identity when the platform capability report allows
+  unattended execution; on Windows, Job Object limits and a separate desktop; no network by
+  default; an owner-only state directory; absolute executable paths; the containment conformance
+  suite in `13-platform.md`.
 - **Residual:** Windows kernel or sandbox escape vulnerabilities.
 
 ### T9. Browser abuse
@@ -396,9 +401,14 @@ Each threat lists the vector, the impact, the controls (defined under
 - **Vector:** tool-description poisoning, post-approval changes to a tool ("rug pull"), ambient
   secret access, access to other tools' outputs, server-initiated model calls.
 - **Impact:** a third-party component acting outside the grant model.
-- **Controls:** no plugin or MCP surface exists in this design (07, [08-rust.md](08-rust.md)). The
-  gate for any future surface is [Plugins and MCP](#plugins-and-mcp).
-- **Residual:** none until a surface is added.
+- **Controls:** one admitted MCP catalog, specified in
+  `docs/superpowers/specs/2026-11-06-mcp-catalog-design.md`. The router execution set stays empty.
+  A subagent may call only a tool whose wire name is in the live admitted manifest and whose
+  arguments pass the pinned schema subset. Sampling, roots, and elicitation requests are refused.
+  Stdio does not spawn until containment is ready. Secret values stay out of SQLite, prompts, and
+  audit rows. Anything beyond that one call still has to pass [Plugins and MCP](#plugins-and-mcp).
+- **Residual:** an admitted server can do whatever its own process does, including calling a model
+  on its side. Maia does not sample for it.
 
 ### T19. Denial of service and cost abuse
 
@@ -487,6 +497,14 @@ model tool call
 The closed `ToolRequest` enum (07, 08) is the only way a model reaches this pipeline. Every tool a
 model can call, including vault `map` and `read`, opening a thread, and posting a message, is a
 variant of that enum.
+
+`13-platform.md` admission order is authoritative for profile branching. Under `Unrestricted`,
+controllable `check_sink` gates (grants, presence, egress, and containment) return `Allow`, Maia
+approval prompts are suppressed, and process containment is not applied. Budget admission, the
+durable audit start, panic, Stop all, audit verification, and log redaction still run.
+`DesktopConfirm` administration is not part of this pipeline and is not bypassed. Under
+`Allowlisted`, a matching entry suppresses only the approval prompt. The covering grant and the
+rest of this pipeline still apply. An allowlist match does not replace a grant.
 
 ### Capability grants
 
@@ -665,8 +683,9 @@ every durable slot is `Trusted`. A thread returns to `Trusted` only when no untr
 in its compiled prefix and the current request's recall set is empty or entirely `Trusted`.
 
 Durable Untrusted slots carry the advisory envelope defined in
-[03-thread-cache.md](03-thread-cache.md) (Untrusted-slot envelopes). Recall items do not. The
-envelope helps the model and the human reader; no security decision relies on it.
+[03-thread-cache.md](03-thread-cache.md) (Untrusted-slot envelopes). Untrusted durable wire content
+includes that visible advisory envelope. Recall items do not. The envelope helps the model and the
+human reader; no security decision relies on it.
 
 ### Sink checks
 
@@ -762,9 +781,11 @@ enum ApprovalTier {
   valid owner session has full approval authority. The mitigations are digest binding, single use,
   injective rendering, session lifetimes, the session-generation revoke, and unpairing.
 - **`DesktopConfirm`:** administration only, never an action approval. It needs an owner decision
-  from the desktop window plus OS user verification (Windows Hello, or the account credential
-  through the Windows consent prompt). Remote clients cannot use it. If OS verification is
-  unavailable, the action is unavailable; it never downgrades to `Confirm`.
+  from the local desktop window plus OS user verification. On Windows that verification is Windows
+  Hello or the account credential through the Windows consent prompt. Remote clients cannot use
+  it. If OS verification is unavailable, the action is unavailable; it never downgrades to
+  `Confirm`. No security profile, including `Unrestricted`, bypasses this tier. Enabling
+  `Unrestricted` is itself local-desktop only (`13-platform.md`).
 
 Forbidden actions are `SinkDecision::Deny`, not a tier. No approval unlocks them.
 
@@ -840,7 +861,9 @@ Owner actions and their tiers:
   - add or rotate a secret value;
   - loosen policy, including lowering a decision-table row;
   - clear panic while under an incident; resume after an incident or audit failure;
-  - apply a binary update.
+  - apply a binary update;
+  - switch the active credential backend;
+  - enable `Unrestricted`.
 
 ### No secret in prompt
 
@@ -852,8 +875,8 @@ Mechanics:
 
 1. **Handles.** Settings, grants, tool schemas, and operation contracts name secrets by
    `SecretRef`. The skin that uses a secret (the router adapter, the console launcher's environment
-   injection, the sidecar's credential attachment) resolves plaintext from the Windows credential
-   store at use time and drops it after the call.
+   injection, the sidecar's credential attachment) resolves plaintext from the active credential
+   backend at use time and drops it after the call.
 2. **Types.** The skin-side `Secret` type has no `Display` or `Serialize` implementation, and its
    `Debug` output is the reference name. No `maia-core` type can hold a `Secret`; ports carry
    `SecretRef`.
@@ -883,7 +906,7 @@ Residual: a sandbox granted a secret can transform it past the registered encodi
 - **Taint:** per request, sticky per thread.
 - **Session grants:** per thread.
 - **Budget:** per lease, with lineage (06 and [Denial of service and cost](#denial-of-service-and-cost)).
-- **Console:** per-thread security identity, workspace, and Job Object.
+- **Console:** per-thread security identity and workspace; on Windows, a Job Object.
 - **Browser:** per-thread tab ownership (07) and origin grants; the cookie jar is shared (residual).
 - **Secrets:** `SecretUse` grants per thread or agent.
 - **Approvals:** bound to thread, lease, request, and digest.
@@ -897,14 +920,20 @@ and recalled facts all make the receiver's taint the join of both.
 ### Shell containment
 
 The mechanism must meet every requirement below. The containment conformance suite is the oracle.
+The numbered mechanism in this section is the Windows column of the matrix in `13-platform.md`.
+Linux unattended readiness uses user namespaces, bubblewrap, seccomp, Landlock ABI 6, cgroup v2,
+and a fresh devpts, and requires Linux 6.4 or newer. macOS does not report unattended readiness
+for arbitrary child tools. A missing or insufficient control is `NeedsHuman`, never a pass.
+`Unrestricted` disables process containment for new admissions and does not skip the
+non-bypassable controls in invariant 1.
 
 1. **Distinct identity per thread.** Shell processes run under an OS security identity distinct
-   from the owner and from every other thread. The mechanism is one AppContainer (low-box)
+   from the owner and from every other thread. On Windows the mechanism is one AppContainer (low-box)
    profile per thread, as recorded in `REVIEW.md` and specified in `07-computer.md`: it gives a
    per-thread SID, denies the owner's files by default, and blocks network and loopback unless
    capabilities are granted. Sidecars run under a separate AppContainer SID. If the conformance
    suite fails on a supported Windows build, shell tools are disabled on that build; there is no
-   fallback identity in v1.
+   fallback identity in v1. Linux and macOS use the containment matrix in `13-platform.md`.
 2. **No access to** the daemon state directory (brain, audit, blobs, policy, approvals), the Maia
    Chrome profile, the vault, the owner's profile folders, the owner's credential store, other
    threads' workspaces, write access to the install directory, or owner persistence locations (Run
@@ -958,8 +987,9 @@ These extend the persistent-Chrome contract in 07.
 7. **Context egress.** Screenshots and DOM extracts are untrusted, redacted (07's list plus hidden
    inputs, one-time-code fields, and payment fields), bounded, and sent to the router only under a
    `ContextEgress` grant.
-8. **Executable.** Chrome is launched from its installed absolute path after its Authenticode
-   signature verifies, never through `PATH`.
+8. **Executable.** Chrome is launched from its installed absolute path after the platform signature
+   check verifies, never through `PATH`. On Windows that check is Authenticode. On Linux the Maia
+   Chrome profile directory is not bind-mounted into the bubblewrap sandbox.
 
 ### Scrapy containment
 
@@ -1219,6 +1249,11 @@ These extend the audit in 06.
    Funnel detected; containment self-check failed; endorsement; retro-taint; incident opened or
    closed; execution mode changed.
 7. **Redaction** happens before write (06). Events never contain secrets, tokens, or cookies.
+8. **Profile stamp.** Every `AuditEvent` includes `profile: SecurityProfile` and
+   `allowlist_entry_id: Option<GrantId>`, in addition to the fields in `06-agents.md`. `profile`
+   is always present. `allowlist_entry_id` is present only when an allowlist match suppressed the
+   approval prompt. Both fields are part of the canonical bytes covered by `event_hash`.
+   `13-platform.md` is authoritative for these two fields.
 
 ### Execution modes and startup self-checks
 
@@ -1328,8 +1363,11 @@ The wall clock may not move behind the latest audited time. If it does, the mode
 
 ### Plugins and MCP
 
-No plugin or MCP surface exists. 07 and 08 exclude plugin APIs, dynamic loading, and arbitrary
-sidecar plugins. A future integration must, before it is enabled:
+Plugins, dynamic loading, and arbitrary sidecar plugins stay out. The one MCP surface is the
+admitted catalog in `docs/superpowers/specs/2026-11-06-mcp-catalog-design.md`: the owner adds a
+server, tools are pinned by hash, the owner chat can read the catalog and pass advisory guidance,
+and only a parent or child can call an admitted tool. A future integration beyond that one
+`Mcp` call must, before it is enabled:
 
 1. add closed `ToolRequest` variants (08), never a generic passthrough;
 2. run out of process under a contained identity with no ambient secrets; secrets arrive only
@@ -1488,19 +1526,26 @@ Maia never claims to have rolled them back (06, 07).
 
 ## Invariants
 
-1. No side effect happens without a covering grant, a sink check under the request's provenance,
-   budget admission, a durable audit start event, and, where the tier requires it, an owner
-   approval bound to the action digest.
+1. No side effect happens without budget admission, a durable audit start event, and log
+   redaction. Except when the security profile is `Unrestricted`, it also requires a covering
+   grant, a sink check under the request's provenance, and, where the tier requires it, an owner
+   approval bound to the action digest. Under `Unrestricted`, `check_sink` auto-allows
+   controllable gates (grants, presence, egress, and containment) while budget admission, the
+   durable audit start, panic, Stop all, audit verification, log redaction, and `DesktopConfirm`
+   administration still run.
 2. Authority originates only in owner actions. Model output cannot create, widen, or extend a grant,
    change policy or settings, or pair a device.
 3. Effective authority never increases across a thread-open, a post, or an agent-group thread.
 4. Taint never decreases except through a recorded owner endorsement. Request taint is the join of
    the included slots and the scratch suffix.
 5. `check_sink` is deterministic and monotone in taint, grants, and policy tightening.
-6. Unattended runs never auto-approve. Approve controls never come from model-rendered content.
+6. Except under `SecurityProfile::Unrestricted`, unattended runs never auto-approve. Approve
+   controls never come from model-rendered content.
 7. No known secret appears in any prompt, durable record, log, or UI projection.
-8. Shell processes run under a per-thread contained identity with no access to daemon state, the
-   Chrome profile, the vault, owner secrets, or other threads.
+8. On a platform whose capability report is unattended-ready, shell processes run under a
+   per-thread contained identity with no access to daemon state, the Chrome profile, the vault,
+   owner secrets, or other threads. Otherwise unattended shell execution is `NeedsHuman`.
+   `Unrestricted` does not apply that containment.
 9. Browser automation is pipe-only, and all router, browser, sidecar, and sandbox egress passes one
    destination policy evaluated on resolved addresses.
 10. Every API request, including loopback, carries a session of a known client class. Phones never
@@ -1598,7 +1643,8 @@ never yields a trusted claim; and that an untrusted closure of a trusted fact be
 
 ### Windows containment conformance
 
-Run on a real Windows build in CI. From a thread sandbox, each of these must fail: reading a
+Run on a real Windows build in CI. This is the Windows column. Linux and macOS conformance is the
+matrix in `13-platform.md`. From a thread sandbox, each of these must fail: reading a
 state-directory canary, the brain, or the audit store; reading the Chrome profile's cookie or key
 files; reading a vault canary; reading another thread's workspace canary; reading owner
 credential-store entries; connecting to the Maia listeners, the sidecar, or any loopback address;
@@ -1652,9 +1698,10 @@ a decision in `REVIEW.md`; until then the restrictive reading here applies.
    and invariant 10 require the per-launch desktop secret for every loopback UI session.
 2. **Chrome debugging-port fallback.** **Resolved (r3).** [07](07-computer.md) uses pipe-only
    automation with no port fallback.
-3. **Shell and sidecar identity.** **Resolved (r3).** [07](07-computer.md) uses one AppContainer SID
-   per thread plus a separate sidecar SID, and denies the whole vault. Mechanism recorded in
-   `REVIEW.md`.
+3. **Shell and sidecar identity.** **Resolved (r3; extended by accepted `13-platform.md`).**
+   On Windows, [07](07-computer.md) uses one AppContainer SID per thread plus a separate sidecar
+   SID, and denies the whole vault. Linux and macOS follow the containment matrix in
+   `13-platform.md`. The Windows mechanism remains recorded in `REVIEW.md`.
 4. **Unkeyed audit chain.** **Resolved (r3).** [06](06-agents.md) signs checkpoints and keeps
    witnesses on paired clients.
 5. **Budget laundering.** **Resolved (r3).** [06](06-agents.md) adds budget lineage and the global
@@ -1668,8 +1715,10 @@ a decision in `REVIEW.md`; until then the restrictive reading here applies.
    denies tagged nodes.
 9. **Phone settings.** **Resolved (r4).** [09](09-frontend.md) keeps administration fields
    read-only on remote clients; grants and approvals are `Confirm` on every owner client.
-10. **`forbid(unsafe_code)` versus Windows containment.** **Resolved (r3).** [08](08-rust.md) names
-    one audited `maia-win32` crate as the only one allowed `unsafe`; it parses no untrusted bytes.
+10. **`forbid(unsafe_code)` versus platform containment.** **Resolved (accepted `13-platform.md`).**
+    Unsafe is limited to audited FFI in `maia-windows`, `maia-linux`, and `maia-macos`, plus the
+    one static `sqlite-vec` registration function in `maia-store`. No unsafe block parses
+    untrusted bytes. The `maia-win32` crate is replaced by `maia-windows`.
 11. **Markdown neutralization.** **Resolved (r4).** [01](01-vault.md) runs
     `neutralize_inline_markdown` on fact sentences and entity descriptions before generated
     bytes are written.
@@ -1680,6 +1729,7 @@ a decision in `REVIEW.md`; until then the restrictive reading here applies.
     sources; episodes carry segment provenance; `rank_paths` takes quarantine and
     `RecallTaintMode`. `request_provenance` joins recall-item taint. [03](03-thread-cache.md)
     defines Untrusted-slot envelopes for durable slots only (not recall), version frozen per slot.
+    Untrusted durable wire content includes that visible advisory envelope.
 14. **Agent-group grants.** **Resolved (r4).** [06](06-agents.md) intersects participant grants
     for `AgentGroup` threads.
 15. **Instruction-file approval.** **Resolved (r4).** [01](01-vault.md) and [03](03-thread-cache.md)
@@ -1706,9 +1756,10 @@ a decision in `REVIEW.md`; until then the restrictive reading here applies.
 
 ## Explicitly out of scope
 
-- An attacker already running as the owner's Windows account, a local administrator, SYSTEM, the
-  kernel, firmware, or physical access to the unlocked desktop. Maia limits what its own sandboxes
-  and remote clients can do; it does not defend the owner account from itself (consistent with 06).
+- An attacker already running as the desktop account that owns the daemon, a local administrator,
+  the kernel, firmware, or physical access to the unlocked desktop. On Windows that account is the
+  interactive user. Maia limits what its own sandboxes and remote clients can do; it does not
+  defend the owner account from itself (consistent with 06).
 - Preventing prompt injection inside the model. Maia bounds consequences instead.
 - Confidentiality from the configured router provider for data Maia sends it.
 - Compromise of the Tailscale coordination service or of WireGuard.
@@ -1737,4 +1788,6 @@ a decision in `REVIEW.md`; until then the restrictive reading here applies.
   [07-computer.md](07-computer.md)
 - Crate boundaries, ports, and the `unsafe` rule: [08-rust.md](08-rust.md)
 - Stop placement, `NeedsHuman`, settings, and the phone: [09-frontend.md](09-frontend.md)
+- Cross-platform profiles, allowlist, containment matrix, and credential backends:
+  [13-platform.md](13-platform.md)
 - Whole-set acceptance record: `REVIEW.md`

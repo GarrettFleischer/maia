@@ -28,10 +28,15 @@ this document and pass the design review.
 - Promotion and consolidation (the dream) can depend on the brain, vault, router, and embedder ports.
   Neither can receive or recover a `Tools` implementation.
 - No code runs before `main`.
-- Every workspace crate forbids unsafe code except one: `maia-win32`, a small audited crate
-  allowed `unsafe` only for Job Objects, AppContainer profiles, ConPTY, pipe ACLs, and
-  credential-store calls. It exposes safe typed functions, parses no untrusted bytes, and is
-  reviewed on every change.
+- Every workspace crate forbids unsafe code except the audited exceptions in
+  `13-platform.md`: `maia-windows` (Job Objects, AppContainer, ConPTY, pipe ACLs,
+  Credential Manager FFI), `maia-linux` (namespace, seccomp, Landlock, and
+  bubblewrap FFI), `maia-macos` (Keychain and lifecycle-probe FFI only), and the
+  one static `sqlite-vec` registration function in `maia-store`. Every other
+  crate, including `maia-secrets`, uses `forbid(unsafe_code)`. No unsafe block
+  parses untrusted bytes. Each block has a `// SAFETY:` comment and a
+  conformance test outside the block. The old `maia-win32` crate is replaced by
+  `maia-windows`.
 
 ## Dependency direction
 
@@ -44,15 +49,22 @@ maia-daemon ─┬─> maia-store ─────> maia-core
              ├─> maia-embedder ──> maia-core
              ├─> maia-tools ─────> maia-core
              ├─> maia-secrets ───> maia-core
+             ├─> maia-containment > maia-core
              └───────────────────> maia-core
 
-maia-tools ───> maia-win32
-maia-secrets ─> maia-win32
-maia-daemon ──> maia-win32
+maia-daemon ──> maia-windows | maia-linux | maia-macos
+maia-tools ───> maia-windows | maia-linux | maia-macos
+maia-secrets ─> maia-windows | maia-linux | maia-macos
+maia-windows | maia-linux | maia-macos ──> maia-containment
 ```
 
-`maia-win32` depends on no workspace crate and is the only permitted target of a horizontal
-edge. Apart from those edges, there are no horizontal dependencies between adapter crates. Adapters exchange only
+Exactly one of `maia-windows`, `maia-linux`, or `maia-macos` is compiled for a
+target. That selected platform adapter is the only permitted target of a
+horizontal edge, and only from `maia-daemon`, `maia-tools` (PTY port), and
+`maia-secrets` (native credential FFI). Platform adapters depend on
+`maia-containment` and on no other workspace crate. `maia-containment` depends
+only on `maia-core` and performs no I/O. Apart from those edges, there are no
+horizontal dependencies between adapter crates. Adapters exchange only
 `maia-core` types through orchestration in `maia-daemon`. In particular:
 
 - `maia-store` does not call the router, vault, embedder, or tools.
@@ -95,7 +107,8 @@ node and edge tables with FTS5 and `sqlite-vec`. No graph engine extension is lo
 
 The adapter serializes all connection access through a bounded command channel. A command that
 must atomically update the thread heat ledger and shared brain is one database-owner command and
-one SQLite transaction. SQL row types remain private to this crate.
+one SQLite transaction. SQL row types remain private to this crate. The only `unsafe` in this
+crate is the static `sqlite-vec` registration function named by `13-platform.md`.
 
 ### `maia-vault`
 
@@ -123,9 +136,12 @@ persistence stay outside this crate.
 
 ### `maia-tools`
 
-Owns per-thread ConPTY sessions, the persistent Chrome profile, the api-anything
-and Scrapy sidecars, tool timeouts, audit-ready tool outcomes, challenge
-detection, and unattended auth automation. It implements `Tools`.
+Owns per-thread terminal sessions through the selected platform adapter's PTY
+port, the persistent Chrome profile, the api-anything and Scrapy sidecars, tool
+timeouts, audit-ready tool outcomes, challenge detection, and unattended auth
+automation. It implements `Tools`. Windows implements the PTY port with ConPTY.
+Linux and macOS implement it with `posix_openpt`, `grantpt`, and `unlockpt`.
+`maia-tools` does not call those OS APIs itself.
 
 `ToolRequest` is a closed `maia-core` enum. Browser, Scrapy, and shell library
 types remain private. Challenge detection attempts granted credentials, store-
@@ -137,12 +153,15 @@ into `maia-core` policy as owned values.
 
 ### `maia-secrets`
 
-Owns the Windows Credential Vault adapter (default) and the optional Vault/OpenBao KV v2
-adapter that implement `SecretStore`. It stores and resolves secret values, enforces lock
-state, and returns short-lived `SecretValue` leases that zeroize on drop. Metadata and
-scopes are catalogued as `SecretRef` rows without values. See `11-secrets.md`. The Windows
-adapter calls `CredRead`, `CredWrite`, and `CredDelete` only through safe functions exported by
-`maia-win32`; `maia-secrets` itself is `forbid(unsafe_code)`.
+Owns the active credential backend selected at onboarding: native OS storage
+(Windows Credential Manager, macOS Keychain, or Linux Secret Service), the
+encrypted-file backend, or the Vault/OpenBao KV v2 adapter. There is no hidden
+default. It implements `SecretStore`. It stores and resolves secret values,
+enforces lock state, and returns short-lived `SecretValue` leases that zeroize
+on drop. Metadata and scopes are catalogued as `SecretRef` rows without values.
+See `11-secrets.md` and `13-platform.md`. Native FFI goes through safe functions
+exported by the selected platform adapter. Switching backends does not copy or
+delete values. `maia-secrets` itself is `forbid(unsafe_code)`.
 
 ### `maia-daemon`
 
@@ -152,6 +171,17 @@ localhost and the selected Tailscale address.
 
 It is the only crate allowed to know every concrete adapter. It contains no retrieval, attribution,
 prompt-layout, or rendering algorithm.
+
+### `maia-containment`
+
+Owns capability reports, admission verdicts, and safe containment request and result types. It
+performs no I/O. `13-platform.md` is authoritative for the verdict rules.
+
+### `maia-windows`, `maia-linux`, and `maia-macos`
+
+Each owns one operating system's containment, PTY, and native-credential FFI and translates the
+results into `maia-containment` types. Exactly one is compiled per target. Unsafe scope is the
+list in the invariants above and in `13-platform.md`.
 
 ## Honest leaves, I/O skins, and hooks
 
@@ -568,7 +598,8 @@ mode.
 ## Style and lint contract
 
 The workspace targets stable Rust, edition 2024. Unstable language and library features are
-prohibited.
+prohibited unless `13-platform.md`'s nightly exception is met and the pin is recorded there. No
+such pin is recorded.
 
 When configuration is added after design approval, rustfmt must enforce:
 
@@ -593,8 +624,10 @@ Imports and modules follow these rules:
 - a leaf module with one primary type is named after that type;
 - no project prelude.
 
-All crates except `maia-win32` use `#![forbid(unsafe_code)]`; `maia-win32` uses
-`#![deny(unsafe_op_in_unsafe_fn)]` with a `// SAFETY:` comment on every block. `maia-core` uses `#![deny(missing_docs)]`; other crates
+`maia-windows`, `maia-linux`, `maia-macos`, and the one `sqlite-vec` registration function in
+`maia-store` are the only `unsafe` exceptions, as `13-platform.md` states. Those crates use
+`#![deny(unsafe_op_in_unsafe_fn)]` with a `// SAFETY:` comment on every block. Every other crate
+uses `#![forbid(unsafe_code)]`. `maia-core` uses `#![deny(missing_docs)]`; other crates
 deny missing docs on their public API and may keep implementation modules crate-private. Public
 docs state meaningful invariants, errors, and panic conditions rather than repeating names.
 
@@ -687,7 +720,8 @@ substitute for deterministic CI.
 This document does not:
 
 - implement crates, Cargo manifests, rustfmt, Clippy, CI, migrations, or source code;
-- choose concrete database, HTTP, embedding, ConPTY, browser, or Tauri libraries;
+- choose concrete database, HTTP, embedding, browser, or Tauri library versions beyond the accepted
+  stack in `13-platform.md`;
 - define SQL tables, wire JSON, HTTP routes, UI components, or frontend state;
 - specify retrieval constants, dream thresholds, budgets, or model defaults beyond requiring them
   to be explicit inputs or configuration;

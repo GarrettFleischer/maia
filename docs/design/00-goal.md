@@ -8,7 +8,12 @@ this design set makes those decisions precise enough to review and test before a
 configuration, or UI code is created.
 
 Implementation may begin only after all design documents and placement mockups have been reviewed
-together and the result has been recorded in `REVIEW.md`.
+together and the result has been recorded in `REVIEW.md`. `13-platform.md` is accepted there and
+is authoritative for the cross-platform runtime, credential backends, security profiles, and
+allowlist. Accepted [`14-super-agent-router.md`](14-super-agent-router.md) (owner, 2026-11-05)
+supersedes the user-facing loop in this document: the owner speaks in one tool-free
+`RouterSession`, and tool execution belongs to a parent `TaskSession` or its children. Brain
+recall, dreams, panic, and the desktop daemon boundary below stay in force. The product runs on Windows, Linux, and macOS. The phone remains a remote window only.
 
 ## Purpose
 
@@ -25,12 +30,15 @@ as possible.
   is findable from any thread without waiting for a dream.
 - A model consolidates memory in batched dreams (merge, close, entities, vault projection). Dreams
   organize memory; they are not the gate for finding it.
-- Unattended threads may act on the desktop computer within explicit budgets and controls.
-- The phone is a window onto the same desktop daemon; the brain, shell, and browser remain on the
-  desktop. The phone, and the web UI over Tailscale, can approve and grant everything the
-  desktop can. Only administration (pairing, router, vault, Tailscale, policy, and audit
-  recovery) is desktop-only. A paired Android phone may install the UI as a home-screen PWA and
-  get content-free Web Push when something needs them.
+- Unattended threads may act on the desktop computer — Windows, Linux, or macOS — within explicit
+  budgets, the active security profile, and the platform capability report (`13-platform.md`).
+- The phone is a remote window onto the same desktop daemon; the brain, shell, and browser remain
+  on that desktop. The phone does not run its own daemon. The phone, and the web UI over
+  Tailscale, can approve and grant everything the desktop can, except enabling `Unrestricted` and
+  other local-desktop administration. Only administration (pairing, router, vault, Tailscale,
+  policy, credential-backend selection, encrypted-file passphrase entry, and audit recovery) is
+  desktop-only. A paired Android phone may install the UI as a home-screen PWA and get
+  content-free Web Push when something needs them.
 
 The primary user task is conversation. Organization belongs on the left of the desktop UI, and
 inspectable proof of memory belongs on the right without covering the transcript.
@@ -191,7 +199,7 @@ The review recorded in `REVIEW.md` must answer every item:
   `NeedsHuman` accurately states when auth automation failed and must finish on
   the desktop, while approvals work on every owner client.
 - **Security:** approvals, containment, provenance, secrets, and remote authority match
-  `10-security.md` and `11-secrets.md`.
+  `10-security.md`, `11-secrets.md`, and accepted `13-platform.md`.
 - **Review record:** unresolved disagreements are documented and fixed in the design set before
   code begins.
 
@@ -222,4 +230,5 @@ The review recorded in `REVIEW.md` must answer every item:
 - Desktop/phone placement and inspector behavior: `09-frontend.md`
 - Threat model and adversarial controls: [`10-security.md`](10-security.md)
 - Credential management and secret containment: [`11-secrets.md`](11-secrets.md)
+- Cross-platform runtime, credentials, profiles, and allowlist: [`13-platform.md`](13-platform.md)
 - Whole-set acceptance record: `REVIEW.md`

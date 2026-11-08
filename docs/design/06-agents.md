@@ -35,6 +35,13 @@ presentation reversal. `03-thread-cache.md` owns prompt byte layout and
 compaction. `04-credit.md` owns attribution weights. `07-computer.md` owns the
 router and computer-tool transports.
 
+**Supersession (2026-11-05):** accepted [`14-super-agent-router.md`](14-super-agent-router.md)
+replaces the user-facing direct thread that both talks and executes. `OpenThread` and
+`PostToThread` are not how the router splits a user task. User-facing phase is `TaskPhase`.
+Leases, audit, panic, and budget lineage in this document remain the mechanism under attempts
+and children. An agent-agent shared cache is not the isolation boundary between router, parent,
+and child.
+
 The scheduler is orchestration, not memory. It advances durable thread logs and
 calls injected ports. It cannot rewrite prompt slots, infer facts, or bypass the
 tool policy.

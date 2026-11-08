@@ -7,6 +7,11 @@ navigation indexes, personalities, and entity pages. It is not the event store. 
 transcripts, reasoning traces, prompt-cache slots, presentation logs, vectors, and dream batch
 state live in the shared SQLite brain beside the vault.
 
+**Supersession (2026-11-05):** accepted [`14-super-agent-router.md`](14-super-agent-router.md)
+keeps these vault folders as human-edited personalities and entity notes. They are not the
+sidebar's user-facing chat list. A task retrieves shared entities plus the private entities of
+its participants.
+
 The vault has two consumers:
 
 - People edit human prose in Obsidian.

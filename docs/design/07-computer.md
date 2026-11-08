@@ -20,9 +20,10 @@
 - **Leaves (honest):** `normalize_router_response`, `select_execution_route`,
   `classify_api_outcome`, `classify_scrapy_outcome`, `classify_page_blocker`,
   `authorize_peer`, `validate_origin`, and `redact_tool_record`.
-- **Skin (I/O):** the router HTTP client, ConPTY owner, api-anything sidecar
-  client, Scrapy sidecar client, Chrome controller, configured captcha/MFA
-  solvers, Tailscale LocalAPI client, and foreground-window notifier.
+- **Skin (I/O):** the router HTTP client, the PTY owner (ConPTY on Windows; POSIX
+  PTY on Linux and macOS), api-anything sidecar client, Scrapy sidecar client,
+  Chrome controller, configured captcha/MFA solvers, Tailscale LocalAPI client,
+  and foreground-window notifier.
 - **Hooks (backward):** Axum HTTP/WebSocket handlers and tool dispatch parse,
   authorize, invoke one skin, and return typed results.
 - **Mode args:** `OperationRisk`, `Idempotency`, `ExecutionRoute`,
@@ -34,14 +35,21 @@
 ## Purpose and authority
 
 This document specifies the desktop execution boundary: OpenAI-compatible
-router transport, Windows console sessions, api-anything, Scrapy, persistent
+router transport, platform console sessions, api-anything, Scrapy, persistent
 Chrome, unattended auth challenges, Tailscale access, and the contracts
-connecting them to the scheduler in `06-agents.md`.
+connecting them to the scheduler in `06-agents.md`. `13-platform.md` is
+authoritative for which desktop operating systems can run unattended tools.
 
-All computer capabilities remain on the Windows desktop. The phone can submit
-authenticated commands and inspect results, but it receives no shell, browser,
-database, or vault process of its own. A paired Android phone may receive
-content-free Web Push alerts so the owner can open the same UI without polling.
+**Supersession (2026-11-05):** accepted [`14-super-agent-router.md`](14-super-agent-router.md)
+withholds the execution `ToolRequest` set from `SessionRole::Router`, including under
+`Unrestricted`. Parent and child roles may receive those tools when grants allow. In this
+document, "router" means the model HTTP transport, not `RouterSession`.
+
+All computer capabilities remain on the desktop daemon. That daemon runs on
+Windows, Linux, or macOS. The phone can submit authenticated commands and
+inspect results, but it receives no shell, browser, database, or vault process
+of its own. A paired Android phone may receive content-free Web Push alerts so
+the owner can open the same UI without polling.
 
 ## Boundary architecture
 
@@ -51,7 +59,7 @@ Scheduler
   |
   `-- Tool host
        |-- route policy (pure)
-       |-- Console owner ---- ConPTY ------- per-thread PowerShell/cmd process
+       |-- Console owner ---- PTY --------- per-thread shell (ConPTY or POSIX)
        |-- API client ------- loopback ----- api-anything sidecar
        |-- Scrapy client ---- loopback ----- Scrapy sidecar
        `-- Browser owner ---- pipe only      daemon-owned Chrome profile
@@ -59,6 +67,13 @@ Scheduler
 Desktop/phone UI -- authenticated HTTP + WebSocket --> Axum daemon
 Axum daemon ------ local LocalAPI WhoIs ------------> Tailscale daemon
 ```
+
+Process ownership follows `13-platform.md`. Windows console sessions use
+AppContainer, Job Objects, and ConPTY. Linux and macOS terminal sessions use a
+POSIX PTY (`posix_openpt`, `grantpt`, `unlockpt`) through the selected platform
+adapter. Linux unattended containment is bubblewrap, seccomp, Landlock, and
+cgroup v2 when the capability report is ready, and requires Linux 6.4 or newer.
+macOS does not report unattended readiness. The phone remains remote only.
 
 The composition root creates one owner for each process-backed service. No
 module-level client or lazy singleton is allowed. Tool requests are a closed
@@ -322,10 +337,12 @@ contract's postcondition evidence. Missing or contradictory evidence is
 
 ## api-anything sidecar
 
-The sidecar runs as a child process under the same dedicated sandbox identity as
-console sessions (not the interactive Windows user) and listens on an
-unpredictable loopback port. The daemon passes a per-launch bearer token through
-an inherited pipe, not command-line arguments or the filesystem.
+The sidecar runs as a child process under a dedicated sandbox identity, not as
+the interactive desktop user. On Windows that identity is an AppContainer
+profile, separate from the owner's user. On Linux and macOS the sidecar follows
+the containment contract in `13-platform.md`. It listens on an unpredictable
+loopback port. The daemon passes a per-launch bearer token through an inherited
+pipe, not command-line arguments or the filesystem.
 Requests from non-loopback addresses are rejected.
 
 Handshake:
@@ -358,10 +375,12 @@ extract leg of the web suite: crawl allowlisted origins, select page data, and
 return size-bounded items. It sits between api-anything and Chrome in route
 policy.
 
-The Scrapy sidecar runs as a child process under its own AppContainer profile
-(separate from console threads and from api-anything) and listens on an
-unpredictable loopback port. Handshake, bearer token, protocol version, and
-capability hash rules match the api-anything sidecar. Non-loopback requests are
+The Scrapy sidecar runs as a child process under its own sandbox identity
+(separate from console threads and from api-anything). On Windows that identity
+is its own AppContainer profile. On Linux and macOS it follows
+`13-platform.md`. It listens on an unpredictable loopback port. Handshake,
+bearer token, protocol version, and capability hash rules match the api-anything
+sidecar. Non-loopback requests are
 rejected. Cookies and credentials used by Scrapy stay in the sidecar; they are
 never sent to the router.
 
@@ -396,6 +415,10 @@ the same `WebIntent`. Auth walls encountered on the Chrome path use the
 unattended auth rules below.
 
 ## Windows console sessions
+
+This section is the Windows adapter contract. Linux and macOS console ownership
+follows `13-platform.md`, including the POSIX PTY port. It does not replace this
+section on Windows.
 
 Each thread has one logical console session and at most one live ConPTY process.
 The default shell executable is configuration validated at startup.
@@ -492,7 +515,9 @@ daemon restarts so cookies and logins persist locally.
 Only one daemon instance may own the profile. An exclusive profile lock is
 acquired before Chrome launch; failure puts browser tools unavailable without
 deleting or copying profile data. The profile directory is owned by the daemon
-process identity and ACL-denied to the console/sidecar sandbox identity. It is
+process identity. On Windows it is ACL-denied to the console and sidecar
+sandbox identity. On Linux it is not bind-mounted into the bubblewrap sandbox
+and is unreadable by the mapped sandbox UID (`13-platform.md`). It is
 excluded from vault indexing, audit blobs, backups created by Maia, and router
 payloads.
 
@@ -604,6 +629,27 @@ performing a consequential action. Resolution appends an audit event and
 creates a new scheduler lease. Cancelling the request moves the thread to
 `Stopped`.
 
+## Accepted route additions
+
+`13-platform.md` is authoritative for these additions to the daemon surface.
+Authorization below matches that document.
+
+| Method and path | Purpose | Authorization |
+| --- | --- | --- |
+| `GET /api/security/profile` | current profile and non-sensitive activation metadata | owner client |
+| `PUT /api/security/profile` | change profile | local desktop to enable `Unrestricted`; any owner to tighten |
+| `GET /api/security/capabilities` | current safe capability report | owner client |
+| `GET /api/security/allowlist` | list entries | owner client |
+| `POST /api/security/allowlist` | create exact or deliberately broadened entry | owner client |
+| `PUT /api/security/allowlist/:id` | edit scope, lifetime, or enabled state | owner client |
+| `DELETE /api/security/allowlist/:id` | revoke entry | owner client |
+| `POST /api/threads/:thread/approvals/:id` | approve, deny, allow once, or create an exact always-allow entry | owner client |
+| `PUT /api/secrets/backend` | switch the active credential backend; no copy and no deletion | local desktop only |
+
+The encrypted-file passphrase has no HTTP route. A local Tauri command accepts
+it. Remote attempts to enable `Unrestricted` or to switch the credential
+backend return `403`.
+
 ## Localhost and Tailscale boundary
 
 The daemon binds to:
@@ -633,17 +679,23 @@ endpoint. A loopback client without it receives no session and no CSRF token.
 
 Approving actions and issuing or approving capability grants are `Confirm`:
 any authenticated owner client may do them, including a paired phone or the web
-UI over the tailnet (`10-security.md`, Approval tiers). Administration
-additionally requires a desktop-only channel plus user presence (Windows Hello
-or an OS consent prompt):
+UI over the tailnet (`10-security.md`, Approval tiers). `Allowlisted` and
+`Unrestricted` change only tool-execution prompts and controllable sink gates,
+as `13-platform.md` specifies. Administration additionally requires a
+desktop-only channel plus user presence (on Windows, Windows Hello or an OS
+consent prompt):
 
 - clearing the panic latch while under an incident;
 - changing router URL or model;
 - changing the Tailscale allowlist or pairing a device;
-- putting or rotating a secret value.
+- putting or rotating a secret value;
+- switching the credential backend;
+- enabling `Unrestricted`.
 
-Engaging panic remains available from every authenticated channel (desktop
-secret or Tailscale session) without a presence prompt.
+`DesktopConfirm` administration is not bypassed by `Unrestricted`. Enabling
+`Unrestricted` is local desktop only. Paired clients may switch to a safer
+profile. Engaging panic remains available from every authenticated channel
+(desktop secret or Tailscale session) without a presence prompt.
 
 Tailscale requests are authorized by asking the local Tailscale LocalAPI
 `WhoIs` endpoint for the socket peer address. The returned stable user identity
@@ -1010,5 +1062,7 @@ Health is descriptive and does not expose credentials or remote account names.
 - provider-specific features not representable by the normalized router
   contract;
 - a general browser-extension platform or arbitrary Scrapy/spider plugins
+- an MCP passthrough. The only MCP call is the hash-pinned catalog in
+  `docs/superpowers/specs/2026-11-06-mcp-catalog-design.md`
   installed by the model;
 - automatic promotion of Scrapy/Chrome flows into api-anything capabilities.

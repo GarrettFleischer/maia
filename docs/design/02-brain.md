@@ -274,7 +274,9 @@ rankable set as soon as promotion commits, through the same channels and the sam
 6. A canonical fact is exactly one sentence with a validity window and one or more source episodes.
    A provisional claim is exactly one sentence with one source episode.
 7. Supersession closes old validity; it does not erase history. A canonical fact that consolidates a
-   claim supersedes that claim for ranking only.
+   claim supersedes that claim for ranking only. Dream consolidation and correction marks still
+   do not delete rows. The owner brain map is the only path that rewrites or deletes a fact; see
+   **Owner map edits** below.
 8. Mention edges point from a claim or fact to the episodes that sourced or hit it. Thread identity
    is reached through the episode.
 9. Stopwords and very high-fan terms do not become lexeme nodes.
@@ -282,6 +284,23 @@ rankable set as soon as promotion commits, through the same channels and the sam
 11. Cold facts remain in the graph when omitted from a prompt.
 12. Tests can replace embeddings with explicit fixture vectors.
 13. Ranking ties are resolved deterministically.
+
+## Owner map edits
+
+The center Brain map is an owner tool for the whole shared brain, across every session. It is not
+the inspector's per-turn lens, and it does not run retrieval.
+
+- **Revise** keeps the fact id and replaces `facts.sentence` in place. Claims linked through
+  `fact_claims` receive the same sentence. The old sentence is not kept on those rows. The fact's
+  embedding and the linked claims' embeddings are dropped in that transaction. Lexeme edges for the
+  fact and those claims are replaced from the sentence and the owner-edit lexical policy.
+- **Trim** deletes that fact and the claims consolidated into it. Episode rows and episode text stay.
+  Facts that pointed at the deleted id through `replacement_fact_id` or `merged_into` have those
+  pointers cleared so the transaction can commit. Past task snapshots and the router transcript are
+  not rewritten.
+- A blank or multi-line sentence is rejected before SQL. An unknown fact id is not found.
+- Obsidian generated regions are not rewritten by this path. A later projection omits a trimmed fact
+  because the brain row is gone.
 
 ## Failure handling
 

@@ -15,18 +15,20 @@
   transition table; scope-admission pure unit tests; `NotSecretValue`
   compile-fail tests.
 - **Then:** narrow `SecretStore` port and pure scope/admission leaves first,
-  then Windows Credential Vault adapter, then Vault/OpenBao adapter, then
-  resolution injection at each tool boundary that declared it.
+  then the native OS adapter, the encrypted-file adapter, and the Vault/OpenBao
+  adapter, then resolution injection at each tool boundary that declared it.
 
 ## Honesty preamble
 
 - **Leaves (honest):** `admit_resolution`, `check_scope`, `redact_ref_label`,
   `classify_lock_event`, and `validate_secret_ref`; all state, requester
   identity, and scope arrive as parameters with no hidden global access.
-- **Skin (I/O):** `WindowsCredentialAdapter` (calls `CredRead`/`CredWrite`/
-  `CredDelete` via the Windows API), `VaultAdapter` (calls the KV v2 HTTP API
-  with a short-lived token), and `SecretMetaStore` (the SQLite table that
-  stores `SecretRef` rows without values).
+- **Skin (I/O):** the native adapter (Windows Credential Manager, macOS Keychain,
+  or Linux Secret Service, via safe functions on the selected platform crate),
+  `EncryptedFileAdapter` (Argon2id and XChaCha20-Poly1305; passphrase only from
+  a local Tauri command), `VaultAdapter` (KV v2 HTTP with a short-lived token),
+  and `SecretMetaStore` (the SQLite table that stores `SecretRef` rows without
+  values).
 - **Hooks (backward):** Axum handlers for the secrets Settings API and the
   `SecretStore` injection point in the composition root; both are glue.
 - **Mode args:** `SecretKind`, `SecretBackend`, `LockState`, `ScopeVerdict`,
@@ -38,10 +40,14 @@
 ## Purpose and authority
 
 This document specifies the credential-management boundary for Maia: the
-`SecretStore` port, the `SecretRef` and `SecretValue` domain types, the two
-permitted backends, scope and approval rules, user-facing operations,
+`SecretStore` port, the `SecretRef` and `SecretValue` domain types, the
+credential backends, scope and approval rules, user-facing operations,
 lock/unlock lifecycle, the absolute non-entry contract, threat model, and
-required tests.
+required tests. Accepted `13-platform.md` is authoritative for which backends
+exist, how native stores map to each OS, encrypted-file cryptography and lock
+events, and backend switching. This document remains authoritative for
+`SecretStore`, scopes, the non-entry contract, and the Vault/OpenBao HTTP
+adapter. Where they conflict, `13-platform.md` wins.
 
 Authentication for the router adapter is the first caller. Console session
 environment injection and future tool contracts that need a bearer token or
@@ -77,16 +83,23 @@ generation native to its core. Bitwarden Secrets Manager is AGPL-3.0 but its
 self-hosted path requires an additional setup burden without adding capabilities
 relevant to this use case.
 
-The Windows Credential Vault adapter is the default and requires no
-configuration. The Vault/OpenBao adapter is opt-in and requires a base URL and
-AppRole credentials stored in the Windows Credential Vault itself. Exactly one
-backend is active per daemon instance. Switching backends requires explicit
-migration (see **Migration and recovery**).
+The owner chooses exactly one active backend at onboarding: native OS storage,
+an encrypted local file, or Vault/OpenBao. There is no hidden default. Native
+storage is Windows Credential Manager, macOS Keychain, or Linux Secret Service
+API v2, as `13-platform.md` specifies. Switching the active backend does not
+copy values and does not delete values. Old values stay in the backend that
+holds them and are not silently read after the switch. Missing credentials are
+registered again on the newly active backend.
+
+When Vault/OpenBao is selected, its AppRole `secret_id` is a `SecretRef` whose
+recorded backend is not Vault. The Vault adapter resolves that one bootstrap
+ref from the backend named on the ref. That read is not a fallback for any
+other secret.
 
 ## Threat model
 
-Maia runs as a single desktop daemon under the current Windows user account.
-The threat model is scoped to that context.
+Maia runs as a single desktop daemon under the current desktop user account on
+Windows, Linux, or macOS. The threat model is scoped to that context.
 
 ### Assets
 
@@ -103,17 +116,17 @@ The threat model is scoped to that context.
 | Malicious vault note | Markdown read by `map` / `read` | References are opaque ids; value is not derivable from a ref |
 | Memory inspection or crash dump | In-process `SecretValue` | `Zeroizing<String>` wrapper; short scope lifetime |
 | Audit or log scraping | Log lines, audit blobs | Values are excluded from all log and audit payloads |
-| Network sniffing | Vault HTTP connection | TLS required; loopback allowed only for Windows Credential Vault calls |
+| Network sniffing | Vault HTTP connection | TLS required; local native credential APIs stay on the machine |
 | Enumeration via the settings API | Reference list | `list_refs` is scoped; values absent from every response |
 | Console child-process injection | Environment block | Environment values reach children only under explicit grant; redacted from transcript |
 | Phone projection | Tailscale responses | Phone receives reference ids and labels; never values |
 | Browser DOM exposure | Tool result rendered in UI | Tool result type for secret resolution is `()` or a typed confirmation |
 | Local administrator rollback | SQLite + credential store | Acknowledged; local admin controls the machine. No defence claimed. |
-| AppRole `secret_id` theft | Storage in Credential Vault | Wrapped in its own `SecretRef`; short TTL tokens; renewal only on demand |
+| AppRole `secret_id` theft | Storage in the non-Vault backend named on its `SecretRef` | Wrapped in its own `SecretRef`; short TTL tokens; renewal only on demand |
 
 ### Non-goals
 
-- Protecting secrets from a Windows administrator who controls the credential
+- Protecting secrets from a local administrator who controls the credential
   store and SQLite database.
 - Encrypting the vault or SQLite at rest.
 - Detecting or responding to memory inspection by a privileged process.
@@ -154,6 +167,18 @@ pub enum SecretBackend {
         /// Windows credential target name. Deterministic from SecretId.
         target: String,
     },
+    Keychain {
+        /// macOS Keychain account. Deterministic from SecretId.
+        account: String,
+    },
+    SecretService {
+        /// Secret Service collection.
+        collection: String,
+        /// Item label. Deterministic from SecretId. Not the secret value.
+        label: String,
+    },
+    /// Addressed by `SecretId` inside the encrypted file. No OS handle.
+    EncryptedFile,
     Vault {
         /// Mount path, e.g. "secret".
         mount: String,
@@ -390,20 +415,48 @@ pub enum LockReason {
     ExplicitLock,
     DaemonRestart,
     VaultTokenExpired,
+    OsLock,
+    Suspend,
 }
 
 /// Honest leaf — transitions lock state given an event. No I/O.
 pub fn classify_lock_event(current: LockState, event: LockEvent) -> LockState;
 ```
 
-### Windows Credential Vault
+### Windows Credential Manager
 
-The Windows Credential Vault is protected by the Windows user session. When
-the user is logged in, the vault is unlocked and credentials are accessible
-without a secondary PIN. When the session is locked, calls to `CredRead` fail
-and `lock_state()` returns `Locked { reason: DaemonRestart }`. The daemon does
-not attempt to work around a locked Windows session. Resolution calls fail with
-`SecretStoreError::Locked` until the session is restored.
+This subsection is the Windows native backend. The Windows Credential Manager
+is protected by the Windows user session. When the user is logged in, the store
+is unlocked and credentials are accessible without a secondary PIN. When the
+session is locked, calls to `CredRead` fail and `lock_state()` returns
+`Locked { reason: DaemonRestart }`. That mapping is specific to this Windows
+native store. Encrypted-file OS lock and suspend use `OsLock` and `Suspend`.
+The daemon does not attempt to work around a locked Windows session. Resolution calls fail with `SecretStoreError::Locked`
+until the session is restored.
+
+### macOS Keychain
+
+The native backend on macOS is Keychain, addressed by `SecretBackend::Keychain
+{ account }`. A locked session or a Keychain prompt the daemon cannot complete
+is `Locked`. Maia does not fall back to another backend.
+
+### Linux Secret Service
+
+The native backend on Linux is Secret Service API v2 at `org.freedesktop.secrets`,
+addressed by `SecretBackend::SecretService { collection, label }`. KWallet is
+acceptable only when it implements that API. If the DBus session bus or the
+service is absent, `lock_state()` is `Unavailable`. There is no legacy GNOME
+Keyring API and no fallback backend.
+
+### Encrypted file
+
+The encrypted-file backend follows `13-platform.md`. Idle is the time since the
+last successful `SecretStore::resolve` and uses `LockReason::IdleTimeout`. OS
+lock and suspend use the sources named in `13-platform.md` and enter `Locked`
+with `LockReason::OsLock` or `LockReason::Suspend`. The passphrase enters only
+through a local Tauri command and never through HTTP. Argon2id parameters are
+benchmark-gated in that document. Each write uses a fresh XChaCha20-Poly1305
+nonce.
 
 ### Vault/OpenBao adapter
 
@@ -412,10 +465,10 @@ authentication. The token TTL is configurable (default: 15 minutes). The
 adapter renews the token proactively when less than half its TTL remains and
 the daemon is active. If renewal fails, the token expires and `lock_state()`
 returns `Locked { reason: VaultTokenExpired }`. Re-authentication requires the
-AppRole `role_id` and a fresh `secret_id`, both stored in the Windows
-Credential Vault under their own `SecretRef` entries. The daemon does not cache
-the `secret_id` in memory between authentication events; it re-reads it from
-the Windows Credential Vault on each AppRole login.
+AppRole `role_id` and a fresh `secret_id`, both stored as `SecretRef` entries
+whose recorded backend is not Vault. The daemon does not cache the `secret_id`
+in memory between authentication events; it re-reads it from that recorded
+backend on each AppRole login.
 
 An explicit user action `POST /api/secrets/lock` sets `Locked { reason:
 ExplicitLock }`. An explicit `POST /api/secrets/unlock` initiates the
@@ -506,11 +559,13 @@ secret values. Importing a `SecretRefExport` JSON file re-registers the
 metadata without writing a credential value; the user must supply the value
 separately.
 
-## Windows Credential Vault adapter
+## Windows Credential Manager adapter
 
-The adapter wraps the Windows `CredRead`, `CredWrite`, and `CredDelete` API
-(type `CRED_TYPE_GENERIC`) via the `windows` crate. No third-party
-credential-store crate is used to avoid adding an audit surface.
+This is the Windows native skin. The adapter wraps the Windows `CredRead`,
+`CredWrite`, and `CredDelete` API (type `CRED_TYPE_GENERIC`) via safe functions
+from `maia-windows`. No third-party credential-store crate is used to avoid
+adding an audit surface. macOS Keychain and Linux Secret Service are separate
+skins with the `SecretBackend` variants above. They are not this adapter.
 
 ```rust
 pub struct WindowsCredentialAdapter;
@@ -543,7 +598,7 @@ error code included but no credential text.
 pub struct VaultAdapter {
     base_url: Url,            // https required
     role_id: String,          // non-secret; identifies the AppRole
-    secret_id_ref: SecretId,  // resolved from Windows Credential Vault at auth time
+    secret_id_ref: SecretId,  // resolved from the ref's non-Vault backend at auth time
     token: Mutex<Option<VaultToken>>,
     http: reqwest::Client,    // TLS; no redirects
 }
@@ -559,14 +614,15 @@ struct VaultToken {
 
 1. `resolve` or `register` checks `token` for a valid, non-expiring entry.
 2. If absent or expiring within the renewal window, the adapter reads the
-   `secret_id` from the Windows Credential Vault (not from memory) and calls
-   `POST /v1/auth/approle/login` with `role_id` and the resolved `secret_id`.
+   `secret_id` from the `SecretRef`'s recorded non-Vault backend (not from
+   memory, SQLite, or Vault) and calls `POST /v1/auth/approle/login` with
+   `role_id` and the resolved `secret_id`.
 3. The response token is stored with its `lease_duration` converted to an
    `expires_at` timestamp. The `secret_id` `SecretValue` is dropped
    immediately.
-4. The `secret_id` stored in the Windows Credential Vault may optionally be a
-   response-wrapping token (Vault cubbyhole wrapping), which the adapter
-   unwraps on first use and then destroys. This is configuration-driven.
+4. The stored `secret_id` may optionally be a response-wrapping token (Vault
+   cubbyhole wrapping), which the adapter unwraps on first use and then
+   destroys. This is configuration-driven.
 
 ### Secret resolution
 
@@ -589,34 +645,24 @@ settings, not as a secret value in SQLite). Connections to loopback are only
 allowed with an explicit `allow_loopback_http: true` configuration flag absent
 in production.
 
-## Migration and recovery
+## Backend switching and recovery
 
-### Switching from Windows Credential Vault to Vault/OpenBao
+Switching the active backend writes only the active-backend setting. It does
+not copy values and it does not delete values. There is no migrate action.
+Credentials that remain in the previous backend stay there until the owner
+deletes them by an explicit revoke on that backend, which is a separate action
+and is not part of switching. References the newly active backend cannot
+resolve are unavailable and may be registered again.
 
-1. The user registers Vault connection parameters (base URL, role ID, AppRole
-   `secret_id`) through the Settings pane. These are stored as `SecretRef`
-   entries in the Windows Credential Vault.
-2. The user selects `Migrate to Vault` in Settings.
-3. For each existing `SecretRef` in Windows Credential Vault (excluding the
-   Vault connection credentials themselves), the daemon:
-   a. resolves the value from Windows;
-   b. registers it in Vault under the configured path;
-   c. updates the `SecretRef.backend` in `SecretMetadataPort`;
-   d. does not delete the Windows credential until the user confirms migration
-      success.
-4. After the user confirms, old Windows credentials are deleted.
-
-No migration step stores values in SQLite or the vault.
-
-### Switching from Vault/OpenBao to Windows Credential Vault
-
-Reverse of the above. The Vault `secret_id` credential is migrated last.
+`PUT /api/secrets/backend` is local desktop only. The encrypted-file passphrase
+is not a field of that request or of any other HTTP request. A local Tauri
+command accepts it.
 
 ### Recovery when the backend is unavailable
 
-If the Windows Credential Vault is inaccessible, the daemon provides a
-`SecretRefExport` JSON export (from before the failure, if taken) so the user
-can re-register values manually. No automatic value recovery is possible.
+If the active backend is inaccessible, the daemon provides a `SecretRefExport`
+JSON export (metadata only, if taken) so the user can re-register values
+manually. No automatic value recovery is possible. No other backend is tried.
 
 If the Vault cluster is permanently lost, the user must restore the Vault from
 its own backup. Maia's `SecretRefExport` preserves paths and field names to
@@ -624,10 +670,11 @@ simplify re-population.
 
 ### Daemon restart
 
-The Windows Credential Vault adapter re-resolves on each `resolve` call; there
-is no in-memory cache. The Vault adapter re-authenticates using its standard
-renewal logic on the first request after restart. Neither adapter caches values
-across process boundaries.
+Native adapters re-resolve on each `resolve` call; there is no in-memory value
+cache. The encrypted-file backend locks on daemon exit and requires the
+passphrase again. The Vault adapter re-authenticates using its standard renewal
+logic on the first request after restart. No adapter caches values across
+process boundaries.
 
 ## UI placement
 
@@ -652,8 +699,12 @@ Secrets                                           [Add secret] [Lock]
   gh-token     API key   scout          2026-09-15  [Rotate] [Revoke]
 
 Secret backend
-  ● Windows Credential Vault (default)
-  ○ Vault / OpenBao  [ https://vault.example.com ] [Configure]
+  ( ) Native OS store
+      Windows Credential Manager, macOS Keychain, or Linux Secret Service
+  ( ) Encrypted file   passphrase is a local Tauri prompt, not this form
+  ( ) Vault / OpenBao  [ https://vault.example.com ] [Configure]
+
+Switching the selection does not copy or delete existing values.
 
 Default thread budgets
 Tokens        [ 30000 ]
@@ -673,8 +724,10 @@ UI rules:
 - Rotation and revocation require a confirmation step naming the secret label
   and the consequence.
 - The lock button changes to Unlock when `LockState` is `Locked`. Unlock on
-  Windows Credential Vault is informational (points to the Windows lock
-  screen); Unlock on Vault/OpenBao initiates AppRole re-authentication.
+  the native store follows that OS store's lock (on Windows, the Windows lock
+  screen). Unlock on the encrypted file asks for the passphrase through the
+  local Tauri command. Unlock on Vault/OpenBao initiates AppRole
+  re-authentication.
 - Phone settings expose label and scope metadata. Revoking a secret and
   narrowing or widening a scope work from the phone at `Confirm`. Adding or
   rotating a value is desktop-only; a phone rotation request queues
@@ -724,9 +777,19 @@ pub fn validate_label(raw: &str) -> Result<ValidatedLabel, LabelError>;
 ### I/O skins (own external state; resolve at the boundary)
 
 ```rust
-// Defined in maia-daemon; constructed by the composition root
+// Defined in maia-daemon; constructed by the composition root.
+// Exactly one active backend. Native FFI is the selected platform adapter.
 pub struct WindowsCredentialAdapter;
 impl SecretStore for WindowsCredentialAdapter { ... }
+
+pub struct KeychainAdapter;
+impl SecretStore for KeychainAdapter { ... }
+
+pub struct SecretServiceAdapter;
+impl SecretStore for SecretServiceAdapter { ... }
+
+pub struct EncryptedFileAdapter;
+impl SecretStore for EncryptedFileAdapter { ... }
 
 pub struct VaultAdapter {
     base_url: Url,
@@ -824,6 +887,8 @@ calling any skin. They do not read or return values.
     mandatory for `resolve`; a locked store never returns a value.
 11. `run_dream` has no `SecretStore` type parameter and cannot call `resolve`.
 12. The model and dream runner receive only `SecretRef.id` and `SecretRef.label`.
+13. Switching `active_backend` does not copy or delete secret values. The
+    encrypted-file passphrase never appears in an HTTP body.
 
 ## Failure modes
 
@@ -832,7 +897,12 @@ calling any skin. They do not read or return values.
   startup; it records the unavailability and surfaces it in the health endpoint.
 - **Windows session locked during a resolution:** `CredRead` fails;
   `SecretStoreError::Locked` moves the thread to `NeedsHuman`. No retry until
-  the user unlocks the Windows session and signals Resume.
+  the user unlocks the Windows session and signals Resume. This failure is
+  specific to the Windows native backend.
+- **Secret Service or DBus session missing:** the Linux native backend is
+  `Unavailable`. No other backend is substituted.
+- **Encrypted file locked or idle:** resolution waits for the local passphrase.
+  Idle is measured from the last successful `SecretStore::resolve`.
 - **Vault token expired mid-request:** the adapter attempts one renewal before
   returning `SecretStoreError::Locked`. If renewal fails, the thread moves to
   `NeedsHuman { kind: CredentialUnlock }`.
@@ -1008,10 +1078,10 @@ These are `compile_fail` doc-tests in `maia-core`:
   Chrome profile directory, governed by `07-computer.md`.
 - Secrets for the Tailscale daemon or its key material.
 - Hardware-backed key storage (TPM, smart card, Windows Hello for Business).
-  The Windows Credential Vault may delegate to Windows Hello on the user's
+  The Windows Credential Manager may delegate to Windows Hello on the user's
   machine; Maia does not configure or control that delegation.
 - Password generation, strength checking, or breach-status lookup.
-- Secret sharing between multiple daemon instances or multiple Windows users.
+- Secret sharing between multiple daemon instances or multiple desktop users.
 - Automatic rotation of API keys with third-party services; Maia stores and
   rotates values only at the user's direction.
 - End-to-end encryption of phone projections beyond TLS and Tailscale transport
@@ -1032,7 +1102,9 @@ These are `compile_fail` doc-tests in `maia-core`:
   is a port in `maia-core`; `maia-tools` and `maia-router` receive it via
   generic parameter; `run_dream` has no `SecretStore` parameter.
 - Settings pane placement: [`09-frontend.md`](09-frontend.md) §Settings — the
-  Secrets section extends the existing settings mockup.
+  Secrets and Security sections extend the existing settings mockup.
+- Backend kinds, encrypted-file rules, and no-migration switching:
+  [`13-platform.md`](13-platform.md).
 - `NeedsHuman` credential unlock flow: [`06-agents.md`](06-agents.md)
   §Four-state model — `HumanRequestKind::CredentialUnlock` is a new variant.
 - Grants, taint, and sink checks: [`10-security.md`](10-security.md)

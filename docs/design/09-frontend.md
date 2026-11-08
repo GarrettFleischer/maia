@@ -12,6 +12,12 @@ The conversation remains the primary surface. Organization stays on the left.
 Evidence stays on the right. Obsidian remains the editor for the vault, so Maia
 does not duplicate a markdown editor.
 
+**Supersession (2026-11-05):** accepted [`14-super-agent-router.md`](14-super-agent-router.md)
+replaces the per-agent thread list. The center pane is the router chat. Sidebar sections are
+Needs you, Working, Completed, Pinned, and Archive, with helper trees under parent tasks.
+Task detail is read-only and has no worker composer. Mint Ledger tokens, `Stop all`, approval
+sheets, and phone reachability in this document stay.
+
 ## Information architecture
 
 - **Agent rail:** agents, their threads, aggregate activity, global stop, vault,
@@ -76,10 +82,11 @@ A status dot means at least one child thread is `Running` or `NeedsHuman`.
 Color is not the only signal: the thread row also exposes its state to assistive
 technology, and the Activity block contains text counts.
 
-The rail footer never scrolls out of reach. `Stop all` engages the durable panic
-latch with immediate effect and no confirmation dialog: every `Running`,
-`Sleeping`, and `NeedsHuman` thread becomes `Stopped`. Clearing the latch is a
-separate control, available on any owner client except during an incident or audit failure, when it
+The rail footer never scrolls out of reach. `Stop all` stops every `Running`,
+`Sleeping`, and `NeedsHuman` thread with immediate effect and no confirmation
+dialog. The threads stay `Stopped` until the owner's next message, and the super
+agent then decides what to resume. `Stop all` does not engage the durable panic
+latch. Clearing the latch is a separate control, available on any owner client except during an incident or audit failure, when it
 is desktop-only. It does not resume anyone; each thread needs its own
 Resume. Vault opens the configured folder in Obsidian. Settings replaces
 the center pane.
@@ -158,6 +165,20 @@ Brain is a graph lens, not a decorative network.
 Zooming and panning never change activation. Selecting a node selects the same
 claim or fact in Cache and Trace.
 
+### Brain map
+
+The rail **Brain** control opens the shared brain in the center pane, the same way Settings
+replaces the conversation. This is the whole brain from every session: facts, claims, episodes,
+and lexemes. The inspector Brain tab stays the per-turn lens above.
+
+- Pan and zoom do not write activation or recall.
+- A keyboard list mirrors every visible node.
+- Search and a session filter hide the same nodes from the graph and the list.
+- Explore is the default. Edit is explicit and applies only to a canonical fact.
+- Save rewrites that fact's sentence in place. Trim asks for confirmation, then deletes the fact
+  and the claims that were consolidated into it. The source episode text stays.
+- An empty brain says so. It does not invent sample sentences.
+
 ### Trace
 
 Trace is a vertically ordered record:
@@ -216,12 +237,15 @@ Tokens        [ configured value ]
 Tool turns    [ configured value ]
 
 Secrets
-Backend       [ Windows Credential Vault (default)         ]
-              [ Vault / OpenBao  [Configure]               ]
-Labels and scopes are listed here. Values are write-only: create, rotate,
-revoke, import. The UI never displays a resolved secret after save. Phone
-clients may change scopes and revoke; entering or rotating a value stays on the
-desktop.
+Backend       [ native OS store | encrypted file | Vault / OpenBao ]
+Native store  Credential Manager | Keychain | Secret Service
+Passphrase    local desktop only
+
+Security
+Profile       [ Protected | Allowlisted | Unrestricted ]
+Capability    platform report
+Allowlist     exact entries, lifetime, enabled
+Audit         chain status
 
 Capability grants
 Standing and session grants are listed with capability, presence rule, and
@@ -251,6 +275,24 @@ subscription.
 Secret values are write-only through Settings and resolve only inside approved
 tool adapters. Saving settings affects future requests; it cannot rewrite an
 existing durable prefix.
+
+The Secrets backend is an explicit onboarding choice: native OS storage
+(Windows Credential Manager, macOS Keychain, or Linux Secret Service), an
+encrypted local file, or Vault/OpenBao. There is no hidden default. Switching
+backends does not copy or delete old values. The encrypted-file passphrase is
+entered only in a local Tauri prompt and is never sent over HTTP. Phone clients
+may change scopes and revoke. Entering or rotating a value, switching the
+backend, and entering the passphrase stay on the desktop.
+
+Security Settings follow `13-platform.md`. `Protected` prompts by policy.
+`Allowlisted` suppresses only the approval prompt for a matching entry and
+still requires a covering grant. `Unrestricted` requires one local confirmation,
+stays visible in the banner, window, and tray, and offers `Return to Protected`.
+Remote clients may view the profile and switch to a safer one. They cannot
+enable `Unrestricted`. Allowlist `enabled` state survives profile switches.
+Tray status is a Tauri integration check, or a manual check of that same
+contract, and is not a Vitest or Playwright assertion. The approval sheet
+offers `Allow once` and `Always allow this exact action`.
 
 ## Phone placement
 
@@ -282,8 +324,10 @@ on Cache and preserves selection and turn when dismissed.
 The phone and the web UI over the tailnet approve, deny, and grant with the same
 controls as the desktop. In Settings on a remote client, the administration
 fields (vault path, router base URL, model, and key, listener and Tailscale
-settings, device pairing, and policy) are read-only and show "Change this on the
-desktop."
+settings, device pairing, policy, credential backend, and encrypted-file
+passphrase) are read-only and show "Change this on the desktop." Remote clients
+may switch the security profile only to a safer profile. Enabling
+`Unrestricted` stays on the local desktop.
 
 On Android Chrome (or an installed PWA), Settings can enable Web Push as in
 `07-computer.md`. A notification tap opens the phone UI on the deep-linked
