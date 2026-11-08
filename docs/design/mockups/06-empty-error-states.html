@@ -66,9 +66,6 @@ html[data-theme="light"] .tok{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--
 .empty-c{display:grid;gap:8px;justify-items:start;padding:12px 4px}
 .empty-c h3{margin:0;font-size:15px;line-height:20px;font-weight:650}
 .empty-c p{margin:0;color:var(--muted);max-width:52ch}
-.agent-row{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 8px;border-radius:var(--r);font-size:13px}
-.agent-row[aria-current="true"]{background:color-mix(in srgb,var(--accent) 14%,var(--surface))}
-.agent-row .meta{margin-left:auto}
 .rail-mini{display:grid;gap:4px;align-content:start;padding:8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg)}
 .split{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px;min-width:0}
 .bubble-h{font-size:13px;line-height:18px;color:var(--muted)}
@@ -136,51 +133,52 @@ html[data-theme="light"] .tok{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--
 
 <section class="cards" aria-label="Empty and error states">
 <article class="scard tok" data-host>
-  <header class="scard-h"><span class="num">1</span><div><h2>No agents</h2><p class="meta">Desktop · the vault has no agent folders yet</p></div><span class="chip spec">09 · Empty</span></header>
+  <header class="scard-h"><span class="num">1</span><div><h2>No tasks</h2><p class="meta">Desktop · Needs you and Working are empty</p></div><span class="chip spec">09 · Empty</span></header>
   <div class="mock">
-    <div class="mock-h"><span>Maia</span><span class="grow"></span><span>Agents: 0</span></div>
-    <div class="mock-b split">
-      <div class="rail-mini"><p class="lbl">Agents</p><p class="meta">None yet</p></div>
-      <div class="empty-c">
-        <h3>No agents yet</h3>
-        <p>An agent is a folder in your vault with a <span class="mono">personality.md</span> file. Maia lists the agents it finds there.</p>
-        <p class="meta mono">F:\Notes\Maia</p>
-        <div class="acts">
-          <button type="button" class="btn sm" data-note="Copied the vault path">Copy vault path</button>
-          <button type="button" class="btn sm" data-note="Rescanning the vault. Agents appear here when found">Rescan vault</button>
-        </div>
-        <p class="meta">Create the folder on this computer, then rescan.</p>
-      </div>
-    </div>
-  </div>
-  <p class="copy">Phone: “Create agents on the desktop.” The phone does not create agent folders.</p>
-  <p class="toast" role="status" aria-live="polite"></p>
-</article>
-
-<article class="scard tok" data-host>
-  <header class="scard-h"><span class="num">2</span><div><h2>Agent with no threads</h2><p class="meta">Desktop · Archivist exists, no conversation yet</p></div><span class="chip spec">09 · Empty</span></header>
-  <div class="mock">
-    <div class="mock-h"><span>Maia</span><span class="grow"></span><span>Archivist · no threads</span></div>
+    <div class="mock-h"><span>Maia</span><span class="grow"></span><span>Tasks: 0</span></div>
     <div class="mock-b split">
       <div class="rail-mini">
-        <p class="lbl">Agents</p>
-        <div class="agent-row" aria-current="true">Archivist <span class="meta">no threads</span></div>
-        <div class="agent-row">Scout <span class="meta">idle</span></div>
-        <div class="agent-row">Scribe <span class="meta">idle</span></div>
+        <p class="lbl">Needs you · 0</p><p class="meta">None waiting</p>
+        <p class="lbl">Working · 0</p><p class="meta">Nothing queued</p>
       </div>
       <div class="empty-c">
-        <h3>Archivist</h3>
-        <p>No conversations yet. Start one to ask Archivist about your vault or your files.</p>
-        <div class="acts"><button type="button" class="btn sm pri" data-note="Starts an empty thread with Archivist. Its prompt is compiled from its personality and tools">New conversation</button></div>
+        <h3>No tasks yet</h3>
+        <p>A task appears here when the Router turns one of your messages into work. Its progress shows in Needs you or Working.</p>
+        <div class="acts">
+          <button type="button" class="btn sm pri" data-note="Moves focus to the Router composer">Message Router</button>
+        </div>
+        <p class="meta">Nothing needs you yet.</p>
       </div>
     </div>
   </div>
-  <p class="copy">Offers New conversation and nothing that implies history exists.</p>
+  <p class="copy">Phone: the same empty sections, with the Router composer.</p>
   <p class="toast" role="status" aria-live="polite"></p>
 </article>
 
 <article class="scard tok" data-host>
-  <header class="scard-h"><span class="num">3</span><div><h2>Cache without facts</h2><p class="meta">Desktop · inspector Cache, new thread, no facts promoted</p></div><span class="chip spec">09 · Empty</span></header>
+  <header class="scard-h"><span class="num">2</span><div><h2>Model connection not configured</h2><p class="meta">Desktop · first run, no Base URL or API key yet</p></div><span class="chip spec">09 · Settings</span></header>
+  <div class="mock">
+    <div class="mock-h"><span>Maia</span><span class="grow"></span><span>Router · not configured</span></div>
+    <div class="mock-b split">
+      <div class="rail-mini">
+        <p class="lbl">Needs you · 0</p><p class="meta">None waiting</p>
+        <p class="lbl">Working · 0</p><p class="meta">Nothing queued</p>
+      </div>
+      <div class="empty-c">
+        <h3>Model connection not configured</h3>
+        <p>The Router needs a Base URL and an API key before it can answer. Add them in Settings · Model connection.</p>
+        <div class="acts"><button type="button" class="btn sm pri" data-note="Opens Settings · Model connection on this computer">Open Settings</button></div>
+        <div class="draft" aria-disabled="true">Message Router…</div>
+        <p class="meta">The composer stays disabled until both are saved.</p>
+      </div>
+    </div>
+  </div>
+  <p class="copy">Composer disabled, and Open Settings leads to Model connection. Nothing is sent to a model until both are saved.</p>
+  <p class="toast" role="status" aria-live="polite"></p>
+</article>
+
+<article class="scard tok" data-host>
+  <header class="scard-h"><span class="num">3</span><div><h2>Cache without facts</h2><p class="meta">Desktop · inspector Cache, new conversation, no facts promoted</p></div><span class="chip spec">09 · Empty</span></header>
   <div class="mock">
     <div class="mock-h"><span>Inspector</span><span class="grow"></span><span>Cache</span></div>
     <div class="mock-b">
@@ -188,10 +186,10 @@ html[data-theme="light"] .tok{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--
       <div class="rowline"><b>74%</b><span class="meta">of the prompt is cached</span></div>
       <div class="bar" role="img" aria-label="74 percent cached"><i></i></div>
       <div>
-        <div class="slot"><span class="n">1</span><span>Tools</span><span class="s">8 schemas</span></div>
-        <div class="slot"><span class="n">2</span><span>Agents</span><span class="s">3 listed</span></div>
-        <div class="slot"><span class="n">3</span><span>Persona</span><span class="s mono">personality.md · 3f9a.c21</span></div>
-        <div class="slot"><span class="n">4</span><span>Compacted memory</span><span class="s">none yet</span></div>
+        <div class="slot"><span class="n">1</span><span>Tools</span><span class="s">none on the router</span></div>
+        <div class="slot"><span class="n">2</span><span>Router instructions</span><span class="s mono">fixed · 3f9a.c21</span></div>
+        <div class="slot"><span class="n">3</span><span>Candidate tasks</span><span class="s">0 tasks</span></div>
+        <div class="slot"><span class="n">4</span><span>Compacted transcript</span><span class="s">none yet</span></div>
         <div class="slot"><span class="n">5</span><span>Memory notes</span><span class="s">none</span></div>
       </div>
       <p class="lbl">Recall · not durable</p>
@@ -199,7 +197,7 @@ html[data-theme="light"] .tok{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--
       <p class="meta">Episodes searched this turn: 14. Nothing recalled yet.</p>
     </div>
   </div>
-  <p class="copy">Still shows tools, agents, and personas. States that episode retrieval is active.</p>
+  <p class="copy">Shows the Router’s fixed prefix, an empty candidate task list, and memory. States that episode retrieval is active.</p>
   <p class="toast" role="status" aria-live="polite"></p>
 </article>
 
@@ -226,16 +224,16 @@ html[data-theme="light"] .tok{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--
 </article>
 
 <article class="scard tok" data-host>
-  <header class="scard-h"><span class="num">5</span><div><h2>Router unavailable</h2><p class="meta">Desktop · the composer, after a send failed</p></div><span class="chip spec">FP-ERR-01</span></header>
+  <header class="scard-h"><span class="num">5</span><div><h2>Model connection did not answer</h2><p class="meta">Desktop · the composer, after a send failed</p></div><span class="chip spec">FP-ERR-01</span></header>
   <div class="mock">
-    <div class="mock-h"><span>Scout · with you</span><span class="grow"></span><span>Turn 149</span></div>
+    <div class="mock-h"><span>Router · one conversation</span><span class="grow"></span><span>Router turn 149</span></div>
     <div class="mock-b">
       <p class="bubble-h">You · 10:58</p>
       <div class="draft" aria-label="Draft kept after the failed send">Can you check the build log again and tell me if the report is ready?</div>
       <div class="err" role="alert">
-        <b>Router unavailable</b>
-        <span class="meta">openrouter.ai did not answer in 30 s. Your draft is kept.</span>
-        <div class="acts"><button type="button" class="btn sm pri" id="r-retry">Retry</button><button type="button" class="btn sm" data-note="Opens Settings, Model router. The key stays in the Windows Credential Vault">Open settings</button></div>
+        <b>Router didn’t answer</b>
+        <span class="meta">The model connection did not answer in 30 s. Your draft is kept.</span>
+        <div class="acts"><button type="button" class="btn sm pri" id="r-retry">Retry</button><button type="button" class="btn sm" data-note="Opens Settings · Model connection. The key stays in the secret store and is never shown">Open Settings</button></div>
       </div>
       <p class="status-line" id="r-status" aria-live="polite">Last attempt 10:58.</p>
     </div>
@@ -252,7 +250,7 @@ html[data-theme="light"] .tok{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--
         <div class="body">
           <div class="banner-e" role="alert">
             <b>Can't reach your desktop.</b>
-            <span class="meta">Last update 10:52. Maia runs on your desktop; agents, brain, and vault stay there.</span>
+            <span class="meta">Last update 10:52. Maia runs on your desktop; the Router, tasks, brain, and vault stay there.</span>
             <div class="acts">
               <button type="button" class="btn sm pri" id="p-retry">Try again</button>
               <button type="button" class="btn sm" id="p-details" aria-expanded="false" aria-controls="p-addr">Show details</button>
@@ -263,8 +261,8 @@ html[data-theme="light"] .tok{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--
           <div class="draft" aria-label="Draft kept while the desktop is unreachable">Check the build log for me</div>
         </div>
         <div class="foot">
-          <button type="button" class="btn danger" disabled aria-describedby="p-stop-note">Stop all</button>
-          <p class="meta" id="p-stop-note">Stop all can't reach the desktop. Stop it on the desktop.</p>
+          <button type="button" class="btn" disabled aria-describedby="p-stop-note">Stop all running threads</button>
+          <p class="meta" id="p-stop-note">Stop all running threads can’t reach the desktop. Stop them on the desktop.</p>
         </div>
         <p class="toast" role="status" aria-live="polite"></p>
       </div>
@@ -358,10 +356,11 @@ html[data-theme="light"] .tok{--bg:#F3F4F1;--surface:#FCFCFA;--border:#DADCD5;--
 <section class="notes" aria-labelledby="notes-t">
   <h2 id="notes-t">What this mock settles, and what to check</h2>
   <ul>
-    <li><b>Empty states use the 09 copy.</b> No agents, agent without threads, Cache without facts, and Brain without facts each say what exists and what to do next. None implies history that does not exist.</li>
-    <li><b>Router failure keeps the draft</b> (FP-ERR-01). Retry resends the same draft; a failed retry keeps it too.</li>
+    <li><b>Empty states use the 09 copy.</b> No tasks, Model connection not configured, Cache without facts, and Brain without facts each say what exists and what to do next. None implies history that does not exist.</li>
+    <li><b>Router failure keeps the draft</b> (FP-ERR-01). Retry resends the same draft; a failed retry keeps it too. The copy names the model connection, not a provider.</li>
+    <li><b>Model connection not configured</b> disables the composer and offers Open Settings. The key is never shown, and nothing is sent until the connection is saved.</li>
     <li><b>The phone never implies the desktop's work moved.</b> The unreachable state names the last update and the address tried. Uploads are not queued (FP-CMP-05).</li>
-    <li><b>Stop all is disabled on the phone while the desktop is unreachable,</b> and the copy says where to stop it (FP-ERR-03). This is the gap recorded as OD-2 in 12. It needs an owner decision before the invariant in 09 can read as unconditional.</li>
+    <li><b>Stop all running threads is disabled on the phone while the desktop is unreachable,</b> and the copy says where to stop them (FP-ERR-03). This is the gap recorded as OD-2 in 12. It needs an owner decision before the invariant in 09 can read as unconditional.</li>
     <li><b>A failed preview gets one retry</b>, then stays failed with the file unchanged and Download offered (FP-ERR-04).</li>
     <li><b>Installers and executables get Download only.</b> Open in app is never offered for them (FP-PRV-06). This refines the 03 chrome.</li>
     <li><b>A too-large file shows a labelled partial preview</b> and its cap, never a silent truncation (FP-ERR-06, limits in 12). The caps are proposals for owner confirmation.</li>

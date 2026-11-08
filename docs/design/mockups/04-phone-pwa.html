@@ -9,8 +9,8 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;padding:24px 16px 64px}
 .page{max-width:1480px;margin:0 auto;display:grid;gap:16px}
-.page h1{margin:0;font-size:20px;line-height:28px;font-weight:650}
-.page header p{margin:0;color:var(--pg-muted);max-width:90ch}
+.page > header h1{margin:0;font-size:20px;line-height:28px;font-weight:650}
+.page > header p{margin:0;color:var(--pg-muted);max-width:90ch}
 .seg{display:inline-flex;border:1px solid var(--pg-border);border-radius:8px;padding:2px;background:var(--pg-surface);width:max-content}
 .seg button{border:0;background:none;color:var(--pg-muted);font:inherit;font-size:13px;padding:6px 10px;border-radius:6px;cursor:pointer}
 .seg button[aria-pressed="true"]{background:var(--pg-fg);color:var(--pg-bg)}
@@ -40,7 +40,7 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
 .scr{flex:1;min-height:0;position:relative;display:flex;flex-direction:column;--dock:120px}
 .hdr{flex:none;min-height:56px;display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--surface)}
 .hdr .who{flex:1;min-width:0;padding:0 4px}
-.who b{display:block;font-size:15px;line-height:20px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who b,.who h1,.who h2{margin:0;display:block;font-size:15px;line-height:20px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .who span{display:block;font-size:12px;line-height:16px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tap{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);font-size:14px;font-weight:550;white-space:nowrap}
 .tap.ghost{border-color:transparent;background:none}
@@ -100,8 +100,9 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
 .drawer .hdr{border-top:0}
 .rail{flex:1;min-height:0;overflow-y:auto;padding:8px}
 .rail ul{list-style:none;margin:0;padding:0}
+.rail section + section{margin-top:4px}
+.drawer h3.lbl{margin:12px 8px 4px}
 .row{width:100%;min-height:44px;display:flex;align-items:center;gap:8px;padding:0 10px;border:0;border-radius:var(--r);background:none;text-align:left;font-size:14px;font-weight:550}
-.row.sel{background:color-mix(in srgb,var(--accent) 12%,var(--surface))}
 .row.child{padding-left:30px;font-weight:400;color:var(--muted)}
 .row .end{margin-left:auto;font-size:12px;font-weight:400;color:var(--muted)}
 .activity{flex:none;display:grid;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
@@ -168,7 +169,7 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
 <main class="page">
   <header>
     <h1>Maia · Phone PWA (Android, 390 × 844)</h1>
-    <p>Task 4 from the frontend plan: five phone screens on the Mint Ledger tokens, side by side in phone frames. The controls match the desktop. Touch targets are 44 px or larger, and global stop stays reachable on every screen where a thread runs. Dark is the default; the switch changes all five.</p>
+    <p>Task 4 from the frontend plan, updated to the Super Agent router: five phone screens on the Mint Ledger tokens, side by side in phone frames. The phone shows the same Router conversation, Tasks drawer, and controls as the desktop. Touch targets are 44 px or larger, and Stop all running threads stays reachable on every screen where a task runs. Dark is the default; the switch changes all five.</p>
   </header>
   <div class="seg" role="group" aria-label="Theme">
     <button type="button" data-theme-btn="dark" aria-pressed="true">Dark</button>
@@ -177,20 +178,20 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
 
   <div class="lineup">
     <figure class="fig">
-      <figcaption>1 · Thread view</figcaption>
+      <figcaption>1 · Router conversation</figcaption>
       <div class="ph" data-theme="dark">
         <div class="sbar"><span>10:47</span><span>Tailscale · 5G</span></div>
         <div class="scr">
           <header class="hdr">
-            <button type="button" class="tap ghost" aria-label="Agents" data-note="Opens the agent drawer (frame 3)"><svg class="ic"><use href="#i-menu"/></svg>Agents</button>
-            <div class="who"><b>Scout</b><span>with you · turn 148</span></div>
+            <button type="button" class="tap ghost" aria-label="Tasks" data-note="Opens the Tasks drawer (frame 3)"><svg class="ic"><use href="#i-menu"/></svg>Tasks</button>
+            <div class="who"><h1>Router</h1><span>2 running · 1 needs you</span></div>
             <button type="button" class="tap" data-note="Opens the inspector sheet (frame 4)"><svg class="ic"><use href="#i-inspect"/></svg>Inspect</button>
           </header>
           <div class="tx">
             <div class="msg-h">Can I open this from my phone?</div>
             <div class="msg-a">
-              <div class="who-a"><span class="av">S</span>Scout</div>
-              <p>Yes. Same UI over Tailscale. The HTTPS certificate renews in 62 days; I noted that in
+              <div class="who-a"><span class="av">R</span>Router</div>
+              <p>Yes. Same UI over Tailscale. The HTTPS certificate renews in 62 days. Tailscale HTTPS setup wrote the date to
                 <button type="button" class="chip-f" data-note="Opens tailscale.md in the preview"><svg class="ic"><use href="#i-file"/></svg>tailscale.md</button>.</p>
               <p class="meta">2 facts installed</p>
             </div>
@@ -200,7 +201,7 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
             </button>
             <div class="msg-h">Check page 3 against this.</div>
             <div class="msg-a">
-              <div class="who-a"><span class="av">S</span>Scout</div>
+              <div class="who-a"><span class="av">R</span>Router</div>
               <p>Page 3 says the figures are provisional until the September build report is merged.
                 <button type="button" class="chip-f" data-note="Opens report.pdf at page 3"><svg class="ic"><use href="#i-pdf"/></svg>report.pdf p.3</button></p>
             </div>
@@ -208,11 +209,11 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
           <div class="runbar" role="status">
             <span class="dot" aria-hidden="true"></span>
             <span class="label">2 running</span>
-            <button type="button" class="tap danger" data-note="Stops all running threads">Stop all</button>
+            <button type="button" class="tap" data-note="Stops all running threads">Stop all running threads</button>
           </div>
           <div class="comp">
             <button type="button" class="tap" aria-label="Attach file" data-note="Attach from phone files or camera"><svg class="ic"><use href="#i-attach"/></svg></button>
-            <textarea rows="1" aria-label="Message Scout" placeholder="Message Scout…"></textarea>
+            <textarea rows="1" aria-label="Message Router" placeholder="Message Router…"></textarea>
             <button type="button" class="tap pri" aria-label="Send" data-note="Sends this message"><svg class="ic"><use href="#i-send"/></svg></button>
           </div>
           <p class="toast" role="status" aria-live="polite"></p>
@@ -226,8 +227,8 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
         <div class="sbar"><span>10:48</span><span>Tailscale · 5G</span></div>
         <div class="scr">
           <header class="hdr">
-            <button type="button" class="tap ghost" aria-label="Close preview" data-note="Closes the preview and returns to the thread"><svg class="ic"><use href="#i-x"/></svg></button>
-            <div class="who"><b>report.pdf</b><span>from Scout · turn 148 · v1</span></div>
+            <button type="button" class="tap ghost" aria-label="Close preview" data-note="Closes the preview and returns to the Router"><svg class="ic"><use href="#i-x"/></svg></button>
+            <div class="who"><h1>report.pdf</h1><span>from Android PWA rebuild · v1</span></div>
           </header>
           <div class="ptaint">
             <span class="taint">Untrusted · workspace</span>
@@ -238,7 +239,7 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
               <h3>3 Build</h3>
               <p>The build passes on the phone path. Two warnings remain in the Tailscale renewal script.</p>
               <p>Figures in section 3.2 are provisional until the September build report is merged.</p>
-              <small>Generated by Scout · turn 147 · not reviewed by the owner</small>
+              <small>Generated by Android PWA rebuild · not reviewed by the owner</small>
             </div>
           </div>
           <div class="pager">
@@ -248,7 +249,7 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
           </div>
           <div class="float" id="vers" hidden>
             <span class="lbl">History</span>
-            <p><b>v1</b> · Scout · Nov 4, 18:20 · current</p>
+            <p><b>v1</b> · Android PWA rebuild · Nov 4, 18:20 · current</p>
             <p class="mono">sha256 3f9a…c21 · binary, compared by hash</p>
           </div>
           <div class="float" id="menu" hidden>
@@ -268,13 +269,13 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
     </figure>
 
     <figure class="fig">
-      <figcaption>3 · Agent drawer</figcaption>
+      <figcaption>3 · Tasks drawer</figcaption>
       <div class="ph" data-theme="dark">
         <div class="sbar"><span>10:49</span><span>Tailscale · 5G</span></div>
         <div class="scr">
           <header class="hdr" aria-hidden="true">
-            <button type="button" class="tap ghost" tabindex="-1"><svg class="ic"><use href="#i-menu"/></svg>Agents</button>
-            <div class="who"><b>Scout</b><span>with you · turn 148</span></div>
+            <button type="button" class="tap ghost" tabindex="-1"><svg class="ic"><use href="#i-menu"/></svg>Tasks</button>
+            <div class="who"><h1>Router</h1><span>2 running · 1 needs you</span></div>
             <button type="button" class="tap" tabindex="-1"><svg class="ic"><use href="#i-inspect"/></svg>Inspect</button>
           </header>
           <div class="tx" aria-hidden="true">
@@ -283,35 +284,59 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
           </div>
           <div class="runbar" aria-hidden="true">
             <span class="dot"></span><span class="label">2 running</span>
-            <button type="button" class="tap danger" tabindex="-1">Stop all</button>
+            <button type="button" class="tap" tabindex="-1">Stop all running threads</button>
           </div>
           <div class="comp" aria-hidden="true">
             <button type="button" class="tap" tabindex="-1"><svg class="ic"><use href="#i-attach"/></svg></button>
-            <textarea rows="1" tabindex="-1" placeholder="Message Scout…"></textarea>
+            <textarea rows="1" tabindex="-1" placeholder="Message Router…"></textarea>
           </div>
           <div class="scrim" aria-hidden="true"></div>
           <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-t">
             <header class="hdr">
-              <div class="who"><b id="drawer-t">Agents</b></div>
-              <button type="button" class="tap ghost" aria-label="Close agents" data-note="Closes the drawer and returns focus to Agents"><svg class="ic"><use href="#i-x"/></svg></button>
+              <div class="who"><h2 id="drawer-t">Tasks</h2></div>
+              <button type="button" class="tap ghost" aria-label="Close tasks" data-note="Closes the drawer and returns focus to Tasks"><svg class="ic"><use href="#i-x"/></svg></button>
             </header>
-            <nav class="rail" aria-label="Agents and threads">
-              <ul>
-                <li><button type="button" class="row" data-note="Opens Archivist's threads">Archivist<span class="end">idle</span></button></li>
-                <li><button type="button" class="row" data-note="Opens Scout's threads">Scout<span class="end"><span class="dot" aria-label="running"></span></span></button></li>
-                <li><button type="button" class="row child sel" aria-current="true" data-note="Opens the thread with you">with you<span class="end">running</span></button></li>
-                <li><button type="button" class="row child" data-note="Opens the Scout and Scribe thread">with Scribe<span class="end">idle</span></button></li>
-                <li><button type="button" class="row" data-note="Opens Scribe's threads">Scribe<span class="end">idle</span></button></li>
-              </ul>
+            <nav class="rail" aria-label="Tasks">
+              <section aria-labelledby="pd-needs">
+                <h3 class="lbl" id="pd-needs">Needs you · 1</h3>
+                <ul>
+                  <li><button type="button" class="row" data-note="Opens the read-only detail for Android PWA rebuild. Nothing is sent or run from it">Android PWA rebuild<span class="end">Blocked</span></button></li>
+                </ul>
+              </section>
+              <section aria-labelledby="pd-work">
+                <h3 class="lbl" id="pd-work">Working · 1</h3>
+                <ul>
+                  <li><button type="button" class="row" data-note="Opens the read-only detail for Tailscale HTTPS setup">Tailscale HTTPS setup<span class="end"><span class="dot" aria-label="running"></span></span></button></li>
+                  <li><button type="button" class="row child" data-note="Opens the read-only detail for Certificate check. Helpers are not top-level tasks">Certificate check<span class="end">done</span></button></li>
+                  <li><button type="button" class="row child" data-note="Opens the read-only detail for Serve check. Helpers are not top-level tasks">Serve check<span class="end">running</span></button></li>
+                </ul>
+              </section>
+              <section aria-labelledby="pd-done">
+                <h3 class="lbl" id="pd-done">Completed · 1</h3>
+                <ul>
+                  <li><button type="button" class="row" data-note="Opens the read-only detail for Phone install checklist">Phone install checklist<span class="end">done</span></button></li>
+                </ul>
+              </section>
+              <section aria-labelledby="pd-pin">
+                <h3 class="lbl" id="pd-pin">Pinned · 1</h3>
+                <ul>
+                  <li><button type="button" class="row" data-note="Opens the read-only detail for Install banner copy. A pinned task appears only here">Install banner copy<span class="end">pinned</span></button></li>
+                </ul>
+              </section>
+              <section aria-label="Archive">
+                <ul>
+                  <li><button type="button" class="row" aria-expanded="false" data-note="Expands Archive. Archived tasks stay read-only">Archive<span class="end">4</span></button></li>
+                </ul>
+              </section>
             </nav>
             <section class="activity" aria-label="Activity">
               <span class="lbl">Activity</span>
               <p>2 running · 1 needs you</p>
-              <button type="button" class="tap danger full" data-note="Stops all running threads">Stop all</button>
+              <button type="button" class="tap full" data-note="Stops all running threads">Stop all running threads</button>
             </section>
             <footer class="railfoot">
               <button type="button" class="tap ghost" data-note="Opens the vault folder list">Vault</button>
-              <button type="button" class="tap ghost" data-note="Opens settings">Settings</button>
+              <button type="button" class="tap ghost" data-note="Opens Settings. Model connection is read-only on the phone">Settings</button>
             </footer>
           </aside>
           <p class="toast" role="status" aria-live="polite"></p>
@@ -324,10 +349,10 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
       <div class="ph" data-theme="dark">
         <div class="sbar"><span>10:50</span><span>Tailscale · 5G</span></div>
         <div class="scr">
-          <header class="hdr">
-            <button type="button" class="tap ghost" aria-label="Agents" data-note="Opens the agent drawer (frame 3)"><svg class="ic"><use href="#i-menu"/></svg>Agents</button>
-            <div class="who"><b>Scout</b><span>with you · turn 148</span></div>
-            <button type="button" class="tap" aria-pressed="true" data-note="Inspector is open"><svg class="ic"><use href="#i-inspect"/></svg>Inspect</button>
+          <header class="hdr" aria-hidden="true">
+            <button type="button" class="tap ghost" aria-label="Tasks" tabindex="-1" data-note="Opens the Tasks drawer (frame 3)"><svg class="ic"><use href="#i-menu"/></svg>Tasks</button>
+            <div class="who"><h1>Router</h1><span>2 running · 1 needs you</span></div>
+            <button type="button" class="tap" aria-pressed="true" tabindex="-1" data-note="Inspector is open"><svg class="ic"><use href="#i-inspect"/></svg>Inspect</button>
           </header>
           <div class="tx" aria-hidden="true">
             <div class="msg-h">Check page 3 against this.</div>
@@ -353,11 +378,11 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
                   <p class="legend"><span><i class="s-fixed"></i>fixed 58%</span><span><i class="s-comp"></i>compacted 23%</span><span><i class="s-new"></i>new 19%</span></p>
                 </div>
                 <ol class="slots">
-                  <li><span class="mono">01</span>tools<em>fixed</em></li>
-                  <li><span class="mono">02</span>agents<em>fixed</em></li>
-                  <li><span class="mono">03</span>Persona · Scout<em>fixed</em></li>
-                  <li><span class="mono">04</span>Compacted memory<em>compacted</em></li>
-                  <li><span class="mono">05</span>mem_7f3a Tailscale<em>compacted</em></li>
+                  <li><span class="mono">01</span>tools · none on the router<em>fixed</em></li>
+                  <li><span class="mono">02</span>router instructions<em>fixed</em></li>
+                  <li><span class="mono">03</span>candidate tasks<em>fixed</em></li>
+                  <li><span class="mono">04</span>compacted transcript<em>compacted</em></li>
+                  <li><span class="mono">05</span>memory · mem_7f3a Tailscale<em>compacted</em></li>
                 </ol>
                 <p class="divider">recall · not durable</p>
                 <p class="meta">r1 · ep_2c10 · Untrusted · turn-local</p>
@@ -373,11 +398,11 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
           </section>
           <div class="runbar">
             <span class="dot"></span><span class="label">2 running</span>
-            <button type="button" class="tap danger" data-note="Stops all running threads">Stop all</button>
+            <button type="button" class="tap" data-note="Stops all running threads">Stop all running threads</button>
           </div>
           <div class="comp">
             <button type="button" class="tap" aria-label="Attach file" data-note="Attach from phone files or camera"><svg class="ic"><use href="#i-attach"/></svg></button>
-            <textarea rows="1" aria-label="Message Scout" placeholder="Message Scout…"></textarea>
+            <textarea rows="1" aria-label="Message Router" placeholder="Message Router…"></textarea>
             <button type="button" class="tap pri" aria-label="Send" data-note="Sends this message"><svg class="ic"><use href="#i-send"/></svg></button>
           </div>
           <p class="toast" role="status" aria-live="polite"></p>
@@ -391,8 +416,8 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
         <div class="sbar"><span>10:51</span><span>Tailscale · 5G</span></div>
         <div class="scr">
           <header class="hdr">
-            <button type="button" class="tap ghost" aria-label="Agents" data-note="Opens the agent drawer (frame 3)"><svg class="ic"><use href="#i-menu"/></svg>Agents</button>
-            <div class="who"><b>Scout</b><span>with you · turn 148</span></div>
+            <button type="button" class="tap ghost" aria-label="Tasks" data-note="Opens the Tasks drawer (frame 3)"><svg class="ic"><use href="#i-menu"/></svg>Tasks</button>
+            <div class="who"><h1>Router</h1><span>2 running · 1 needs you</span></div>
             <button type="button" class="tap" data-note="Opens the inspector sheet (frame 4)"><svg class="ic"><use href="#i-inspect"/></svg>Inspect</button>
           </header>
           <div class="banner-i" id="install">
@@ -403,8 +428,8 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
           <div class="tx">
             <div class="msg-h">Regenerate the report from build.ps1.</div>
             <div class="msg-a">
-              <div class="who-a"><span class="av">S</span>Scout</div>
-              <p>I need to run the build script on this computer to regenerate the report.</p>
+              <div class="who-a"><span class="av">R</span>Router</div>
+              <p>Android PWA rebuild needs to run build.ps1 on this computer to regenerate the report.</p>
             </div>
           </div>
           <section class="appr" role="dialog" aria-labelledby="appr-t" id="appr">
@@ -412,6 +437,7 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
             <h2 id="appr-t">Approve shell command?</h2>
             <p class="cmd">pwsh -File build.ps1</p>
             <dl class="kv">
+              <dt>Task</dt><dd>Android PWA rebuild</dd>
               <dt>Target</dt><dd>Shell on this computer</dd>
               <dt>Digest</dt><dd class="mono">ab12…</dd>
               <dt>Provenance</dt><dd>Context includes content from web: example.com</dd>
@@ -422,16 +448,17 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
               <button type="button" class="tap" data-decide="deny">Deny</button>
               <button type="button" class="tap pri" data-decide="approve">Approve</button>
             </div>
-            <button type="button" class="tap danger full" data-note="Stops this thread">Stop thread</button>
+            <button type="button" class="tap danger full" data-note="Stops this task only. Its helpers stop with it">Stop task</button>
             <p class="status" id="appr-status" role="status"></p>
           </section>
           <div class="runbar">
-            <span class="dot"></span><span class="label">2 running · 1 needs you</span>
-            <button type="button" class="tap danger" data-note="Stops all running threads">Stop all</button>
+            <span class="dot"></span><span class="label">2 running</span>
+            <button type="button" class="tap" data-note="Stops all running threads">Stop all running threads</button>
           </div>
           <div class="comp">
-            <textarea rows="1" disabled aria-label="Composer paused until you decide" placeholder="Paused until you decide"></textarea>
-            <button type="button" class="tap pri" aria-label="Send" disabled><svg class="ic"><use href="#i-send"/></svg></button>
+            <button type="button" class="tap" aria-label="Attach file" data-note="Attach from phone files or camera"><svg class="ic"><use href="#i-attach"/></svg></button>
+            <textarea rows="1" aria-label="Message Router" placeholder="Message Router…"></textarea>
+            <button type="button" class="tap pri" aria-label="Send" data-note="Sends this message"><svg class="ic"><use href="#i-send"/></svg></button>
           </div>
           <p class="toast" role="status" aria-live="polite"></p>
         </div>
@@ -442,9 +469,11 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
   <section class="notes" aria-labelledby="notes-t">
     <h2 id="notes-t">What this mock settles, and what to check</h2>
     <ul>
-      <li><b>Stop all stays reachable.</b> Every frame with a running thread keeps the running bar visible, including under the inspector sheet (frame 4) and the approval sheet (frame 5). Both sheets stop at the bar's top edge.</li>
-      <li><b>Approve appears only for CapabilityApproval.</b> Login, MFA, captcha, consent with a legal effect, and rotation show “Finish this on the desktop.” instead; the Task 5 mock shows those banners. The approval sheet carries the same content as the desktop approval.</li>
-      <li><b>The composer pauses while NeedsHuman holds.</b> Frame 5 disables it, as 09 requires.</li>
+      <li><b>One Router transcript.</b> The phone shows the same single conversation as the desktop. Tasks and their helpers appear only in the Tasks drawer, never as chat threads.</li>
+      <li><b>Five sections, in order:</b> Needs you, Working, Completed, Pinned, and a collapsed Archive that shows a count. A pinned task lives only in Pinned and keeps its phase text. Helpers nest under their parent and are not top-level rows.</li>
+      <li><b>Stop all running threads stays reachable.</b> Every frame with a running task keeps the quiet running bar, including under the Tasks drawer (frame 3), the inspector sheet (frame 4), and the approval (frame 5).</li>
+      <li><b>Approve appears only for CapabilityApproval.</b> Login, MFA, captcha, consent with a legal effect, and rotation show “Finish this on the desktop.” instead; the Task 5 mock shows those banners. The approval sheet carries the same content as the desktop approval, and Stop task is available there.</li>
+      <li><b>The composer stays enabled while a task waits.</b> Frame 5 keeps it live. Sending a message does not approve, deny, or waive anything; those are host decisions made on the approval or the waiver banner.</li>
       <li><b>Touch targets are 44 px or larger.</b> Every button, chip, and tab in the five frames is measured in the browser.</li>
       <li><b>Install banner.</b> Shown in the browser only. In standalone mode it is hidden and Settings shows “Installed”. Not now hides the banner; Settings still offers Install.</li>
       <li><b>Drawer and sheets.</b> Frames 3 and 4 show open states only. The focus trap and focus restore to the trigger are specified in the accessibility section and are not simulated here.</li>
@@ -456,8 +485,8 @@ body{margin:0;background:var(--pg-bg);color:var(--pg-fg);font:14px/20px "Segoe U
 (function () {
   'use strict';
   var OUTCOMES = {
-    deny: 'Denied · the thread continues without the command.',
-    approve: 'Approved · Scout runs the command, and the desktop shows the same decision.'
+    deny: 'Denied · the task continues without the command.',
+    approve: 'Approved · the task runs the command, and the desktop shows the same decision.'
   };
   var toastTimers = new WeakMap();
 
