@@ -1,0 +1,41 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --noEmit",
+    "e2e": "playwright test",
+    "e2e:live": "playwright test --config playwright.live.config.ts",
+    "e2e:sequential": "npm run e2e && npm run e2e:live"
+  },
+  "dependencies": {
+    "mermaid": "^12.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "@vitest/ui": "^4.1.12",
+    "jsdom": "^29.1.1",
+    "oxlint": "^1.90.0",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^4.1.12"
+  }
+}
