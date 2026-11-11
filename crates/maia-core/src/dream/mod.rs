@@ -3,20 +3,24 @@
 mod apply;
 mod batch;
 mod consolidate;
+mod decision;
 mod error;
 mod json;
 mod parse;
 mod plan;
 mod prepass;
 mod project;
+mod related;
 mod schedule;
+mod seeds;
 mod select;
 mod sentence;
+mod skip;
 
 pub use apply::{
-    ApplyFault, ClaimStatus, CommittedClaim, EpisodeSegment, LexemeEdge, MentionEdge,
-    ModelIdentity, PromotedMark, PromotionCommit, PromotionEpisode, PromotionInputPart,
-    describe_promotion, promotion_input_parts,
+    ApplyFault, ClaimReplacement, ClaimStatus, CommittedClaim, EpisodeSegment, LexemeEdge,
+    MentionEdge, ModelIdentity, PromotedMark, PromotionCommit, PromotionEpisode,
+    PromotionInputPart, describe_promotion, describe_promotion_decision, promotion_input_parts,
 };
 pub use batch::{
     ClosureDraft, ConsolidationDraft, DismissalDraft, EntityDraft, EntityScope, FactDraft,
@@ -29,10 +33,19 @@ pub use consolidate::{
     ProposedOperation, SnapshotClaim, SnapshotCorrection, decide_proposal, describe_consolidation,
     render_consolidation_model_input,
 };
+pub use decision::{
+    MAX_CLAIM_SENTENCE_CHARS, PromotionDecision, ReplaceDraft, parse_promotion_decision,
+};
 pub use error::{
     ConsolidationPhase, DreamError, ModelFailure, PromotionError, PromotionPhase, SentenceIssue,
 };
 pub use parse::{ClaimDraft, parse_promotion};
+pub use related::{
+    RELATEDNESS_FANOUT, EntityLink, EntitySlug, LEXICAL_MIN_MILLIS, RelatedCandidate,
+    RelatedChannel, RelatedLink, VECTOR_MIN_MILLIS, select_entity_links, select_related_claims,
+};
+pub use seeds::{ClaimSeed, merge_claim_seeds, promotion_backoff_seconds, promotion_claim_id};
+pub use skip::{PromotionSkipReason, should_skip_promotion};
 pub use prepass::{
     ContradictionCandidate, DreamCandidates, DreamEpisode, DreamFact, DuplicateCandidate, EntityId,
     FactCurrency, SubjectKey, propose_dream_candidates,

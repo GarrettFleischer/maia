@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import type {
   ComposerNotice,
   HostCommand,
+  LiveApproval,
   PinMark,
   RouterMessage,
   SidebarRow,
@@ -13,7 +14,7 @@ import type {
 } from '@/api/superAgentTypes'
 import { SuperAgentRequestError } from '@/api/liveSuperAgent'
 import { pinMarkFor } from '@/api/superAgentFormat'
-import { admissionOutcomeText } from '@/api/superAgentOutcome'
+import { admissionOutcomeText, PROCESSING_PENDING_TEXT } from '@/api/superAgentOutcome'
 import {
   createSuperAgentState,
   reduceSuperAgentState,
@@ -31,6 +32,14 @@ import {
 const TRANSCRIPT_LOAD_ERROR = 'The conversation could not be loaded.'
 const TRANSCRIPT_REFRESH_ERROR = 'The conversation could not be refreshed.'
 const TRANSCRIPT_REFRESH_NOTICE = 'Message sent. Refresh the conversation to see the latest reply.'
+const SEND_FAILED_TEXT = 'Message failed. Try again.'
+const SEND_WATCH_MS = 2_000
+const SEND_GIVE_UP_MS = 150_000
+const SEND_TRANSCRIPT_PROBE_MS = 5_000
+
+function detailAlreadyOpen(error: unknown): boolean {
+  return error instanceof SuperAgentRequestError && error.code === 'command_rejected'
+}
 
 type TranscriptLoadResult =
   | { kind: 'loaded'; messages: readonly RouterMessage[] }
@@ -213,6 +222,54 @@ function isActiveActivation(activation: ClientActivation): boolean {
   return !activation.controller.signal.aborted
 }
 
+function transcriptIdentity(messages: readonly RouterMessage[]): string {
+  let identity = ''
+  for (const message of messages) {
+    identity += message.message_id
+    identity += '\n'
+  }
+  return identity
+}
+
+function storedOwnerSend(
+  messages: readonly RouterMessage[],
+  text: string,
+): 'absent' | 'waiting' | 'answered' {
+  let index = -1
+  for (let cursor = 0; cursor < messages.length; cursor += 1) {
+    const message = messages[cursor]
+    if (message?.role === 'owner' && message.text === text) index = cursor
+  }
+  if (index < 0) return 'absent'
+  const later = messages.slice(index + 1)
+  return later.some((message) => message.role === 'router') ? 'answered' : 'waiting'
+}
+
+function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve(undefined)
+    }, ms)
+    promise.then(
+      (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(undefined)
+      },
+    )
+  })
+}
+
 function submissionErrorDisposition(error: unknown): SubmissionErrorDisposition {
   if (
     error instanceof SuperAgentRequestError &&
@@ -277,6 +334,10 @@ export interface RouterBindings {
   quote: (taskId: string) => Promise<void>
   pin: (taskId: string, pin: PinMark) => Promise<void>
   hostCommand: (command: HostCommand) => Promise<void>
+  approvals: LiveApproval[]
+  decideApproval: (approvalId: string, decision: 'approve' | 'deny') => Promise<void>
+  canAttach: boolean
+  stageAttachments: (files: readonly File[]) => Promise<void>
 }
 
 export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
@@ -289,6 +350,8 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     [client.backendScope],
   )
   const activeActivation = useRef<ClientActivation | null>(null)
+  const closeSendWatch = useRef<(() => void) | null>(null)
+  const pendingAttachmentIds = useRef<string[]>([])
   const [storedState, dispatch] = useReducer(
     reduceSuperAgentState,
     session,
@@ -322,6 +385,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         activation: activation.id,
         request_id: requestId,
         rows: sidebar.rows,
+        approvals: sidebar.approvals ?? [],
       })
     } catch {
       if (!isActiveActivation(activation)) return
@@ -391,7 +455,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     })
     void refreshSidebar(activation)
     void loadTranscript(activation, 'hydrate', TRANSCRIPT_LOAD_ERROR, 'silent')
-    const stopSubscription = session.client.subscribeSidebar?.((rows) => {
+    const stopSubscription = session.client.subscribeSidebar?.((rows, approvals) => {
       if (!isActiveActivation(activation)) return
       const requestId = activation.next_sidebar_request()
       dispatch({
@@ -406,10 +470,12 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         activation: activation.id,
         request_id: requestId,
         rows,
+        approvals: approvals ?? [],
       })
       void loadTranscript(activation, 'refresh', TRANSCRIPT_LOAD_ERROR, 'silent')
     })
     return () => {
+      closeSendWatch.current?.()
       activation.dispose()
       if (activeActivation.current === activation) activeActivation.current = null
       stopSubscription?.()
@@ -430,7 +496,11 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       try {
         const next = await session.client.task(taskId)
         if (!isActiveActivation(activation) || !activation.is_detail_owner(request)) return
-        await session.client.openDetail(taskId)
+        try {
+          await session.client.openDetail(taskId)
+        } catch (error) {
+          if (!detailAlreadyOpen(error)) throw error
+        }
         if (!isActiveActivation(activation) || !activation.is_detail_owner(request)) return
         dispatch({
           type: 'detail_loaded',
@@ -683,6 +753,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     }
     const token = activation.try_start_send()
     if (!token) return
+    closeSendWatch.current?.()
     const submission = submissionController.submission_for(
       text,
       () => session.client.createOperationId(),
@@ -693,9 +764,31 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       activation: activation.id,
       token,
     })
-    try {
-      const admission = await session.client.send(submission.operation_id, text)
-      if (!isActiveActivation(activation) || activation.send_owner() !== token) return
+    let closed = false
+    let probing = false
+    let composerReleased = false
+    let lastView: 'absent' | 'waiting' | 'answered' = 'absent'
+    let lastIdentity = ''
+    let watch: ReturnType<typeof setInterval> | undefined
+    let giveUp: ReturnType<typeof setTimeout> | undefined
+    const ownsSend = () =>
+      isActiveActivation(activation) && activation.send_owner() === token
+    const newerSend = () => {
+      const owner = activation.send_owner()
+      return owner !== null && owner !== token
+    }
+    const closeWatch = () => {
+      if (closed) return false
+      closed = true
+      clearInterval(watch)
+      clearTimeout(giveUp)
+      if (closeSendWatch.current === closeWatch) closeSendWatch.current = null
+      return true
+    }
+    closeSendWatch.current = closeWatch
+    const releaseComposer = () => {
+      if (composerReleased || !ownsSend()) return
+      composerReleased = true
       submissionController.discard(submission.operation_id)
       dispatch({
         type: 'send_admitted',
@@ -703,6 +796,116 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         activation: activation.id,
         token,
       })
+      dispatch({
+        type: 'send_succeeded',
+        session: session.id,
+        activation: activation.id,
+        token,
+      })
+      activation.finish_send(token)
+    }
+    const showStored = async (
+      view: 'waiting' | 'answered',
+      messages: readonly RouterMessage[],
+    ) => {
+      const identity = transcriptIdentity(messages)
+      if (identity === lastIdentity || closed || newerSend()) return
+      lastIdentity = identity
+      await loadTranscript(
+        activation,
+        'refresh',
+        TRANSCRIPT_REFRESH_ERROR,
+        view === 'answered' ? 'announce' : 'silent',
+      )
+    }
+    const probeStoredSend = async () => {
+      if (closed || probing) return
+      if (newerSend()) {
+        closeWatch()
+        return
+      }
+      if (!composerReleased && !ownsSend()) return
+      probing = true
+      try {
+        const transcript = await within(
+          activation.session.client.transcript(),
+          SEND_TRANSCRIPT_PROBE_MS,
+        )
+        if (!transcript || closed || newerSend()) return
+        const view = storedOwnerSend(transcript.messages, text)
+        lastView = view
+        if (view === 'absent') return
+        releaseComposer()
+        await showStored(view, transcript.messages)
+      } finally {
+        probing = false
+      }
+    }
+    watch = setInterval(() => {
+      void probeStoredSend()
+    }, SEND_WATCH_MS)
+    giveUp = setTimeout(() => {
+      if (newerSend()) {
+        closeWatch()
+        return
+      }
+      if (lastView === 'answered') {
+        closeWatch()
+        return
+      }
+      if (lastView === 'absent') {
+        if (!closeWatch() || !ownsSend()) return
+        submissionController.discard(submission.operation_id)
+        dispatch({
+          type: 'send_failed',
+          session: session.id,
+          activation: activation.id,
+          token,
+          text: SEND_FAILED_TEXT,
+        })
+        activation.finish_send(token)
+        return
+      }
+      closeWatch()
+      dispatch({
+        type: 'stored_send_unanswered',
+        session: session.id,
+        activation: activation.id,
+        text: PROCESSING_PENDING_TEXT,
+      })
+    }, SEND_GIVE_UP_MS)
+    try {
+      const attachmentIds = pendingAttachmentIds.current
+      pendingAttachmentIds.current = []
+      const admission =
+        attachmentIds.length > 0
+          ? await session.client.send(submission.operation_id, text, attachmentIds)
+          : await session.client.send(submission.operation_id, text)
+      if (newerSend()) {
+        closeWatch()
+        return
+      }
+      const owned = !composerReleased && closeWatch() && ownsSend()
+      if (owned) {
+        submissionController.discard(submission.operation_id)
+        dispatch({
+          type: 'send_admitted',
+          session: session.id,
+          activation: activation.id,
+          token,
+        })
+      } else {
+        closeWatch()
+        if (!composerReleased) {
+          dispatch({
+            type: 'send_admitted',
+            session: session.id,
+            activation: activation.id,
+            token,
+            sent_text: text,
+          })
+        }
+      }
       const admittedFailure = admissionOutcomeText(admission)
       const refresh = await loadTranscript(
         activation,
@@ -711,7 +914,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         admittedFailure === null ? 'announce' : 'silent',
         admittedFailure ?? undefined,
       )
-      if (!isActiveActivation(activation) || activation.send_owner() !== token) return
+      if (!owned || !ownsSend()) return
       const transcriptHasFailure =
         admittedFailure !== null &&
         refresh.kind === 'loaded' &&
@@ -743,23 +946,28 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         })
       }
     } catch (error) {
-      if (!isActiveActivation(activation) || activation.send_owner() !== token) return
+      closeWatch()
+      if (!ownsSend()) return
       if (
         submissionErrorDisposition(error) ===
         SubmissionErrorDisposition.DiscardPreAdmission
       ) {
         submissionController.discard(submission.operation_id)
       }
-      await loadTranscript(activation, 'refresh', TRANSCRIPT_REFRESH_ERROR)
-      if (!isActiveActivation(activation) || activation.send_owner() !== token) return
+      await within(
+        loadTranscript(activation, 'refresh', TRANSCRIPT_REFRESH_ERROR),
+        SEND_TRANSCRIPT_PROBE_MS,
+      )
+      if (!ownsSend()) return
       dispatch({
         type: 'send_failed',
         session: session.id,
         activation: activation.id,
         token,
-        text: error instanceof SuperAgentRequestError ? error.message : 'Message failed. Try again.',
+        text: error instanceof SuperAgentRequestError ? error.message : SEND_FAILED_TEXT,
       })
     } finally {
+      closeWatch()
       activation.finish_send(token)
     }
   }, [
@@ -782,6 +990,33 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       })
     },
     [session],
+  )
+
+  const stageAttachments = useCallback(
+    async (files: readonly File[]) => {
+      if (!client.uploadAttachment) return
+      const ids: string[] = []
+      for (const file of files) {
+        const saved = await client.uploadAttachment({
+          name: file.name,
+          mediaType: file.type,
+          bytes: new Uint8Array(await file.arrayBuffer()),
+        })
+        ids.push(saved.attachment_id)
+      }
+      pendingAttachmentIds.current = ids
+    },
+    [client],
+  )
+
+  const decideApproval = useCallback(
+    async (approvalId: string, decision: 'approve' | 'deny') => {
+      const activation = activeActivation.current
+      if (!activation || !isActiveActivation(activation)) return
+      await activation.session.client.decideApproval?.(approvalId, decision)
+      await refreshSidebar(activation)
+    },
+    [refreshSidebar],
   )
 
   return {
@@ -816,5 +1051,9 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     pin,
     hostCommand,
     submit,
+    approvals: state.sidebar.approvals,
+    decideApproval,
+    canAttach: client.uploadAttachment !== undefined,
+    stageAttachments,
   }
 }

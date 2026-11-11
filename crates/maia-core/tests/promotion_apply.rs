@@ -12,8 +12,9 @@ use maia_core::brain::{
 use maia_core::credit::AgeUnit;
 use maia_core::dream::{
     ApplyFault, ClaimStatus, CommittedClaim, EpisodeSegment, LexemeEdge, MentionEdge,
-    ModelIdentity, PromotedMark, PromotionCommit, PromotionEpisode, PromotionError,
-    PromotionInputPart, PromotionPhase, describe_promotion, promotion_input_parts,
+    ModelIdentity, PromotedMark, PromotionCommit, PromotionDecision, PromotionEpisode,
+    PromotionError, PromotionInputPart, PromotionPhase, ReplaceDraft, describe_promotion,
+    describe_promotion_decision, promotion_input_parts,
 };
 use maia_core::security::{SourceRef, Taint};
 
@@ -78,6 +79,8 @@ fn commits_provisional_claims_with_episode_taint_mentions_and_lexemes() {
                 claim_id: ClaimId::new("claim_01JXYZ"),
                 episode_id: EpisodeId::new("episode_01J001"),
             }],
+            same_mentions: Vec::new(),
+            replacements: Vec::new(),
             lexeme_edges: lexemes
                 .iter()
                 .map(|lexeme| LexemeEdge {
@@ -241,6 +244,29 @@ fn identical_sentences_from_two_episodes_remain_two_claims() {
             episode_id: EpisodeId::new("episode_01J002"),
         }]
     );
+}
+
+#[test]
+fn same_and_replaces_cannot_cite_one_claim() {
+    let decision = PromotionDecision {
+        skip: false,
+        new: Vec::new(),
+        same: vec![ClaimId::new("claim-shown")],
+        replaces: vec![ReplaceDraft {
+            old: ClaimId::new("claim-shown"),
+            sentence: "The project is named Northwind Pantry.".to_owned(),
+        }],
+    };
+    let error = describe_promotion_decision(
+        &episode(&["claim-shown"]),
+        &decision,
+        &[ClaimId::new("claim-next")],
+        Timestamp(50),
+        &ModelIdentity::new("promoter-1"),
+        &lexical(),
+        ApplyFault::None,
+    );
+    assert_eq!(error, Err(PromotionError::DuplicateId));
 }
 
 #[test]

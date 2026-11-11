@@ -39,22 +39,44 @@ function RouterHarness({ client }: { client: FixtureSuperAgentClient }) {
           onQuote={agent.quote}
           onPin={agent.pin}
         />
-      ) : null}
-      <RouterConversation
-        messages={agent.messages}
-        transcriptState={agent.transcriptState}
-        admission={agent.admission}
-        operation={agent.operation}
-        announcement={agent.announcement}
-        draft={agent.draft}
-        notice={agent.notice}
-        disabled={false}
-        onDraftChange={agent.setDraft}
-        onRetryTranscript={agent.retryTranscript}
-        onAnnouncementAcknowledged={agent.acknowledgeAnnouncement}
-        onSubmit={agent.submit}
-      />
+      ) : (
+        <RouterConversation
+          messages={agent.messages}
+          transcriptState={agent.transcriptState}
+          admission={agent.admission}
+          operation={agent.operation}
+          announcement={agent.announcement}
+          draft={agent.draft}
+          notice={agent.notice}
+          disabled={false}
+          onDraftChange={agent.setDraft}
+          onRetryTranscript={agent.retryTranscript}
+          onAnnouncementAcknowledged={agent.acknowledgeAnnouncement}
+          onSubmit={agent.submit}
+        />
+      )}
     </>
+  )
+}
+
+function PhoneDraft({ onSubmit }: { onSubmit: () => void }) {
+  const [draft, setDraft] = useState('')
+  return (
+    <RouterConversation
+      messages={[]}
+      transcriptState={{ kind: 'empty' }}
+      admission={{ kind: 'ready' }}
+      operation={{ kind: 'idle' }}
+      announcement={null}
+      draft={draft}
+      notice={{ kind: 'idle' }}
+      disabled={false}
+      submitOnEnter={false}
+      onDraftChange={setDraft}
+      onRetryTranscript={() => undefined}
+      onAnnouncementAcknowledged={() => undefined}
+      onSubmit={onSubmit}
+    />
   )
 }
 
@@ -228,7 +250,7 @@ describe('RouterConversation', () => {
     expect(announcer.querySelector('[data-announcement-sequence="2"]')).not.toBeNull()
   })
 
-  it('shows the message text without a You or Router title', () => {
+  it('shows a visible You or Router label on each message run', () => {
     render(
       <ReviewedRouterConversation
         messages={[
@@ -257,8 +279,8 @@ describe('RouterConversation', () => {
     const router = within(items[1]!).getByRole('article', { name: 'Message from Router' })
     expect(owner).toHaveTextContent('Owner body')
     expect(router).toHaveTextContent('Router body')
-    expect(within(owner).queryByText('You')).toBeNull()
-    expect(within(router).queryByText('Router')).toBeNull()
+    expect(within(owner).getByText('You')).toBeVisible()
+    expect(within(router).getByText('Router')).toBeVisible()
   })
 
   it('shows thinking and an admitted route inside the router message', () => {
@@ -430,6 +452,86 @@ describe('RouterConversation', () => {
     expect(container.querySelector('script')).toBeNull()
   })
 
+  it('inserts a newline on Enter when the phone composer only submits from Send', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn()
+    render(<PhoneDraft onSubmit={onSubmit} />)
+    expect(screen.queryByText('new line')).not.toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), 'line{Enter}more')
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('line\nmore')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onSubmit).toHaveBeenCalledOnce()
+  })
+
+  it('offers Refresh conversation beside the sent-message notice', async () => {
+    const user = userEvent.setup()
+    const onRetryTranscript = vi.fn()
+    render(
+      <RouterConversation
+        messages={[]}
+        transcriptState={{ kind: 'ready' }}
+        admission={{ kind: 'ready' }}
+        operation={{ kind: 'idle' }}
+        announcement={null}
+        draft=""
+        notice={{
+          kind: 'refresh_failed',
+          text: 'Message sent. Refresh the conversation to see the latest reply.',
+        }}
+        disabled={false}
+        onDraftChange={vi.fn()}
+        onRetryTranscript={onRetryTranscript}
+        onAnnouncementAcknowledged={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Message sent. Refresh the conversation to see the latest reply.',
+    )
+    await user.click(screen.getByRole('button', { name: 'Refresh conversation' }))
+    expect(onRetryTranscript).toHaveBeenCalledOnce()
+  })
+
+  it('offers Latest message after new text arrives while the transcript is scrolled up', () => {
+    const props = {
+      transcriptState: { kind: 'ready' as const },
+      admission: { kind: 'ready' as const },
+      operation: { kind: 'idle' as const },
+      announcement: null,
+      draft: '',
+      notice: { kind: 'idle' as const },
+      disabled: false,
+      onDraftChange: vi.fn(),
+      onRetryTranscript: vi.fn(),
+      onAnnouncementAcknowledged: vi.fn(),
+      onSubmit: vi.fn(),
+    }
+    const { rerender } = render(
+      <RouterConversation
+        {...props}
+        messages={[{ message_id: 'm1', role: 'router', text: 'First' }]}
+      />,
+    )
+    const transcript = screen.getByTestId('transcript')
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 400 })
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 100 })
+    transcript.scrollTop = 0
+    fireEvent.scroll(transcript)
+    rerender(
+      <RouterConversation
+        {...props}
+        messages={[
+          { message_id: 'm1', role: 'router', text: 'First' },
+          { message_id: 'm2', role: 'router', text: 'Second' },
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Latest message' }))
+    expect(screen.queryByRole('button', { name: 'Latest message' })).not.toBeInTheDocument()
+    expect(transcript.scrollTop).toBe(400)
+  })
+
   it('keeps Shift+Enter in the draft', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn()
@@ -455,6 +557,39 @@ describe('RouterConversation', () => {
     expect(box).toHaveValue('ピン')
   })
 
+  it('replaces the composer when a send clears the draft', () => {
+    const props = {
+      messages: [] as [],
+      transcriptState: { kind: 'empty' as const },
+      admission: { kind: 'ready' as const },
+      announcement: null,
+      notice: { kind: 'idle' as const },
+      disabled: false,
+      onDraftChange: () => undefined,
+      onRetryTranscript: () => undefined,
+      onAnnouncementAcknowledged: () => undefined,
+      onSubmit: () => undefined,
+    }
+    const { rerender } = render(
+      <ReviewedRouterConversation
+        {...props}
+        draft="Hello from my phone"
+        operation={{ kind: 'sending' }}
+      />,
+    )
+    const first = screen.getByRole('textbox', { name: 'Message' })
+    expect(first).toHaveValue('Hello from my phone')
+
+    rerender(
+      <ReviewedRouterConversation {...props} draft="" operation={{ kind: 'idle' }} />,
+    )
+
+    const next = screen.getByRole('textbox', { name: 'Message' })
+    expect(next).not.toBe(first)
+    expect(next).toHaveValue('')
+    expect(next).toBeEnabled()
+  })
+
   it('speaks pending and failed sends in plain language', () => {
     const { rerender } = render(<DraftHarness operation={{ kind: 'sending' }} onSubmit={vi.fn()} />)
     expect(screen.getByRole('status')).toHaveTextContent('Sending.')
@@ -472,13 +607,13 @@ describe('RouterConversation', () => {
     await waitFor(() => expect(box).toBeEnabled())
     await user.type(box, 'keep this')
     await user.click(await screen.findByRole('button', { name: 'Open Pin control' }))
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Quote task' }))
     expect(insertReference).toHaveBeenCalledWith('task-1')
-    expect(box).toHaveValue('keep this task:task-1 ')
     await user.click(screen.getByRole('button', { name: 'Quote task' }))
-    expect(box).toHaveValue('keep this task:task-1 task:task-1 ')
-    expect(screen.getAllByRole('textbox', { hidden: true })).toHaveLength(1)
-    expect(within(screen.getByRole('dialog', { name: 'Task detail' })).queryByRole('textbox')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Back to chat' }))
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('keep this task:task-1 task:task-1 ')
+    expect(screen.getAllByRole('textbox')).toHaveLength(1)
   })
 
   it('quotes into an empty composer as a task reference', async () => {
@@ -489,7 +624,8 @@ describe('RouterConversation', () => {
     await user.click(await screen.findByRole('button', { name: 'Open Pin control' }))
     await user.click(screen.getByRole('button', { name: 'Quote task' }))
     expect(insertReference).toHaveBeenCalledWith('task-1')
-    expect(screen.getByRole('textbox', { name: 'Message', hidden: true })).toHaveValue('task:task-1 ')
+    await user.click(screen.getByRole('button', { name: 'Back to chat' }))
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('task:task-1 ')
   })
 
   it('archives a completed task on detail close unless it is pinned', async () => {
@@ -497,8 +633,8 @@ describe('RouterConversation', () => {
     const client = createFixtureSuperAgentClient()
     render(<RouterHarness client={client} />)
     await user.click(await screen.findByRole('button', { name: 'Open Pin control' }))
-    expect(screen.getByRole('dialog', { name: 'Task detail' })).toBeVisible()
-    await user.click(screen.getByRole('button', { name: 'Close detail' }))
+    expect(screen.getByRole('article', { name: 'Task conversation' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Back to chat' }))
     const archive = screen.getByRole('region', { name: 'Archive' })
     expect(archive).toHaveTextContent('Pin control')
     expect(screen.queryByRole('region', { name: 'Completed' })).not.toBeInTheDocument()
@@ -539,13 +675,13 @@ describe('RouterConversation', () => {
     renderWithMaia(<AppShell client={client} />, { initialState: undefined })
     await user.click(await screen.findByRole('button', { name: 'Expand Pin control' }))
     await user.click(screen.getByRole('button', { name: 'Open Write the control' }))
-    const dialog = screen.getByRole('dialog', { name: 'Task detail' })
-    expect(within(dialog).queryByRole('button', { name: 'Stop this task' })).not.toBeInTheDocument()
+    const conversation = screen.getByRole('article', { name: 'Task conversation' })
+    expect(within(conversation).queryByRole('button', { name: 'Stop this task' })).not.toBeInTheDocument()
     await user.click(screen.getAllByLabelText('Stop all running threads')[0])
     await waitFor(() =>
-      expect(within(dialog).getByRole('list', { name: 'Attempts' })).toHaveTextContent('Stopped'),
+      expect(within(conversation).getByRole('list', { name: 'Attempts' })).toHaveTextContent('Stopped'),
     )
-    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument()
+    expect(within(conversation).queryByRole('textbox')).not.toBeInTheDocument()
   })
 
   it('does not send an empty draft from the hook', async () => {
@@ -564,7 +700,7 @@ describe('RouterConversation', () => {
     vi.spyOn(client, 'task').mockRejectedValueOnce(new Error('Unknown task.'))
     render(<RouterHarness client={client} />)
     await user.click(await screen.findByRole('button', { name: 'Open Pin control' }))
-    expect(screen.queryByRole('dialog', { name: 'Task detail' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'Task conversation' })).not.toBeInTheDocument()
   })
 
   it('stays quiet when the sidebar cannot load', async () => {
@@ -590,7 +726,7 @@ describe('RouterConversation', () => {
 
     expect(screen.getByText('Loading conversation.')).toBeVisible()
     resolveTranscript({ messages: [] })
-    expect(await screen.findByText('No messages yet.')).toBeVisible()
+    expect(await screen.findByText('This is the owner chat. Say what you want done; work shows under Tasks.')).toBeVisible()
   })
 
   it('offers a safe transcript retry after the initial load fails', async () => {
@@ -605,7 +741,7 @@ describe('RouterConversation', () => {
     expect(document.body).not.toHaveTextContent('private.invalid')
     expect(document.body).not.toHaveTextContent('sk-SECRET')
     await user.click(screen.getByRole('button', { name: 'Retry conversation' }))
-    expect(await screen.findByText('No messages yet.')).toBeVisible()
+    expect(await screen.findByText('This is the owner chat. Say what you want done; work shows under Tasks.')).toBeVisible()
   })
 
   it('speaks ask and refuse results from the fixture', async () => {
@@ -672,6 +808,30 @@ describe('fixture client isolation', () => {
 })
 
 describe('router shell', () => {
+  it('opens a sidebar task from the brain into the conversation and returns to chat', async () => {
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />)
+    await user.click(await screen.findByRole('button', { name: 'Brain' }))
+    expect(screen.getByRole('heading', { name: 'Brain', level: 1 })).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: 'Open Pin control' }))
+
+    const conversation = await screen.findByRole('article', { name: 'Task conversation' })
+    const line = within(conversation).getByText(/Editing the control\./)
+    expect(line.closest('button')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Brain', level: 1 })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Back to chat' }))
+
+    expect(screen.getByRole('heading', { name: 'Router', level: 1 })).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeVisible()
+    expect(screen.queryByRole('article', { name: 'Task conversation' })).not.toBeInTheDocument()
+  })
+
   it('keeps one composer and the existing Stop all behavior', async () => {
     window.innerWidth = 1440
     window.dispatchEvent(new Event('resize'))
@@ -682,10 +842,10 @@ describe('router shell', () => {
       initialState: undefined,
     })
     await user.click(await screen.findByRole('button', { name: 'Open Pin control' }))
-    const dialog = screen.getByRole('dialog', { name: 'Task detail' })
-    expect(screen.getAllByRole('textbox', { hidden: true })).toHaveLength(1)
-    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Close detail' }))
+    const conversation = screen.getByRole('article', { name: 'Task conversation' })
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+    expect(within(conversation).queryByRole('textbox')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Back to chat' }))
     expect(screen.queryByRole('button', { name: 'Panic' })).not.toBeInTheDocument()
     await user.click(screen.getByLabelText('Stop all running threads'))
     expect(hostCommand).toHaveBeenCalledWith({ command: 'stop_all' })
@@ -698,7 +858,7 @@ describe('router shell', () => {
     const user = userEvent.setup()
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />)
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(document.documentElement.clientWidth + 1)
-    await user.click(screen.getByRole('button', { name: /open agents drawer/i }))
+    await user.click(screen.getByRole('button', { name: /open tasks drawer/i }))
     expect(await screen.findByRole('button', { name: 'Open Pin control' })).toBeInTheDocument()
     expect(screen.getAllByRole('textbox', { hidden: true })).toHaveLength(1)
   })

@@ -7,11 +7,12 @@ import { useMaiaState } from '@/hooks/useMaiaState'
 interface RailTasks {
   dataSource: SuperAgentDataSource
   rows: readonly SidebarRow[]
+  openTaskId?: string | null
   onOpen: (taskId: string) => void
   onPin: (taskId: string, pin: PinMark) => void
 }
 
-export function AgentRailBody({ dataSource, rows, onOpen, onPin }: RailTasks) {
+export function AgentRailBody({ dataSource, rows, openTaskId = null, onOpen, onPin }: RailTasks) {
   const { state } = useMaiaState()
   const counts =
     dataSource === 'fixture'
@@ -20,7 +21,7 @@ export function AgentRailBody({ dataSource, rows, onOpen, onPin }: RailTasks) {
   const showActivity = dataSource === 'fixture' || rows.length > 0
   return (
     <>
-      <TaskRail rows={rows} onOpen={onOpen} onPin={onPin} />
+      <TaskRail rows={rows} openTaskId={openTaskId} onOpen={onOpen} onPin={onPin} />
       {showActivity ? (
         <p className="maia-rail-count" data-testid="activity-counts">
           {counts.running} running · {counts.needsYou} needs you
@@ -38,6 +39,7 @@ export function AgentRail({
   settingsActive,
   onStopAll,
   rows,
+  openTaskId = null,
   onOpen,
   onPin,
 }: RailTasks & {
@@ -56,6 +58,7 @@ export function AgentRail({
         <AgentRailBody
           dataSource={dataSource}
           rows={rows}
+          openTaskId={openTaskId}
           onOpen={onOpen}
           onPin={onPin}
         />

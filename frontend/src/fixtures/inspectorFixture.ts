@@ -8,7 +8,7 @@ export const defaultInspectorFixture = (): InspectorFixtureDto => ({
     { id: 'slot-agents', label: 'agents', section: 'fixed' },
     { id: 'slot-persona', label: 'Persona · Scout', section: 'fixed' },
     { id: 'slot-mem', label: 'mem_7f3a · Tailscale', section: 'memory' },
-    { id: 'slot-recall', label: 'fact_9ab · Pipe-only Chrome', section: 'recall' },
+    { id: 'slot-recall', label: 'fact_9ab · Pipe-only Chrome', section: 'recall', taint: 'untrusted' },
   ],
   brain_nodes: [
     { id: 'mem_7f3a', label: 'Tailscale' },

@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -17,7 +19,10 @@ use maia_daemon::ModelPorts;
 use maia_daemon::Orchestrator;
 use maia_daemon::OrchestratorConfig;
 use maia_daemon::ParentWork;
+use maia_daemon::PromotionCaps;
+use maia_daemon::PromotionRunner;
 use maia_daemon::PublicModelConnection;
+use maia_daemon::RouterPromoter;
 use maia_daemon::RouterTurn;
 use maia_daemon::RuntimeRouter;
 use maia_daemon::ScriptedToolHost;
@@ -25,11 +30,12 @@ use maia_daemon::accepted_routing_policy;
 use maia_daemon::discover_model_id;
 use maia_daemon::live_model_lister;
 use maia_daemon::native_router_key_store;
+use maia_daemon::open_candle_claim_embedder;
 use maia_daemon::parse_reasoning_effort;
 use maia_daemon::read_model_env;
+use maia_daemon::read_promoter_env;
 use maia_daemon::router_from_connection;
 use maia_daemon::serve_super_agent_with_model;
-use maia_daemon::ui_bind_addr;
 use maia_daemon::validate_runtime_snapshot;
 use maia_store::OwnerOpen;
 use maia_store::RuntimeHttpIdReservation;
@@ -70,7 +76,8 @@ fn boot() -> Result<(), BootError> {
         .build()
         .map_err(|_| BootError::Server)?;
     let now = unix_seconds();
-    let database = PathBuf::from("data").join("maia.sqlite");
+    let database = database_path(std::env::var("MAIA_DATABASE").ok().as_deref());
+    let port = bind_port(std::env::var("MAIA_PORT").ok().as_deref())?;
     if let Some(parent) = database.parent() {
         std::fs::create_dir_all(parent).map_err(|_| BootError::Store)?;
     }
@@ -81,6 +88,45 @@ fn boot() -> Result<(), BootError> {
         panic_capacity: 2,
     })
     .map_err(|_| BootError::Store)?;
+    probe_vector_tables(&store)?;
+    let promoter = load_promoter_env()?;
+    let promo_store = SqliteOwner::open(OwnerOpen {
+        path: database.clone(),
+        now,
+        normal_capacity: 4,
+        panic_capacity: 1,
+    })
+    .map_err(|_| BootError::Store)?;
+    let promo_router = router_from_connection(
+        promoter.base_url(),
+        promoter.api_key().as_str(),
+        promoter.model(),
+    )
+    .map_err(|_| BootError::Router)?;
+    let embedder = claim_embedder_from_env();
+    let mut runner = PromotionRunner::new(
+        promo_store,
+        RouterPromoter::new(promo_router, promoter.model()),
+        promoter.model(),
+        PromotionCaps {
+            daily_call_cap: promoter.daily_call_cap(),
+            daily_token_cap: promoter.daily_token_cap(),
+            failure_limit: 3,
+        },
+        Arc::new(unix_seconds),
+    );
+    if let Some(embedder) = embedder.clone() {
+        runner = runner.with_embedder(embedder);
+    }
+    std::thread::Builder::new()
+        .name("maia-promotion".to_owned())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(2));
+                let _ = runner.promote_one();
+            }
+        })
+        .map_err(|_| BootError::Server)?;
     let saved = store.model_connection().map_err(|_| BootError::Store)?;
     let keys = native_router_key_store();
     let stored_key = keys.read_key().map_err(|_| BootError::Store)?;
@@ -110,7 +156,6 @@ fn boot() -> Result<(), BootError> {
             ids: supplies.orchestrator,
             turn: RouterTurn {
                 model: chosen.model.clone(),
-                max_output_tokens: 1024,
                 reasoning: chosen.reasoning,
                 prefix_hash: PrefixHash::new("super-agent"),
             },
@@ -120,8 +165,10 @@ fn boot() -> Result<(), BootError> {
         snapshot,
     )
     .map_err(|_| BootError::Store)?;
+    if let Some(embedder) = embedder {
+        orchestrator.set_recall_embedder(embedder);
+    }
     attach_subagent_tools(&mut orchestrator);
-    orchestrator.work_queued_parents();
     let fallback = if chosen.from_settings {
         PublicModelConnection {
             base_url: String::new(),
@@ -146,7 +193,7 @@ fn boot() -> Result<(), BootError> {
         orchestrator,
         database,
         PathBuf::from("frontend").join("dist"),
-        ui_bind_addr(),
+        std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)),
         supplies.http,
         ModelPorts {
             keys,
@@ -189,6 +236,49 @@ fn load_model_env() -> Result<maia_daemon::ModelEnv, BootError> {
         ("API_KEY", api_key.as_str()),
     ])
     .map_err(|_| BootError::Env)
+}
+
+fn load_promoter_env() -> Result<maia_daemon::PromoterEnv, BootError> {
+    let _ = dotenvy::dotenv();
+    let pairs = [
+        ("BASE_URL", std::env::var("BASE_URL").unwrap_or_default()),
+        ("API_KEY", std::env::var("API_KEY").unwrap_or_default()),
+        (
+            "PROMOTER_BASE_URL",
+            std::env::var("PROMOTER_BASE_URL").unwrap_or_default(),
+        ),
+        (
+            "PROMOTER_API_KEY",
+            std::env::var("PROMOTER_API_KEY").unwrap_or_default(),
+        ),
+        (
+            "PROMOTER_MODEL",
+            std::env::var("PROMOTER_MODEL").unwrap_or_default(),
+        ),
+        (
+            "PROMOTER_DAILY_CALL_CAP",
+            std::env::var("PROMOTER_DAILY_CALL_CAP").unwrap_or_default(),
+        ),
+        (
+            "PROMOTER_DAILY_TOKEN_CAP",
+            std::env::var("PROMOTER_DAILY_TOKEN_CAP").unwrap_or_default(),
+        ),
+    ];
+    let refs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    read_promoter_env(&refs).map_err(|_| BootError::Env)
+}
+
+fn probe_vector_tables(store: &SqliteOwner) -> Result<(), BootError> {
+    store.probe_vector_write().map_err(|_| BootError::Vectors)
+}
+
+fn claim_embedder_from_env() -> Option<Arc<dyn maia_daemon::ClaimEmbedder>> {
+    let weights = std::env::var("MAIA_EMBEDDER_WEIGHTS").ok()?;
+    let tokenizer = std::env::var("MAIA_EMBEDDER_TOKENIZER").ok()?;
+    open_candle_claim_embedder(&weights, &tokenizer)
 }
 
 struct RuntimeSupplies {
@@ -261,6 +351,20 @@ fn push_numeric_ids(
     Ok(())
 }
 
+fn database_path(configured: Option<&str>) -> PathBuf {
+    match configured.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from("data").join("maia.sqlite"),
+    }
+}
+
+fn bind_port(configured: Option<&str>) -> Result<u16, BootError> {
+    match configured.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(text) => text.parse().map_err(|_| BootError::Server),
+        None => Ok(4178),
+    }
+}
+
 fn unix_seconds() -> i64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(0),
@@ -274,6 +378,7 @@ enum BootError {
     Discovery,
     Router,
     Store,
+    Vectors,
     Server,
 }
 
@@ -288,6 +393,7 @@ impl std::fmt::Display for BootError {
             Self::Env => "Model provider is not configured.",
             Self::Discovery | Self::Router => "The model provider is unavailable.",
             Self::Store => "The task store is unavailable.",
+            Self::Vectors => "Vector tables could not be written.",
             Self::Server => "The local UI server could not start.",
         };
         formatter.write_str(text)
@@ -309,6 +415,26 @@ mod tests {
     use rusqlite::Connection;
 
     static RESERVATION_SEQ: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn database_and_port_stay_on_the_release_defaults_unless_configured() {
+        assert_eq!(
+            database_path(None),
+            PathBuf::from("data").join("maia.sqlite")
+        );
+        assert_eq!(
+            database_path(Some("  ")),
+            PathBuf::from("data").join("maia.sqlite")
+        );
+        assert_eq!(
+            database_path(Some(r"C:\temp\maia.sqlite")),
+            PathBuf::from(r"C:\temp\maia.sqlite")
+        );
+        assert_eq!(bind_port(None).ok(), Some(4178));
+        assert_eq!(bind_port(Some("")).ok(), Some(4178));
+        assert_eq!(bind_port(Some("4181")).ok(), Some(4181));
+        assert!(bind_port(Some("nope")).is_err());
+    }
 
     #[test]
     fn production_boot_constructs_http_supply_from_owner_reservation() {

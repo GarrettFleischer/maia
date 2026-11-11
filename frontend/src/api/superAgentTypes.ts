@@ -58,12 +58,20 @@ export interface SidebarRow {
   children: SidebarRow[]
 }
 
+export interface AttachmentChip {
+  attachment_id: string
+  safe_name: string
+  media_type: string
+  byte_size: number
+}
+
 export interface RouterMessage {
   message_id: string
   role: 'owner' | 'router'
   text: string
   thinking?: string
   route?: string
+  attachments?: AttachmentChip[]
 }
 
 export interface TranscriptLine {
@@ -138,20 +146,49 @@ export type TranscriptState =
   | { kind: 'ready' }
   | { kind: 'error'; text: string }
 
+export type ConnectionPhase = 'connected' | 'reconnecting'
+
+export interface ConnectionSnapshot {
+  phase: ConnectionPhase
+  origin: string
+}
+
+export interface LiveApproval {
+  approval_id: string
+  task_id: string
+  kind: 'login' | 'consent' | 'capability'
+  taint: 'trusted' | 'untrusted'
+  grant_text: string
+  reason: string
+  created_at: number
+  expires_at: number
+}
+
 export interface SuperAgentClient {
   readonly dataSource: SuperAgentDataSource
   readonly backendScope: SuperAgentBackendScope
   createOperationId(): SubmissionOperationId
-  sidebar(): Promise<{ rows: SidebarRow[] }>
+  sidebar(): Promise<{ rows: SidebarRow[]; approvals?: LiveApproval[] }>
+  decideApproval?(approvalId: string, decision: 'approve' | 'deny'): Promise<void>
   transcript(): Promise<{ messages: RouterMessage[] }>
   task(taskId: string): Promise<TaskDetail>
-  send(operationId: SubmissionOperationId, text: string): Promise<MessageAdmissionResult>
+  send(
+    operationId: SubmissionOperationId,
+    text: string,
+    attachmentIds?: readonly string[],
+  ): Promise<MessageAdmissionResult>
+  uploadAttachment?(file: {
+    name: string
+    mediaType: string
+    bytes: Uint8Array
+  }): Promise<AttachmentChip>
   pin(taskId: string, pin: PinMark): Promise<{ pin: PinMark }>
-  openDetail(taskId: string): Promise<{ view: 'open' }>
+  openDetail(taskId: string): Promise<{ view: 'open' | 'closed_once' }>
   closeDetail(taskId: string): Promise<{ view: 'closed_once' }>
   insertReference(taskId: string): Promise<{ composer_insert: string }>
   hostCommand(command: HostCommand): Promise<{ phase: TaskPhaseName }>
-  subscribeSidebar?(onRows: (rows: SidebarRow[]) => void): () => void
+  subscribeSidebar?(onRows: (rows: SidebarRow[], approvals?: LiveApproval[]) => void): () => void
+  subscribeConnection?(onChange: (snapshot: ConnectionSnapshot) => void): () => void
   dispose?(): void
   inspector?(): Promise<InspectorSnapshot>
 }
@@ -171,6 +208,8 @@ export interface InspectorRecallItem {
   kind: 'claim' | 'fact'
   sentence: string
   score: number
+  taint?: 'trusted' | 'untrusted' | null
+  walked?: string[]
 }
 
 export interface InspectorTraceStep {
@@ -188,6 +227,7 @@ export interface InspectorTurn {
   route: string | null
   reply: string
   trace: InspectorTraceStep[]
+  used?: string[]
 }
 
 export interface InspectorSnapshot {

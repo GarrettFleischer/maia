@@ -86,6 +86,33 @@ pub enum ScriptedCall {
         /// Failure summary stored on the task report.
         summary: String,
     },
+    /// The host must park the task for an owner decision. The kind is code, not model text.
+    NeedsApproval {
+        /// What the owner is being asked to grant.
+        kind: ApprovalKind,
+    },
+}
+
+/// Owner decision a scripted task is allowed to request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalKind {
+    /// Sign in to a service.
+    Login,
+    /// Consent to continue.
+    Consent,
+    /// Grant a capability.
+    Capability,
+}
+
+impl ApprovalKind {
+    /// Store kind token.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Login => "login",
+            Self::Consent => "consent",
+            Self::Capability => "capability",
+        }
+    }
 }
 
 /// Per-instance scripted parent and child queues.

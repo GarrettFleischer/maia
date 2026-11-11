@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { withCsrf } from '@/remote/csrf'
 import type { SuperAgentDataSource } from '@/api/superAgentTypes'
+import { reloadUntilLoaded } from '@/components/settings/reloadUntilLoaded'
 
 type Reasoning = 'low' | 'medium' | 'high'
 
@@ -59,16 +60,19 @@ export function ModelConnectionSection({
           : 'Add a Base URL and an API key.',
       )
     }
-    void loadModelConnection(window.location.origin).then((result) => {
-      if (cancel) return
+    const stop = reloadUntilLoaded(async () => {
+      const result = await loadModelConnection(window.location.origin)
+      if (cancel) return true
       if (!result.ok) {
         setStatus(result.message)
-        return
+        return false
       }
       applyView(result.view)
-    })
+      return true
+    }, () => cancel)
     return () => {
       cancel = true
+      stop()
     }
   }, [source])
 

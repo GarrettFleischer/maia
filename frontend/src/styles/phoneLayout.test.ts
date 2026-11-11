@@ -58,6 +58,7 @@ interface LayoutBox {
       searchHeight: number
       modeLabelHeight: number
   navDisplay: string | null
+  phoneNavHeight: number
   offenders: string[]
 }
 
@@ -99,6 +100,7 @@ async function measure(page: Page, width: number, height: number, body: string):
       searchHeight: document.querySelector('input[type="search"]')?.getBoundingClientRect().height ?? 0,
       modeLabelHeight: document.querySelector('.maia-brain-toolbar label')?.getBoundingClientRect().height ?? 0,
       navDisplay: nav ? getComputedStyle(nav).display : null,
+      phoneNavHeight: document.querySelector('.maia-phone-nav button')?.getBoundingClientRect().height ?? 0,
       offenders,
     }
   })
@@ -143,14 +145,15 @@ describe('phone layout at 390px', () => {
       844,
       `<div class="maia-shell maia-shell--phone">
         <header class="maia-phone-header">
-          <button class="maia-btn" type="button">Agents</button>
           <strong>Router</strong>
-          <div class="maia-phone-header-actions">
-            <button class="maia-btn" type="button">Inspect</button>
-            <button class="maia-btn" type="button">Brain</button>
-            <button class="maia-btn" type="button">Settings</button>
-          </div>
+          <button class="maia-btn" type="button">Inspect</button>
         </header>
+        <nav class="maia-phone-nav" aria-label="Sections">
+          <button type="button" aria-current="page">Chat</button>
+          <button type="button">Tasks</button>
+          <button type="button">Brain</button>
+          <button type="button">Settings</button>
+        </nav>
         <main class="maia-main">
           <section class="maia-conversation maia-phone-screen" aria-label="Brain">
             <header class="maia-conv-head">
@@ -178,6 +181,7 @@ describe('phone layout at 390px', () => {
     expect(box.offenders).toEqual([])
     expect(box.conversationWidth).toBeGreaterThanOrEqual(box.clientWidth - 1)
     expect(box.buttonHeight).toBeGreaterThanOrEqual(44)
+    expect(box.phoneNavHeight).toBeGreaterThanOrEqual(44)
     expect(box.searchHeight).toBeGreaterThanOrEqual(44)
     expect(box.modeLabelHeight).toBeGreaterThanOrEqual(44)
   })

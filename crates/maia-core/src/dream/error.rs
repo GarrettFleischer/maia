@@ -49,8 +49,14 @@ pub enum PromotionError {
     ForgedEpisodeId,
     /// Sentence shape violates the promotion contract.
     InvalidSentence(SentenceIssue),
+    /// Sentence exceeds the configured character cap.
+    SentenceTooLong,
     /// A tool-call channel is present.
     ToolChannel,
+    /// `same` or `replaces` names an unknown claim id.
+    UnknownClaimId,
+    /// `same` or `replaces` targets a claim that is already closed.
+    ClosedClaimId,
     /// Claim id is already stored in the supplied brain scope.
     KnownId,
     /// Simulated store failure rolled the description back.

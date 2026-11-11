@@ -443,16 +443,18 @@ fn load_lexemes(
 
 fn load_edges(connection: &Connection) -> Result<Vec<BrainEdge>, StoreError> {
     let mut statement = connection.prepare(
-        "SELECT edge_kind, from_kind, from_id, to_kind, to_id FROM edges \
+        "SELECT edge_kind, from_kind, from_id, to_kind, to_id, weight FROM edges \
          ORDER BY edge_kind, from_kind, from_id, to_kind, to_id",
     )?;
     let mapped = statement.query_map([], |row| {
+        let weight: f64 = row.get(5)?;
         Ok(BrainEdge {
             kind: row.get(0)?,
             from_kind: row.get(1)?,
             from_id: row.get(2)?,
             to_kind: row.get(3)?,
             to_id: row.get(4)?,
+            weight_millis: weight_millis(weight),
         })
     })?;
     let mut edges = Vec::new();
@@ -460,4 +462,15 @@ fn load_edges(connection: &Connection) -> Result<Vec<BrainEdge>, StoreError> {
         edges.push(edge?);
     }
     Ok(edges)
+}
+
+fn weight_millis(weight: f64) -> i64 {
+    if !weight.is_finite() {
+        return 0;
+    }
+    let scaled = (weight * 1000.0).round();
+    if !(0.0..=1_000_000.0).contains(&scaled) {
+        return 0;
+    }
+    scaled as i64
 }

@@ -232,6 +232,15 @@ pub struct PromotionClaimWrite {
     pub lexemes: Vec<String>,
 }
 
+/// Claim replacement applied inside one promotion transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotionReplaceWrite {
+    /// Existing claim closed by this promotion.
+    pub old_claim_id: String,
+    /// Successor claim id that must also appear in [`PromotionWrite::claims`].
+    pub new_claim_id: String,
+}
+
 /// Promotion transaction body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromotionWrite {
@@ -243,6 +252,224 @@ pub struct PromotionWrite {
     pub now: i64,
     /// Claims, mention edges, and lexeme edges committed together.
     pub claims: Vec<PromotionClaimWrite>,
+    /// Existing claims that only receive a mention edge to this episode.
+    pub same_claim_ids: Vec<String>,
+    /// Old claims superseded by new claims from `claims`.
+    pub replacements: Vec<PromotionReplaceWrite>,
+    /// Relatedness and entity edges committed in the same transaction.
+    pub links: Vec<PromotionLinkWrite>,
+}
+
+/// Relatedness or entity edge written with a promotion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotionLinkWrite {
+    /// `relatedness` or `entity`.
+    pub edge_kind: String,
+    /// New claim id. It must appear in [`PromotionWrite::claims`].
+    pub from_claim_id: String,
+    /// `claim` or `entity`.
+    pub to_kind: String,
+    /// Existing claim or entity id.
+    pub to_id: String,
+    /// Weight times 1000. `1000` is weight 1. Untrusted endpoints use a lower value.
+    pub weight_millis: u32,
+}
+
+/// Host-created approval wait. Grant text and the reason are chosen in code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalWrite {
+    /// Decimal approval id. It matches the waiting phase token.
+    pub approval_id: String,
+    /// Task parked on this approval.
+    pub task_id: String,
+    /// `login`, `consent`, or `capability`.
+    pub kind: String,
+    /// Taint of the request, supplied by the host rather than model output.
+    pub taint: MemoryTaint,
+    /// Injected creation time.
+    pub created_at: i64,
+    /// Injected expiry. A later decide fails closed.
+    pub expires_at: i64,
+}
+
+/// One approval still waiting for the owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingApproval {
+    /// Decimal approval id.
+    pub approval_id: String,
+    /// Task parked on this approval.
+    pub task_id: String,
+    /// `login`, `consent`, or `capability`.
+    pub kind: String,
+    /// Stored taint.
+    pub taint: MemoryTaint,
+    /// Plain-language description of what would be granted.
+    pub grant_text: String,
+    /// Plain-language reason the task is waiting.
+    pub reason: String,
+    /// Creation time.
+    pub created_at: i64,
+    /// Expiry time.
+    pub expires_at: i64,
+}
+
+/// Owner choice on a pending approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    /// Let the task continue.
+    Approve,
+    /// Stop the task.
+    Deny,
+}
+
+/// Result of deciding or expiring one approval.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalSettlement {
+    /// The owner approved. The task may continue.
+    Approved {
+        /// Task that was waiting.
+        task_id: String,
+    },
+    /// The owner denied. The task should stop.
+    Denied {
+        /// Task that was waiting.
+        task_id: String,
+    },
+    /// The wait expired before a decision. The task should stop.
+    Expired {
+        /// Task that was waiting.
+        task_id: String,
+    },
+    /// The row was already approved, denied, or expired.
+    AlreadySettled,
+}
+
+/// Taint of one stored claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimTaint {
+    /// Claim id.
+    pub claim_id: String,
+    /// Stored taint.
+    pub taint: MemoryTaint,
+}
+
+/// Entity slug used to link a claim lexeme.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntitySlugRow {
+    /// Entity id.
+    pub entity_id: String,
+    /// Path slug.
+    pub slug: String,
+}
+
+/// Untrusted file stored beside the database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentWrite {
+    /// Attachment id. The same bytes may be attached more than once.
+    pub attachment_id: String,
+    /// Lowercase SHA-256 of the bytes.
+    pub content_sha256: String,
+    /// Byte length. It must be within the store cap.
+    pub byte_size: i64,
+    /// Allowlisted media type.
+    pub media_type: String,
+    /// Display name with no path separators.
+    pub safe_name: String,
+    /// Path relative to the data directory: `attachments/{sha256}`.
+    pub relative_path: String,
+    /// Injected creation time.
+    pub created_at: i64,
+}
+
+/// One stored attachment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentRow {
+    /// Attachment id.
+    pub attachment_id: String,
+    /// Lowercase SHA-256 of the bytes.
+    pub content_sha256: String,
+    /// Byte length.
+    pub byte_size: i64,
+    /// Allowlisted media type.
+    pub media_type: String,
+    /// Display name.
+    pub safe_name: String,
+    /// Path relative to the data directory.
+    pub relative_path: String,
+    /// Creation time.
+    pub created_at: i64,
+    /// Message the owner sent this file with, when it is bound.
+    pub message_id: Option<String>,
+}
+
+/// File cleanup after an unbound attachment is removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedAttachment {
+    /// Path relative to the data directory.
+    pub relative_path: String,
+    /// True when no remaining row uses this content hash.
+    pub remove_file: bool,
+}
+
+/// Episode waiting for promotion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPromotionRow {
+    /// Episode id.
+    pub episode_id: String,
+    /// Episode creation time.
+    pub created_at: i64,
+    /// Consecutive promotion failures so far.
+    pub promotion_failures: i64,
+}
+
+/// Result of recording one promotion failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotionFailureNote {
+    /// Failure count after the increment.
+    pub failures: i64,
+    /// Whether the episode is now quarantined.
+    pub quarantined: bool,
+}
+
+/// Claim row returned by nearest FTS search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NearestClaimRow {
+    /// Claim id.
+    pub claim_id: String,
+    /// Claim sentence.
+    pub sentence: String,
+}
+
+/// Provisional claim returned by a same-model vector search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorClaimHit {
+    /// Claim id.
+    pub claim_id: String,
+    /// Claim sentence.
+    pub sentence: String,
+    /// `f32` distance bits. Lower is nearer for non-negative distances.
+    pub distance_bits: u32,
+}
+
+/// Episode fields needed to run promotion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotionEpisodeRow {
+    /// Episode id.
+    pub episode_id: String,
+    /// Owning thread.
+    pub thread_id: String,
+    /// Full exchange body.
+    pub body: String,
+    /// Episode taint.
+    pub taint: MemoryTaint,
+    /// Readable reasoning when present.
+    pub reasoning: Option<String>,
+    /// Participant labels.
+    pub participants: String,
+    /// Episode creation time.
+    pub created_at: i64,
+    /// Ordered segments.
+    pub segments: Vec<SegmentWrite>,
 }
 
 /// One accepted presentation.
@@ -426,6 +653,8 @@ pub struct BrainEdge {
     pub to_kind: String,
     /// Target node id.
     pub to_id: String,
+    /// Weight times 1000. `1000` is weight 1.
+    pub weight_millis: i64,
 }
 
 /// Shared brain graph ordered for a stable owner view.

@@ -143,7 +143,6 @@ impl RouterHttp {
             "model": request.model,
             "messages": request.messages.iter().map(outbound_message).collect::<Vec<_>>(),
             "tools": tools,
-            "max_tokens": request.max_output_tokens,
             "stream": matches!(self.config.stream_mode, RouterStreamMode::ServerSentEvents),
         });
         if let Some(choice) = tool_choice_for(body.get("tools").unwrap_or(&serde_json::Value::Null))
@@ -151,6 +150,11 @@ impl RouterHttp {
             body["tool_choice"] = serde_json::json!(choice);
         }
         Ok(body)
+    }
+
+    /// Deadline for one completion, including gateway failover inside that call.
+    pub fn request_timeout(&self) -> Duration {
+        self.config.request_timeout
     }
 
     fn request_headers(&self) -> Result<HeaderMap, RouterError> {

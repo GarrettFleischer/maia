@@ -111,8 +111,8 @@ test('live shell renders API state without fixture surfaces and exposes safe pro
   }
 
   if (testInfo.project.name === 'phone') {
-    await page.getByRole('button', { name: 'Open agents drawer' }).click()
-    const drawer = page.getByRole('dialog', { name: 'Agents' })
+    await page.getByRole('button', { name: 'Open tasks drawer' }).click()
+    const drawer = page.getByRole('dialog', { name: 'Tasks' })
     await expect(drawer.getByTestId('activity-counts')).toHaveCount(0)
     await expect(drawer.getByRole('button', { name: 'Settings' })).toHaveCount(0)
     await page.keyboard.press('Escape')

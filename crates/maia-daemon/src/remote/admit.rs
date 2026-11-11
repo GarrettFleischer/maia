@@ -189,7 +189,9 @@ pub fn host_allowed(host: &str, names: &HostNames<'_>) -> bool {
 
 /// Map Tailscale's certificate failure to a fixed sentence. The raw error stays out of the API.
 pub fn certificate_failure_reason(stderr: &str) -> &'static str {
-    if stderr.contains("does not support getting TLS certs") || stderr.contains("HTTPS is not enabled") {
+    if stderr.contains("does not support getting TLS certs")
+        || stderr.contains("HTTPS is not enabled")
+    {
         "Turn on Enable HTTPS in the Tailscale DNS admin page. Maia will keep trying."
     } else {
         "A Tailscale certificate is not available."
@@ -203,7 +205,9 @@ pub fn serve_blocks_remote(text: &str, port: u16) -> bool {
         return false;
     }
     let port_text = port.to_string();
-    trimmed.split(|ch: char| !ch.is_ascii_digit()).any(|token| token == port_text)
+    trimmed
+        .split(|ch: char| !ch.is_ascii_digit())
+        .any(|token| token == port_text)
 }
 
 /// Decide a tailnet request. Tagged nodes and bad hosts never reach a handler.
@@ -283,7 +287,10 @@ pub fn parse_status(bytes: &[u8]) -> Option<TailscaleSnapshot> {
     Some(TailscaleSnapshot {
         dns_name,
         online: this.get("Online").and_then(serde_json::Value::as_bool) == Some(true),
-        backend_running: value.get("BackendState").and_then(serde_json::Value::as_str) == Some("Running"),
+        backend_running: value
+            .get("BackendState")
+            .and_then(serde_json::Value::as_str)
+            == Some("Running"),
         ips: tailscale_addrs(&ips),
     })
 }
@@ -292,7 +299,10 @@ pub fn parse_status(bytes: &[u8]) -> Option<TailscaleSnapshot> {
 pub fn parse_whois(bytes: &[u8]) -> Option<TailnetIdentity> {
     let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
     let node = value.get("Node")?;
-    let node_id = node.get("StableID").and_then(serde_json::Value::as_str)?.trim();
+    let node_id = node
+        .get("StableID")
+        .and_then(serde_json::Value::as_str)?
+        .trim();
     if node_id.is_empty() {
         return None;
     }
@@ -374,7 +384,9 @@ fn mutates(method: &str) -> bool {
 fn is_open_tailnet_route(method: &str, path: &str) -> bool {
     matches!(
         (method, path),
-        ("GET", "/api/remote/session") | ("GET", "/api/remote/status") | ("POST", "/api/remote/pair")
+        ("GET", "/api/remote/session")
+            | ("GET", "/api/remote/status")
+            | ("POST", "/api/remote/pair")
     )
 }
 
@@ -499,7 +511,10 @@ mod tests {
         let reason = certificate_failure_reason(
             "500 Internal Server Error: your Tailscale account does not support getting TLS certs\n",
         );
-        assert_eq!(reason, "Turn on Enable HTTPS in the Tailscale DNS admin page. Maia will keep trying.");
+        assert_eq!(
+            reason,
+            "Turn on Enable HTTPS in the Tailscale DNS admin page. Maia will keep trying."
+        );
         assert!(!reason.contains("500"));
         assert_eq!(
             certificate_failure_reason("boom"),
@@ -549,13 +564,19 @@ mod tests {
         tagged.tags.push("tag:server".to_owned());
         assert_eq!(
             gate_tailnet(&request, &tagged, true, None, &names, 1_500),
-            TailnetGate::Reject { status: 403, error: "denied" }
+            TailnetGate::Reject {
+                status: 403,
+                error: "denied"
+            }
         );
         let mut anonymous = phone();
         anonymous.user_id.clear();
         assert_eq!(
             gate_tailnet(&request, &anonymous, false, None, &names, 1_500),
-            TailnetGate::Reject { status: 403, error: "denied" }
+            TailnetGate::Reject {
+                status: 403,
+                error: "denied"
+            }
         );
     }
 
@@ -586,7 +607,10 @@ mod tests {
         };
         assert_eq!(
             gate_tailnet(&sidebar, &identity, false, None, &names, 1_500),
-            TailnetGate::Reject { status: 401, error: "unpaired" }
+            TailnetGate::Reject {
+                status: 401,
+                error: "unpaired"
+            }
         );
         let page = TailnetRequest {
             method: "GET",
@@ -616,13 +640,30 @@ mod tests {
             csrf: Some("csrf-token"),
         };
         assert_eq!(
-            gate_tailnet(&post, &identity, true, Some(session("csrf-token")), &names, 1_500),
+            gate_tailnet(
+                &post,
+                &identity,
+                true,
+                Some(session("csrf-token")),
+                &names,
+                1_500
+            ),
             TailnetGate::Continue
         );
         let missing = TailnetRequest { csrf: None, ..post };
         assert_eq!(
-            gate_tailnet(&missing, &identity, true, Some(session("csrf-token")), &names, 1_500),
-            TailnetGate::Reject { status: 403, error: "denied" }
+            gate_tailnet(
+                &missing,
+                &identity,
+                true,
+                Some(session("csrf-token")),
+                &names,
+                1_500
+            ),
+            TailnetGate::Reject {
+                status: 403,
+                error: "denied"
+            }
         );
         let other = TailnetRequest {
             method: "GET",
@@ -633,13 +674,30 @@ mod tests {
             csrf: None,
         };
         assert_eq!(
-            gate_tailnet(&other, &identity, true, Some(session("csrf-token")), &names, 1_500),
+            gate_tailnet(
+                &other,
+                &identity,
+                true,
+                Some(session("csrf-token")),
+                &names,
+                1_500
+            ),
             TailnetGate::Continue
         );
         let late = 2_000;
         assert_eq!(
-            gate_tailnet(&other, &identity, true, Some(session("csrf-token")), &names, late),
-            TailnetGate::Reject { status: 401, error: "session_expired" }
+            gate_tailnet(
+                &other,
+                &identity,
+                true,
+                Some(session("csrf-token")),
+                &names,
+                late
+            ),
+            TailnetGate::Reject {
+                status: 401,
+                error: "session_expired"
+            }
         );
     }
 
@@ -657,7 +715,10 @@ mod tests {
         };
         assert_eq!(
             gate_tailnet(&request, &phone(), false, None, &names, 1_500),
-            TailnetGate::Reject { status: 403, error: "denied" }
+            TailnetGate::Reject {
+                status: 403,
+                error: "denied"
+            }
         );
     }
 

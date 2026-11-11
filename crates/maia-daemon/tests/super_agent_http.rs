@@ -15,8 +15,10 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::task::Waker;
 use std::task::Context;
 use std::task::Poll;
 use std::thread;
@@ -63,6 +65,7 @@ use maia_daemon::ServeFailure;
 use maia_daemon::accepted_routing_policy;
 use maia_daemon::coalesce_sidebar;
 use maia_daemon::discover_model_id_bounded;
+use maia_daemon::named_tool_response;
 use maia_daemon::parse_model_ids;
 use maia_daemon::present_router_body;
 use maia_daemon::route_tool_response;
@@ -115,6 +118,7 @@ struct RouterScript {
 
 enum ScriptedReply {
     Proposal(RouteProposal),
+    Tool { name: String, arguments: String },
     Fail(String),
     Server { code: u16 },
 }
@@ -130,6 +134,14 @@ impl ScriptedRouter {
     }
 
     fn push_proposal(&self, proposal: RouteProposal) {
+        self.push(ScriptedReply::Proposal(proposal));
+        self.push(ScriptedReply::Tool {
+            name: "success".to_owned(),
+            arguments: r#"{"message":"Done."}"#.to_owned(),
+        });
+    }
+
+    fn push_host_ask(&self, proposal: RouteProposal) {
         self.push(ScriptedReply::Proposal(proposal));
     }
 
@@ -173,6 +185,9 @@ impl Router for ScriptedRouter {
                     Some(ScriptedReply::Proposal(proposal)) => {
                         Ok(route_tool_response(request.request_id, &proposal))
                     }
+                    Some(ScriptedReply::Tool { name, arguments }) => {
+                        Ok(named_tool_response(request.request_id, &name, &arguments))
+                    }
                     Some(ScriptedReply::Fail(detail)) => Err(RouterError::Protocol { detail }),
                     Some(ScriptedReply::Server { code }) => Err(RouterError::Server { code }),
                     None => Err(RouterError::Protocol {
@@ -186,6 +201,87 @@ impl Router for ScriptedRouter {
 
     async fn cancel(&self, _request_id: RequestId) -> Result<(), RouterError> {
         Ok(())
+    }
+}
+
+struct HoldGate {
+    released: Mutex<bool>,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl HoldGate {
+    fn create() -> Arc<Self> {
+        Arc::new(Self {
+            released: Mutex::new(false),
+            waker: Mutex::new(None),
+        })
+    }
+
+    fn release(&self) {
+        let mut released = self.released.lock().expect("hold");
+        if *released {
+            return;
+        }
+        *released = true;
+        drop(released);
+        if let Some(waker) = self.waker.lock().expect("waker").take() {
+            waker.wake();
+        }
+    }
+}
+
+struct ReleaseOnDrop(Arc<HoldGate>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+struct HoldingRouter {
+    inner: ScriptedRouter,
+    gate: Arc<HoldGate>,
+    started: Arc<AtomicBool>,
+}
+
+impl Router for HoldingRouter {
+    fn complete(
+        &self,
+        request: &RouterRequest,
+    ) -> impl Future<Output = Result<RouterResponse, RouterError>> + Send {
+        let inner = self.inner.clone();
+        let request = request.clone();
+        let gate = Arc::clone(&self.gate);
+        let started = Arc::clone(&self.started);
+        async move {
+            started.store(true, Ordering::SeqCst);
+            HoldUntil { gate }.await;
+            inner.complete(&request).await
+        }
+    }
+
+    async fn cancel(&self, _request_id: RequestId) -> Result<(), RouterError> {
+        Ok(())
+    }
+}
+
+struct HoldUntil {
+    gate: Arc<HoldGate>,
+}
+
+impl Future for HoldUntil {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
+        if *self.gate.released.lock().expect("hold") {
+            return Poll::Ready(());
+        }
+        *self.gate.waker.lock().expect("waker") = Some(context.waker().clone());
+        if *self.gate.released.lock().expect("hold") {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
     }
 }
 
@@ -298,7 +394,7 @@ impl Session {
     }
 
     fn queue_ask(&self) {
-        self.router.push_proposal(create_task(100, 200));
+        self.router.push_host_ask(create_task(100, 200));
     }
 
     fn queue_fail(&self, detail: &str) {
@@ -372,7 +468,6 @@ impl Session {
                 ids: self.ids,
                 turn: RouterTurn {
                     model: "fixture-model".to_owned(),
-                    max_output_tokens: 32,
                     reasoning: ReasoningEffort::Low,
                     prefix_hash: PrefixHash::new("fixture-prefix"),
                 },
@@ -574,6 +669,143 @@ async fn inspector_returns_the_stored_router_turn_without_fixture_copy() {
     assert!(!body.to_lowercase().contains("compact"));
     assert!(!body.contains("Tailscale"));
     assert!(!body.contains("Persona"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transcript_is_readable_while_the_router_still_holds_the_send() {
+    let session = Session::open("live-transcript");
+    session.queue_create();
+    let gate = HoldGate::create();
+    let started = Arc::new(AtomicBool::new(false));
+    let router = HoldingRouter {
+        inner: session.router.clone(),
+        gate: Arc::clone(&gate),
+        started: Arc::clone(&started),
+    };
+    let server = session.spawn_router(router);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    let origin = server.origin.clone();
+    let post = tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        client
+            .post(format!("{origin}/api/super-agent/messages"))
+            .header("content-type", "application/json")
+            .json(&json!({
+                "text": USER_TEXT,
+                "operation_id": "00000000-0000-4000-8000-000000000099",
+            }))
+            .send()
+            .await
+            .expect("post")
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !started.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            panic!("router did not start holding the send");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let reader = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("reader");
+    let transcript = reader
+        .get(format!("{}/api/super-agent/transcript", server.origin))
+        .send()
+        .await
+        .expect("transcript while the send is still open");
+    assert_eq!(transcript.status(), 200);
+    let body = transcript.text().await.expect("transcript body");
+    assert!(body.contains(USER_TEXT));
+    assert!(body.contains("\"role\":\"owner\""));
+    gate.release();
+    let posted = tokio::time::timeout(Duration::from_secs(5), post)
+        .await
+        .expect("send finished after the router was released")
+        .expect("send task");
+    assert_eq!(posted.status(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn settings_stay_readable_while_the_router_holds_the_send() {
+    let session = Session::open("settings-during-send");
+    session.queue_create();
+    let gate = HoldGate::create();
+    let started = Arc::new(AtomicBool::new(false));
+    let router = HoldingRouter {
+        inner: session.router.clone(),
+        gate: Arc::clone(&gate),
+        started: Arc::clone(&started),
+    };
+    let server = session.spawn_router(router);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    let saved = put_json(
+        &server,
+        "/api/super-agent/model-connection",
+        json!({
+            "base_url": "https://example.test/v1",
+            "api_key": LEAK,
+            "model": "example-chat",
+            "reasoning": "high"
+        }),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+
+    let origin = server.origin.clone();
+    let post = tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        client
+            .post(format!("{origin}/api/super-agent/messages"))
+            .header("content-type", "application/json")
+            .json(&json!({
+                "text": USER_TEXT,
+                "operation_id": "00000000-0000-4000-8000-000000000098",
+            }))
+            .send()
+            .await
+            .expect("post")
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !started.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            panic!("router did not start holding the send");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let reader = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("reader");
+    let model = reader
+        .get(format!(
+            "{}/api/super-agent/model-connection",
+            server.origin
+        ))
+        .send()
+        .await
+        .expect("model connection while the send is still open");
+    assert_eq!(model.status(), 200);
+    let model_body = model.text().await.expect("model body");
+    assert!(model_body.contains("https://example.test/v1"));
+    assert!(model_body.contains("example-chat"));
+    assert!(model_body.contains("\"key_set\":true"));
+    assert!(model_body.contains("\"reasoning\":\"high\""));
+    assert!(!model_body.contains(LEAK));
+    let mcp = reader
+        .get(format!("{}/api/super-agent/mcp", server.origin))
+        .send()
+        .await
+        .expect("mcp list while the send is still open");
+    assert_eq!(mcp.status(), 200);
+    let mcp_body = mcp.text().await.expect("mcp body");
+    assert!(mcp_body.contains("\"connections\""));
+    gate.release();
+    let posted = tokio::time::timeout(Duration::from_secs(5), post)
+        .await
+        .expect("send finished after the router was released")
+        .expect("send task");
+    assert_eq!(posted.status(), 200);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -799,7 +1031,7 @@ async fn same_operation_replays_success_without_side_effects() {
     let replay_body = replay.text().await.expect("replay body");
 
     assert_eq!(first_body, replay_body);
-    assert_eq!(router.request_count(), 1);
+    assert_eq!(router.request_count(), 2);
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM router_messages"),
         2
@@ -841,7 +1073,7 @@ async fn same_operation_different_text_conflicts_without_mutation() {
         conflict.text().await.expect("conflict body"),
         r#"{"error":"submission_conflict"}"#
     );
-    assert_eq!(router.request_count(), 1);
+    assert_eq!(router.request_count(), 2);
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM router_messages"),
         2
@@ -1039,7 +1271,7 @@ async fn step_failure_after_admission_returns_processing_failed() {
             },
         })
     );
-    assert_eq!(router.request_count(), 1);
+    assert_eq!(router.request_count(), 2);
     assert_eq!(
         shown(
             &server.database,
@@ -1047,7 +1279,7 @@ async fn step_failure_after_admission_returns_processing_failed() {
         ),
         vec![
             USER_TEXT.to_owned(),
-            format!("Dispatched as one new task: {USER_TEXT}."),
+            "Done.".to_owned(),
             "The message was accepted, but processing could not continue.".to_owned(),
         ]
     );
@@ -1064,7 +1296,7 @@ async fn step_failure_after_admission_returns_processing_failed() {
         replay.json::<Value>().await.expect("replay body"),
         first_body
     );
-    assert_eq!(router.request_count(), 1);
+    assert_eq!(router.request_count(), 2);
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM router_messages"),
         3
@@ -1104,7 +1336,7 @@ async fn publication_failure_after_admission_returns_processing_failed() {
             },
         })
     );
-    assert_eq!(router.request_count(), 1);
+    assert_eq!(router.request_count(), 2);
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM task_sessions"),
         1
@@ -1124,7 +1356,7 @@ async fn publication_failure_after_admission_returns_processing_failed() {
         ),
         vec![
             USER_TEXT.to_owned(),
-            format!("Dispatched as one new task: {USER_TEXT}."),
+            "Done.".to_owned(),
             "The message was accepted, but processing could not continue.".to_owned(),
         ]
     );
@@ -1133,7 +1365,7 @@ async fn publication_failure_after_admission_returns_processing_failed() {
         replay.json::<Value>().await.expect("replay body"),
         first_body
     );
-    assert_eq!(router.request_count(), 1);
+    assert_eq!(router.request_count(), 2);
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM router_messages"),
         3
@@ -1741,7 +1973,7 @@ async fn terminal_persistence_failure_after_side_effects_restarts_pending_withou
             },
         })
     );
-    assert_eq!(first_router.request_count(), 2);
+    assert_eq!(first_router.request_count(), 3);
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM router_messages"),
         3
@@ -3067,7 +3299,6 @@ async fn installed_router_handles_the_next_completion() {
         prefix_hash: PrefixHash::new("fixture-prefix"),
         recall_hash: None,
         reasoning_effort: ReasoningEffort::Low,
-        max_output_tokens: 8,
         prior_provider_tool_state: None,
     };
     let first_result = proxy.complete(&request).await;
@@ -3201,6 +3432,9 @@ fn seed_http_brain(path: &Path) {
                 valid_from: 40,
                 lexemes: vec!["obsidian".to_owned(), "vault".to_owned()],
             }],
+            same_claim_ids: Vec::new(),
+            replacements: Vec::new(),
+            links: Vec::new(),
         })
         .expect("promotion");
     owner

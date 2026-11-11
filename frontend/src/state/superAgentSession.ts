@@ -1,5 +1,6 @@
 import type {
   ComposerNotice,
+  LiveApproval,
   RouterMessage,
   SidebarRow,
   TaskDetail,
@@ -33,6 +34,7 @@ interface SidebarResource {
   active_request: number | null
   status: ResourceStatus
   rows: SidebarRow[]
+  approvals: LiveApproval[]
 }
 
 interface TranscriptResource {
@@ -88,6 +90,7 @@ type SessionEvent =
       activation: ClientActivationId
       request_id: number
       rows: SidebarRow[]
+      approvals: LiveApproval[]
     }
   | {
       type: 'sidebar_failed'
@@ -154,6 +157,13 @@ type SessionEvent =
       session: ClientSessionId
       activation: ClientActivationId
       token: SendOperationToken
+      sent_text?: string
+    }
+  | {
+      type: 'stored_send_unanswered'
+      session: ClientSessionId
+      activation: ClientActivationId
+      text: string
     }
   | {
       type: 'send_succeeded'
@@ -234,6 +244,7 @@ export function createSuperAgentState(
       active_request: null,
       status: 'loading',
       rows: [],
+      approvals: [],
     },
     transcript: {
       latest_request_id: 0,
@@ -379,6 +390,7 @@ export function reduceSuperAgentState(
           active_request: null,
           status: 'ready',
           rows: event.rows,
+          approvals: event.approvals,
         },
       }
     case 'sidebar_failed':
@@ -395,6 +407,7 @@ export function reduceSuperAgentState(
           active_request: null,
           status: 'error',
           rows: [],
+          approvals: state.sidebar.approvals,
         },
       }
     case 'transcript_started':
@@ -481,8 +494,23 @@ export function reduceSuperAgentState(
         admitted_status_message_id: null,
       }
     case 'send_admitted':
-      if (!ownsSend(state, event.token)) return state
+      if (!ownsSend(state, event.token)) {
+        if (
+          state.operation.kind === 'idle' &&
+          event.sent_text !== undefined &&
+          state.draft === event.sent_text
+        ) {
+          return { ...state, draft: '', notice: { kind: 'idle' } }
+        }
+        return state
+      }
       return { ...state, draft: '', notice: { kind: 'idle' } }
+    case 'stored_send_unanswered':
+      if (state.operation.kind !== 'idle') return state
+      return {
+        ...state,
+        notice: { kind: 'admitted_failure', text: event.text },
+      }
     case 'send_succeeded':
       if (!ownsSend(state, event.token)) return state
       return {

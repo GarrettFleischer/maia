@@ -5,7 +5,7 @@ export const ROUTE_UNREADABLE_TEXT = 'The router proposal could not be read.'
 export const PROCESSING_UNAVAILABLE_TEXT =
   'The message was accepted, but processing could not continue.'
 export const PROCESSING_PENDING_TEXT =
-  'The message was accepted, but its final outcome is unavailable.'
+  'The message was accepted. A final reply is not in the chat yet; the task may still be running.'
 export const UNKNOWN_ADMITTED_OUTCOME_TEXT =
   'The message was accepted, but its outcome is unavailable.'
 

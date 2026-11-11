@@ -14,7 +14,7 @@ test.describe('Mint Ledger responsive shell', () => {
   test('desktop shows rail, conversation, and inspector', async ({ page, viewport }) => {
     test.skip((viewport?.width ?? 0) !== 1440, 'desktop project only')
     await completeOnboarding(page)
-    await expect(page.getByRole('navigation', { name: 'Agents' })).toBeVisible()
+    await expect(page.getByRole('navigation', { name: 'Tasks' })).toBeVisible()
     await expect(page.getByTestId('composer')).toBeVisible()
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toBeVisible()
     const transcript = page.getByTestId('transcript')
@@ -131,12 +131,12 @@ test.describe('Modal and inspector keyboard contracts', () => {
   }) => {
     test.skip((viewport?.width ?? 0) !== 390, 'phone project only')
     await completeOnboarding(page)
-    const agents = page.getByRole('button', { name: 'Open agents drawer' })
+    const agents = page.getByRole('button', { name: 'Open tasks drawer' })
     const inspect = page.locator('.maia-phone-header button').filter({ hasText: 'Inspect' })
 
     await agents.focus()
     await page.keyboard.press('Enter')
-    const drawer = page.getByRole('dialog', { name: 'Agents' })
+    const drawer = page.getByRole('dialog', { name: 'Tasks' })
     await expect(drawer).toBeVisible()
     await expect(page.locator('#root')).toHaveAttribute('inert', '')
     await expect(page.locator('#root')).toHaveAttribute('aria-hidden', 'true')

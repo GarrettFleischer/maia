@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ApprovalSheet } from '@/components/approval/ApprovalSheet'
 import { NeedsHumanBanner } from '@/components/conversation/NeedsHumanBanner'
+import { LiveApprovalNotice, openLiveApproval } from '@/components/conversation/LiveApprovalNotice'
 import { RouterConversation } from '@/components/shell/RouterConversation'
 import { StopAllButton } from '@/components/shell/StopAllButton'
 import { TaskDetail } from '@/components/shell/TaskDetail'
@@ -16,17 +17,27 @@ export function ConversationPane({
   activityLabel,
   onStopAll,
   router,
+  phoneStop,
+  headerAction = null,
+  factsUsed,
+  onInspectFacts,
 }: {
   dataSource: SuperAgentDataSource
   layout: ConversationLayout
   activityLabel: string
   onStopAll: () => void
   router: RouterBindings
+  phoneStop: string | null
+  headerAction?: ReactNode
+  factsUsed?: ReadonlyMap<string, readonly string[]>
+  onInspectFacts?: (messageId: string, ids: readonly string[]) => void
 }) {
   const { state, dispatch } = useMaiaState()
   const [approvalOpen, setApprovalOpen] = useState(false)
   const pending = dataSource === 'fixture' ? state.pending_approval : null
-  const composerDisabled = pending !== null
+  const liveApproval =
+    dataSource === 'live' ? openLiveApproval(router.approvals, Date.now() / 1000) : null
+  const composerDisabled = pending !== null || liveApproval !== null
 
   const denyPending = () => {
     if (!pending) {
@@ -42,53 +53,81 @@ export function ConversationPane({
 
   return (
     <section className="maia-conversation" aria-label="Conversation">
-      <header className="maia-conv-head">
-        <h1>Router</h1>
-        <p>One conversation · {activityLabel}</p>
-      </header>
-
-      {dataSource === 'fixture' ? (
-        <NeedsHumanBanner onApprove={() => setApprovalOpen(true)} onDeny={denyPending} />
-      ) : null}
-
-      <RouterConversation
-        messages={router.messages}
-        transcriptState={router.transcriptState}
-        admittedStatusMessageId={router.admittedStatusMessageId}
-        admission={router.admission}
-        operation={router.operation}
-        announcement={router.announcement}
-        draft={router.draft}
-        notice={router.notice}
-        disabled={composerDisabled}
-        onDraftChange={router.setDraft}
-        onRetryTranscript={() => {
-          void router.retryTranscript()
-        }}
-        onAnnouncementAcknowledged={router.acknowledgeAnnouncement}
-        onSubmit={() => {
-          void router.submit()
-        }}
-        accessory={
-          dataSource === 'fixture' && layout === 'phone' && state.activity.running > 0 ? (
-            <div className="maia-phone-stop" data-testid="phone-stop-bar">
-              <span>{state.activity.running} running</span>
-              <StopAllButton onStop={onStopAll} />
-            </div>
-          ) : null
-        }
-      />
-
       {router.detail ? (
         <TaskDetail
           detail={router.detail}
           pin={router.pinMark}
           operation={router.operation}
-          onClose={() => router.closeDetail()}
-          onQuote={(taskId) => router.quote(taskId)}
-          onPin={(taskId, mark) => router.pin(taskId, mark)}
+          onClose={() => {
+            void router.closeDetail()
+          }}
+          onQuote={(taskId) => {
+            void router.quote(taskId)
+          }}
+          onPin={(taskId, mark) => {
+            void router.pin(taskId, mark)
+          }}
         />
-      ) : null}
+      ) : (
+        <>
+          <header className={headerAction ? 'maia-conv-head maia-conv-head--split' : 'maia-conv-head'}>
+            <div>
+              <h1>Router</h1>
+              <p>One conversation · {activityLabel}</p>
+            </div>
+            {headerAction}
+          </header>
+
+          {dataSource === 'fixture' ? (
+            <NeedsHumanBanner onApprove={() => setApprovalOpen(true)} onDeny={denyPending} />
+          ) : null}
+          {liveApproval ? (
+            <LiveApprovalNotice
+              approval={liveApproval}
+              sheetOpen={approvalOpen}
+              onOpen={() => setApprovalOpen(true)}
+              onClose={() => setApprovalOpen(false)}
+              onDecide={(decision) => {
+                setApprovalOpen(false)
+                void router.decideApproval(liveApproval.approval_id, decision)
+              }}
+            />
+          ) : null}
+
+          <RouterConversation
+            messages={router.messages}
+            transcriptState={router.transcriptState}
+            admittedStatusMessageId={router.admittedStatusMessageId}
+            admission={router.admission}
+            operation={router.operation}
+            announcement={router.announcement}
+            draft={router.draft}
+            notice={router.notice}
+            disabled={composerDisabled}
+            submitOnEnter={layout !== 'phone'}
+            onDraftChange={router.setDraft}
+            onRetryTranscript={() => {
+              void router.retryTranscript()
+            }}
+            onAnnouncementAcknowledged={router.acknowledgeAnnouncement}
+            onSubmit={() => {
+              void router.submit()
+            }}
+            factsUsed={factsUsed}
+            onInspectFacts={onInspectFacts}
+            canAttach={router.canAttach}
+            stageAttachments={router.stageAttachments}
+            accessory={
+              phoneStop ? (
+                <div className="maia-phone-stop" data-testid="phone-stop-bar">
+                  <span>{phoneStop}</span>
+                  <StopAllButton onStop={onStopAll} />
+                </div>
+              ) : null
+            }
+          />
+        </>
+      )}
 
       {pending ? (
         <ApprovalSheet

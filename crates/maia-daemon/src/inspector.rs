@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -24,6 +25,7 @@ use maia_core::brain::MemoryScope;
 use maia_core::brain::NodeId;
 use maia_core::brain::PageRankParams;
 use maia_core::brain::QuarantineSet;
+use maia_core::brain::QueryEmbedding;
 use maia_core::brain::RankError;
 use maia_core::brain::RankPolicy;
 use maia_core::brain::RecallGraph;
@@ -96,8 +98,8 @@ pub(crate) struct MeasuredPrompt {
 }
 
 /// One packed claim or fact. It is not installed as durable memory.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct RecallLine {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecallLine {
     /// Claim or fact id.
     pub id: String,
     /// `claim` or `fact`.
@@ -106,12 +108,15 @@ pub(crate) struct RecallLine {
     pub sentence: String,
     /// Combined rank score.
     pub score: f64,
+    /// Nodes walked from the query to this fact, as `kind:id`.
+    #[serde(default)]
+    pub walked: Vec<String>,
 }
 
 /// Endpoint kind of one recall line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum RecallKind {
+pub enum RecallKind {
     /// Provisional claim.
     Claim,
     /// Canonical fact.
@@ -120,7 +125,7 @@ pub(crate) enum RecallKind {
 
 /// Recall bytes and the lines they contain.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct PackedRecall {
+pub struct PackedRecall {
     /// Canonical recall block sent as one extra message.
     pub bytes: String,
     /// Lines inside that block, in rank order.
@@ -296,7 +301,30 @@ pub(crate) fn recall_graph(map: &BrainMap) -> (RecallGraph, QuarantineSet) {
         }
     }
     for edge in &map.edges {
-        if let Some(reversed) = reversed_lexeme_edge(edge) {
+        let weight = edge_weight(edge);
+        if weight <= 0.0 {
+            continue;
+        }
+        if edge.kind == "co_use" || edge.kind == "relatedness" {
+            let Some(from) = memory_node(&edge.from_kind, &edge.from_id) else {
+                continue;
+            };
+            let Some(to) = memory_node(&edge.to_kind, &edge.to_id) else {
+                continue;
+            };
+            graph.edges.push(GraphEdge {
+                from: from.clone(),
+                to: to.clone(),
+                weight,
+            });
+            graph.edges.push(GraphEdge {
+                from: to,
+                to: from,
+                weight,
+            });
+            continue;
+        }
+        if let Some(reversed) = reversed_lexeme_edge(edge, weight) {
             if let NodeId::Lexeme(lexeme) = &reversed.from {
                 graph.lexemes.insert(lexeme.clone());
             }
@@ -313,12 +341,23 @@ pub(crate) fn pack_recall(
     now: Timestamp,
     quarantine: &QuarantineSet,
 ) -> Result<Option<PackedRecall>, RankError> {
+    pack_recall_with_embedding(graph, query, now, quarantine, None)
+}
+
+/// Ranks with an optional query vector from the same embedder that stored claim vectors.
+pub(crate) fn pack_recall_with_embedding(
+    graph: &RecallGraph,
+    query: &str,
+    now: Timestamp,
+    quarantine: &QuarantineSet,
+    embedding: Option<&QueryEmbedding>,
+) -> Result<Option<PackedRecall>, RankError> {
     let policy = router_rank_policy();
     let ranked = rank_paths(
         graph,
         &RecallQuery {
             text: query.to_owned(),
-            embedding: None,
+            embedding: embedding.cloned(),
         },
         now,
         &policy,
@@ -376,17 +415,24 @@ pub(crate) fn usage_from_json(json: &str) -> RouterUsage {
 }
 
 /// Inspector document, oldest turn first.
-pub(crate) fn inspector_document(rows: &[StoredTurnRow]) -> Value {
+///
+/// `used` maps a message id to the claim and fact ids presented for that turn.
+pub(crate) fn inspector_document(
+    rows: &[StoredTurnRow],
+    used: &BTreeMap<String, Vec<String>>,
+) -> Value {
     let turns = rows
         .iter()
         .map(|row| {
             let usage = usage_from_json(&row.usage_json);
+            let facts_used = used.get(&row.message_id).cloned().unwrap_or_default();
             serde_json::json!({
                 "ordinal": row.ordinal,
                 "message_id": row.message_id,
                 "cached_percent": cached_percent(&usage),
                 "slots": parse_json_array(&row.slots_json),
                 "recall": parse_json_array(&row.recall_json),
+                "used": facts_used,
                 "thinking": row.thinking,
                 "route": row.route,
                 "reply": row.reply,
@@ -482,20 +528,29 @@ fn fact_from(node: &BrainNode, map: &BrainMap) -> GraphFact {
     }
 }
 
-fn reversed_lexeme_edge(edge: &BrainEdge) -> Option<GraphEdge> {
+fn reversed_lexeme_edge(edge: &BrainEdge, weight: f64) -> Option<GraphEdge> {
     if edge.kind != "lexeme" || edge.to_kind != "lexeme" {
         return None;
     }
-    let memory = match edge.from_kind.as_str() {
-        "claim" => NodeId::Claim(ClaimId::new(edge.from_id.clone())),
-        "fact" => NodeId::Fact(FactId::new(edge.from_id.clone())),
-        _ => return None,
-    };
+    let memory = memory_node(&edge.from_kind, &edge.from_id)?;
     Some(GraphEdge {
         from: NodeId::Lexeme(LexemeId::new(edge.to_id.clone())),
         to: memory,
-        weight: 1.0,
+        weight,
     })
+}
+
+fn memory_node(kind: &str, id: &str) -> Option<NodeId> {
+    match kind {
+        "claim" => Some(NodeId::Claim(ClaimId::new(id))),
+        "fact" => Some(NodeId::Fact(FactId::new(id))),
+        _ => None,
+    }
+}
+
+fn edge_weight(edge: &BrainEdge) -> f64 {
+    let millis = edge.weight_millis.clamp(0, 1_000_000);
+    f64::from(u32::try_from(millis).unwrap_or(0)) / 1000.0
 }
 
 fn router_rank_policy() -> RankPolicy {
@@ -509,12 +564,12 @@ fn router_rank_policy() -> RankPolicy {
         },
         pagerank: PageRankParams {
             damping: 0.5,
-            iterations: 1,
+            iterations: 2,
         },
         weights: ScoreWeights {
             activation: 0.0,
             pagerank: 1.0,
-            embedding: 0.0,
+            embedding: 1.0,
         },
         inclusion_threshold: 0.05,
         recall_token_budget: 800,
@@ -554,7 +609,17 @@ fn recall_line(item: &RecallItem, ranked: &[maia_core::brain::RankedPath]) -> Op
         kind,
         sentence: path.sentence.clone(),
         score: path.scores.combined,
+        walked: path.walked.iter().map(walked_token).collect(),
     })
+}
+
+fn walked_token(node: &NodeId) -> String {
+    match node {
+        NodeId::Lexeme(id) => format!("lexeme:{}", id.as_str()),
+        NodeId::Claim(id) => format!("claim:{}", id.as_str()),
+        NodeId::Fact(id) => format!("fact:{}", id.as_str()),
+        NodeId::Episode(id) => format!("episode:{}", id.as_str()),
+    }
 }
 
 fn usage_value(value: UsageValue) -> Value {
@@ -669,6 +734,7 @@ mod tests {
                     kind: RecallKind::Claim,
                     sentence: "Kept.".to_owned(),
                     score: 0.5,
+                    walked: Vec::new(),
                 }],
             }),
         };
@@ -782,6 +848,7 @@ mod tests {
                 from_id: "claim-1".to_owned(),
                 to_kind: "lexeme".to_owned(),
                 to_id: "obsidian".to_owned(),
+                weight_millis: 1000,
             }],
         };
         let (graph, quarantine) = recall_graph(&map);

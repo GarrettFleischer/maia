@@ -31,6 +31,8 @@
 //! any other hash. Profile and allowlist bytes are covered by that hash only
 //! when the caller includes them in `canonical`.
 
+mod approval_ops;
+mod attachment_ops;
 mod audit_ops;
 mod brain_ops;
 mod canonical;
@@ -80,7 +82,19 @@ pub use super_agent_contract::validate_envelope_contract;
 pub use super_agent_contract::validate_phase_contract;
 pub use super_agent_contract::validate_pin_contract;
 pub use super_agent_contract::validate_router_message_contract;
+pub use attachment_ops::MAX_ATTACHMENT_BYTES;
+pub use attachment_ops::attachment_media_allowed;
 pub use types::AllowlistEntryWrite;
+pub use types::ApprovalDecision;
+pub use types::ApprovalSettlement;
+pub use types::ApprovalWrite;
+pub use types::AttachmentRow;
+pub use types::AttachmentWrite;
+pub use types::ClaimTaint;
+pub use types::DeletedAttachment;
+pub use types::EntitySlugRow;
+pub use types::PendingApproval;
+pub use types::PromotionLinkWrite;
 pub use types::AppendEvents;
 pub use types::AppendOutcome;
 pub use types::AuditActor;
@@ -134,14 +148,20 @@ pub use types::McpConnectionRecord;
 pub use types::McpSecretSlot;
 pub use types::McpTransportRecord;
 pub use types::ModelConnectionRecord;
+pub use types::NearestClaimRow;
+pub use types::VectorClaimHit;
 pub use types::NegativeMarkWrite;
 pub use types::OwnerOpen;
 pub use types::PanicLatch;
 pub use types::PendingProjection;
+pub use types::PendingPromotionRow;
 pub use types::PlatformKind;
 pub use types::PresenceProof;
 pub use types::PresentationWrite;
 pub use types::PromotionClaimWrite;
+pub use types::PromotionEpisodeRow;
+pub use types::PromotionFailureNote;
+pub use types::PromotionReplaceWrite;
 pub use types::PromotionWrite;
 pub use types::ProposalOperation;
 pub use types::ProposalWrite;
@@ -193,6 +213,32 @@ pub use types::UnrestrictedConfirmation;
 pub use types::VecTable;
 pub use types::VecVersionMetadata;
 pub use types::runtime_id_contracts;
+/// Saved model endpoint on `connection`, if Settings has written one.
+///
+/// The caller owns `connection`. This does not use the `maia-sqlite` thread.
+///
+/// # Errors
+///
+/// Returns a SQLite failure.
+pub fn read_model_connection(
+    connection: &rusqlite::Connection,
+) -> Result<Option<ModelConnectionRecord>, StoreError> {
+    model_connection_ops::get(connection)
+}
+
+/// MCP connection rows on `connection`, in id order.
+///
+/// The caller owns `connection`. This does not use the `maia-sqlite` thread.
+///
+/// # Errors
+///
+/// Returns a SQLite failure.
+pub fn read_mcp_connections(
+    connection: &rusqlite::Connection,
+) -> Result<Vec<McpConnectionRecord>, StoreError> {
+    mcp_ops::list(connection)
+}
+
 pub use vec_register::VecRegistrationGate;
 pub use vec_register::classify_vec_registration;
 pub use vec_register::register_sqlite_vec;

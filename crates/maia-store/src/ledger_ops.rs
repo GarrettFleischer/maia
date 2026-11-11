@@ -131,3 +131,141 @@ pub(crate) fn apply(connection: &mut Connection, request: &LedgerWrite) -> Resul
     transaction.commit()?;
     Ok(())
 }
+
+pub(crate) fn reverse(
+    connection: &mut Connection,
+    ledger_id: &str,
+    now: i64,
+) -> Result<(), StoreError> {
+    crate::canonical::require_text("ledger_id", ledger_id)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let exists: Option<i64> = transaction
+        .query_row(
+            "SELECT 1 FROM ledgers WHERE ledger_id = ?1",
+            params![ledger_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exists.is_none() {
+        return Err(StoreError::NotFound {
+            entity: "ledger",
+            id: ledger_id.to_owned(),
+        });
+    }
+    let reversed: Option<i64> = transaction
+        .query_row(
+            "SELECT reversed_at FROM ledger_reversals WHERE ledger_id = ?1",
+            params![ledger_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if reversed.is_some() {
+        transaction.commit()?;
+        return Ok(());
+    }
+    let mut statement = transaction.prepare(
+        "SELECT candidate_kind, candidate_id, weight FROM presentations \
+         WHERE ledger_id = ?1 ORDER BY presentation_id",
+    )?;
+    let mapped = statement.query_map(params![ledger_id], |row| {
+        Ok(StoredUse {
+            kind: row.get(0)?,
+            id: row.get(1)?,
+            weight: row.get(2)?,
+        })
+    })?;
+    let mut stored = Vec::new();
+    for row in mapped {
+        stored.push(row?);
+    }
+    drop(statement);
+    let increments = co_use_from_stored(&stored);
+    for edge in &increments {
+        let (left_kind, left_id) = endpoint(&edge.left);
+        let (right_kind, right_id) = endpoint(&edge.right);
+        transaction.execute(
+            "UPDATE edges SET weight = weight - ?5 \
+             WHERE edge_kind = 'co_use' AND from_kind = ?1 AND from_id = ?2 \
+             AND to_kind = ?3 AND to_id = ?4",
+            params![left_kind, left_id, right_kind, right_id, edge.weight],
+        )?;
+        transaction.execute(
+            "DELETE FROM edges \
+             WHERE edge_kind = 'co_use' AND from_kind = ?1 AND from_id = ?2 \
+             AND to_kind = ?3 AND to_id = ?4 AND weight <= 0.000001",
+            params![left_kind, left_id, right_kind, right_id],
+        )?;
+    }
+    transaction.execute(
+        "INSERT INTO ledger_reversals (ledger_id, reversed_at) VALUES (?1, ?2)",
+        params![ledger_id, now],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub(crate) fn presented_ids(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<Vec<String>, StoreError> {
+    crate::canonical::require_text("request_id", request_id)?;
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT p.candidate_id FROM presentations p \
+         JOIN ledgers l ON l.ledger_id = p.ledger_id \
+         WHERE l.request_id = ?1 AND p.weight > 0 \
+         ORDER BY p.candidate_id",
+    )?;
+    let mapped = statement.query_map(params![request_id], |row| row.get::<_, String>(0))?;
+    let mut ids = Vec::new();
+    for id in mapped {
+        ids.push(id?);
+    }
+    Ok(ids)
+}
+
+struct StoredUse {
+    kind: String,
+    id: String,
+    weight: f64,
+}
+
+fn co_use_from_stored(stored: &[StoredUse]) -> Vec<maia_core::credit::EdgeIncrement> {
+    let mut presentations = Vec::new();
+    for (index, row) in stored.iter().enumerate() {
+        let Some(memory) = memory_ref(&row.kind, &row.id) else {
+            continue;
+        };
+        let accepted = row.weight > 0.0;
+        presentations.push(maia_core::credit::Presentation {
+            id: maia_core::agents::PresentationId(u64::try_from(index).unwrap_or(0)),
+            memory,
+            source: maia_core::credit::UseSource::Reply,
+            weight: row.weight,
+            acceptance: if accepted {
+                maia_core::credit::Acceptance::Accepted
+            } else {
+                maia_core::credit::Acceptance::Rejected
+            },
+        });
+    }
+    maia_core::credit::co_use_updates(&presentations)
+}
+
+fn memory_ref(kind: &str, id: &str) -> Option<maia_core::brain::MemoryRef> {
+    match kind {
+        "claim" => Some(maia_core::brain::MemoryRef::Claim(
+            maia_core::brain::ClaimId::new(id),
+        )),
+        "fact" => Some(maia_core::brain::MemoryRef::Fact(
+            maia_core::brain::FactId::new(id),
+        )),
+        _ => None,
+    }
+}
+
+fn endpoint(memory: &maia_core::brain::MemoryRef) -> (&'static str, String) {
+    match memory {
+        maia_core::brain::MemoryRef::Claim(id) => ("claim", id.as_str().to_owned()),
+        maia_core::brain::MemoryRef::Fact(id) => ("fact", id.as_str().to_owned()),
+    }
+}

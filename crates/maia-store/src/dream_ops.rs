@@ -1,6 +1,7 @@
 //! Episode, promotion, consolidation, projection, and FTS operations.
 
 use std::collections::BTreeSet;
+use std::collections::VecDeque;
 
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
@@ -8,17 +9,32 @@ use rusqlite::Transaction;
 use rusqlite::TransactionBehavior;
 use rusqlite::params;
 
+use crate::brain_ops;
 use crate::canonical::consolidation_canonical;
 use crate::canonical::episode_canonical;
 use crate::canonical::promotion_canonical;
+use crate::canonical::require_text;
 use crate::error::StoreError;
+use crate::limits::require_fts_query;
+use crate::types::BrainEdge;
+use crate::types::ClaimTaint;
+use crate::types::EntitySlugRow;
+use crate::types::BrainMap;
+use crate::types::BrainNode;
+use crate::types::BrainNodeKind;
 use crate::types::CompleteProjection;
 use crate::types::ConsolidationWrite;
 use crate::types::EntityScope;
 use crate::types::EpisodeWrite;
+use crate::types::MemoryTaint;
+use crate::types::NearestClaimRow;
 use crate::types::PendingProjection;
+use crate::types::PendingPromotionRow;
+use crate::types::PromotionEpisodeRow;
+use crate::types::PromotionFailureNote;
 use crate::types::PromotionWrite;
 use crate::types::ProposalOperation;
+use crate::types::SegmentWrite;
 use crate::types::TextSearch;
 
 fn immediate(connection: &mut Connection) -> Result<Transaction<'_>, StoreError> {
@@ -146,6 +162,107 @@ pub(crate) fn apply_promotion(
             )?;
         }
     }
+    for claim_id in &request.same_claim_ids {
+        let found: Option<i64> = transaction
+            .query_row(
+                "SELECT 1 FROM claims WHERE claim_id = ?1",
+                params![claim_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if found.is_none() {
+            return Err(StoreError::NotFound {
+                entity: "claim",
+                id: claim_id.clone(),
+            });
+        }
+        transaction.execute(
+            "INSERT OR IGNORE INTO edges (edge_kind, from_kind, from_id, to_kind, to_id, weight) \
+             VALUES ('mention', 'claim', ?1, 'episode', ?2, 1.0)",
+            params![claim_id, request.episode_id],
+        )?;
+    }
+    let mut links = request.links.clone();
+    links.sort_by(|left, right| {
+        left.edge_kind
+            .cmp(&right.edge_kind)
+            .then_with(|| left.from_claim_id.cmp(&right.from_claim_id))
+            .then_with(|| left.to_kind.cmp(&right.to_kind))
+            .then_with(|| left.to_id.cmp(&right.to_id))
+    });
+    for link in &links {
+        if !request
+            .claims
+            .iter()
+            .any(|claim| claim.claim_id == link.from_claim_id)
+        {
+            return Err(StoreError::InvalidRequest {
+                message: "promotion link must start at a claim in this write".to_owned(),
+            });
+        }
+        let weight = f64::from(link.weight_millis) / 1000.0;
+        match (link.edge_kind.as_str(), link.to_kind.as_str()) {
+            ("relatedness", "claim") => {
+                let status: Option<String> = transaction
+                    .query_row(
+                        "SELECT status FROM claims WHERE claim_id = ?1",
+                        params![link.to_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                match status.as_deref() {
+                    Some("provisional") => {}
+                    Some(_) => continue,
+                    None => {
+                        return Err(StoreError::NotFound {
+                            entity: "claim",
+                            id: link.to_id.clone(),
+                        });
+                    }
+                }
+            }
+            ("entity", "entity") => {
+                let found: Option<i64> = transaction
+                    .query_row(
+                        "SELECT 1 FROM entities WHERE entity_id = ?1",
+                        params![link.to_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if found.is_none() {
+                    return Err(StoreError::NotFound {
+                        entity: "entity",
+                        id: link.to_id.clone(),
+                    });
+                }
+            }
+            _ => {
+                return Err(StoreError::InvalidRequest {
+                    message: "promotion link kind is not relatedness or entity".to_owned(),
+                });
+            }
+        }
+        transaction.execute(
+            "INSERT INTO edges (edge_kind, from_kind, from_id, to_kind, to_id, weight) \
+             VALUES (?1, 'claim', ?2, ?3, ?4, ?5) \
+             ON CONFLICT (edge_kind, from_kind, from_id, to_kind, to_id) \
+             DO UPDATE SET weight = excluded.weight",
+            params![link.edge_kind, link.from_claim_id, link.to_kind, link.to_id, weight],
+        )?;
+    }
+    for replacement in &request.replacements {
+        let updated = transaction.execute(
+            "UPDATE claims SET status = 'superseded', replaced_by = ?1 \
+             WHERE claim_id = ?2 AND status = 'provisional'",
+            params![replacement.new_claim_id, replacement.old_claim_id],
+        )?;
+        if updated != 1 {
+            return Err(StoreError::NotFound {
+                entity: "claim",
+                id: replacement.old_claim_id.clone(),
+            });
+        }
+    }
     let updated = transaction.execute(
         "UPDATE episodes SET promoted_at = ?1, promoted_model = ?2, promotion_canonical = ?3 WHERE episode_id = ?4",
         params![request.now, request.model, canonical, request.episode_id],
@@ -158,6 +275,393 @@ pub(crate) fn apply_promotion(
     }
     transaction.commit()?;
     Ok(())
+}
+
+type EpisodeIdentityRow = (String, String, String, String, Option<String>, String, i64);
+
+pub(crate) fn promotion_episode(
+    connection: &Connection,
+    episode_id: &str,
+) -> Result<PromotionEpisodeRow, StoreError> {
+    require_text("episode_id", episode_id)?;
+    let row: Option<EpisodeIdentityRow> = connection
+        .query_row(
+            "SELECT episode_id, thread_id, body, taint, reasoning, participants, created_at \
+             FROM episodes WHERE episode_id = ?1",
+            params![episode_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((episode_id, thread_id, body, taint, reasoning, participants, created_at)) = row
+    else {
+        return Err(StoreError::NotFound {
+            entity: "episode",
+            id: episode_id.to_owned(),
+        });
+    };
+    let mut statement = connection.prepare(
+        "SELECT text, taint, sources FROM episode_segments \
+         WHERE episode_id = ?1 ORDER BY ordinal ASC",
+    )?;
+    let mapped = statement.query_map(params![episode_id], |row| {
+        Ok(SegmentWrite {
+            text: row.get(0)?,
+            taint: match row.get::<_, String>(1)?.as_str() {
+                "untrusted" => MemoryTaint::Untrusted,
+                _ => MemoryTaint::Trusted,
+            },
+            sources: row.get(2)?,
+        })
+    })?;
+    let mut segments = Vec::new();
+    for segment in mapped {
+        segments.push(segment?);
+    }
+    Ok(PromotionEpisodeRow {
+        episode_id,
+        thread_id,
+        body,
+        taint: match taint.as_str() {
+            "untrusted" => MemoryTaint::Untrusted,
+            _ => MemoryTaint::Trusted,
+        },
+        reasoning,
+        participants,
+        created_at,
+        segments,
+    })
+}
+
+pub(crate) fn pending_promotions(
+    connection: &Connection,
+) -> Result<Vec<PendingPromotionRow>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT episode_id, created_at, promotion_failures FROM episodes \
+         WHERE promoted_at IS NULL AND promotion_quarantined = 0 \
+         ORDER BY created_at ASC, episode_id ASC",
+    )?;
+    let mapped = statement.query_map([], |row| {
+        Ok(PendingPromotionRow {
+            episode_id: row.get(0)?,
+            created_at: row.get(1)?,
+            promotion_failures: row.get(2)?,
+        })
+    })?;
+    let mut rows = Vec::new();
+    for row in mapped {
+        rows.push(row?);
+    }
+    Ok(rows)
+}
+
+pub(crate) fn note_promotion_failure(
+    connection: &mut Connection,
+    episode_id: &str,
+    limit: i64,
+) -> Result<PromotionFailureNote, StoreError> {
+    require_text("episode_id", episode_id)?;
+    if limit < 1 {
+        return Err(StoreError::InvalidRequest {
+            message: "promotion failure limit must be at least 1".to_owned(),
+        });
+    }
+    let transaction = immediate(connection)?;
+    let existing: Option<(Option<i64>, i64, i64)> = transaction
+        .query_row(
+            "SELECT promoted_at, promotion_failures, promotion_quarantined \
+             FROM episodes WHERE episode_id = ?1",
+            params![episode_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((promoted_at, failures, quarantined)) = existing else {
+        return Err(StoreError::NotFound {
+            entity: "episode",
+            id: episode_id.to_owned(),
+        });
+    };
+    if promoted_at.is_some() {
+        return Err(StoreError::InvalidRequest {
+            message: "promoted episode cannot record a promotion failure".to_owned(),
+        });
+    }
+    let failures = failures + 1;
+    let quarantined = if quarantined == 1 || failures >= limit {
+        1
+    } else {
+        0
+    };
+    let updated = transaction.execute(
+        "UPDATE episodes SET promotion_failures = ?1, promotion_quarantined = ?2 \
+         WHERE episode_id = ?3",
+        params![failures, quarantined, episode_id],
+    )?;
+    if updated != 1 {
+        return Err(StoreError::NotFound {
+            entity: "episode",
+            id: episode_id.to_owned(),
+        });
+    }
+    transaction.commit()?;
+    Ok(PromotionFailureNote {
+        failures,
+        quarantined: quarantined == 1,
+    })
+}
+
+pub(crate) fn mark_promotion_skipped(
+    connection: &mut Connection,
+    episode_id: &str,
+    now: i64,
+    model: &str,
+) -> Result<(), StoreError> {
+    require_text("episode_id", episode_id)?;
+    require_text("model", model)?;
+    let transaction = immediate(connection)?;
+    let stored: Option<(Option<i64>, Option<String>)> = transaction
+        .query_row(
+            "SELECT promoted_at, promotion_canonical FROM episodes WHERE episode_id = ?1",
+            params![episode_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((promoted_at, canonical)) = stored else {
+        return Err(StoreError::NotFound {
+            entity: "episode",
+            id: episode_id.to_owned(),
+        });
+    };
+    let skip_canonical = format!("skip {episode_id} {model} {now}\n");
+    if promoted_at.is_some() {
+        if canonical.as_deref() == Some(skip_canonical.as_str()) {
+            transaction.commit()?;
+            return Ok(());
+        }
+        return Err(StoreError::IdempotencyConflict {
+            key: episode_id.to_owned(),
+        });
+    }
+    let updated = transaction.execute(
+        "UPDATE episodes SET promoted_at = ?1, promoted_model = ?2, promotion_canonical = ?3 \
+         WHERE episode_id = ?4",
+        params![now, model, skip_canonical, episode_id],
+    )?;
+    if updated != 1 {
+        return Err(StoreError::NotFound {
+            entity: "episode",
+            id: episode_id.to_owned(),
+        });
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+pub(crate) fn nearest_claims(
+    connection: &Connection,
+    query_text: &str,
+    limit: i64,
+) -> Result<Vec<NearestClaimRow>, StoreError> {
+    require_fts_query(query_text)?;
+    if limit < 1 {
+        return Err(StoreError::InvalidRequest {
+            message: "nearest claims limit must be at least 1".to_owned(),
+        });
+    }
+    let mut statement = connection.prepare(
+        "SELECT claims.claim_id, claims.sentence FROM claim_fts \
+         JOIN claims ON claims.claim_id = claim_fts.claim_id \
+         WHERE claim_fts MATCH ?1 \
+           AND claims.status = 'provisional' \
+           AND claims.consolidated_by IS NULL \
+         ORDER BY bm25(claim_fts) ASC, claims.claim_id ASC \
+         LIMIT ?2",
+    )?;
+    let mapped = statement.query_map(params![query_text, limit], |row| {
+        Ok(NearestClaimRow {
+            claim_id: row.get(0)?,
+            sentence: row.get(1)?,
+        })
+    })?;
+    let mut rows = Vec::new();
+    for row in mapped {
+        rows.push(row?);
+    }
+    Ok(rows)
+}
+
+fn closed_claim_ids(connection: &Connection) -> Result<BTreeSet<String>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT claim_id FROM claims \
+         WHERE status != 'provisional' OR consolidated_by IS NOT NULL",
+    )?;
+    let mapped = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut ids = BTreeSet::new();
+    for id in mapped {
+        ids.insert(id?);
+    }
+    Ok(ids)
+}
+
+pub(crate) fn claim_rows(
+    connection: &Connection,
+    ids: &[String],
+) -> Result<Vec<NearestClaimRow>, StoreError> {
+    let mut rows = Vec::new();
+    for id in ids {
+        require_text("claim_id", id)?;
+        let row: Option<NearestClaimRow> = connection
+            .query_row(
+                "SELECT claim_id, sentence FROM claims WHERE claim_id = ?1",
+                params![id],
+                |row| {
+                    Ok(NearestClaimRow {
+                        claim_id: row.get(0)?,
+                        sentence: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?;
+        if let Some(row) = row {
+            rows.push(row);
+        }
+    }
+    rows.sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
+    Ok(rows)
+}
+
+pub(crate) fn recall_subgraph(
+    connection: &Connection,
+    seed_claim_ids: &[String],
+    seed_lexeme_ids: &[String],
+    hops: i64,
+) -> Result<BrainMap, StoreError> {
+    if hops < 0 {
+        return Err(StoreError::InvalidRequest {
+            message: "recall subgraph hops must be non-negative".to_owned(),
+        });
+    }
+    for id in seed_claim_ids {
+        require_text("seed_claim_id", id)?;
+    }
+    for id in seed_lexeme_ids {
+        require_text("seed_lexeme_id", id)?;
+    }
+    let closed = closed_claim_ids(connection)?;
+    let full = brain_ops::map(connection)?;
+    let mut selected: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut frontier: VecDeque<(String, String, i64)> = VecDeque::new();
+    for id in seed_claim_ids {
+        if closed.contains(id) {
+            continue;
+        }
+        if full
+            .nodes
+            .iter()
+            .any(|node| node.kind == BrainNodeKind::Claim && node.id == *id)
+        {
+            selected.insert(("claim".to_owned(), id.clone()));
+            frontier.push_back(("claim".to_owned(), id.clone(), 0));
+        }
+    }
+    for id in seed_lexeme_ids {
+        if full
+            .nodes
+            .iter()
+            .any(|node| node.kind == BrainNodeKind::Lexeme && node.id == *id)
+        {
+            selected.insert(("lexeme".to_owned(), id.clone()));
+            frontier.push_back(("lexeme".to_owned(), id.clone(), 0));
+        }
+    }
+    while let Some((kind, id, depth)) = frontier.pop_front() {
+        if depth >= hops {
+            continue;
+        }
+        for edge in &full.edges {
+            let next = if edge.from_kind == kind && edge.from_id == id {
+                Some((edge.to_kind.clone(), edge.to_id.clone()))
+            } else if edge.to_kind == kind && edge.to_id == id {
+                Some((edge.from_kind.clone(), edge.from_id.clone()))
+            } else {
+                None
+            };
+            let Some((next_kind, next_id)) = next else {
+                continue;
+            };
+            if next_kind == "claim" && closed.contains(&next_id) {
+                continue;
+            }
+            if selected.insert((next_kind.clone(), next_id.clone())) {
+                frontier.push_back((next_kind, next_id, depth + 1));
+            }
+        }
+    }
+    let nodes: Vec<BrainNode> = full
+        .nodes
+        .into_iter()
+        .filter(|node| selected.contains(&(node.kind.as_str().to_owned(), node.id.clone())))
+        .collect();
+    let node_keys: BTreeSet<(String, String)> = nodes
+        .iter()
+        .map(|node| (node.kind.as_str().to_owned(), node.id.clone()))
+        .collect();
+    let edges: Vec<BrainEdge> = full
+        .edges
+        .into_iter()
+        .filter(|edge| {
+            node_keys.contains(&(edge.from_kind.clone(), edge.from_id.clone()))
+                && node_keys.contains(&(edge.to_kind.clone(), edge.to_id.clone()))
+        })
+        .collect();
+    Ok(BrainMap { nodes, edges })
+}
+
+pub(crate) fn bump_promotion_day_stats(
+    connection: &mut Connection,
+    day_key: &str,
+    calls: i64,
+    tokens: i64,
+) -> Result<(), StoreError> {
+    require_text("day_key", day_key)?;
+    if calls < 0 || tokens < 0 {
+        return Err(StoreError::InvalidRequest {
+            message: "promotion day stats increments must be non-negative".to_owned(),
+        });
+    }
+    let transaction = immediate(connection)?;
+    transaction.execute(
+        "INSERT INTO promotion_day_stats (day_key, calls, tokens) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(day_key) DO UPDATE SET \
+         calls = calls + excluded.calls, tokens = tokens + excluded.tokens",
+        params![day_key, calls, tokens],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub(crate) fn promotion_day_stats(
+    connection: &Connection,
+    day_key: &str,
+) -> Result<(i64, i64), StoreError> {
+    require_text("day_key", day_key)?;
+    let row: Option<(i64, i64)> = connection
+        .query_row(
+            "SELECT calls, tokens FROM promotion_day_stats WHERE day_key = ?1",
+            params![day_key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    Ok(row.unwrap_or((0, 0)))
 }
 
 pub(crate) fn apply_consolidation(
@@ -460,4 +964,49 @@ pub(crate) fn search(
         }
     };
     string_column(connection, sql, query)
+}
+
+pub(crate) fn claim_taints(
+    connection: &Connection,
+    ids: &[String],
+) -> Result<Vec<ClaimTaint>, StoreError> {
+    let mut rows = Vec::new();
+    for id in ids {
+        require_text("claim_id", id)?;
+        let taint: Option<String> = connection
+            .query_row(
+                "SELECT taint FROM claims WHERE claim_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(taint) = taint else {
+            continue;
+        };
+        rows.push(ClaimTaint {
+            claim_id: id.clone(),
+            taint: match taint.as_str() {
+                "trusted" => MemoryTaint::Trusted,
+                _ => MemoryTaint::Untrusted,
+            },
+        });
+    }
+    Ok(rows)
+}
+
+pub(crate) fn entity_slugs(connection: &Connection) -> Result<Vec<EntitySlugRow>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT entity_id, slug FROM entities ORDER BY entity_id",
+    )?;
+    let mapped = statement.query_map([], |row| {
+        Ok(EntitySlugRow {
+            entity_id: row.get(0)?,
+            slug: row.get(1)?,
+        })
+    })?;
+    let mut rows = Vec::new();
+    for row in mapped {
+        rows.push(row?);
+    }
+    Ok(rows)
 }

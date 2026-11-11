@@ -160,7 +160,11 @@ pub enum IssuedCode {
 /// Pair or session establishment.
 pub enum SessionIssued {
     /// Cookie token plus CSRF token.
-    Connected { token: String, csrf: String, max_age: i64 },
+    Connected {
+        token: String,
+        csrf: String,
+        max_age: i64,
+    },
     /// This node is not paired.
     Unpaired,
     /// The code did not match.
@@ -242,7 +246,11 @@ impl RemoteHub {
                 sessions: Mutex::new(HashMap::new()),
                 whois_cache: Mutex::new(Vec::new()),
                 failures: Mutex::new(HashMap::new()),
-                report: Mutex::new(LiveReport { phase, url: None, reason }),
+                report: Mutex::new(LiveReport {
+                    phase,
+                    url: None,
+                    reason,
+                }),
                 bound: Mutex::new(None),
                 enable_tx,
             }),
@@ -288,10 +296,20 @@ impl RemoteHub {
             return PhoneState::Denied;
         };
         if !file.is_paired(&identity.user_id, &identity.node_id) {
-            return PhoneState::Unpaired { node_name: identity.node_name.clone() };
+            return PhoneState::Unpaired {
+                node_name: identity.node_name.clone(),
+            };
         }
-        let url = self.inner.report.lock().ok().and_then(|report| report.url.clone());
-        PhoneState::Paired { url, devices: file.devices() }
+        let url = self
+            .inner
+            .report
+            .lock()
+            .ok()
+            .and_then(|report| report.url.clone());
+        PhoneState::Paired {
+            url,
+            devices: file.devices(),
+        }
     }
 
     /// Turn phone access on after the owner acknowledges certificate publication.
@@ -420,10 +438,15 @@ impl RemoteHub {
         if node_id.is_empty() || node_id.len() > 200 {
             return false;
         }
-        if let UnpairActor::Phone { node_id: actor_node } = &actor {
+        if let UnpairActor::Phone {
+            node_id: actor_node,
+        } = &actor
+        {
             if actor_node != node_id {
                 let allowed = self.inner.file.lock().ok().is_some_and(|file| {
-                    file.paired.iter().any(|device| device.node_id == *actor_node)
+                    file.paired
+                        .iter()
+                        .any(|device| device.node_id == *actor_node)
                 });
                 if !allowed {
                     return false;
@@ -486,7 +509,11 @@ impl RemoteHub {
         let identity = parse_whois(&output).ok_or(())?;
         if let Ok(mut cache) = self.inner.whois_cache.lock() {
             cache.retain(|entry| now.saturating_sub(entry.at) < WHOIS_CACHE_SECS);
-            cache.push(WhoisCache { ip, at: now, identity: identity.clone() });
+            cache.push(WhoisCache {
+                ip,
+                at: now,
+                identity: identity.clone(),
+            });
         }
         Ok(identity)
     }
@@ -519,7 +546,8 @@ impl RemoteHub {
             None => return self.fail("Tailscale Serve status could not be read."),
         };
         if serve_blocks_remote(&serve, self.inner.port) {
-            return self.fail("Tailscale Serve or Funnel is aimed at Maia, so phone access stays off.");
+            return self
+                .fail("Tailscale Serve or Funnel is aimed at Maia, so phone access stays off.");
         }
         let config = match self.certificate(&program, &snapshot.dns_name) {
             Ok(config) => config,
@@ -562,7 +590,9 @@ impl RemoteHub {
 
     /// Cookie header value for one session token.
     pub fn cookie_header(token: &str, max_age: i64) -> String {
-        format!("{COOKIE_NAME}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age}")
+        format!(
+            "{COOKIE_NAME}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age}"
+        )
     }
 
     /// Cookie name the middleware reads.
@@ -614,7 +644,14 @@ impl RemoteHub {
         let cert_text = cert.to_string_lossy().into_owned();
         let key_text = key.to_string_lossy().into_owned();
         let output = Command::new(program)
-            .args(["cert", "--cert-file", &cert_text, "--key-file", &key_text, dns_name])
+            .args([
+                "cert",
+                "--cert-file",
+                &cert_text,
+                "--key-file",
+                &key_text,
+                dns_name,
+            ])
             .output();
         let Ok(output) = output else {
             return Err("A Tailscale certificate is not available.");
@@ -629,7 +666,8 @@ impl RemoteHub {
     fn cached(&self, ip: IpAddr, now: i64) -> Option<TailnetIdentity> {
         let cache = self.inner.whois_cache.lock().ok()?;
         cache.iter().find_map(|entry| {
-            (entry.ip == ip && now.saturating_sub(entry.at) < WHOIS_CACHE_SECS).then(|| entry.identity.clone())
+            (entry.ip == ip && now.saturating_sub(entry.at) < WHOIS_CACHE_SECS)
+                .then(|| entry.identity.clone())
         })
     }
 
@@ -647,7 +685,10 @@ impl RemoteHub {
         let Some(mut failures) = self.inner.failures.lock().ok() else {
             return;
         };
-        let window = failures.entry(node_id.to_owned()).or_insert(FailWindow { start: now, count: 0 });
+        let window = failures.entry(node_id.to_owned()).or_insert(FailWindow {
+            start: now,
+            count: 0,
+        });
         if now.saturating_sub(window.start) >= super::admit::PAIR_WINDOW_SECS {
             window.start = now;
             window.count = 1;
@@ -691,7 +732,10 @@ pub enum PhoneState {
     /// Tagged or anonymous.
     Denied,
     /// Paired owner client.
-    Paired { url: Option<String>, devices: Vec<DeviceView> },
+    Paired {
+        url: Option<String>,
+        devices: Vec<DeviceView>,
+    },
 }
 
 impl PhoneFile {
@@ -794,11 +838,16 @@ fn command_output(program: &str, args: &[&str]) -> Option<Vec<u8>> {
     output.status.success().then_some(output.stdout)
 }
 
-fn load_server_config(cert_path: &Path, key_path: &Path) -> Option<std::sync::Arc<rustls::ServerConfig>> {
+fn load_server_config(
+    cert_path: &Path,
+    key_path: &Path,
+) -> Option<std::sync::Arc<rustls::ServerConfig>> {
     let cert_bytes = fs::read(cert_path).ok()?;
     let key_bytes = fs::read(key_path).ok()?;
     let mut cert_reader = std::io::Cursor::new(cert_bytes);
-    let certs = rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, _>>().ok()?;
+    let certs = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
     let mut key_reader = std::io::Cursor::new(key_bytes);
     let key = rustls_pemfile::private_key(&mut key_reader).ok()??;
     if certs.is_empty() {
@@ -893,15 +942,24 @@ mod tests {
     fn pairing_persists_and_a_wrong_code_does_not() {
         let (hub, dir) = temp_hub();
         assert!(matches!(hub.issue_code(1_000), IssuedCode::NotEnabled));
-        assert!(matches!(hub.enable(false), EnableResult::NeedsAcknowledgement));
+        assert!(matches!(
+            hub.enable(false),
+            EnableResult::NeedsAcknowledgement
+        ));
         assert!(matches!(hub.enable(true), EnableResult::Started));
         let IssuedCode::Shown { code, expires_at } = hub.issue_code(1_000) else {
             panic!("code");
         };
         assert_eq!(expires_at, 1_600);
-        assert!(matches!(hub.accept_pair(&pixel(), "ZZZZ-ZZZZ", 1_100), SessionIssued::InvalidCode));
+        assert!(matches!(
+            hub.accept_pair(&pixel(), "ZZZZ-ZZZZ", 1_100),
+            SessionIssued::InvalidCode
+        ));
         let (again, _) = RemoteHub::open(&dir, 4178);
-        assert!(matches!(again.accept_pair(&pixel(), &code, 1_100), SessionIssued::Connected { .. }));
+        assert!(matches!(
+            again.accept_pair(&pixel(), &code, 1_100),
+            SessionIssued::Connected { .. }
+        ));
         let status = again.desktop_status(1_100);
         assert!(status.enabled);
         assert_eq!(status.devices.len(), 1);

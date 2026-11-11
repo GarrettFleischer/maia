@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -71,6 +72,12 @@ describe('TaskRail', () => {
     expect(
       screen.getAllByRole('listitem').filter((item) => item.parentElement?.getAttribute('data-level') === 'root'),
     ).toHaveLength(1)
+  })
+
+  it('marks the open task row as the current selection', () => {
+    render(<TaskRail rows={rows} openTaskId="task-1" onOpen={vi.fn()} />)
+    const open = screen.getByRole('listitem', { name: 'Pin control', current: true })
+    expect(open).toHaveClass('maia-task-row--selected')
   })
 
   it('orders populated sections and hides empty ones', () => {
@@ -169,6 +176,32 @@ describe('TaskRail', () => {
     expect(grandchild.parentElement?.getAttribute('data-level')).toBe('2')
   })
 
+  it('caps the latest activity and opens the conversation from that preview', async () => {
+    const user = userEvent.setup()
+    const onOpen = vi.fn()
+    const summary = `Here's the current weather for Canby. ${'Rain likely tonight. '.repeat(40)}`
+    render(
+      <TaskRail
+        rows={[
+          row({
+            task_id: 'weather',
+            title: 'Check the weather in Canby, Oregon',
+            section: 'completed',
+            phase: 'completed',
+            summary,
+          }),
+        ]}
+        onOpen={onOpen}
+      />,
+    )
+    expect(screen.queryByText(summary)).not.toBeInTheDocument()
+    const preview = screen.getByText(/^Here's the current weather/)
+    expect([...(preview.textContent ?? '')].length).toBeLessThanOrEqual(81)
+    expect(preview.closest('button')).toHaveAccessibleName('Open Check the weather in Canby, Oregon')
+    await user.click(preview)
+    expect(onOpen).toHaveBeenCalledWith('weather')
+  })
+
   it('routes open and pin through typed callbacks and offers no per-row stop', async () => {
     const user = userEvent.setup()
     const onOpen = vi.fn()
@@ -185,6 +218,45 @@ describe('TaskRail', () => {
 })
 
 describe('TaskDetail', () => {
+  it('keeps the full conversation in the dialog and the close control in the header', async () => {
+    const user = userEvent.setup()
+    const text = `Here's the current weather for Canby. ${'Rain likely tonight. '.repeat(40)}`
+    function Harness() {
+      const [open, setOpen] = useState(true)
+      return (
+        <>
+          <button type="button">Composer</button>
+          {open ? (
+            <TaskDetail
+              detail={{
+                ...inspection,
+                transcript: [{ id: 'line-weather', author: 'Parent', text }],
+              }}
+              pin="unpinned"
+              operation={{ kind: 'idle' }}
+              onClose={() => setOpen(false)}
+              onQuote={vi.fn()}
+              onPin={vi.fn()}
+            />
+          ) : null}
+        </>
+      )
+    }
+    render(<Harness />)
+    const conversation = screen.getByRole('article', { name: 'Task conversation' })
+    const line = within(conversation).getByText(/Here's the current weather for Canby\./)
+    expect(line.closest('button')).toBeNull()
+    const back = within(conversation).getByRole('button', { name: 'Back to chat' })
+    expect(back.closest('.maia-task-detail-bar')).not.toBeNull()
+    expect(back.closest('.maia-task-detail-body')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Composer' }).closest('[inert]')).toBeNull()
+    await user.click(back)
+    expect(screen.queryByRole('article', { name: 'Task conversation' })).not.toBeInTheDocument()
+    const composer = screen.getByRole('button', { name: 'Composer' })
+    expect(composer.closest('[inert]')).toBeNull()
+    await user.click(composer)
+  })
+
   it('has no textbox and exposes the inspection records', () => {
     render(
       <TaskDetail
@@ -196,18 +268,18 @@ describe('TaskDetail', () => {
         onPin={vi.fn()}
       />,
     )
-    const dialog = screen.getByRole('dialog', { name: 'Task detail' })
-    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument()
-    expect(within(dialog).queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
-    expect(within(dialog).getByText('Add a pin control')).toBeInTheDocument()
-    expect(within(dialog).getByText('Pin moves the row and keeps the envelope.')).toBeInTheDocument()
-    expect(within(dialog).getByRole('list', { name: 'Transcript' })).toHaveTextContent('Editing the control.')
-    expect(within(dialog).getByRole('list', { name: 'Tool events' })).toHaveTextContent('Updated pin handler')
-    expect(within(dialog).getByRole('list', { name: 'Artifacts' })).toHaveTextContent('pin-control.diff')
-    expect(within(dialog).getByRole('list', { name: 'Attempts' })).toHaveTextContent('Ready to review')
-    expect(within(dialog).getByRole('list', { name: 'Criteria' })).toHaveTextContent('Pin control is visible')
-    expect(within(dialog).getByRole('list', { name: 'Helpers' })).toHaveTextContent('Write the control')
-    expect(within(dialog).getByText('None recorded.')).toBeInTheDocument()
+    const conversation = screen.getByRole('article', { name: 'Task conversation' })
+    expect(within(conversation).queryByRole('textbox')).not.toBeInTheDocument()
+    expect(within(conversation).queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
+    expect(within(conversation).getByText('Add a pin control')).toBeInTheDocument()
+    expect(within(conversation).getByText('Pin moves the row and keeps the envelope.')).toBeInTheDocument()
+    expect(within(conversation).getByRole('list', { name: 'Transcript' })).toHaveTextContent('Editing the control.')
+    expect(within(conversation).getByRole('list', { name: 'Tool events' })).toHaveTextContent('Updated pin handler')
+    expect(within(conversation).getByRole('list', { name: 'Artifacts' })).toHaveTextContent('pin-control.diff')
+    expect(within(conversation).getByRole('list', { name: 'Attempts' })).toHaveTextContent('Ready to review')
+    expect(within(conversation).getByRole('list', { name: 'Criteria' })).toHaveTextContent('Pin control is visible')
+    expect(within(conversation).getByRole('list', { name: 'Helpers' })).toHaveTextContent('Write the control')
+    expect(within(conversation).getByText('None recorded.')).toBeInTheDocument()
   })
 
   it('routes quote, pin, and close through typed callbacks', async () => {
@@ -233,7 +305,7 @@ describe('TaskDetail', () => {
     await user.click(screen.getByRole('button', { name: 'Pin this task' }))
     expect(onPin).toHaveBeenCalledWith('task-1', 'pinned')
     expect(screen.queryByRole('button', { name: 'Stop this task' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Close detail' }))
+    await user.click(screen.getByRole('button', { name: 'Back to chat' }))
     expect(onClose).toHaveBeenCalledOnce()
   })
 

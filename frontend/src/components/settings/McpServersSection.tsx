@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { reloadUntilLoaded } from '@/components/settings/reloadUntilLoaded'
 import type { SuperAgentDataSource } from '@/api/superAgentTypes'
 import { withCsrf } from '@/remote/csrf'
 
@@ -45,17 +46,20 @@ export function McpServersSection({
   useEffect(() => {
     if (source !== 'live') return
     let cancel = false
-    void loadServers(window.location.origin).then((result) => {
-      if (cancel) return
+    const stop = reloadUntilLoaded(async () => {
+      const result = await loadServers(window.location.origin)
+      if (cancel) return true
       if (!result.ok) {
         setStatus(result.message)
-        return
+        return false
       }
       setConnections(result.connections)
       setStatus(result.connections.length === 0 ? 'No MCP servers are connected.' : 'Saved.')
-    })
+      return true
+    }, () => cancel)
     return () => {
       cancel = true
+      stop()
     }
   }, [source])
 
@@ -141,12 +145,12 @@ export function McpServersSection({
               ))}
             </ul>
           ) : null}
-          {connection.listed_hash && connection.admitted_hash !== connection.listed_hash ? (
+          {canEdit && connection.listed_hash && connection.admitted_hash !== connection.listed_hash ? (
             <button type="button" className="maia-btn" disabled={busy} onClick={() => void admit(connection)}>
               Admit
             </button>
           ) : null}
-          {connection.admitted_hash ? (
+          {canEdit && connection.admitted_hash ? (
             <button type="button" className="maia-btn" disabled={busy} onClick={() => void revoke(connection.id)}>
               Revoke
             </button>

@@ -151,6 +151,14 @@ describe('liveSuperAgentClient', () => {
     )
   })
 
+  it('reads an archived task open without hiding the conversation', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ view: 'closed_once' })))
+    const client = liveSuperAgentClient('http://127.0.0.1:9')
+
+    await expect(client.openDetail('task-1')).resolves.toEqual({ view: 'closed_once' })
+    vi.unstubAllGlobals()
+  })
+
   it('loads the sidebar from the daemon origin without a provider key', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ rows: [ROW], API_KEY: 'sk-SECRET' }))
     vi.stubGlobal('fetch', fetchMock)
@@ -209,7 +217,45 @@ describe('liveSuperAgentClient', () => {
         criteria_done: count,
         criteria_total: count,
       }],
+      approvals: [],
     })
+  })
+
+  it('reads a pending approval and skips a row the model could have shaped', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          rows: [ROW],
+          approvals: [
+            {
+              approval_id: '41',
+              task_id: 'task-1',
+              kind: 'login',
+              taint: 'untrusted',
+              grant_text: 'Sign in to the service this task needs',
+              reason: 'This task is waiting for you to sign in.',
+              created_at: 10,
+              expires_at: 20,
+            },
+            { approval_id: 'bad', kind: 'invented' },
+          ],
+        }),
+      ),
+    )
+    const sidebar = await liveSuperAgentClient('http://127.0.0.1:9').sidebar()
+    expect(sidebar.approvals).toEqual([
+      {
+        approval_id: '41',
+        task_id: 'task-1',
+        kind: 'login',
+        taint: 'untrusted',
+        grant_text: 'Sign in to the service this task needs',
+        reason: 'This task is waiting for you to sign in.',
+        created_at: 10,
+        expires_at: 20,
+      },
+    ])
   })
 
   it.each([
@@ -374,6 +420,25 @@ describe('liveSuperAgentClient', () => {
     expect(JSON.stringify(seen)).not.toContain('sk-SECRET')
     expect(JSON.stringify(seen)).not.toContain('BASE_URL')
     stop?.()
+  })
+
+  it('reports reconnecting after the sidebar socket closes and connected when it opens', () => {
+    const harness = socketHarness()
+    const factory = liveSuperAgentClient as ReviewedLiveFactory
+    const client = factory('http://127.0.0.1:9', undefined, harness.ports)
+    const seen: string[] = []
+    const stopRows = client.subscribeSidebar?.(() => undefined)
+    const stopLink = client.subscribeConnection?.((snapshot) => {
+      seen.push(`${snapshot.phase}:${snapshot.origin}`)
+    })
+    expect(seen).toEqual(['connected:http://127.0.0.1:9'])
+    harness.sockets[0]?.emitClose()
+    expect(seen.at(-1)).toBe('reconnecting:http://127.0.0.1:9')
+    harness.runNext()
+    harness.sockets[1]?.emitOpen()
+    expect(seen.at(-1)).toBe('connected:http://127.0.0.1:9')
+    stopLink?.()
+    stopRows?.()
   })
 
   it('reconnects once after close with the original websocket URL', () => {

@@ -39,7 +39,7 @@
 html,
 body,
 #root {
-  height: 100%;
+  height: 100dvh;
   margin: 0;
 }
 
@@ -65,8 +65,8 @@ textarea {
   display: grid;
   grid-template-columns: var(--rail-width) minmax(0, 1fr) var(--inspector-width);
   grid-template-rows: 32px auto minmax(0, 1fr);
-  height: 100%;
-  min-height: 100%;
+  height: 100dvh;
+  min-height: 100dvh;
   background: var(--bg);
   color: var(--text);
 }
@@ -108,7 +108,7 @@ textarea {
 
 .maia-shell--phone {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: 100%;
   max-width: 100%;
 }
@@ -125,6 +125,11 @@ textarea {
 
 .maia-shell--phone > .maia-main {
   grid-row: 2;
+}
+
+.maia-shell--phone > .maia-phone-nav {
+  grid-column: 1;
+  grid-row: 3;
 }
 
 .maia-warning-banner {
@@ -149,6 +154,7 @@ textarea {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
 
 .maia-rail-top {
@@ -202,11 +208,14 @@ textarea {
 
 .maia-foot-link {
   justify-self: start;
+  display: inline-flex;
+  align-items: center;
   border: 0;
   background: none;
   color: var(--muted);
-  padding: 2px 0;
-  min-height: 0;
+  padding: 0 4px;
+  min-height: 40px;
+  min-width: 40px;
   cursor: pointer;
 }
 
@@ -275,6 +284,15 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 
+.maia-conv-head--split {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  height: auto;
+  min-height: 56px;
+  gap: 12px;
+}
+
 .maia-conv-head h1 {
   margin: 0;
   font-size: 15px;
@@ -307,7 +325,7 @@ textarea {
 }
 
 .maia-composer {
-  padding: 0 24px 20px;
+  padding: 0 24px calc(20px + env(safe-area-inset-bottom, 0px) + var(--keyboard-inset, 0px));
   background: transparent;
   border: 0;
 }
@@ -327,7 +345,10 @@ textarea {
 .maia-composer textarea {
   display: block;
   width: 100%;
-  height: 56px;
+  min-height: 48px;
+  max-height: 144px;
+  height: auto;
+  overflow-y: auto;
   resize: none;
   border: 0;
   background: transparent;
@@ -369,6 +390,17 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+.maia-speaker {
+  margin: 0;
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 600;
+}
+
+.maia-run--you .maia-speaker {
+  text-align: right;
 }
 
 .maia-run {
@@ -514,7 +546,9 @@ textarea {
   background: var(--surface);
   color: var(--text);
   border-radius: 6px;
-  height: 32px;
+  min-height: 40px;
+  min-width: 40px;
+  height: auto;
   padding: 0 14px;
   font-weight: 550;
   cursor: pointer;
@@ -707,16 +741,26 @@ textarea {
   background: color-mix(in srgb, var(--bg) 55%, transparent);
 }
 
+.maia-dialog-backdrop--above:has(.maia-task-detail) {
+  place-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 55%);
+}
+
 .maia-dialog:has(.maia-task-detail) {
-  width: min(400px, 100%);
-  height: 100%;
-  max-height: 100%;
+  width: min(560px, 100%);
+  max-width: min(560px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  height: auto;
+  min-width: 0;
   margin: 0;
   padding: 0;
-  border-radius: 0;
-  border-top: 0;
-  border-bottom: 0;
-  border-right: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  justify-self: center;
+  align-self: center;
 }
 
 .maia-dialog {
@@ -983,12 +1027,35 @@ textarea {
   .maia-quiet,
   .maia-chev,
   .maia-pin,
+  .maia-foot-link,
+  .maia-task-open,
+  .maia-choice,
   .maia-brain-list button,
   .maia-inspector-tabs [role='tab'],
   .maia-phone-header .maia-btn,
+  .maia-phone-nav button,
   .maia-fold summary {
     min-height: 44px;
     min-width: 44px;
+  }
+  .maia-field input:not([type='checkbox']):not([type='radio']),
+  .maia-field select,
+  .maia-settings-section input:not([type='checkbox']):not([type='radio']),
+  .maia-settings-section select,
+  .maia-brain-toolbar input,
+  .maia-brain-toolbar select {
+    min-height: 44px;
+    height: 44px;
+  }
+  .maia-composer {
+    padding-left: calc(12px + env(safe-area-inset-left, 0px));
+    padding-right: calc(12px + env(safe-area-inset-right, 0px));
+  }
+  .maia-dialog {
+    padding-top: max(16px, env(safe-area-inset-top, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
   }
   .maia-fold summary {
     height: auto;
@@ -1039,6 +1106,69 @@ textarea {
   }
 }
 
+.maia-skip {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 80;
+  min-height: 40px;
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  transform: translateY(-160%);
+}
+
+.maia-skip:focus {
+  transform: none;
+}
+
+.maia-reconnect {
+  margin: 0;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface));
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.maia-reconnect-origin {
+  display: block;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  font: 12px/16px 'Cascadia Mono', Consolas, monospace;
+}
+
+.maia-install {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.maia-install p {
+  margin: 0;
+  flex: 1;
+}
+
+.maia-latest {
+  align-self: center;
+  margin: 0 0 8px;
+}
+
+.maia-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  margin-right: 12px;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -1051,15 +1181,59 @@ textarea {
   border: 0;
 }
 
+.maia-attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 8px 8px 0;
+  list-style: none;
+}
+
+.maia-attachment-chips img {
+  display: block;
+  max-width: 96px;
+  max-height: 96px;
+  object-fit: contain;
+}
+
+.maia-phone-nav {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.maia-phone-nav button {
+  flex: 1 1 0;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+}
+
+.maia-phone-nav button[aria-current='page'] {
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
 .maia-phone-header {
   grid-column: 1 / -1;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
   max-width: 100%;
-  padding: 8px 12px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) calc(12px + env(safe-area-inset-right, 0px)) 8px
+    calc(12px + env(safe-area-inset-left, 0px));
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -1129,6 +1303,11 @@ textarea {
   max-width: 100%;
 }
 
+/* display:grid above beats the closed-details user-agent rule and paints rows that cannot receive clicks. */
+details:not([open]) > .maia-task-tree {
+  display: none;
+}
+
 .maia-task-tree[data-level='1'],
 .maia-task-tree[data-level='2'],
 .maia-task-tree[data-level='3'] {
@@ -1153,18 +1332,32 @@ textarea {
 
 .maia-task-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   min-height: 24px;
 }
 
-.maia-task-title {
+.maia-task-open {
   flex: 1;
   min-width: 0;
+  min-height: 40px;
+  display: grid;
+  gap: 1px;
   border: 0;
   background: none;
   padding: 0;
   text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.maia-task-row--selected {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+
+.maia-task-title {
+  min-width: 0;
   font-weight: 600;
   font-size: 13px;
   line-height: 18px;
@@ -1172,13 +1365,12 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
 }
 
 .maia-chev,
 .maia-pin {
-  width: 20px;
-  height: 20px;
+  width: 40px;
+  height: 40px;
   flex: none;
   display: grid;
   place-items: center;
@@ -1226,7 +1418,6 @@ textarea {
 .maia-task-phase,
 .maia-task-sum {
   margin: 0;
-  padding-left: 26px;
   font-size: 12px;
   line-height: 16px;
 }
@@ -1240,6 +1431,10 @@ textarea {
 }
 
 .maia-task-sum {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
 }
 
@@ -1291,7 +1486,6 @@ textarea {
 
 .maia-task-meta {
   margin: 0;
-  padding-left: 26px;
   color: var(--muted);
   font-size: 12px;
   line-height: 16px;
@@ -1303,6 +1497,13 @@ textarea {
   display: flex;
   align-items: center;
   cursor: pointer;
+}
+
+.maia-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .maia-status {
@@ -1317,8 +1518,43 @@ textarea {
 .maia-task-detail {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
-  padding: 14px 16px 16px;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.maia-conversation > .maia-task-detail {
+  flex: 1;
+  max-height: none;
+}
+
+.maia-task-detail-body,
+.maia-task-detail-body * {
+  user-select: text;
+}
+
+.maia-task-detail-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.maia-task-detail-body {
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 16px 16px;
+}
+
+.maia-task-detail-body li,
+.maia-task-detail-body p {
+  overflow-wrap: anywhere;
+  max-width: 100%;
 }
 
 .maia-task-detail h2 {

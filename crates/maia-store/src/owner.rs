@@ -7,6 +7,8 @@ use std::thread::JoinHandle;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::oneshot;
 
+use crate::approval_ops;
+use crate::attachment_ops;
 use crate::audit_ops;
 use crate::brain_ops;
 use crate::brain_ops::validate_fact_sentence;
@@ -30,6 +32,15 @@ use crate::security_ops;
 use crate::super_agent_ops;
 use crate::thread_ops;
 use crate::types::AllowlistEntryWrite;
+use crate::types::ApprovalDecision;
+use crate::types::ApprovalSettlement;
+use crate::types::ApprovalWrite;
+use crate::types::AttachmentRow;
+use crate::types::AttachmentWrite;
+use crate::types::ClaimTaint;
+use crate::types::DeletedAttachment;
+use crate::types::EntitySlugRow;
+use crate::types::PendingApproval;
 use crate::types::AppendEvents;
 use crate::types::AppendOutcome;
 use crate::types::AuditAppend;
@@ -61,7 +72,11 @@ use crate::types::McpTransportRecord;
 use crate::types::ModelConnectionRecord;
 use crate::types::OwnerOpen;
 use crate::types::PanicLatch;
+use crate::types::NearestClaimRow;
 use crate::types::PendingProjection;
+use crate::types::PendingPromotionRow;
+use crate::types::PromotionEpisodeRow;
+use crate::types::PromotionFailureNote;
 use crate::types::PromotionWrite;
 use crate::types::RouterMessageWrite;
 use crate::types::RouterTurnWrite;
@@ -81,6 +96,7 @@ use crate::types::TaskReportWrite;
 use crate::types::TaskView;
 use crate::types::TaskWrite;
 use crate::types::TextSearch;
+use crate::types::VectorClaimHit;
 use crate::types::ThreadSnapshot;
 use crate::types::VecTable;
 use crate::types::VecVersionMetadata;
@@ -127,9 +143,113 @@ enum NormalCommand {
         request: PromotionWrite,
         reply: Reply<Executed<()>>,
     },
+    PendingPromotions {
+        reply: Reply<Vec<PendingPromotionRow>>,
+    },
+    PromotionEpisode {
+        episode_id: String,
+        reply: Reply<PromotionEpisodeRow>,
+    },
+    NotePromotionFailure {
+        episode_id: String,
+        limit: i64,
+        reply: Reply<Executed<PromotionFailureNote>>,
+    },
+    MarkPromotionSkipped {
+        episode_id: String,
+        now: i64,
+        model: String,
+        reply: Reply<Executed<()>>,
+    },
+    NearestClaims {
+        query_text: String,
+        limit: i64,
+        reply: Reply<Vec<NearestClaimRow>>,
+    },
+    NearestClaimVectors {
+        model_id: String,
+        values: Vec<f32>,
+        limit: i64,
+        reply: Reply<Vec<VectorClaimHit>>,
+    },
+    ClaimRows {
+        ids: Vec<String>,
+        reply: Reply<Vec<NearestClaimRow>>,
+    },
+    RecallSubgraph {
+        seed_claim_ids: Vec<String>,
+        seed_lexeme_ids: Vec<String>,
+        hops: i64,
+        reply: Reply<BrainMap>,
+    },
+    BumpPromotionDayStats {
+        day_key: String,
+        calls: i64,
+        tokens: i64,
+        reply: Reply<Executed<()>>,
+    },
+    PromotionDayStats {
+        day_key: String,
+        reply: Reply<(i64, i64)>,
+    },
     Ledger {
         request: LedgerWrite,
         reply: Reply<Executed<()>>,
+    },
+    ReverseLedger {
+        ledger_id: String,
+        now: i64,
+        reply: Reply<Executed<()>>,
+    },
+    PresentedIds {
+        request_id: String,
+        reply: Reply<Vec<String>>,
+    },
+    InsertApproval {
+        request: ApprovalWrite,
+        reply: Reply<Executed<()>>,
+    },
+    PendingApprovals {
+        now: i64,
+        reply: Reply<Vec<PendingApproval>>,
+    },
+    ExpireApprovals {
+        now: i64,
+        reply: Reply<Executed<Vec<String>>>,
+    },
+    DecideApproval {
+        approval_id: String,
+        decision: ApprovalDecision,
+        now: i64,
+        reply: Reply<Executed<ApprovalSettlement>>,
+    },
+    ClaimTaints {
+        ids: Vec<String>,
+        reply: Reply<Vec<ClaimTaint>>,
+    },
+    EntitySlugs {
+        reply: Reply<Vec<EntitySlugRow>>,
+    },
+    InsertAttachment {
+        request: AttachmentWrite,
+        reply: Reply<Executed<()>>,
+    },
+    Attachment {
+        attachment_id: String,
+        reply: Reply<Option<AttachmentRow>>,
+    },
+    BindAttachments {
+        ids: Vec<String>,
+        message_id: String,
+        reply: Reply<Executed<()>>,
+    },
+    AttachmentsForMessage {
+        message_id: String,
+        reply: Reply<Vec<AttachmentRow>>,
+    },
+    DeleteAttachment {
+        attachment_id: String,
+        reply: Reply<Executed<DeletedAttachment>>,
     },
     Consolidation {
         request: ConsolidationWrite,
@@ -218,6 +338,15 @@ enum NormalCommand {
         target: EmbeddingTarget,
         target_id: String,
         reply: Reply<Option<Vec<f32>>>,
+    },
+    EmbeddingForModel {
+        target: EmbeddingTarget,
+        target_id: String,
+        model_id: String,
+        reply: Reply<Option<Vec<f32>>>,
+    },
+    ProbeVectors {
+        reply: Reply<()>,
     },
     Search {
         kind: TextSearch,
@@ -712,6 +841,221 @@ impl SqliteOwner {
         Pending { rx }.wait()
     }
 
+    /// Episodes still waiting for promotion, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn pending_promotions(&self) -> Result<Vec<PendingPromotionRow>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::PendingPromotions { reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Loads one episode's promotion input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] when the episode is missing.
+    pub fn promotion_episode(
+        &self,
+        episode_id: &str,
+    ) -> Result<PromotionEpisodeRow, StoreError> {
+        require_text("episode_id", episode_id)?;
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::PromotionEpisode {
+                episode_id: episode_id.to_owned(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Increments promotion failures and quarantines when `limit` is reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] when the episode is missing.
+    pub fn note_promotion_failure(
+        &self,
+        episode_id: &str,
+        limit: i64,
+    ) -> Result<Executed<PromotionFailureNote>, StoreError> {
+        require_text("episode_id", episode_id)?;
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::NotePromotionFailure {
+                episode_id: episode_id.to_owned(),
+                limit,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Marks an episode promoted with no claims (code skip).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] when the episode is missing.
+    pub fn mark_promotion_skipped(
+        &self,
+        episode_id: &str,
+        now: i64,
+        model: &str,
+    ) -> Result<Executed<()>, StoreError> {
+        require_text("episode_id", episode_id)?;
+        require_text("model", model)?;
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::MarkPromotionSkipped {
+                episode_id: episode_id.to_owned(),
+                now,
+                model: model.to_owned(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Deterministic FTS5 claim search ordered by claim id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure when the query is not valid FTS5 syntax.
+    pub fn nearest_claims(
+        &self,
+        query_text: &str,
+        limit: i64,
+    ) -> Result<Vec<NearestClaimRow>, StoreError> {
+        require_fts_query(query_text)?;
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::NearestClaims {
+                query_text: query_text.to_owned(),
+                limit,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Same-model KNN over provisional claim vectors, nearest first.
+    ///
+    /// Vectors stored under a different model id are omitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure when the vector table cannot be queried.
+    pub fn nearest_claim_vectors(
+        &self,
+        model_id: &str,
+        values: &[f32],
+        limit: i64,
+    ) -> Result<Vec<VectorClaimHit>, StoreError> {
+        require_text("model_id", model_id)?;
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::NearestClaimVectors {
+                model_id: model_id.to_owned(),
+                values: values.to_vec(),
+                limit,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Loads claim id/sentence rows for the supplied ids, ordered by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn claim_rows(&self, ids: &[String]) -> Result<Vec<NearestClaimRow>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::ClaimRows {
+                ids: ids.to_vec(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Brain-map subset reachable from seed claims and lexemes within `hops`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn recall_subgraph(
+        &self,
+        seed_claim_ids: &[String],
+        seed_lexeme_ids: &[String],
+        hops: i64,
+    ) -> Result<BrainMap, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::RecallSubgraph {
+                seed_claim_ids: seed_claim_ids.to_vec(),
+                seed_lexeme_ids: seed_lexeme_ids.to_vec(),
+                hops,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Increments promotion call and token counters for one day key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn bump_promotion_day_stats(
+        &self,
+        day_key: &str,
+        calls: i64,
+        tokens: i64,
+    ) -> Result<Executed<()>, StoreError> {
+        require_text("day_key", day_key)?;
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::BumpPromotionDayStats {
+                day_key: day_key.to_owned(),
+                calls,
+                tokens,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Returns promotion call and token totals for one day key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn promotion_day_stats(&self, day_key: &str) -> Result<(i64, i64), StoreError> {
+        require_text("day_key", day_key)?;
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::PromotionDayStats {
+                day_key: day_key.to_owned(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
     /// Applies one presentation ledger.
     ///
     /// # Errors
@@ -722,6 +1066,215 @@ impl SqliteOwner {
         let _ = ledger_canonical(&request)?;
         let (reply, rx) = oneshot::channel();
         self.send_normal(NormalCommand::Ledger { request, reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Subtracts the co-use edges of one applied ledger. A second call is a no-op.
+    ///
+    /// Presentation rows stay. An edge at or below zero is deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] when the ledger does not exist.
+    pub fn reverse_ledger(&self, ledger_id: String, now: i64) -> Result<Executed<()>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::ReverseLedger {
+                ledger_id,
+                now,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Claim and fact ids presented with positive weight for one request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn presented_ids(&self, request_id: String) -> Result<Vec<String>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::PresentedIds { request_id, reply },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Records a pending approval. The same id and body is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::IdempotencyConflict`] when the id exists with a different body.
+    pub fn insert_approval(&self, request: ApprovalWrite) -> Result<Executed<()>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::InsertApproval { request, reply },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Pending approvals that have not reached `now`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn pending_approvals(&self, now: i64) -> Result<Vec<PendingApproval>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::PendingApprovals { now, reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Marks due approvals expired and returns their task ids.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn expire_approvals(&self, now: i64) -> Result<Executed<Vec<String>>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::ExpireApprovals { now, reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Approves, denies, or expires one approval.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] when the id does not exist.
+    pub fn decide_approval(
+        &self,
+        approval_id: String,
+        decision: ApprovalDecision,
+        now: i64,
+    ) -> Result<Executed<ApprovalSettlement>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::DecideApproval {
+                approval_id,
+                decision,
+                now,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Taint of the claims that exist. Missing ids are omitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn claim_taints(&self, ids: Vec<String>) -> Result<Vec<ClaimTaint>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::ClaimTaints { ids, reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Entity ids and slugs, ordered by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn entity_slugs(&self) -> Result<Vec<EntitySlugRow>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::EntitySlugs { reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Stores an untrusted attachment reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::InvalidRequest`] for a disallowed type, size, or path.
+    pub fn insert_attachment(
+        &self,
+        request: AttachmentWrite,
+    ) -> Result<Executed<()>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::InsertAttachment { request, reply },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// One attachment, if it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn attachment(&self, attachment_id: String) -> Result<Option<AttachmentRow>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::Attachment {
+                attachment_id,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Binds unbound attachments to one sent message.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] or [`StoreError::IdempotencyConflict`].
+    pub fn bind_attachments(
+        &self,
+        ids: Vec<String>,
+        message_id: String,
+    ) -> Result<Executed<()>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::BindAttachments {
+                ids,
+                message_id,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Attachments already bound to one message.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn attachments_for_message(
+        &self,
+        message_id: String,
+    ) -> Result<Vec<AttachmentRow>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::AttachmentsForMessage { message_id, reply },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Removes an attachment that has not been sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::InvalidRequest`] when the attachment is already bound.
+    pub fn delete_attachment(
+        &self,
+        attachment_id: String,
+    ) -> Result<Executed<DeletedAttachment>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::DeleteAttachment {
+                attachment_id,
+                reply,
+            },
+            Submit::Wait,
+        )?;
         Pending { rx }.wait()
     }
 
@@ -1095,6 +1648,43 @@ impl SqliteOwner {
             },
             Submit::Wait,
         )?;
+        Pending { rx }.wait()
+    }
+
+    /// Loads one vector only when it was written by `model_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite or decode failure. A missing or different-model vector is `Ok(None)`.
+    pub fn embedding_for_model(
+        &self,
+        target: EmbeddingTarget,
+        target_id: &str,
+        model_id: &str,
+    ) -> Result<Option<Vec<f32>>, StoreError> {
+        require_text("target_id", target_id)?;
+        require_text("model_id", model_id)?;
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::EmbeddingForModel {
+                target,
+                target_id: target_id.to_owned(),
+                model_id: model_id.to_owned(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Proves the vector table accepts a write, then removes that row.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure when the extension or `claim_vec` cannot be written.
+    pub fn probe_vector_write(&self) -> Result<(), StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::ProbeVectors { reply }, Submit::Wait)?;
         Pending { rx }.wait()
     }
 
@@ -2108,8 +2698,155 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
                 dream_ops::apply_promotion(connection, &request),
             );
         }
+        NormalCommand::PendingPromotions { reply } => {
+            send(reply, dream_ops::pending_promotions(connection))
+        }
+        NormalCommand::PromotionEpisode { episode_id, reply } => {
+            send(reply, dream_ops::promotion_episode(connection, &episode_id))
+        }
+        NormalCommand::NotePromotionFailure {
+            episode_id,
+            limit,
+            reply,
+        } => {
+            executed(
+                reply,
+                sequence,
+                dream_ops::note_promotion_failure(connection, &episode_id, limit),
+            );
+        }
+        NormalCommand::MarkPromotionSkipped {
+            episode_id,
+            now,
+            model,
+            reply,
+        } => {
+            executed(
+                reply,
+                sequence,
+                dream_ops::mark_promotion_skipped(connection, &episode_id, now, &model),
+            );
+        }
+        NormalCommand::NearestClaims {
+            query_text,
+            limit,
+            reply,
+        } => send(
+            reply,
+            dream_ops::nearest_claims(connection, &query_text, limit),
+        ),
+        NormalCommand::NearestClaimVectors {
+            model_id,
+            values,
+            limit,
+            reply,
+        } => send(
+            reply,
+            embed_ops::nearest_claim_vectors(connection, &model_id, &values, limit),
+        ),
+        NormalCommand::ClaimRows { ids, reply } => {
+            send(reply, dream_ops::claim_rows(connection, &ids))
+        }
+        NormalCommand::RecallSubgraph {
+            seed_claim_ids,
+            seed_lexeme_ids,
+            hops,
+            reply,
+        } => send(
+            reply,
+            dream_ops::recall_subgraph(connection, &seed_claim_ids, &seed_lexeme_ids, hops),
+        ),
+        NormalCommand::BumpPromotionDayStats {
+            day_key,
+            calls,
+            tokens,
+            reply,
+        } => {
+            executed(
+                reply,
+                sequence,
+                dream_ops::bump_promotion_day_stats(connection, &day_key, calls, tokens),
+            );
+        }
+        NormalCommand::PromotionDayStats { day_key, reply } => {
+            send(reply, dream_ops::promotion_day_stats(connection, &day_key))
+        }
         NormalCommand::Ledger { request, reply } => {
             executed(reply, sequence, ledger_ops::apply(connection, &request));
+        }
+        NormalCommand::ReverseLedger {
+            ledger_id,
+            now,
+            reply,
+        } => {
+            executed(
+                reply,
+                sequence,
+                ledger_ops::reverse(connection, &ledger_id, now),
+            );
+        }
+        NormalCommand::PresentedIds { request_id, reply } => {
+            send(reply, ledger_ops::presented_ids(connection, &request_id));
+        }
+        NormalCommand::InsertApproval { request, reply } => {
+            executed(reply, sequence, approval_ops::insert(connection, &request));
+        }
+        NormalCommand::PendingApprovals { now, reply } => {
+            send(reply, approval_ops::pending(connection, now));
+        }
+        NormalCommand::ExpireApprovals { now, reply } => {
+            executed(reply, sequence, approval_ops::expire_due(connection, now));
+        }
+        NormalCommand::DecideApproval {
+            approval_id,
+            decision,
+            now,
+            reply,
+        } => {
+            executed(
+                reply,
+                sequence,
+                approval_ops::decide(connection, &approval_id, decision, now),
+            );
+        }
+        NormalCommand::ClaimTaints { ids, reply } => {
+            send(reply, dream_ops::claim_taints(connection, &ids));
+        }
+        NormalCommand::EntitySlugs { reply } => send(reply, dream_ops::entity_slugs(connection)),
+        NormalCommand::InsertAttachment { request, reply } => {
+            executed(
+                reply,
+                sequence,
+                attachment_ops::insert(connection, &request),
+            );
+        }
+        NormalCommand::Attachment {
+            attachment_id,
+            reply,
+        } => send(reply, attachment_ops::get(connection, &attachment_id)),
+        NormalCommand::BindAttachments {
+            ids,
+            message_id,
+            reply,
+        } => {
+            executed(
+                reply,
+                sequence,
+                attachment_ops::bind(connection, &ids, &message_id),
+            );
+        }
+        NormalCommand::AttachmentsForMessage { message_id, reply } => {
+            send(reply, attachment_ops::for_message(connection, &message_id));
+        }
+        NormalCommand::DeleteAttachment {
+            attachment_id,
+            reply,
+        } => {
+            executed(
+                reply,
+                sequence,
+                attachment_ops::delete(connection, &attachment_id),
+            );
         }
         NormalCommand::Consolidation { request, reply } => {
             executed(
@@ -2200,6 +2937,18 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
             reply,
         } => {
             send(reply, embed_ops::embedding(connection, target, &target_id));
+        }
+        NormalCommand::EmbeddingForModel {
+            target,
+            target_id,
+            model_id,
+            reply,
+        } => send(
+            reply,
+            embed_ops::embedding_for_model(connection, target, &target_id, &model_id),
+        ),
+        NormalCommand::ProbeVectors { reply } => {
+            send(reply, embed_ops::probe_vector_write(connection));
         }
         NormalCommand::Search { kind, query, reply } => {
             send(reply, dream_ops::search(connection, kind, &query))

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createFixtureSuperAgentClient } from '@/api/fixtureSuperAgent'
@@ -49,7 +49,7 @@ describe('AppShell layout', () => {
     })
     await user.click(screen.getByRole('button', { name: 'Brain' }))
     expect(screen.getByRole('heading', { name: 'Brain' })).toBeVisible()
-    expect(await screen.findByText('No facts in the brain yet.')).toBeVisible()
+    expect(await screen.findByText('Nothing has been promoted yet. Episodes remain searchable.')).toBeVisible()
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
   })
 
@@ -62,7 +62,7 @@ describe('AppShell layout', () => {
     })
     await user.click(screen.getByRole('button', { name: 'Brain' }))
     expect(screen.getByRole('heading', { name: 'Brain' })).toBeVisible()
-    expect(await screen.findByText('No facts in the brain yet.')).toBeVisible()
+    expect(await screen.findByText('Nothing has been promoted yet. Episodes remain searchable.')).toBeVisible()
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
   })
 
@@ -106,7 +106,7 @@ describe('AppShell layout', () => {
         initialState: { ...defaultFixtureState(), onboarding_complete: true },
       })
       expect(screen.getByTestId('app-shell')).toHaveAttribute('data-viewport', 'phone')
-      expect(screen.getByRole('button', { name: 'Open agents drawer' })).toBeVisible()
+      expect(screen.getByRole('button', { name: 'Open tasks drawer' })).toBeVisible()
     } finally {
       if (previous) Object.defineProperty(window, 'matchMedia', previous)
       else Reflect.deleteProperty(window, 'matchMedia')
@@ -138,5 +138,67 @@ describe('AppShell layout', () => {
     })
     expect(screen.getByTestId('unrestricted-banner')).toBeInTheDocument()
     expect(screen.getAllByLabelText('Stop all running threads').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('puts Inspect in the tablet conversation header and marks it pressed while open', async () => {
+    window.innerWidth = 900
+    window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
+      initialState: { ...defaultFixtureState(), onboarding_complete: true },
+    })
+    const inspect = screen.getByRole('button', { name: 'Inspect' })
+    expect(inspect.closest('.maia-conv-head')).not.toBeNull()
+    expect(inspect).toHaveAttribute('aria-pressed', 'false')
+    expect(inspect.getAttribute('style')).toBeNull()
+    await user.click(inspect)
+    expect(inspect).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('returns from phone settings to the chat and skips to the conversation', async () => {
+    window.innerWidth = 390
+    window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
+      initialState: { ...defaultFixtureState(), onboarding_complete: true },
+    })
+    const skip = screen.getByRole('link', { name: 'Skip to conversation' })
+    expect(skip).toHaveAttribute('href', '#main-content')
+    expect(document.querySelector('a, button, input, textarea, select')).toBe(skip)
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Back to chat' }))
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeVisible()
+  })
+
+  it('stores a light theme from Settings and can follow the system', async () => {
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
+      initialState: { ...defaultFixtureState(), onboarding_complete: true },
+    })
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(screen.getByRole('radio', { name: 'Light' }))
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    expect(localStorage.getItem('maia.theme')).toBe('light')
+    expect(screen.getByText('In Chrome: Menu → Install app / Add to Home screen.')).toBeVisible()
+  })
+
+  it('shows an install button once when the browser offers to install', async () => {
+    sessionStorage.removeItem('maia.install.dismissed')
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
+    const prompt = vi.fn().mockResolvedValue(undefined)
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
+      initialState: { ...defaultFixtureState(), onboarding_complete: true },
+    })
+    const event = new Event('beforeinstallprompt', { cancelable: true })
+    Object.assign(event, { prompt })
+    window.dispatchEvent(event)
+    expect(await screen.findByRole('region', { name: 'Install Maia' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Install' }))
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('region', { name: 'Install Maia' })).not.toBeInTheDocument()
   })
 })

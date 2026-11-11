@@ -38,7 +38,6 @@ fn sample_request(request_id: RequestId) -> maia_core::router::RouterRequest {
         prefix_hash: PrefixHash::new("prefix"),
         recall_hash: None,
         reasoning_effort: ReasoningEffort::Low,
-        max_output_tokens: 16,
         prior_provider_tool_state: None,
     }
 }
@@ -82,6 +81,10 @@ fn router_http_complete_json_posts_auth_and_normalizes() {
         let lowered = request.to_ascii_lowercase();
         assert!(lowered.contains("authorization: bearer super-secret-key"));
         assert!(request.contains("hello"));
+        assert!(
+            !request.contains("max_tokens"),
+            "completions must not send an output token cap"
+        );
         let body = r#"{"id":"resp","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"pong"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#;
         write_http_response(&mut stream, "200 OK", body.as_bytes()).expect("write");
     });

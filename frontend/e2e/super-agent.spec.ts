@@ -20,16 +20,16 @@ test('unpinned completed row archives on detail close and can be pinned from Arc
   await expect(page.getByRole('region', { name: 'Working', exact: true })).toHaveCount(0)
   await openRow.click()
 
-  const detail = page.getByRole('dialog', { name: 'Task detail' })
+  const detail = page.getByRole('article', { name: 'Task conversation' })
   await expect(detail).toBeVisible()
-  await expect(detail.getByRole('button', { name: 'Close detail' })).toBeFocused()
+  await expect(detail.getByRole('button', { name: 'Back to chat' })).toBeFocused()
   await expect(detail.getByText('Add a pin control', { exact: true })).toBeVisible()
   await expect(detail.getByRole('list', { name: 'Criteria' })).toContainText('Pin control is visible')
   await expect(detail.getByRole('textbox')).toHaveCount(0)
-  await expectSoleRouterComposer(page)
+  await expect(page.locator('textarea#composer-input')).toHaveCount(0)
   await expectNoHorizontalOverflow(page)
-  await expect(detail.getByRole('button', { name: 'Close detail' })).toBeEnabled()
-  await detail.getByRole('button', { name: 'Close detail' }).click()
+  await expect(detail.getByRole('button', { name: 'Back to chat' })).toBeEnabled()
+  await detail.getByRole('button', { name: 'Back to chat' }).click()
   await expect(detail).toHaveCount(0)
 
   await expect(page.getByRole('region', { name: 'Completed', exact: true })).toHaveCount(0)
@@ -58,11 +58,11 @@ test('unpinned completed row archives on detail close and can be pinned from Arc
   await expect(returnedRow).toBeVisible()
   await expect(returnedRow).toBeEnabled()
   await returnedRow.click()
-  const reopened = page.getByRole('dialog', { name: 'Task detail' })
+  const reopened = page.getByRole('article', { name: 'Task conversation' })
   await expect(reopened).toBeVisible()
-  await expect(reopened.getByRole('button', { name: 'Close detail' })).toBeFocused()
+  await expect(reopened.getByRole('button', { name: 'Back to chat' })).toBeFocused()
   await expect(reopened.getByRole('textbox')).toHaveCount(0)
-  await reopened.getByRole('button', { name: 'Close detail' }).click()
+  await reopened.getByRole('button', { name: 'Back to chat' }).click()
   await expect(reopened).toHaveCount(0)
   await expect(returned.getByRole('button', { name: 'Open Pin control' })).toBeVisible()
   await collapseArchive(returned)
@@ -85,19 +85,19 @@ test('pinning from an open detail keeps the row pinned after close', async ({ pa
   await expect(page.getByRole('listitem', { name: 'Write the control' })).toHaveCount(0)
   await completed.getByRole('button', { name: 'Open Pin control' }).click()
 
-  const detail = page.getByRole('dialog', { name: 'Task detail' })
+  const detail = page.getByRole('article', { name: 'Task conversation' })
   await expect(detail).toBeVisible()
-  await expect(detail.getByRole('button', { name: 'Close detail' })).toBeFocused()
+  await expect(detail.getByRole('button', { name: 'Back to chat' })).toBeFocused()
   await expect(detail.getByRole('textbox')).toHaveCount(0)
   await expect(detail.getByRole('button', { name: 'Pin this task' })).toBeEnabled()
   await detail.getByRole('button', { name: 'Pin this task' }).click()
 
   await expect(detail).toBeVisible()
   await expect(detail.getByRole('button', { name: 'Unpin this task' })).toBeVisible()
-  await expectSoleRouterComposer(page)
+  await expect(page.locator('textarea#composer-input')).toHaveCount(0)
   await expectNoHorizontalOverflow(page)
 
-  await detail.getByRole('button', { name: 'Close detail' }).click()
+  await detail.getByRole('button', { name: 'Back to chat' }).click()
   await expect(detail).toHaveCount(0)
   const pinned = page.getByRole('region', { name: 'Pinned', exact: true })
   await expect(pinned.getByRole('button', { name: 'Open Pin control' })).toBeVisible()
@@ -163,11 +163,11 @@ async function openShell(page: Page) {
 
 async function openTaskSurface(page: Page) {
   if ((page.viewportSize()?.width ?? 0) < 728) {
-    const openDrawer = page.getByRole('button', { name: 'Open agents drawer' })
+    const openDrawer = page.getByRole('button', { name: 'Open tasks drawer' })
     await expect(openDrawer).toBeVisible()
     await expect(openDrawer).toBeEnabled()
     await openDrawer.click()
-    await expect(page.getByRole('dialog', { name: 'Agents' })).toBeVisible()
+    await expect(page.getByRole('dialog', { name: 'Tasks' })).toBeVisible()
   }
 }
 

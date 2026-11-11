@@ -11,6 +11,7 @@ export function AgentPhoneDrawer({
   onOpenSettings,
   onStopAll,
   rows,
+  openTaskId = null,
   onOpen,
   onPin,
 }: {
@@ -21,15 +22,16 @@ export function AgentPhoneDrawer({
   onOpenSettings: () => void
   onStopAll: () => void
   rows: readonly SidebarRow[]
+  openTaskId?: string | null
   onOpen: (taskId: string) => void
   onPin: (taskId: string, pin: PinMark) => void
 }) {
   return (
-    <FocusTrap active={open} onClose={onClose} labelId="agents-drawer-title">
-      <nav aria-label="Agents">
+    <FocusTrap active={open} onClose={onClose} labelId="tasks-drawer-title">
+      <nav aria-label="Tasks">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 id="agents-drawer-title" style={{ margin: 0, fontSize: 15 }}>
-            Agents
+          <h2 id="tasks-drawer-title" style={{ margin: 0, fontSize: 15 }}>
+            Tasks
           </h2>
           <button type="button" className="maia-btn" onClick={onClose}>
             Close
@@ -39,6 +41,7 @@ export function AgentPhoneDrawer({
           <AgentRailBody
             dataSource={dataSource}
             rows={rows}
+            openTaskId={openTaskId}
             onOpen={onOpen}
             onPin={onPin}
           />

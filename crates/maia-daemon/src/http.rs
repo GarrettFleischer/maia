@@ -82,6 +82,30 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 
 use crate::inspector::StoredTurnRow;
+use crate::inspector::inspector_document;
+use crate::mcp_settings::McpApiError;
+use crate::mcp_settings::McpSecretStore;
+use crate::mcp_settings::MemoryMcpSecretStore;
+use crate::mcp_settings::admit_connection;
+use crate::mcp_settings::create_connection;
+use crate::mcp_settings::delete_connection;
+use crate::mcp_settings::install_from_store;
+use crate::mcp_settings::records_json;
+use crate::mcp_settings::refresh_connection;
+use crate::mcp_settings::rename_connection;
+use crate::mcp_settings::replace_connection;
+use crate::mcp_settings::revoke_connection;
+use crate::model_connection::ModelConnectionWrite;
+use crate::model_connection::ModelTestRequest;
+use crate::model_connection::PublicModelConnection;
+use crate::model_connection::connection_json;
+use crate::model_connection::parse_model_test;
+use crate::model_connection::parse_model_write;
+use crate::model_connection::parse_reasoning_effort;
+use crate::model_connection::reasoning_name;
+use crate::model_connection::resolve_key;
+use crate::model_connection::router_from_connection;
+use crate::orchestrator::present_router_body;
 use crate::remote::ListenerClass;
 use crate::remote::RemoteHub;
 use crate::remote::TailnetPeer;
@@ -98,30 +122,6 @@ use crate::remote::supervise;
 use crate::remote::tailnet_gate;
 use crate::remote::unix_now;
 use crate::remote::unpair_response;
-use crate::inspector::inspector_document;
-use crate::mcp_settings::McpApiError;
-use crate::mcp_settings::McpSecretStore;
-use crate::mcp_settings::MemoryMcpSecretStore;
-use crate::mcp_settings::admit_connection;
-use crate::mcp_settings::create_connection;
-use crate::mcp_settings::delete_connection;
-use crate::mcp_settings::install_from_store;
-use crate::mcp_settings::public_list;
-use crate::mcp_settings::refresh_connection;
-use crate::mcp_settings::rename_connection;
-use crate::mcp_settings::replace_connection;
-use crate::mcp_settings::revoke_connection;
-use crate::model_connection::ModelConnectionWrite;
-use crate::model_connection::ModelTestRequest;
-use crate::model_connection::PublicModelConnection;
-use crate::model_connection::connection_json;
-use crate::model_connection::parse_model_test;
-use crate::model_connection::parse_model_write;
-use crate::model_connection::parse_reasoning_effort;
-use crate::model_connection::reasoning_name;
-use crate::model_connection::resolve_key;
-use crate::model_connection::router_from_connection;
-use crate::orchestrator::present_router_body;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -140,6 +140,8 @@ use crate::select_model_id;
 
 const UI_PORT: u16 = 4178;
 const MAX_HTTP_BODY: usize = 48 * 1024;
+const MAX_UPLOAD_BODY: usize = 14 * 1024 * 1024;
+const MAX_ATTACHMENTS_PER_MESSAGE: usize = 8;
 const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 const MAX_TASK_ID_BYTES: usize = 200;
 const MAX_MODEL_LIST_BYTES: usize = 1024 * 1024;
@@ -952,6 +954,7 @@ fn server_thread<R>(
     let model = ModelHub::from_ports(config.ports);
     let model_for_actor = model.clone();
     let database_for_actor = config.database.clone();
+    let mcp_for_actor = Arc::clone(&mcp_secrets);
     let actor = match std::thread::Builder::new()
         .name("maia-actor".to_owned())
         .spawn(move || {
@@ -962,7 +965,7 @@ fn server_thread<R>(
                 config.ids,
                 publication,
                 model_for_actor,
-                mcp_secrets,
+                mcp_for_actor,
             );
         }) {
         Ok(actor) => actor,
@@ -984,6 +987,8 @@ fn server_thread<R>(
             model,
             list_models,
             remote: remote.clone(),
+            database: config.database.clone(),
+            mcp_secrets,
         },
         config.dist,
     );
@@ -1028,6 +1033,8 @@ struct AppState {
     model: ModelHub,
     list_models: Arc<dyn ModelLister>,
     remote: RemoteHub,
+    database: PathBuf,
+    mcp_secrets: Arc<dyn McpSecretStore>,
 }
 
 struct WatchPublication {
@@ -1045,6 +1052,15 @@ enum ActorCall {
     Message {
         operation: SubmissionId,
         text: String,
+        attachments: Vec<crate::orchestrator::StagedAttachment>,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    SaveAttachment {
+        write: maia_store::AttachmentWrite,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    DeleteAttachment {
+        attachment_id: String,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
     Read {
@@ -1069,7 +1085,9 @@ enum ActorCall {
         command: WireHost,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
-    ReadModel {
+    DecideApproval {
+        approval_id: String,
+        decision: maia_store::ApprovalDecision,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
     SaveModel {
@@ -1099,7 +1117,6 @@ enum ActorCall {
 }
 
 enum McpAction {
-    List,
     Create(Value),
     Replace { id: String, body: Value },
     Rename { id: String, body: Value },
@@ -1111,7 +1128,6 @@ enum McpAction {
 
 enum ReadKind {
     Sidebar,
-    Transcript,
     Inspector,
     Task { task_id: String },
 }
@@ -1155,6 +1171,9 @@ fn actor_loop<R>(
     actor.host.notify_sidebar(std::sync::Arc::new(move || {
         let _ = publish_database(&database_for_notice, publication_for_notice.as_ref());
     }));
+    // The listener is already bound. Resume here so a parent model call does
+    // not keep Settings unreachable until that call finishes.
+    actor.host.work_queued_parents();
     while let Some(call) = commands.blocking_recv() {
         dispatch(&mut actor, call);
     }
@@ -1165,11 +1184,39 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
         ActorCall::Message {
             operation,
             text,
+            attachments,
             reply,
         } => {
-            let _ = reply.send(message(actor, &operation, &text));
+            let _ = reply.send(message(actor, &operation, &text, &attachments));
+        }
+        ActorCall::SaveAttachment { write, reply } => {
+            let saved = actor
+                .host
+                .save_attachment(write)
+                .map(|()| serde_json::json!({ "status": "stored" }))
+                .map_err(map_orchestrator);
+            let _ = reply.send(saved);
+        }
+        ActorCall::DeleteAttachment {
+            attachment_id,
+            reply,
+        } => {
+            let deleted = actor
+                .host
+                .delete_attachment(&attachment_id)
+                .map(|removed| {
+                    serde_json::json!({
+                        "relative_path": removed.relative_path,
+                        "remove_file": removed.remove_file,
+                    })
+                })
+                .map_err(map_approval);
+            let _ = reply.send(deleted);
         }
         ActorCall::Read { kind, reply } => {
+            if matches!(kind, ReadKind::Sidebar) {
+                let _ = actor.host.expire_approvals(unix_now());
+            }
             let _ = reply.send(read(actor, kind));
         }
         ActorCall::Pin {
@@ -1192,8 +1239,12 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
         ActorCall::Host { command, reply } => {
             let _ = reply.send(host_command(actor, command));
         }
-        ActorCall::ReadModel { reply } => {
-            let _ = reply.send(read_model(actor));
+        ActorCall::DecideApproval {
+            approval_id,
+            decision,
+            reply,
+        } => {
+            let _ = reply.send(decide_approval(actor, &approval_id, decision));
         }
         ActorCall::SaveModel { write, reply } => {
             let _ = reply.send(save_model(actor, write));
@@ -1224,7 +1275,6 @@ fn mcp_action<R: RouterPort>(actor: &mut Actor<R>, action: McpAction) -> Result<
     let store = actor.host.store();
     let secrets = actor.mcp_secrets.as_ref();
     let result = match action {
-        McpAction::List => public_list(store, secrets),
         McpAction::Create(body) => create_connection(store, secrets, &body),
         McpAction::Replace { id, body } => replace_connection(store, secrets, &id, &body),
         McpAction::Rename { id, body } => rename_connection(store, secrets, &id, &body),
@@ -1249,18 +1299,15 @@ fn map_mcp(error: McpApiError) -> ApiError {
     }
 }
 
-fn read_model<R: RouterPort>(actor: &Actor<R>) -> Result<Value, ApiError> {
-    let models = actor.model.models();
-    match actor
-        .host
-        .store()
-        .model_connection()
-        .map_err(|_| ApiError::Store)?
-    {
+fn stored_model_view(
+    model: &ModelHub,
+    row: Option<ModelConnectionRecord>,
+) -> Result<Value, ApiError> {
+    let models = model.models();
+    match row {
         Some(row) => {
             let reasoning = parse_reasoning_effort(&row.reasoning).map_err(|_| ApiError::Store)?;
-            let mut stored = actor
-                .model
+            let mut stored = model
                 .inner
                 .keys
                 .read_key()
@@ -1279,7 +1326,7 @@ fn read_model<R: RouterPort>(actor: &Actor<R>) -> Result<Value, ApiError> {
                 &models,
             ))
         }
-        None => Ok(connection_json(&actor.model.inner.fallback, &models)),
+        None => Ok(connection_json(&model.inner.fallback, &models)),
     }
 }
 
@@ -1348,7 +1395,12 @@ fn save_model<R: RouterPort>(
         }
         *boot_key = None;
     }
-    read_model(actor)
+    let row = actor
+        .host
+        .store()
+        .model_connection()
+        .map_err(|_| ApiError::Store)?;
+    stored_model_view(&actor.model, row)
 }
 
 fn resolve_test<R: RouterPort>(
@@ -1376,10 +1428,15 @@ fn message<R: RouterPort>(
     actor: &mut Actor<R>,
     operation: &SubmissionId,
     text: &str,
+    attachments: &[crate::orchestrator::StagedAttachment],
 ) -> Result<Value, ApiError> {
     install_from_store(&mut actor.host, &actor.mcp_secrets);
-    let admission = drive(actor.host.handle_submission(operation, text))
-        .map_err(map_submission_orchestrator)?;
+    let admission = drive(
+        actor
+            .host
+            .handle_submission_attached(operation, text, attachments),
+    )
+    .map_err(map_submission_orchestrator)?;
     let outcome = match admission {
         SubmissionAdmission::NewRouted(outcome) => outcome,
         terminal => return Ok(submission_value(terminal)),
@@ -1486,7 +1543,6 @@ fn read<R: RouterPort>(actor: &Actor<R>, kind: ReadKind) -> Result<Value, ApiErr
                 .map_err(map_orchestrator)
         }
         ReadKind::Sidebar => sidebar_value(&open_read(&actor.database)?),
-        ReadKind::Transcript => transcript_value(&open_read(&actor.database)?),
         ReadKind::Inspector => inspector_value(&open_read(&actor.database)?),
     }
 }
@@ -1729,10 +1785,10 @@ async fn remote_enable(State(state): State<AppState>, request: Request) -> Respo
     if !desktop_only(&request) {
         return remote_error(403, "desktop_only");
     }
-    let acknowledged = read_remote_body(request)
-        .await
-        .and_then(|body| body.get("acknowledge_certificate_publication").and_then(Value::as_bool))
-        == Some(true);
+    let acknowledged = read_remote_body(request).await.and_then(|body| {
+        body.get("acknowledge_certificate_publication")
+            .and_then(Value::as_bool)
+    }) == Some(true);
     enable_response(&state.remote, acknowledged)
 }
 
@@ -1776,7 +1832,9 @@ async fn remote_unpair(State(state): State<AppState>, request: Request) -> Respo
             let Some(peer) = peer else {
                 return remote_error(403, "denied");
             };
-            UnpairActor::Phone { node_id: peer.0.node_id }
+            UnpairActor::Phone {
+                node_id: peer.0.node_id,
+            }
         }
         None => return remote_error(403, "denied"),
     };
@@ -1797,6 +1855,7 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
             post(post_reference),
         )
         .route("/super-agent/host-command", post(post_host))
+        .route("/super-agent/approvals/{approval_id}", post(post_approval))
         .route(
             "/super-agent/model-connection",
             get(get_model).put(put_model),
@@ -1821,13 +1880,20 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
             patch(patch_fact).delete(delete_fact),
         )
         .fallback(unknown_api)
-        .layer(DefaultBodyLimit::max(MAX_HTTP_BODY))
-        .with_state(state);
+        .layer(DefaultBodyLimit::max(MAX_HTTP_BODY));
+    let uploads = Router::new()
+        .route("/super-agent/attachments", post(post_attachment))
+        .route(
+            "/super-agent/attachments/{attachment_id}",
+            get(get_attachment).delete(delete_attachment),
+        )
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY));
     Router::new()
-        .nest("/api", api)
+        .nest("/api", api.merge(uploads))
         .route_service("/tasks/{task_id}", ServeFile::new(dist.join("index.html")))
         .fallback_service(ServeDir::new(dist))
         .layer(middleware::from_fn(cache_headers))
+        .with_state(state)
 }
 
 async fn cache_headers(request: Request, next: Next) -> Response {
@@ -1876,13 +1942,18 @@ async fn inspector(State(state): State<AppState>) -> Response {
 }
 
 async fn transcript(State(state): State<AppState>) -> Response {
-    finish(
-        ask(&state, |reply| ActorCall::Read {
-            kind: ReadKind::Transcript,
-            reply,
-        })
-        .await,
-    )
+    // Read the committed transcript off the actor. A model call keeps that
+    // thread busy, and the phone still needs to see the stored message.
+    let database = state.database.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        let connection = open_read(&database)?;
+        transcript_value(&connection)
+    })
+    .await;
+    match read {
+        Ok(value) => finish(value),
+        Err(_) => error_response(ApiError::Session),
+    }
 }
 
 async fn task(State(state): State<AppState>, Path(task_id): Path<String>) -> Response {
@@ -1896,18 +1967,136 @@ async fn task(State(state): State<AppState>, Path(task_id): Path<String>) -> Res
 }
 
 async fn post_message(State(state): State<AppState>, request: Request) -> Response {
-    let (operation, text) = match read_message(request).await {
+    let (operation, text, attachment_ids) = match read_message(request).await {
         Ok(message) => message,
+        Err(error) => return error_response(error),
+    };
+    let attachments = match stage_attachments(&state.database, &attachment_ids) {
+        Ok(attachments) => attachments,
         Err(error) => return error_response(error),
     };
     finish(
         ask(&state, |reply| ActorCall::Message {
             operation,
             text,
+            attachments,
             reply,
         })
         .await,
     )
+}
+
+async fn post_attachment(State(state): State<AppState>, request: Request) -> Response {
+    let (name, media_type, bytes) = match read_upload(request).await {
+        Ok(upload) => upload,
+        Err(error) => return error_response(error),
+    };
+    let accepted = match crate::attachment_prompt::accept_upload(&name, &media_type, &bytes) {
+        Ok(accepted) => accepted,
+        Err(crate::attachment_prompt::UploadReject::TooLarge) => {
+            return error_response(ApiError::PayloadTooLarge);
+        }
+        Err(
+            crate::attachment_prompt::UploadReject::Type
+            | crate::attachment_prompt::UploadReject::Active,
+        ) => {
+            return error_response(ApiError::UnsupportedMedia);
+        }
+        Err(_) => return error_response(ApiError::InvalidMessage),
+    };
+    let attachment_id = match new_attachment_id() {
+        Ok(id) => id,
+        Err(error) => return error_response(error),
+    };
+    let data_dir = match state.database.parent() {
+        Some(dir) => dir.to_path_buf(),
+        None => return error_response(ApiError::Store),
+    };
+    let path = match crate::attachment_prompt::attachment_file(&data_dir, &accepted.relative_path) {
+        Some(path) => path,
+        None => return error_response(ApiError::Store),
+    };
+    let created = !path.exists();
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return error_response(ApiError::Store);
+    }
+    if std::fs::write(&path, &bytes).is_err() {
+        return error_response(ApiError::Store);
+    }
+    let write = maia_store::AttachmentWrite {
+        attachment_id: attachment_id.clone(),
+        content_sha256: accepted.sha256_hex,
+        byte_size: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
+        media_type: accepted.media_type.to_owned(),
+        safe_name: accepted.safe_name.clone(),
+        relative_path: accepted.relative_path,
+        created_at: unix_now(),
+    };
+    let saved = ask(&state, |reply| ActorCall::SaveAttachment { write, reply }).await;
+    if saved.is_err() && created {
+        let _ = std::fs::remove_file(&path);
+    }
+    match saved {
+        Ok(_) => json_response(
+            StatusCode::OK,
+            serde_json::json!({
+                "attachment_id": attachment_id,
+                "safe_name": accepted.safe_name,
+                "media_type": accepted.media_type,
+                "byte_size": bytes.len(),
+            }),
+        ),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn get_attachment(
+    State(state): State<AppState>,
+    Path(attachment_id): Path<String>,
+) -> Response {
+    let loaded = match load_attachment_bytes(&state.database, &attachment_id) {
+        Ok(loaded) => loaded,
+        Err(error) => return error_response(error),
+    };
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, loaded.media_type),
+            (header::CACHE_CONTROL, "no-store".to_owned()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("inline; filename=\"{}\"", loaded.safe_name),
+            ),
+        ],
+        loaded.bytes,
+    )
+        .into_response()
+}
+
+async fn delete_attachment(
+    State(state): State<AppState>,
+    Path(attachment_id): Path<String>,
+) -> Response {
+    let deleted = match ask(&state, |reply| ActorCall::DeleteAttachment {
+        attachment_id,
+        reply,
+    })
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return error_response(error),
+    };
+    if deleted.get("remove_file").and_then(Value::as_bool) == Some(true)
+        && let Some(relative) = deleted.get("relative_path").and_then(Value::as_str)
+        && let Some(data_dir) = state.database.parent()
+        && let Some(path) = crate::attachment_prompt::attachment_file(data_dir, relative)
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    json_response(StatusCode::OK, serde_json::json!({ "status": "deleted" }))
 }
 
 async fn post_pin(
@@ -1960,13 +2149,20 @@ async fn post_reference(
 }
 
 async fn get_mcp(State(state): State<AppState>) -> Response {
-    finish(
-        ask(&state, |reply| ActorCall::Mcp {
-            action: McpAction::List,
-            reply,
-        })
-        .await,
-    )
+    // The actor is busy for the whole model call. The saved server list is
+    // already in SQLite and does not need that thread.
+    let database = state.database.clone();
+    let secrets = Arc::clone(&state.mcp_secrets);
+    let read = tokio::task::spawn_blocking(move || {
+        let connection = open_read(&database)?;
+        let records = maia_store::read_mcp_connections(&connection).map_err(|_| ApiError::Store)?;
+        Ok(records_json(&records, secrets.as_ref()))
+    })
+    .await;
+    match read {
+        Ok(value) => finish(value),
+        Err(_) => error_response(ApiError::Session),
+    }
 }
 
 async fn post_mcp(State(state): State<AppState>, request: Request) -> Response {
@@ -2068,7 +2264,20 @@ async fn post_mcp_revoke(State(state): State<AppState>, Path(id): Path<String>) 
 }
 
 async fn get_model(State(state): State<AppState>) -> Response {
-    finish(ask(&state, |reply| ActorCall::ReadModel { reply }).await)
+    // The actor is busy for the whole model call. The saved connection is
+    // already in SQLite and does not need that thread.
+    let database = state.database.clone();
+    let model = state.model.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        let connection = open_read(&database)?;
+        let row = maia_store::read_model_connection(&connection).map_err(|_| ApiError::Store)?;
+        stored_model_view(&model, row)
+    })
+    .await;
+    match read {
+        Ok(value) => finish(value),
+        Err(_) => error_response(ApiError::Session),
+    }
 }
 
 async fn put_model(State(state): State<AppState>, request: Request) -> Response {
@@ -2117,6 +2326,81 @@ async fn ask_resolve(
         .await
         .map_err(|_| ApiError::Session)?;
     rx.await.map_err(|_| ApiError::Session)?
+}
+
+async fn post_approval(
+    State(state): State<AppState>,
+    Path(approval_id): Path<String>,
+    request: Request,
+) -> Response {
+    let decision = match read_approval_decision(request).await {
+        Ok(decision) => decision,
+        Err(error) => return error_response(error),
+    };
+    finish(
+        ask(&state, |reply| ActorCall::DecideApproval {
+            approval_id,
+            decision,
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn read_approval_decision(
+    request: Request,
+) -> Result<maia_store::ApprovalDecision, ApiError> {
+    let bytes = axum::body::to_bytes(request.into_body(), MAX_HTTP_BODY)
+        .await
+        .map_err(|_| ApiError::InvalidJson)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| ApiError::InvalidJson)?;
+    match value.get("decision").and_then(serde_json::Value::as_str) {
+        Some("approve") => Ok(maia_store::ApprovalDecision::Approve),
+        Some("deny") => Ok(maia_store::ApprovalDecision::Deny),
+        _ => Err(ApiError::UnknownCommand),
+    }
+}
+
+fn decide_approval<R: RouterPort>(
+    actor: &mut Actor<R>,
+    approval_id: &str,
+    decision: maia_store::ApprovalDecision,
+) -> Result<Value, ApiError> {
+    if approval_id.is_empty()
+        || approval_id.len() > 20
+        || !approval_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(ApiError::UnknownApproval);
+    }
+    match actor
+        .host
+        .decide_approval(approval_id, decision, unix_now())
+        .map_err(map_approval)?
+    {
+        maia_store::ApprovalSettlement::Approved { task_id } => {
+            publish_best_effort(actor);
+            Ok(serde_json::json!({ "status": "approved", "task_id": task_id }))
+        }
+        maia_store::ApprovalSettlement::Denied { task_id } => {
+            publish_best_effort(actor);
+            Ok(serde_json::json!({ "status": "denied", "task_id": task_id }))
+        }
+        maia_store::ApprovalSettlement::Expired { task_id } => {
+            publish_best_effort(actor);
+            Ok(serde_json::json!({ "status": "expired", "task_id": task_id }))
+        }
+        maia_store::ApprovalSettlement::AlreadySettled => Err(ApiError::ApprovalSettled),
+    }
+}
+
+fn map_approval(error: OrchestratorError) -> ApiError {
+    match error {
+        OrchestratorError::Store(maia_store::StoreError::NotFound { .. }) => {
+            ApiError::UnknownApproval
+        }
+        _ => map_orchestrator(error),
+    }
 }
 
 async fn post_host(State(state): State<AppState>, request: Request) -> Response {
@@ -2246,6 +2530,7 @@ fn brain_edge_value(edge: &BrainEdge) -> Value {
         "from_id": edge.from_id,
         "to_kind": edge.to_kind,
         "to_id": edge.to_id,
+        "weight_millis": edge.weight_millis,
     })
 }
 
@@ -2314,7 +2599,7 @@ fn finish(result: Result<Value, ApiError>) -> Response {
     }
 }
 
-async fn read_message(request: Request) -> Result<(SubmissionId, String), ApiError> {
+async fn read_message(request: Request) -> Result<(SubmissionId, String, Vec<String>), ApiError> {
     let value = read_json(request).await?;
     let message: WireMessage =
         serde_json::from_value(value).map_err(|_| ApiError::InvalidMessage)?;
@@ -2328,7 +2613,119 @@ async fn read_message(request: Request) -> Result<(SubmissionId, String), ApiErr
     if message.text.len() > MAX_MESSAGE_BYTES {
         return Err(ApiError::PayloadTooLarge);
     }
-    Ok((operation, message.text))
+    if message.attachment_ids.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+        return Err(ApiError::PayloadTooLarge);
+    }
+    Ok((operation, message.text, message.attachment_ids))
+}
+
+async fn read_upload(request: Request) -> Result<(String, String, Vec<u8>), ApiError> {
+    let content_type = request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if !content_type.starts_with(JSON_CONTENT_TYPE) {
+        return Err(ApiError::UnsupportedMedia);
+    }
+    if content_length_exceeds(request.headers(), MAX_UPLOAD_BODY) {
+        return Err(ApiError::PayloadTooLarge);
+    }
+    let bytes = axum::body::to_bytes(request.into_body(), MAX_UPLOAD_BODY)
+        .await
+        .map_err(|_| ApiError::PayloadTooLarge)?;
+    let upload: WireUpload = serde_json::from_slice(&bytes).map_err(|_| ApiError::InvalidJson)?;
+    let raw = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        upload.data_base64.trim(),
+    )
+    .map_err(|_| ApiError::InvalidMessage)?;
+    Ok((upload.name, upload.media_type, raw))
+}
+
+fn new_attachment_id() -> Result<String, ApiError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::getrandom(&mut bytes).map_err(|_| ApiError::Session)?;
+    let mut id = String::from("att-");
+    for byte in bytes {
+        id.push(char::from(b"0123456789abcdef"[(byte >> 4) as usize]));
+        id.push(char::from(b"0123456789abcdef"[(byte & 0x0f) as usize]));
+    }
+    Ok(id)
+}
+
+fn stage_attachments(
+    database: &FsPath,
+    ids: &[String],
+) -> Result<Vec<crate::orchestrator::StagedAttachment>, ApiError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let connection = open_read(database)?;
+    let data_dir = database.parent().ok_or(ApiError::Store)?;
+    let mut staged = Vec::new();
+    for id in ids {
+        let Some(loaded) = load_attachment_bytes_from(&connection, data_dir, id)? else {
+            return Err(ApiError::UnknownAttachment);
+        };
+        let model = crate::attachment_prompt::model_attachment(
+            &loaded.safe_name,
+            &loaded.media_type,
+            &loaded.bytes,
+            false,
+        );
+        staged.push(crate::orchestrator::StagedAttachment {
+            id: id.clone(),
+            note: model.note,
+            png_base64: model.png_base64,
+        });
+    }
+    Ok(staged)
+}
+
+struct LoadedAttachment {
+    safe_name: String,
+    media_type: String,
+    bytes: Vec<u8>,
+}
+
+fn load_attachment_bytes(
+    database: &FsPath,
+    attachment_id: &str,
+) -> Result<LoadedAttachment, ApiError> {
+    let connection = open_read(database)?;
+    let data_dir = database.parent().ok_or(ApiError::Store)?;
+    load_attachment_bytes_from(&connection, data_dir, attachment_id)?
+        .ok_or(ApiError::UnknownAttachment)
+}
+
+fn load_attachment_bytes_from(
+    connection: &Connection,
+    data_dir: &FsPath,
+    attachment_id: &str,
+) -> Result<Option<LoadedAttachment>, ApiError> {
+    let row: Option<(String, String, String)> = connection
+        .query_row(
+            "SELECT safe_name, media_type, relative_path FROM attachments WHERE attachment_id = ?1",
+            params![attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|_| ApiError::Store)?;
+    let Some((safe_name, media_type, relative)) = row else {
+        return Ok(None);
+    };
+    if !maia_store::attachment_media_allowed(&media_type) {
+        return Err(ApiError::UnsupportedMedia);
+    }
+    let path =
+        crate::attachment_prompt::attachment_file(data_dir, &relative).ok_or(ApiError::Store)?;
+    let bytes = std::fs::read(&path).map_err(|_| ApiError::Store)?;
+    Ok(Some(LoadedAttachment {
+        safe_name,
+        media_type,
+        bytes,
+    }))
 }
 
 fn parse_submission_id(value: &str) -> Result<SubmissionId, ApiError> {
@@ -2437,6 +2834,16 @@ struct WireFactSentence {
 struct WireMessage {
     operation_id: Option<Value>,
     text: String,
+    #[serde(default)]
+    attachment_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireUpload {
+    name: String,
+    media_type: String,
+    data_base64: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2488,6 +2895,9 @@ enum ApiError {
     InvalidMcp,
     UnknownMcp,
     McpSecret,
+    UnknownApproval,
+    ApprovalSettled,
+    UnknownAttachment,
 }
 
 impl ApiError {
@@ -2505,12 +2915,16 @@ impl ApiError {
             | Self::InvalidMcp => StatusCode::BAD_REQUEST,
             Self::UnsupportedMedia => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::UnknownTask | Self::UnknownRoute | Self::UnknownFact | Self::UnknownMcp => {
-                StatusCode::NOT_FOUND
-            }
-            Self::CommandRejected | Self::SubmissionConflict | Self::DetailNotOpen => {
-                StatusCode::CONFLICT
-            }
+            Self::UnknownTask
+            | Self::UnknownRoute
+            | Self::UnknownFact
+            | Self::UnknownMcp
+            | Self::UnknownApproval
+            | Self::UnknownAttachment => StatusCode::NOT_FOUND,
+            Self::CommandRejected
+            | Self::SubmissionConflict
+            | Self::DetailNotOpen
+            | Self::ApprovalSettled => StatusCode::CONFLICT,
             Self::Provider | Self::RouteUnreadable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Store | Self::Session | Self::ModelKey | Self::McpSecret => {
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -2545,6 +2959,9 @@ impl ApiError {
             Self::InvalidMcp => "invalid_mcp",
             Self::UnknownMcp => "unknown_mcp",
             Self::McpSecret => "mcp_secret_unavailable",
+            Self::UnknownApproval => "unknown_approval",
+            Self::ApprovalSettled => "approval_settled",
+            Self::UnknownAttachment => "unknown_attachment",
         }
     }
 }
@@ -2614,7 +3031,36 @@ fn sidebar_value(connection: &Connection) -> Result<Value, ApiError> {
     let tasks = load_tasks(connection)?;
     let children = load_children(connection)?;
     let rows = nest_rows(&tasks, &children)?;
-    Ok(serde_json::json!({ "rows": rows }))
+    let approvals = approval_values(connection)?;
+    Ok(serde_json::json!({ "rows": rows, "approvals": approvals }))
+}
+
+fn approval_values(connection: &Connection) -> Result<Vec<Value>, ApiError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT approval_id, task_id, kind, taint, grant_text, reason, created_at, expires_at \
+             FROM pending_approvals WHERE status = 'pending' ORDER BY created_at, approval_id",
+        )
+        .map_err(|_| ApiError::Store)?;
+    let mapped = statement
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "approval_id": row.get::<_, String>(0)?,
+                "task_id": row.get::<_, String>(1)?,
+                "kind": row.get::<_, String>(2)?,
+                "taint": row.get::<_, String>(3)?,
+                "grant_text": row.get::<_, String>(4)?,
+                "reason": row.get::<_, String>(5)?,
+                "created_at": row.get::<_, i64>(6)?,
+                "expires_at": row.get::<_, i64>(7)?,
+            }))
+        })
+        .map_err(|_| ApiError::Store)?;
+    let mut rows = Vec::new();
+    for row in mapped {
+        rows.push(row.map_err(|_| ApiError::Store)?);
+    }
+    Ok(rows)
 }
 
 fn inspector_value(connection: &Connection) -> Result<Value, ApiError> {
@@ -2642,7 +3088,35 @@ fn inspector_value(connection: &Connection) -> Result<Value, ApiError> {
     for row in mapped {
         rows.push(row.map_err(|_| ApiError::Store)?);
     }
-    Ok(inspector_document(&rows))
+    Ok(inspector_document(&rows, &presented_by_message(connection)))
+}
+
+fn presented_by_message(connection: &Connection) -> BTreeMap<String, Vec<String>> {
+    let mut statement = match connection.prepare(
+        "SELECT l.request_id, p.candidate_id FROM presentations p \
+         JOIN ledgers l ON l.ledger_id = p.ledger_id \
+         WHERE p.weight > 0 ORDER BY l.request_id, p.candidate_id",
+    ) {
+        Ok(statement) => statement,
+        Err(_) => return BTreeMap::new(),
+    };
+    let mapped = match statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
+        Ok(mapped) => mapped,
+        Err(_) => return BTreeMap::new(),
+    };
+    let mut used = BTreeMap::<String, Vec<String>>::new();
+    for row in mapped {
+        let Ok((message_id, candidate_id)) = row else {
+            continue;
+        };
+        let ids = used.entry(message_id).or_default();
+        if !ids.contains(&candidate_id) {
+            ids.push(candidate_id);
+        }
+    }
+    used
 }
 
 fn transcript_value(connection: &Connection) -> Result<Value, ApiError> {
@@ -2673,9 +3147,38 @@ fn transcript_value(connection: &Connection) -> Result<Value, ApiError> {
         if let Some(route) = presented.route {
             message["route"] = serde_json::Value::String(route);
         }
+        if let Ok(attachments) = attachment_values(connection, &message_id)
+            && !attachments.is_empty()
+        {
+            message["attachments"] = Value::Array(attachments);
+        }
         messages.push(message);
     }
     Ok(serde_json::json!({ "messages": messages }))
+}
+
+fn attachment_values(connection: &Connection, message_id: &str) -> Result<Vec<Value>, ApiError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT attachment_id, safe_name, media_type, byte_size FROM attachments \
+             WHERE message_id = ?1 ORDER BY attachment_id",
+        )
+        .map_err(|_| ApiError::Store)?;
+    let mapped = statement
+        .query_map(params![message_id], |row| {
+            Ok(serde_json::json!({
+                "attachment_id": row.get::<_, String>(0)?,
+                "safe_name": row.get::<_, String>(1)?,
+                "media_type": row.get::<_, String>(2)?,
+                "byte_size": row.get::<_, i64>(3)?,
+            }))
+        })
+        .map_err(|_| ApiError::Store)?;
+    let mut values = Vec::new();
+    for row in mapped {
+        values.push(row.map_err(|_| ApiError::Store)?);
+    }
+    Ok(values)
 }
 
 fn transcript_role(role: &str) -> Result<&'static str, ApiError> {

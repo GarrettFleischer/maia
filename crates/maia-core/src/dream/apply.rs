@@ -9,6 +9,7 @@ use crate::brain::FactId;
 use crate::brain::LexemeId;
 use crate::brain::LexicalPolicy;
 use crate::brain::lexemes_for_sentence;
+use crate::dream::decision::PromotionDecision;
 use crate::dream::error::PromotionError;
 use crate::dream::error::PromotionPhase;
 use crate::dream::parse::parse_promotion;
@@ -131,13 +132,26 @@ pub struct PromotedMark {
     pub now: Timestamp,
 }
 
+/// One claim closed by a promotion replace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimReplacement {
+    /// Existing claim closed for ranking.
+    pub old_claim_id: ClaimId,
+    /// Successor claim inserted in the same transaction.
+    pub new_claim_id: ClaimId,
+}
+
 /// Complete promotion mutation. Absence of this value means zero rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromotionCommit {
     /// Inserted claims, response order.
     pub claims: Vec<CommittedClaim>,
-    /// Mention edges, response order.
+    /// Mention edges for new and replaced claims, response order.
     pub mentions: Vec<MentionEdge>,
+    /// Mention edges for `same` claims only.
+    pub same_mentions: Vec<MentionEdge>,
+    /// Closed claims paired with their successors.
+    pub replacements: Vec<ClaimReplacement>,
     /// Lexeme edges, response order then lexical order.
     pub lexeme_edges: Vec<LexemeEdge>,
     /// Promoted mark.
@@ -206,6 +220,142 @@ pub fn describe_promotion(
     Ok(PromotionCommit {
         claims,
         mentions,
+        same_mentions: Vec::new(),
+        replacements: Vec::new(),
+        lexeme_edges,
+        promoted,
+    })
+}
+
+/// Describes a promotion from an owner-approved decision. Claim ids for `new`
+/// and replace successors come from `new_ids` in that order; taint comes from
+/// the episode, never from the model.
+pub fn describe_promotion_decision(
+    episode: &PromotionEpisode,
+    decision: &PromotionDecision,
+    new_ids: &[ClaimId],
+    now: Timestamp,
+    model: &ModelIdentity,
+    lexical: &LexicalPolicy,
+    fault: ApplyFault,
+) -> Result<PromotionCommit, PromotionError> {
+    if decision.skip {
+        let promoted = mark_promoted(episode, now, model);
+        if fault == ApplyFault::After(PromotionPhase::MarkPromoted) {
+            return Err(PromotionError::RolledBack(PromotionPhase::MarkPromoted));
+        }
+        return Ok(PromotionCommit {
+            claims: Vec::new(),
+            mentions: Vec::new(),
+            same_mentions: Vec::new(),
+            replacements: Vec::new(),
+            lexeme_edges: Vec::new(),
+            promoted,
+        });
+    }
+    let needed = decision.new.len() + decision.replaces.len();
+    if new_ids.len() != needed {
+        return Err(PromotionError::MissingField);
+    }
+    for id in new_ids {
+        if episode.known_claim_ids.contains(id) {
+            return Err(PromotionError::KnownId);
+        }
+    }
+    for same in &decision.same {
+        if !episode.known_claim_ids.contains(same) {
+            return Err(PromotionError::UnknownClaimId);
+        }
+    }
+    for replace in &decision.replaces {
+        if !episode.known_claim_ids.contains(&replace.old) {
+            return Err(PromotionError::UnknownClaimId);
+        }
+    }
+    let mut cited = BTreeSet::new();
+    for same in &decision.same {
+        if !cited.insert(same.clone()) {
+            return Err(PromotionError::DuplicateId);
+        }
+    }
+    for replace in &decision.replaces {
+        if !cited.insert(replace.old.clone()) {
+            return Err(PromotionError::DuplicateId);
+        }
+    }
+    let taint = joined_taint(&episode.segments);
+    let sources = joined_sources(&episode.segments);
+    let mut claims = Vec::new();
+    let mut mentions = Vec::new();
+    let mut replacements = Vec::new();
+    let mut id_index = 0usize;
+    for sentence in &decision.new {
+        let id = new_ids[id_index].clone();
+        id_index += 1;
+        claims.push(CommittedClaim {
+            id: id.clone(),
+            sentence: sentence.clone(),
+            episode_id: episode.id.clone(),
+            taint,
+            sources: sources.clone(),
+            valid_from: episode.at,
+            status: ClaimStatus::Provisional,
+            lexemes: lexemes_for_sentence(sentence, lexical),
+        });
+        mentions.push(MentionEdge {
+            claim_id: id,
+            episode_id: episode.id.clone(),
+        });
+    }
+    for replace in &decision.replaces {
+        let id = new_ids[id_index].clone();
+        id_index += 1;
+        claims.push(CommittedClaim {
+            id: id.clone(),
+            sentence: replace.sentence.clone(),
+            episode_id: episode.id.clone(),
+            taint,
+            sources: sources.clone(),
+            valid_from: episode.at,
+            status: ClaimStatus::Provisional,
+            lexemes: lexemes_for_sentence(&replace.sentence, lexical),
+        });
+        mentions.push(MentionEdge {
+            claim_id: id.clone(),
+            episode_id: episode.id.clone(),
+        });
+        replacements.push(ClaimReplacement {
+            old_claim_id: replace.old.clone(),
+            new_claim_id: id,
+        });
+    }
+    if fault == ApplyFault::After(PromotionPhase::InsertClaims) {
+        return Err(PromotionError::RolledBack(PromotionPhase::InsertClaims));
+    }
+    let same_mentions = decision
+        .same
+        .iter()
+        .map(|claim_id| MentionEdge {
+            claim_id: claim_id.clone(),
+            episode_id: episode.id.clone(),
+        })
+        .collect::<Vec<_>>();
+    if fault == ApplyFault::After(PromotionPhase::InsertMentions) {
+        return Err(PromotionError::RolledBack(PromotionPhase::InsertMentions));
+    }
+    let lexeme_edges = insert_lexeme_edges(&claims);
+    if fault == ApplyFault::After(PromotionPhase::InsertLexemes) {
+        return Err(PromotionError::RolledBack(PromotionPhase::InsertLexemes));
+    }
+    let promoted = mark_promoted(episode, now, model);
+    if fault == ApplyFault::After(PromotionPhase::MarkPromoted) {
+        return Err(PromotionError::RolledBack(PromotionPhase::MarkPromoted));
+    }
+    Ok(PromotionCommit {
+        claims,
+        mentions,
+        same_mentions,
+        replacements,
         lexeme_edges,
         promoted,
     })

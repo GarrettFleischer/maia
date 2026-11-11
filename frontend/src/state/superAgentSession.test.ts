@@ -87,6 +87,7 @@ describe('reduceSuperAgentState transition validity', () => {
         activation,
         request_id: 1,
         rows: [row('unexpected')],
+        approvals: [],
       },
     },
     {
@@ -162,6 +163,7 @@ describe('reduceSuperAgentState transition validity', () => {
         activation: otherActivation,
         request_id: 1,
         rows: [row('old-activation')],
+        approvals: [],
       },
     },
   ]
@@ -271,6 +273,111 @@ describe('reduceSuperAgentState send ownership', () => {
     expect(changed).toBe(sending)
     expect(quoted).toBe(sending)
     expect(sending.draft).toBe('Owned draft')
+  })
+
+  it('clears a matching draft when admission arrives after the send was given up', () => {
+    const token = Symbol('given-up') as SendOperationToken
+    const drafted = reduceSuperAgentState(hydratedState(), {
+      type: 'draft_changed',
+      session,
+      activation,
+      draft: 'Status from the phone',
+    })
+    const sending = reduceSuperAgentState(drafted, {
+      type: 'send_started',
+      session,
+      activation,
+      token,
+    })
+    const failed = reduceSuperAgentState(sending, {
+      type: 'send_failed',
+      session,
+      activation,
+      token,
+      text: 'Message failed. Try again.',
+    })
+    const admitted = reduceSuperAgentState(failed, {
+      type: 'send_admitted',
+      session,
+      activation,
+      token,
+      sent_text: 'Status from the phone',
+    })
+
+    expect(admitted.draft).toBe('')
+    expect(admitted.notice).toEqual({ kind: 'idle' })
+  })
+
+  it('leaves a newer draft when a late admission arrives', () => {
+    const token = Symbol('given-up') as SendOperationToken
+    const drafted = reduceSuperAgentState(hydratedState(), {
+      type: 'draft_changed',
+      session,
+      activation,
+      draft: 'Status from the phone',
+    })
+    const sending = reduceSuperAgentState(drafted, {
+      type: 'send_started',
+      session,
+      activation,
+      token,
+    })
+    const failed = reduceSuperAgentState(sending, {
+      type: 'send_failed',
+      session,
+      activation,
+      token,
+      text: 'Message failed. Try again.',
+    })
+    const retyped = reduceSuperAgentState(failed, {
+      type: 'draft_changed',
+      session,
+      activation,
+      draft: 'Next question',
+    })
+    const admitted = reduceSuperAgentState(retyped, {
+      type: 'send_admitted',
+      session,
+      activation,
+      token,
+      sent_text: 'Status from the phone',
+    })
+
+    expect(admitted).toBe(retyped)
+    expect(admitted.draft).toBe('Next question')
+  })
+
+  it('notes a stored send that still has no reply once the composer is free', () => {
+    const noted = reduceSuperAgentState(hydratedState(), {
+      type: 'stored_send_unanswered',
+      session,
+      activation,
+      text: 'The message was accepted, but its final outcome is unavailable.',
+    })
+
+    expect(noted.notice).toEqual({
+      kind: 'admitted_failure',
+      text: 'The message was accepted, but its final outcome is unavailable.',
+    })
+    expect(noted.operation).toEqual({ kind: 'idle' })
+  })
+
+  it('ignores an unanswered stored send while another send is in flight', () => {
+    const token = Symbol('newer') as SendOperationToken
+    const sending = reduceSuperAgentState(hydratedState(), {
+      type: 'send_started',
+      session,
+      activation,
+      token,
+    })
+    const noted = reduceSuperAgentState(sending, {
+      type: 'stored_send_unanswered',
+      session,
+      activation,
+      text: 'The message was accepted, but its final outcome is unavailable.',
+    })
+
+    expect(noted).toBe(sending)
   })
 })
 

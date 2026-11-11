@@ -167,6 +167,51 @@ pub(crate) fn promotion_canonical(request: &PromotionWrite) -> Result<String, St
             text.push('\n');
         }
     }
+    for claim_id in &request.same_claim_ids {
+        require_text("same_claim_id", claim_id)?;
+        text.push_str("same ");
+        text.push_str(claim_id);
+        text.push('\n');
+    }
+    for replacement in &request.replacements {
+        require_text("old_claim_id", &replacement.old_claim_id)?;
+        require_text("new_claim_id", &replacement.new_claim_id)?;
+        text.push_str("replace ");
+        text.push_str(&replacement.old_claim_id);
+        text.push(' ');
+        text.push_str(&replacement.new_claim_id);
+        text.push('\n');
+    }
+    let mut links = request.links.clone();
+    links.sort_by(|left, right| {
+        left.edge_kind
+            .cmp(&right.edge_kind)
+            .then_with(|| left.from_claim_id.cmp(&right.from_claim_id))
+            .then_with(|| left.to_kind.cmp(&right.to_kind))
+            .then_with(|| left.to_id.cmp(&right.to_id))
+    });
+    for link in &links {
+        require_text("link_kind", &link.edge_kind)?;
+        require_text("from_claim_id", &link.from_claim_id)?;
+        require_text("to_kind", &link.to_kind)?;
+        require_text("to_id", &link.to_id)?;
+        if link.weight_millis == 0 || link.weight_millis > 1000 {
+            return Err(StoreError::InvalidRequest {
+                message: "promotion link weight must be between 1 and 1000 millis".to_owned(),
+            });
+        }
+        text.push_str("link ");
+        text.push_str(&link.edge_kind);
+        text.push(' ');
+        text.push_str(&link.from_claim_id);
+        text.push(' ');
+        text.push_str(&link.to_kind);
+        text.push(' ');
+        text.push_str(&link.to_id);
+        text.push(' ');
+        text.push_str(&link.weight_millis.to_string());
+        text.push('\n');
+    }
     Ok(text)
 }
 

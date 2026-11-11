@@ -834,6 +834,235 @@ describe('useSuperAgent submission and transcript state', () => {
     expect(send).toHaveBeenCalledTimes(2)
   })
 
+  it('clears sending when admission never settles but the host already stored the message', async () => {
+    const phoneText = 'Hello from my phone'
+    const firstOperation = '11111111-1111-4111-8111-111111111111' as SubmissionOperationId
+    const secondOperation = '22222222-2222-4222-8222-222222222222' as SubmissionOperationId
+    const createOperationId = vi
+      .fn()
+      .mockReturnValueOnce(firstOperation)
+      .mockReturnValueOnce(secondOperation)
+    const send = vi
+      .fn()
+      .mockReturnValueOnce(new Promise<MessageAdmissionResult>(() => undefined))
+      .mockResolvedValueOnce(routed())
+    const transcript = vi
+      .fn()
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValue({ messages: [ownerMessage('m-phone', phoneText)] })
+    const client = clientWith({ createOperationId, send, transcript })
+    const { result } = renderHook(() => useSuperAgent(client))
+    await waitFor(() => expect(result.current.transcriptState).toEqual({ kind: 'empty' }))
+
+    vi.useFakeTimers()
+    try {
+      act(() => result.current.setDraft(phoneText))
+      act(() => {
+        void result.current.submit()
+      })
+      expect(result.current.operation.kind).toBe('sending')
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000)
+      })
+
+      expect(result.current.operation).toEqual({ kind: 'idle' })
+      expect(result.current.draft).toBe('')
+      expect(result.current.messages).toEqual([ownerMessage('m-phone', phoneText)])
+      expect(result.current.notice).toEqual({ kind: 'idle' })
+
+      act(() => result.current.setDraft(phoneText))
+      await act(async () => result.current.submit())
+      expect(createOperationId).toHaveBeenCalledTimes(2)
+      expect(send).toHaveBeenNthCalledWith(2, secondOperation, phoneText)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows replies that arrive while admission is still open and keeps the next draft', async () => {
+    const phoneText = 'Hello from my phone'
+    const admission = deferred<MessageAdmissionResult>()
+    const send = vi.fn().mockReturnValue(admission.promise)
+    const owner = ownerMessage('m-phone', phoneText)
+    const dispatched = message('m-route', 'Dispatched as one new task: Hello from my phone.')
+    const report = message('m-report', 'The task reported: It is 54 F.')
+    const stages: { messages: RouterMessage[] }[] = [
+      { messages: [] },
+      { messages: [owner] },
+      { messages: [owner, dispatched] },
+      { messages: [owner, dispatched, report] },
+    ]
+    let stage = 0
+    const transcript = vi.fn().mockImplementation(() => {
+      const next = stages[Math.min(stage, stages.length - 1)] ?? stages[0]
+      return Promise.resolve(next)
+    })
+    const client = clientWith({ send, transcript })
+    const { result } = renderHook(() => useSuperAgent(client))
+    await waitFor(() => expect(result.current.transcriptState).toEqual({ kind: 'empty' }))
+
+    vi.useFakeTimers()
+    try {
+      act(() => result.current.setDraft(phoneText))
+      act(() => {
+        void result.current.submit()
+      })
+      stage = 1
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000)
+      })
+
+      expect(result.current.operation).toEqual({ kind: 'idle' })
+      expect(result.current.draft).toBe('')
+      expect(result.current.messages).toEqual([owner])
+      expect(result.current.notice).toEqual({ kind: 'idle' })
+
+      stage = 2
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000)
+      })
+      expect(result.current.messages).toEqual([owner, dispatched])
+      expect(result.current.draft).toBe('')
+
+      stage = 3
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000)
+      })
+      expect(result.current.messages).toEqual([owner, dispatched, report])
+      expect(result.current.draft).toBe('')
+
+      act(() => result.current.setDraft('Next question'))
+      admission.resolve(routed())
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      expect(result.current.draft).toBe('Next question')
+      expect(result.current.messages).toEqual([owner, dispatched, report])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the composer clear when a stored send still has no reply', async () => {
+    const phoneText = 'Hello from my phone'
+    const send = vi.fn().mockReturnValue(new Promise<MessageAdmissionResult>(() => undefined))
+    const transcript = vi.fn().mockImplementation(() =>
+      Promise.resolve({ messages: [ownerMessage('m-phone', phoneText)] }),
+    )
+    const client = clientWith({ send, transcript })
+    const { result } = renderHook(() => useSuperAgent(client))
+    await waitFor(() => expect(result.current.transcriptState.kind).not.toBe('loading'))
+
+    vi.useFakeTimers()
+    try {
+      act(() => result.current.setDraft(phoneText))
+      act(() => {
+        void result.current.submit()
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000)
+      })
+      expect(result.current.draft).toBe('')
+      expect(result.current.notice).toEqual({ kind: 'idle' })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(148_000)
+      })
+
+      expect(result.current.operation).toEqual({ kind: 'idle' })
+      expect(result.current.draft).toBe('')
+      expect(result.current.notice).toEqual({
+        kind: 'admitted_failure',
+        text: 'The message was accepted. A final reply is not in the chat yet; the task may still be running.',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the composer when the reply arrives after sending gave up', async () => {
+    const phoneText = 'Status from the phone'
+    const admission = deferred<MessageAdmissionResult>()
+    const send = vi.fn().mockReturnValue(admission.promise)
+    let visible = false
+    const transcript = vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        messages: visible
+          ? [
+              ownerMessage('m-phone', phoneText),
+              message('m-report', 'The task reported: ready.'),
+            ]
+          : [],
+      }),
+    )
+    const client = clientWith({ send, transcript })
+    const { result } = renderHook(() => useSuperAgent(client))
+    await waitFor(() => expect(result.current.transcriptState).toEqual({ kind: 'empty' }))
+
+    vi.useFakeTimers()
+    try {
+      act(() => result.current.setDraft(phoneText))
+      act(() => {
+        void result.current.submit()
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150_000)
+      })
+
+      expect(result.current.draft).toBe(phoneText)
+      expect(result.current.notice).toEqual({
+        kind: 'failed',
+        text: 'Message failed. Try again.',
+      })
+
+      visible = true
+      admission.resolve(routed())
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      expect(result.current.draft).toBe('')
+      expect(result.current.messages).toEqual([
+        ownerMessage('m-phone', phoneText),
+        message('m-report', 'The task reported: ready.'),
+      ])
+      expect(result.current.notice).toEqual({ kind: 'idle' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears sending when admission and the host transcript both stay unreachable', async () => {
+    const send = vi.fn().mockReturnValue(new Promise<MessageAdmissionResult>(() => undefined))
+    const transcript = vi.fn().mockResolvedValue({ messages: [] })
+    const client = clientWith({ send, transcript })
+    const { result } = renderHook(() => useSuperAgent(client))
+    await waitFor(() => expect(result.current.transcriptState).toEqual({ kind: 'empty' }))
+
+    vi.useFakeTimers()
+    try {
+      act(() => result.current.setDraft('Still on the phone'))
+      act(() => {
+        void result.current.submit()
+      })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150_000)
+      })
+
+      expect(result.current.operation).toEqual({ kind: 'idle' })
+      expect(result.current.draft).toBe('Still on the phone')
+      expect(result.current.notice).toEqual({
+        kind: 'failed',
+        text: 'Message failed. Try again.',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('allows no overlapping send or transcript retry while send is pending', async () => {
     const pendingSend = deferred<MessageAdmissionResult>()
     const send = vi.fn().mockReturnValue(pendingSend.promise)
@@ -1132,6 +1361,32 @@ describe('useSuperAgent detail ordering', () => {
     refreshA.resolve(detail('task-a'))
     await act(async () => refresh)
     expect(result.current.detail?.task_id).toBe('task-b')
+  })
+})
+
+describe('useSuperAgent already open detail', () => {
+  it('shows the conversation when the detail view is already open', async () => {
+    const client = clientWith({
+      task: vi.fn().mockResolvedValue(detail('task-a')),
+      openDetail: vi.fn().mockRejectedValue(new SuperAgentRequestError('command_rejected')),
+    })
+    const { result } = renderHook(() => useSuperAgent(client))
+
+    await act(async () => result.current.openTask('task-a'))
+
+    expect(result.current.detail?.task_id).toBe('task-a')
+  })
+
+  it('does not show the conversation when opening the detail fails for another reason', async () => {
+    const client = clientWith({
+      task: vi.fn().mockResolvedValue(detail('task-a')),
+      openDetail: vi.fn().mockRejectedValue(new SuperAgentRequestError('session_unavailable')),
+    })
+    const { result } = renderHook(() => useSuperAgent(client))
+
+    await act(async () => result.current.openTask('task-a'))
+
+    expect(result.current.detail).toBeNull()
   })
 })
 

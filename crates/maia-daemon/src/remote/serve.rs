@@ -7,15 +7,15 @@ use axum::Json;
 use axum::Router;
 use axum::extract::ConnectInfo;
 use axum::extract::Request;
-use axum::extract::connect_info::Connected;
-use axum::serve::IncomingStream;
 use axum::extract::State;
+use axum::extract::connect_info::Connected;
 use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use axum::serve::IncomingStream;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -50,11 +50,7 @@ pub async fn mark_loopback(mut request: Request, next: Next) -> Response {
 }
 
 /// WhoIs, host, session, and CSRF gate for the Tailscale listener only.
-pub async fn tailnet_gate(
-    State(hub): State<RemoteHub>,
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn tailnet_gate(State(hub): State<RemoteHub>, request: Request, next: Next) -> Response {
     let Some(peer) = request.extensions().get::<ConnectInfo<PeerAddr>>().copied() else {
         return error_response(403, "denied");
     };
@@ -77,7 +73,10 @@ pub async fn tailnet_gate(
         request.headers(),
         header::HeaderName::from_static("sec-fetch-site"),
     );
-    let csrf = header_str(request.headers(), header::HeaderName::from_static("x-csrf-token"));
+    let csrf = header_str(
+        request.headers(),
+        header::HeaderName::from_static("x-csrf-token"),
+    );
     let token = request
         .headers()
         .get(header::COOKIE)
@@ -227,7 +226,10 @@ pub fn desktop_status_response(hub: &RemoteHub, now: i64) -> Response {
 }
 
 /// Phone status. An unpaired node does not see other devices.
-pub fn phone_status_response(hub: &RemoteHub, identity: &super::admit::TailnetIdentity) -> Response {
+pub fn phone_status_response(
+    hub: &RemoteHub,
+    identity: &super::admit::TailnetIdentity,
+) -> Response {
     match hub.phone_state(identity) {
         PhoneState::Unpaired { node_name } => (
             StatusCode::UNAUTHORIZED,
@@ -265,12 +267,21 @@ pub fn code_response(hub: &RemoteHub, now: i64) -> Response {
 }
 
 /// Accept a pairing code from the phone that WhoIs just identified.
-pub fn pair_response(hub: &RemoteHub, identity: &super::admit::TailnetIdentity, code: &str, now: i64) -> Response {
+pub fn pair_response(
+    hub: &RemoteHub,
+    identity: &super::admit::TailnetIdentity,
+    code: &str,
+    now: i64,
+) -> Response {
     session_body(hub.accept_pair(identity, code, now))
 }
 
 /// Issue a session for a phone that is already paired.
-pub fn session_response(hub: &RemoteHub, identity: &super::admit::TailnetIdentity, now: i64) -> Response {
+pub fn session_response(
+    hub: &RemoteHub,
+    identity: &super::admit::TailnetIdentity,
+    now: i64,
+) -> Response {
     session_body(hub.establish(identity, now))
 }
 
@@ -290,8 +301,13 @@ pub fn error_response(status: u16, error: &'static str) -> Response {
 
 fn session_body(issued: SessionIssued) -> Response {
     match issued {
-        SessionIssued::Connected { token, csrf, max_age } => {
-            let mut response = Json(serde_json::json!({ "csrf": csrf, "state": "paired" })).into_response();
+        SessionIssued::Connected {
+            token,
+            csrf,
+            max_age,
+        } => {
+            let mut response =
+                Json(serde_json::json!({ "csrf": csrf, "state": "paired" })).into_response();
             if let Ok(value) = HeaderValue::from_str(&RemoteHub::cookie_header(&token, max_age)) {
                 response.headers_mut().insert(header::SET_COOKIE, value);
             }

@@ -111,6 +111,24 @@ pub(crate) const MIGRATION_V8: &[&str] = &[
     "CREATE TABLE mcp_call_audit (row_id INTEGER PRIMARY KEY, connection_id TEXT NOT NULL, wire_name TEXT NOT NULL, manifest_hash TEXT NOT NULL, exchange_class TEXT NOT NULL, result_sha256 TEXT NOT NULL)",
 ];
 
+/// Migration 9 adds promotion quarantine, claim replacement links, and day stats.
+pub(crate) const MIGRATION_V9: &[&str] = &[
+    "ALTER TABLE episodes ADD COLUMN promotion_failures INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE episodes ADD COLUMN promotion_quarantined INTEGER NOT NULL DEFAULT 0 CHECK (promotion_quarantined IN (0, 1))",
+    "ALTER TABLE claims ADD COLUMN replaced_by TEXT REFERENCES claims (claim_id)",
+    "CREATE TABLE promotion_day_stats (day_key TEXT PRIMARY KEY, calls INTEGER NOT NULL, tokens INTEGER NOT NULL)",
+];
+
+/// Migration 10 stores approval waits, ledger reversals, and untrusted attachments.
+pub(crate) const MIGRATION_V10: &[&str] = &[
+    "CREATE TABLE ledger_reversals (ledger_id TEXT PRIMARY KEY, reversed_at INTEGER NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id))",
+    "CREATE TABLE pending_approvals (approval_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('login', 'consent', 'capability')), taint TEXT NOT NULL CHECK (taint IN ('trusted', 'untrusted')), grant_text TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired')), decided_at INTEGER)",
+    "CREATE INDEX idx_pending_approvals_open ON pending_approvals (status, expires_at)",
+    "CREATE TABLE attachments (attachment_id TEXT PRIMARY KEY, content_sha256 TEXT NOT NULL, byte_size INTEGER NOT NULL, media_type TEXT NOT NULL, safe_name TEXT NOT NULL, relative_path TEXT NOT NULL, taint TEXT NOT NULL CHECK (taint = 'untrusted'), created_at INTEGER NOT NULL, message_id TEXT)",
+    "CREATE INDEX idx_attachments_message ON attachments (message_id)",
+    "CREATE INDEX idx_attachments_hash ON attachments (content_sha256)",
+];
+
 /// Migration 5 preserves consumed durable ID high-water marks whose owning row can be replaced.
 pub(crate) const MIGRATION_V5: &[&str] = &[
     "CREATE TABLE runtime_id_high_water (namespace TEXT PRIMARY KEY, value TEXT NOT NULL)",

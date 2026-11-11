@@ -375,9 +375,17 @@ pub fn public_list(
     secrets: &dyn McpSecretStore,
 ) -> Result<Value, McpApiError> {
     let records = store.list_mcp().map_err(map_store)?;
-    Ok(
-        json!({ "connections": records.iter().map(|record| public_connection(record, secrets)).collect::<Vec<_>>() }),
-    )
+    Ok(records_json(&records, secrets))
+}
+
+/// Public connection list for rows already read. Secret values are absent.
+pub fn records_json(records: &[McpConnectionRecord], secrets: &dyn McpSecretStore) -> Value {
+    json!({
+        "connections": records
+            .iter()
+            .map(|record| public_connection(record, secrets))
+            .collect::<Vec<_>>()
+    })
 }
 
 fn catalog_for(

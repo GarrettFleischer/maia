@@ -118,6 +118,7 @@ export interface InspectorCacheSlotDto {
   id: string
   label: string
   section: 'fixed' | 'memory' | 'recall'
+  taint?: 'trusted' | 'untrusted'
 }
 
 export interface InspectorFixtureDto {

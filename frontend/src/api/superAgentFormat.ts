@@ -37,6 +37,16 @@ const CRITERION_MARK_LABELS: Record<CriterionMarkName, string> = {
 
 const TERMINAL_PHASES: ReadonlySet<TaskPhaseName> = new Set(['completed', 'cancelled', 'abandoned'])
 
+export const ACTIVITY_PREVIEW_LIMIT = 80
+
+export function activityPreview(summary: string, limit: number): string {
+  const flat = summary.replace(/\s+/g, ' ').trim()
+  const chars = [...flat]
+  if (chars.length <= limit) return flat
+  const kept = chars.slice(0, Math.max(limit, 0)).join('').trimEnd()
+  return kept.length === 0 ? '…' : `${kept}…`
+}
+
 export interface InspectionListItem {
   id: string
   text: string
@@ -80,6 +90,15 @@ export function countActivity(rows: readonly SidebarRow[]): { running: number; n
     running: rows.reduce((total, row) => total + countRunningThreads(row), 0),
     needsYou: rows.filter((row) => row.section === 'needs_you').length,
   }
+}
+
+export function phoneStopLabel(counts: { running: number; needsYou: number }): string | null {
+  if (counts.running <= 0 && counts.needsYou <= 0) return null
+  if (counts.running > 0 && counts.needsYou > 0) {
+    return `${counts.running} running · ${counts.needsYou} needs you`
+  }
+  if (counts.running > 0) return `${counts.running} running`
+  return `${counts.needsYou} needs you`
 }
 
 function countRunningThreads(row: SidebarRow): number {

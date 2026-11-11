@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { layoutBrainMap, type BrainMap } from '@/components/brain/layoutBrainMap'
+import { NodeChoiceList, type NodeChoice } from '@/components/brain/NodeChoiceList'
 import { inspectorBrainHasFactOrEpisode, inspectorBrainMap } from '@/components/inspector/inspectorBrain'
 import type { InspectorTabId } from '@/components/inspector/inspectorTabs'
 import type { InspectorTurn } from '@/api/superAgentTypes'
@@ -12,6 +14,7 @@ export function LiveInspector({
   tabListId,
   index,
   onScrub,
+  focusIds = [],
 }: {
   tab: InspectorTabId
   turns: readonly InspectorTurn[]
@@ -19,16 +22,39 @@ export function LiveInspector({
   tabListId: string
   index: number
   onScrub: (index: number) => void
+  focusIds?: readonly string[]
 }) {
   const turn = turns[index]
+  const [selectedId, setSelectedId] = useState<string | null>(focusIds[0] ?? null)
   if (!turn) return null
   const panelId = `${tabListId}-${tab}-panel`
   const tabId = `${tabListId}-${tab}`
   return (
     <div className="maia-inspector-panel" role="tabpanel" id={panelId} aria-labelledby={tabId}>
-      {tab === 'cache' ? <LiveCache turn={turn} turns={turns} index={index} onScrub={onScrub} /> : null}
-      {tab === 'brain' ? <LiveBrain turn={turn} brain={brain} /> : null}
-      {tab === 'trace' ? <LiveTrace turn={turn} /> : null}
+      {tab === 'cache' ? (
+        <LiveCache
+          turn={turn}
+          turns={turns}
+          brain={brain}
+          index={index}
+          onScrub={onScrub}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          focusIds={focusIds}
+        />
+      ) : null}
+      {tab === 'brain' ? (
+        <LiveBrain
+          turn={turn}
+          brain={brain}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          focusIds={focusIds}
+        />
+      ) : null}
+      {tab === 'trace' ? (
+        <LiveTrace turn={turn} selectedId={selectedId} onSelect={setSelectedId} />
+      ) : null}
     </div>
   )
 }
@@ -55,13 +81,21 @@ export function selectedIndex(length: number, scrub: number | null): number {
 function LiveCache({
   turn,
   turns,
+  brain,
   index,
   onScrub,
+  selectedId,
+  onSelect,
+  focusIds,
 }: {
   turn: InspectorTurn
   turns: readonly InspectorTurn[]
+  brain: BrainMap
   index: number
   onScrub: (index: number) => void
+  selectedId: string | null
+  onSelect: (id: string) => void
+  focusIds: readonly string[]
 }) {
   return (
     <>
@@ -94,14 +128,12 @@ function LiveCache({
         ))}
       </ol>
       <span className="maia-inspector-label">Recall · not durable</span>
-      <ul className="maia-recall">
-        {turn.recall.map((item) => (
-          <li key={item.id}>
-            <span>{item.sentence}</span>
-            <span className="maia-slot-state">{item.score.toFixed(2)}</span>
-          </li>
-        ))}
-      </ul>
+      <NodeChoiceList
+        label="Facts used"
+        selectedId={selectedId}
+        onSelect={onSelect}
+        items={recallChoices(turn, brain, focusIds)}
+      />
       <div className="maia-scrub">
         <div className="maia-scrub-head">
           <span>
@@ -122,13 +154,27 @@ function LiveCache({
   )
 }
 
-function LiveBrain({ turn, brain }: { turn: InspectorTurn; brain: BrainMap }) {
-  const filtered = inspectorBrainMap(brain, recallIds(turn))
+function LiveBrain({
+  turn,
+  brain,
+  selectedId,
+  onSelect,
+  focusIds,
+}: {
+  turn: InspectorTurn
+  brain: BrainMap
+  selectedId: string | null
+  onSelect: (id: string) => void
+  focusIds: readonly string[]
+}) {
+  const ids = focusIds.length > 0 ? new Set(focusIds) : recallIds(turn)
+  const filtered = inspectorBrainMap(brain, ids)
   if (!inspectorBrainHasFactOrEpisode(filtered)) {
-    return <p>No facts in the brain yet.</p>
+    return <p>Nothing has been promoted yet. Episodes remain searchable.</p>
   }
   const points = layoutBrainMap(filtered.nodes, filtered.edges, GRAPH_SIZE)
   return (
+    <>
     <svg
       className="maia-inspector-graph"
       viewBox={`0 0 ${GRAPH_SIZE.width} ${GRAPH_SIZE.height}`}
@@ -155,27 +201,44 @@ function LiveBrain({ turn, brain }: { turn: InspectorTurn; brain: BrainMap }) {
         return (
           <g key={node.id}>
             <circle cx={point.x} cy={point.y} r={8} />
-            <text x={point.x} y={point.y + 18} textAnchor="middle">
-              {node.label}
-            </text>
           </g>
         )
       })}
     </svg>
+    <NodeChoiceList
+      label="Brain nodes"
+      selectedId={selectedId}
+      onSelect={onSelect}
+      items={filtered.nodes.map((node) => ({
+        id: node.id,
+        label: node.label,
+        taint: node.taint,
+      }))}
+    />
+    </>
   )
 }
 
-function LiveTrace({ turn }: { turn: InspectorTurn }) {
+function LiveTrace({
+  turn,
+  selectedId,
+  onSelect,
+}: {
+  turn: InspectorTurn
+  selectedId: string | null
+  onSelect: (id: string) => void
+}) {
   return (
-    <ol className="maia-trace">
-      {turn.trace.map((step) => (
-        <li key={step.kind}>
-          <span className="maia-inspector-label">{traceLabel(step.kind)}</span>
-          {step.kind === 'route' ? <span className="maia-slot-state">admitted by host</span> : null}
-          <p>{step.text}</p>
-        </li>
-      ))}
-    </ol>
+    <NodeChoiceList
+      label="Trace steps"
+      selectedId={selectedId}
+      onSelect={onSelect}
+      items={turn.trace.map((step, index) => ({
+        id: `${step.kind}-${index}`,
+        label: step.text,
+        detail: step.kind === 'route' ? 'admitted by host' : traceLabel(step.kind),
+      }))}
+    />
   )
 }
 
@@ -185,6 +248,29 @@ function traceLabel(kind: InspectorTurn['trace'][number]['kind']): string {
   return 'Reply'
 }
 
+export function recallTaintText(
+  taint: 'trusted' | 'untrusted' | null | undefined,
+): 'Trusted' | 'Untrusted' | null {
+  if (taint === 'trusted') return 'Trusted'
+  if (taint === 'untrusted') return 'Untrusted'
+  return null
+}
+
 function recallIds(turn: InspectorTurn): Set<string> {
   return new Set(turn.recall.map((item) => item.id))
+}
+
+function recallChoices(
+  turn: InspectorTurn,
+  brain: BrainMap,
+  focusIds: readonly string[],
+): NodeChoice[] {
+  const focus = new Set(focusIds)
+  return turn.recall
+    .filter((item) => focus.size === 0 || focus.has(item.id))
+    .map((item) => ({
+      id: item.id,
+      label: item.sentence,
+      taint: item.taint ?? brain.nodes.find((node) => node.id === item.id)?.taint ?? null,
+    }))
 }

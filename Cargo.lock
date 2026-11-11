@@ -1589,6 +1589,7 @@ name = "maia-daemon"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "dotenvy",
  "futures-util",
  "getrandom 0.2.17",

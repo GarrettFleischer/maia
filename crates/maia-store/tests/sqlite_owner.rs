@@ -57,7 +57,11 @@ use maia_store::NegativeMarkWrite;
 use maia_store::OwnerOpen;
 use maia_store::PlatformKind;
 use maia_store::PresentationWrite;
+use maia_store::NearestClaimRow;
+use maia_store::PendingPromotionRow;
 use maia_store::PromotionClaimWrite;
+use maia_store::PromotionFailureNote;
+use maia_store::PromotionReplaceWrite;
 use maia_store::PromotionWrite;
 use maia_store::ResourceLimit;
 use maia_store::SecurityProfile;
@@ -294,6 +298,9 @@ fn promotion_request() -> PromotionWrite {
             valid_from: 40,
             lexemes: vec!["obsidian".to_owned(), "vault".to_owned()],
         }],
+        same_claim_ids: Vec::new(),
+        replacements: Vec::new(),
+        links: Vec::new(),
     }
 }
 
@@ -400,7 +407,7 @@ fn owner_thread_is_named_maia_sqlite_and_shutdown_reopens() {
     db.reopen(11);
     assert_eq!(must(db.owner().thread_name()), "maia-sqlite");
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 7);
+    assert_eq!(settings.user_version, 10);
 }
 
 #[test]
@@ -456,16 +463,16 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
         db.file(),
         "SELECT CAST(version AS TEXT), name, CAST(applied_at AS TEXT) \
          FROM schema_migrations ORDER BY version",
-        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100",
+        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100",
     );
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 7);
+    assert_eq!(settings.user_version, 10);
     db.reopen(250);
     assert_dump(
         db.file(),
         "SELECT CAST(version AS TEXT), name, CAST(applied_at AS TEXT) \
          FROM schema_migrations ORDER BY version",
-        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100",
+        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100",
     );
     db.shutdown();
 
@@ -495,12 +502,12 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
         &upgrade_file,
         "SELECT CAST(version AS TEXT), name, CAST(applied_at AS TEXT) \
          FROM schema_migrations ORDER BY version",
-        "1|schema_migrations|111\n2|durable_schema|222\n3|super_agent_schema|222\n4|message_submission_idempotency|222\n5|runtime_id_high_water|222\n6|model_connection|222\n7|router_turn_snapshots|222",
+        "1|schema_migrations|111\n2|durable_schema|222\n3|super_agent_schema|222\n4|message_submission_idempotency|222\n5|runtime_id_high_water|222\n6|model_connection|222\n7|router_turn_snapshots|222\n8|mcp_connections|222\n9|promotion_brain|222\n10|approvals_attachments|222",
     );
 
     let future = db.directory.join("future.sqlite");
     let connection = ready(Connection::open(&future));
-    ready(connection.pragma_update(None, "user_version", 8_i64));
+    ready(connection.pragma_update(None, "user_version", 11_i64));
     drop(connection);
     let opened = SqliteOwner::open(OwnerOpen {
         path: future.clone(),
@@ -511,13 +518,13 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
     assert_eq!(
         opened.err(),
         Some(StoreError::DatabaseTooNew {
-            found: 8,
-            supported: 7,
+            found: 11,
+            supported: 10,
         })
     );
     let connection = ready(Connection::open(&future));
     let version: i64 = ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-    assert_eq!(version, 8);
+    assert_eq!(version, 11);
     assert_dump(
         &future,
         "SELECT name FROM sqlite_master WHERE name = 'schema_migrations'",
@@ -531,7 +538,7 @@ fn initial_schema_matches_the_locked_catalog() {
     let settings = must(db.owner().connection_settings());
     assert_eq!(settings.journal_mode, "wal");
     assert_eq!(settings.foreign_keys, 1);
-    assert_eq!(settings.user_version, 7);
+    assert_eq!(settings.user_version, 10);
     db.shutdown();
     let actual = master_dump(db.file());
     let expected = include_str!("expected_schema.txt")
@@ -784,6 +791,9 @@ fn promotion_and_consolidation_are_atomic_and_idempotent() {
         model: "model-a".to_owned(),
         now: 62,
         claims: promotion_request().claims,
+        same_claim_ids: Vec::new(),
+        replacements: Vec::new(),
+        links: Vec::new(),
     });
     assert!(missing.is_err(), "missing episode must not insert claims");
     assert_dump(db.file(), "SELECT claim_id FROM claims", "");
@@ -921,6 +931,301 @@ fn promotion_and_consolidation_are_atomic_and_idempotent() {
         "SELECT claim_id, status, consolidated_by FROM claims",
         "claim-1|superseded|fact-1",
     );
+}
+
+#[test]
+fn apply_promotion_same_and_replaces_is_atomic() {
+    let db = TestDb::open("promo-same-replace", 60);
+    must(db.owner().append(append_request(
+        0,
+        61,
+        vec![thread_event("event-1", "user", "hi")],
+    )));
+    must(db.owner().insert_episode(episode_request()));
+    must(db.owner().apply_promotion(PromotionWrite {
+        episode_id: "episode-1".to_owned(),
+        model: "model-a".to_owned(),
+        now: 62,
+        claims: vec![
+            PromotionClaimWrite {
+                claim_id: "claim-same".to_owned(),
+                sentence: "The vault stays open.".to_owned(),
+                taint: MemoryTaint::Untrusted,
+                valid_from: 40,
+                lexemes: vec!["vault".to_owned()],
+            },
+            PromotionClaimWrite {
+                claim_id: "claim-old".to_owned(),
+                sentence: "Bob uses Obsidian.".to_owned(),
+                taint: MemoryTaint::Untrusted,
+                valid_from: 40,
+                lexemes: vec!["bob".to_owned()],
+            },
+        ],
+        same_claim_ids: Vec::new(),
+        replacements: Vec::new(),
+        links: Vec::new(),
+    }));
+
+    let mut episode_two = episode_request();
+    episode_two.episode_id = "episode-2".to_owned();
+    episode_two.turn_id = "turn-2".to_owned();
+    episode_two.body = "Bob prefers Neovim.".to_owned();
+    episode_two.created_at = 50;
+    episode_two.segments[0].text = "Bob prefers Neovim.".to_owned();
+    must(db.owner().insert_episode(episode_two));
+    must(db.owner().apply_promotion(PromotionWrite {
+        episode_id: "episode-2".to_owned(),
+        model: "model-b".to_owned(),
+        now: 70,
+        claims: vec![PromotionClaimWrite {
+            claim_id: "claim-new".to_owned(),
+            sentence: "Bob prefers Neovim.".to_owned(),
+            taint: MemoryTaint::Untrusted,
+            valid_from: 50,
+            lexemes: vec!["bob".to_owned(), "neovim".to_owned()],
+        }],
+        same_claim_ids: vec!["claim-same".to_owned()],
+        replacements: vec![PromotionReplaceWrite {
+            old_claim_id: "claim-old".to_owned(),
+            new_claim_id: "claim-new".to_owned(),
+        }],
+        links: Vec::new(),
+    }));
+
+    assert_dump(
+        db.file(),
+        "SELECT claim_id, status, COALESCE(replaced_by, '') FROM claims ORDER BY claim_id",
+        "claim-new|provisional|\nclaim-old|superseded|claim-new\nclaim-same|provisional|",
+    );
+    assert_dump(
+        db.file(),
+        "SELECT from_id, to_id FROM edges WHERE edge_kind = 'mention' ORDER BY from_id, to_id",
+        "claim-new|episode-2\nclaim-old|episode-1\nclaim-same|episode-1\nclaim-same|episode-2",
+    );
+    assert_dump(
+        db.file(),
+        "SELECT CAST(promoted_at AS TEXT), promoted_model FROM episodes WHERE episode_id = 'episode-2'",
+        "70|model-b",
+    );
+}
+
+#[test]
+fn apply_promotion_with_invalid_replacement_rolls_back_completely() {
+    let db = TestDb::open("promo-partial", 60);
+    must(db.owner().append(append_request(
+        0,
+        61,
+        vec![thread_event("event-1", "user", "hi")],
+    )));
+    must(db.owner().insert_episode(episode_request()));
+    let failed = db.owner().apply_promotion(PromotionWrite {
+        episode_id: "episode-1".to_owned(),
+        model: "model-a".to_owned(),
+        now: 62,
+        claims: vec![PromotionClaimWrite {
+            claim_id: "claim-new".to_owned(),
+            sentence: "A replacement claim.".to_owned(),
+            taint: MemoryTaint::Untrusted,
+            valid_from: 40,
+            lexemes: vec!["replacement".to_owned()],
+        }],
+        same_claim_ids: Vec::new(),
+        replacements: vec![PromotionReplaceWrite {
+            old_claim_id: "missing-old".to_owned(),
+            new_claim_id: "claim-new".to_owned(),
+        }],
+        links: Vec::new(),
+    });
+    assert!(matches!(failed, Err(StoreError::NotFound { .. })));
+    assert_dump(db.file(), "SELECT claim_id FROM claims", "");
+    assert_dump(
+        db.file(),
+        "SELECT promoted_at IS NULL FROM episodes",
+        "1",
+    );
+}
+
+#[test]
+fn pending_promotions_exclude_promoted_and_quarantined_and_failures_stay_searchable() {
+    let db = TestDb::open("promo-pending", 60);
+    must(db.owner().append(append_request(
+        0,
+        61,
+        vec![thread_event("event-1", "user", "hi")],
+    )));
+    must(db.owner().insert_episode(episode_request()));
+    let mut episode_two = episode_request();
+    episode_two.episode_id = "episode-2".to_owned();
+    episode_two.turn_id = "turn-2".to_owned();
+    episode_two.body = "Second episode body".to_owned();
+    episode_two.created_at = 45;
+    episode_two.segments[0].text = "Second episode body".to_owned();
+    must(db.owner().insert_episode(episode_two));
+    let mut episode_three = episode_request();
+    episode_three.episode_id = "episode-3".to_owned();
+    episode_three.turn_id = "turn-3".to_owned();
+    episode_three.body = "Third episode body".to_owned();
+    episode_three.created_at = 50;
+    episode_three.segments[0].text = "Third episode body".to_owned();
+    must(db.owner().insert_episode(episode_three));
+
+    let pending = must(db.owner().pending_promotions());
+    assert_eq!(
+        pending
+            .iter()
+            .map(|row| row.episode_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["episode-1", "episode-2", "episode-3"]
+    );
+
+    must(db.owner().apply_promotion(promotion_request()));
+    let first_failure = must(db.owner().note_promotion_failure("episode-2", 2));
+    assert_eq!(
+        first_failure.value,
+        PromotionFailureNote {
+            failures: 1,
+            quarantined: false,
+        }
+    );
+    assert_eq!(
+        must(db.owner().search(TextSearch::Episode, "Second")),
+        vec!["episode-2".to_owned()]
+    );
+    assert_eq!(
+        must(db.owner().pending_promotions()),
+        vec![
+            PendingPromotionRow {
+                episode_id: "episode-2".to_owned(),
+                created_at: 45,
+                promotion_failures: 1,
+            },
+            PendingPromotionRow {
+                episode_id: "episode-3".to_owned(),
+                created_at: 50,
+                promotion_failures: 0,
+            },
+        ]
+    );
+
+    let quarantined = must(db.owner().note_promotion_failure("episode-2", 2));
+    assert_eq!(
+        quarantined.value,
+        PromotionFailureNote {
+            failures: 2,
+            quarantined: true,
+        }
+    );
+    assert_eq!(
+        must(db.owner().search(TextSearch::Episode, "Second")),
+        vec!["episode-2".to_owned()]
+    );
+    assert_eq!(
+        must(db.owner().pending_promotions())
+            .into_iter()
+            .map(|row| row.episode_id)
+            .collect::<Vec<_>>(),
+        vec!["episode-3".to_owned()]
+    );
+
+    must(db.owner().mark_promotion_skipped("episode-3", 80, "model-skip"));
+    assert_eq!(must(db.owner().pending_promotions()), Vec::<PendingPromotionRow>::new());
+    assert_dump(
+        db.file(),
+        "SELECT CAST(promoted_at AS TEXT), promoted_model, CAST(promotion_failures AS TEXT), \
+         CAST(promotion_quarantined AS TEXT) FROM episodes ORDER BY episode_id",
+        "60|model-a|0|0\nNULL|NULL|2|1\n80|model-skip|0|0",
+    );
+}
+
+#[test]
+fn nearest_claims_returns_bob_for_query_bob() {
+    let db = TestDb::open("promo-nearest", 60);
+    must(db.owner().append(append_request(
+        0,
+        61,
+        vec![thread_event("event-1", "user", "hi")],
+    )));
+    must(db.owner().insert_episode(episode_request()));
+    must(db.owner().apply_promotion(PromotionWrite {
+        episode_id: "episode-1".to_owned(),
+        model: "model-a".to_owned(),
+        now: 62,
+        claims: vec![
+            PromotionClaimWrite {
+                claim_id: "claim-alice".to_owned(),
+                sentence: "Alice opens the vault.".to_owned(),
+                taint: MemoryTaint::Untrusted,
+                valid_from: 40,
+                lexemes: vec!["alice".to_owned()],
+            },
+            PromotionClaimWrite {
+                claim_id: "claim-bob".to_owned(),
+                sentence: "Bob opens the vault.".to_owned(),
+                taint: MemoryTaint::Untrusted,
+                valid_from: 40,
+                lexemes: vec!["bob".to_owned()],
+            },
+        ],
+        same_claim_ids: Vec::new(),
+        replacements: Vec::new(),
+        links: Vec::new(),
+    }));
+    assert_eq!(
+        must(db.owner().nearest_claims("bob", 5)),
+        vec![NearestClaimRow {
+            claim_id: "claim-bob".to_owned(),
+            sentence: "Bob opens the vault.".to_owned(),
+        }]
+    );
+    assert_eq!(
+        must(db.owner().claim_rows(&[
+            "claim-bob".to_owned(),
+            "missing".to_owned(),
+            "claim-alice".to_owned(),
+        ])),
+        vec![
+            NearestClaimRow {
+                claim_id: "claim-alice".to_owned(),
+                sentence: "Alice opens the vault.".to_owned(),
+            },
+            NearestClaimRow {
+                claim_id: "claim-bob".to_owned(),
+                sentence: "Bob opens the vault.".to_owned(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn promotion_day_stats_and_recall_subgraph_round_trip() {
+    let db = TestDb::open("promo-stats-recall", 60);
+    must(db.owner().append(append_request(
+        0,
+        61,
+        vec![thread_event("event-1", "user", "hi")],
+    )));
+    must(db.owner().insert_episode(episode_request()));
+    must(db.owner().apply_promotion(promotion_request()));
+    must(db.owner().bump_promotion_day_stats("2026-11-10", 1, 40));
+    must(db.owner().bump_promotion_day_stats("2026-11-10", 2, 10));
+    assert_eq!(must(db.owner().promotion_day_stats("2026-11-10")), (3, 50));
+    assert_eq!(must(db.owner().promotion_day_stats("missing-day")), (0, 0));
+
+    let map = must(db.owner().recall_subgraph(
+        &["claim-1".to_owned()],
+        &["obsidian".to_owned()],
+        2,
+    ));
+    let ids = map
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&"claim-1"));
+    assert!(ids.contains(&"obsidian"));
+    assert!(ids.contains(&"episode-1"));
+    assert!(ids.contains(&"vault"));
 }
 
 #[test]
@@ -1652,12 +1957,13 @@ fn concurrent_opens_of_one_path_share_one_migration_journal() {
             "SELECT CAST(version AS TEXT), CAST(applied_at AS TEXT) FROM schema_migrations ORDER BY version",
         );
         let lines: Vec<&str> = journal.lines().collect();
-        assert_eq!(lines.len(), 5, "journal for round {round}: {journal}");
-        assert!(lines[0].starts_with("1|"), "{journal}");
-        assert!(lines[1].starts_with("2|"), "{journal}");
-        assert!(lines[2].starts_with("3|"), "{journal}");
-        assert!(lines[3].starts_with("4|"), "{journal}");
-        assert!(lines[4].starts_with("5|"), "{journal}");
+        assert_eq!(lines.len(), 10, "journal for round {round}: {journal}");
+        for (index, line) in lines.iter().enumerate() {
+            assert!(
+                line.starts_with(&format!("{}|", index + 1)),
+                "journal for round {round}: {journal}"
+            );
+        }
         for line in lines {
             let applied_at = line.rsplit('|').next().unwrap_or("");
             assert!(
@@ -1925,6 +2231,193 @@ fn owner_revise_replaces_a_fact_sentence_and_trim_deletes_it() {
         must(db.owner().search(TextSearch::Claim, "router")),
         vec!["claim-keep".to_owned()]
     );
+}
+
+fn unit_vector(hot: usize) -> Vec<f32> {
+    let mut values = vec![0.0_f32; 384];
+    values[hot] = 1.0;
+    values
+}
+
+fn register_embedder(db: &TestDb, model_id: &str) {
+    must(db.owner().put_embedding_model(EmbeddingModelWrite {
+        model_id: model_id.to_owned(),
+        dimensions: 384,
+        weights_sha256: "weights-sha".to_owned(),
+        tokenizer_sha256: "tokenizer-sha".to_owned(),
+        query_prefix: "query: ".to_owned(),
+        document_prefix: "document: ".to_owned(),
+        recorded_at: 162,
+    }));
+}
+
+#[test]
+fn probe_vector_write_leaves_no_claim_row() {
+    let db = TestDb::open("vec-probe", 70);
+    must(db.owner().probe_vector_write());
+    assert_eq!(dump(db.file(), "SELECT COUNT(*) FROM claim_vec"), "0");
+    assert_eq!(dump(db.file(), "SELECT COUNT(*) FROM embedding_rows"), "0");
+}
+
+#[test]
+fn nearest_claims_and_recall_omit_superseded_claims() {
+    let db = TestDb::open("promo-closed-nearest", 60);
+    must(db.owner().append(append_request(
+        0,
+        61,
+        vec![thread_event("event-1", "user", "hi")],
+    )));
+    must(db.owner().insert_episode(episode_request()));
+    must(db.owner().apply_promotion(PromotionWrite {
+        episode_id: "episode-1".to_owned(),
+        model: "model-a".to_owned(),
+        now: 62,
+        claims: vec![PromotionClaimWrite {
+            claim_id: "claim-old".to_owned(),
+            sentence: "Bob uses Obsidian.".to_owned(),
+            taint: MemoryTaint::Untrusted,
+            valid_from: 40,
+            lexemes: vec!["bob".to_owned(), "obsidian".to_owned()],
+        }],
+        same_claim_ids: Vec::new(),
+        replacements: Vec::new(),
+        links: Vec::new(),
+    }));
+    let mut episode_two = episode_request();
+    episode_two.episode_id = "episode-2".to_owned();
+    episode_two.turn_id = "turn-2".to_owned();
+    episode_two.body = "Bob prefers Neovim.".to_owned();
+    episode_two.created_at = 50;
+    episode_two.segments[0].text = "Bob prefers Neovim.".to_owned();
+    must(db.owner().insert_episode(episode_two));
+    must(db.owner().apply_promotion(PromotionWrite {
+        episode_id: "episode-2".to_owned(),
+        model: "model-b".to_owned(),
+        now: 70,
+        claims: vec![PromotionClaimWrite {
+            claim_id: "claim-new".to_owned(),
+            sentence: "Bob prefers Neovim.".to_owned(),
+            taint: MemoryTaint::Untrusted,
+            valid_from: 50,
+            lexemes: vec!["bob".to_owned(), "neovim".to_owned()],
+        }],
+        same_claim_ids: Vec::new(),
+        replacements: vec![PromotionReplaceWrite {
+            old_claim_id: "claim-old".to_owned(),
+            new_claim_id: "claim-new".to_owned(),
+        }],
+        links: Vec::new(),
+    }));
+    assert_eq!(
+        must(db.owner().nearest_claims("Obsidian", 5)),
+        Vec::<NearestClaimRow>::new()
+    );
+    assert_eq!(
+        must(db.owner().nearest_claims("Neovim", 5)),
+        vec![NearestClaimRow {
+            claim_id: "claim-new".to_owned(),
+            sentence: "Bob prefers Neovim.".to_owned(),
+        }]
+    );
+    let map = must(db.owner().recall_subgraph(&[], &["bob".to_owned()], 2));
+    let claims = map
+        .nodes
+        .iter()
+        .filter(|node| node.kind == BrainNodeKind::Claim)
+        .map(|node| node.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(claims.contains(&"claim-new"));
+    assert!(!claims.contains(&"claim-old"));
+}
+
+#[test]
+fn nearest_claim_vectors_keep_the_same_model_and_the_nearer_claim() {
+    let db = TestDb::open("claim-knn", 80);
+    must(db.owner().append(append_request(
+        0,
+        81,
+        vec![thread_event("event-1", "user", "hi")],
+    )));
+    must(db.owner().insert_episode(episode_request()));
+    must(db.owner().apply_promotion(PromotionWrite {
+        episode_id: "episode-1".to_owned(),
+        model: "model-a".to_owned(),
+        now: 82,
+        claims: vec![
+            PromotionClaimWrite {
+                claim_id: "claim-near".to_owned(),
+                sentence: "The near claim.".to_owned(),
+                taint: MemoryTaint::Trusted,
+                valid_from: 40,
+                lexemes: vec!["near".to_owned()],
+            },
+            PromotionClaimWrite {
+                claim_id: "claim-far".to_owned(),
+                sentence: "The far claim.".to_owned(),
+                taint: MemoryTaint::Trusted,
+                valid_from: 40,
+                lexemes: vec!["far".to_owned()],
+            },
+            PromotionClaimWrite {
+                claim_id: "claim-other".to_owned(),
+                sentence: "The other model claim.".to_owned(),
+                taint: MemoryTaint::Trusted,
+                valid_from: 40,
+                lexemes: vec!["other".to_owned()],
+            },
+        ],
+        same_claim_ids: Vec::new(),
+        replacements: Vec::new(),
+        links: Vec::new(),
+    }));
+    register_embedder(&db, "bge-small-en-v1.5");
+    register_embedder(&db, "other-model");
+    must(db.owner().upsert_embedding(EmbeddingWrite {
+        target: EmbeddingTarget::Claim,
+        target_id: "claim-near".to_owned(),
+        model_id: "bge-small-en-v1.5".to_owned(),
+        values: unit_vector(0),
+    }));
+    must(db.owner().upsert_embedding(EmbeddingWrite {
+        target: EmbeddingTarget::Claim,
+        target_id: "claim-far".to_owned(),
+        model_id: "bge-small-en-v1.5".to_owned(),
+        values: unit_vector(1),
+    }));
+    must(db.owner().upsert_embedding(EmbeddingWrite {
+        target: EmbeddingTarget::Claim,
+        target_id: "claim-other".to_owned(),
+        model_id: "other-model".to_owned(),
+        values: unit_vector(0),
+    }));
+    let hits = must(db.owner().nearest_claim_vectors(
+        "bge-small-en-v1.5",
+        &unit_vector(0),
+        5,
+    ));
+    assert_eq!(
+        hits.first().map(|hit| hit.claim_id.as_str()),
+        Some("claim-near")
+    );
+    assert!(hits.iter().any(|hit| hit.claim_id == "claim-far"));
+    assert!(hits.iter().all(|hit| hit.claim_id != "claim-other"));
+    assert!(matches!(
+        must(db.owner().embedding_for_model(
+            EmbeddingTarget::Claim,
+            "claim-other",
+            "bge-small-en-v1.5",
+        )),
+        None
+    ));
+    let other = must(db.owner().embedding_for_model(
+        EmbeddingTarget::Claim,
+        "claim-other",
+        "other-model",
+    ));
+    assert_eq!(other.as_ref().map(Vec::len), Some(384));
+    assert!(hits
+        .windows(2)
+        .all(|pair| pair[0].distance_bits <= pair[1].distance_bits));
 }
 
 fn durable_dump(path: &Path) -> String {

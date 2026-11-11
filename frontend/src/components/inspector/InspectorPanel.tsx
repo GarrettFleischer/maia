@@ -92,6 +92,9 @@ function InspectorTabPanel({
           {data.cache_slots.map((slot) => (
             <li key={slot.id} data-testid={`inspector-cache-slot-${slot.id}`}>
               {slot.label} · {slot.section}
+              {slot.section === 'recall'
+                ? ` · ${slot.taint === 'trusted' ? 'Trusted' : 'Untrusted'}`
+                : ''}
             </li>
           ))}
         </ul>
@@ -135,7 +138,7 @@ export function InspectorPanel({
   open: boolean
   onClose: () => void
   data?: InspectorFixtureDto
-  live?: { turns: readonly InspectorTurn[]; brain: BrainMap }
+  live?: { turns: readonly InspectorTurn[]; brain: BrainMap; focusIds?: readonly string[] }
 }) {
   const [activeTab, setActiveTab] = useState<InspectorTabId>('cache')
   const [scrub, setScrub] = useState<number | null>(null)
@@ -160,6 +163,7 @@ export function InspectorPanel({
           tabListId={tabListId}
           index={index}
           onScrub={setScrub}
+          focusIds={live.focusIds}
         />
       ) : data ? (
         <InspectorTabPanel tab={activeTab} data={data} tabListId={tabListId} />

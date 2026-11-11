@@ -1,7 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { AttachmentChips, attachmentAllowed } from '@/components/shell/AttachmentChips'
 import { MarkdownMessage } from '@/components/shell/MarkdownMessage'
 import type { ComposerNotice, RouterMessage, TranscriptState } from '@/api/superAgentTypes'
 import { composerStatusText } from '@/api/superAgentFormat'
+import { composerFieldPx } from '@/components/shell/composerField'
 import { useTranscriptPosition } from '@/components/shell/transcriptPosition'
 import {
   dedupeRouterMessages,
@@ -32,10 +34,15 @@ export function RouterConversation({
   notice,
   disabled,
   accessory = null,
+  submitOnEnter = true,
   onDraftChange,
   onRetryTranscript,
   onAnnouncementAcknowledged,
   onSubmit,
+  factsUsed,
+  onInspectFacts,
+  canAttach = false,
+  stageAttachments,
 }: {
   messages: readonly RouterMessage[]
   transcriptState: TranscriptState
@@ -47,18 +54,57 @@ export function RouterConversation({
   notice: ComposerNotice
   disabled: boolean
   accessory?: ReactNode
+  submitOnEnter?: boolean
   onDraftChange: (draft: string) => void
   onRetryTranscript: () => void
   onAnnouncementAcknowledged: (sequence: number) => void
   onSubmit: () => void
+  factsUsed?: ReadonlyMap<string, readonly string[]>
+  onInspectFacts?: (messageId: string, ids: readonly string[]) => void
+  canAttach?: boolean
+  stageAttachments?: (files: readonly File[]) => Promise<void>
 }) {
   const [rejection, setRejection] = useState<string | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [composerKey, setComposerKey] = useState(0)
+  const fieldRef = useRef<HTMLTextAreaElement>(null)
+  const previousComposer = useRef({
+    draft,
+    sending: operation.kind === 'sending',
+  })
+  if (
+    previousComposer.current.sending &&
+    previousComposer.current.draft.length > 0 &&
+    draft.length === 0
+  ) {
+    setComposerKey((key) => key + 1)
+  }
+  previousComposer.current = {
+    draft,
+    sending: operation.kind === 'sending',
+  }
   const busy = disabled || admission.kind === 'blocked' || operation.kind === 'sending'
   const status =
     operation.kind === 'sending' ? 'Sending.' : composerStatusText(notice, rejection)
   const visibleMessages = dedupeRouterMessages(messages)
   const messageKey = JSON.stringify(visibleMessages.map((message) => message.message_id))
-  const { transcriptRef, onScroll } = useTranscriptPosition(messageKey, transcriptState)
+  const { transcriptRef, onScroll, latestOffer, jumpToLatest } = useTranscriptPosition(
+    messageKey,
+    transcriptState,
+  )
+  const fitField = (field: HTMLTextAreaElement) => {
+    field.style.height = 'auto'
+    field.style.height = `${composerFieldPx(field.scrollHeight)}px`
+  }
+  useLayoutEffect(() => {
+    const field = fieldRef.current
+    if (!field) return
+    if (draft.length === 0) {
+      field.style.height = ''
+      return
+    }
+    fitField(field)
+  }, [draft])
 
   useEffect(() => {
     if (!announcement) return
@@ -69,14 +115,35 @@ export function RouterConversation({
     return () => window.clearTimeout(timeout)
   }, [announcement, onAnnouncementAcknowledged])
 
-  const submit = () => {
+  const addFiles = (list: FileList | null) => {
+    if (!list) return
+    const next: File[] = []
+    for (const file of list) {
+      if (!attachmentAllowed(file.type, file.size)) {
+        setRejection('That file type is not allowed, or it is larger than 10 MB.')
+        continue
+      }
+      next.push(file)
+    }
+    if (next.length > 0) setPendingFiles((current) => [...current, ...next])
+  }
+
+  const submit = async () => {
     if (busy) return
     if (draft.trim().length === 0) {
       setRejection('Write a message before sending.')
       return
     }
     setRejection(null)
-    onSubmit()
+    try {
+      if (pendingFiles.length > 0) {
+        await stageAttachments?.(pendingFiles)
+        setPendingFiles([])
+      }
+      onSubmit()
+    } catch {
+      setRejection('The attachment could not be stored.')
+    }
   }
 
   return (
@@ -113,7 +180,9 @@ export function RouterConversation({
             {visibleMessages.length === 0 ? 'Loading conversation.' : 'Refreshing conversation.'}
           </p>
         ) : null}
-        {transcriptState.kind === 'empty' ? <p>No messages yet.</p> : null}
+        {transcriptState.kind === 'empty' ? (
+          <p>This is the owner chat. Say what you want done; work shows under Tasks.</p>
+        ) : null}
         {transcriptState.kind === 'error' ? (
           <div role={notice.kind === 'admitted_failure' ? undefined : 'status'}>
             <p>{transcriptState.text}</p>
@@ -137,6 +206,7 @@ export function RouterConversation({
                     className={message.role === 'owner' ? 'maia-run maia-run--you' : 'maia-run'}
                     aria-label={`Message from ${speaker}`}
                   >
+                    <p className="maia-speaker">{speaker}</p>
                     {message.thinking ? (
                       <details className="maia-fold">
                         <summary>Thinking</summary>
@@ -150,6 +220,16 @@ export function RouterConversation({
                       </details>
                     ) : null}
                     <MarkdownMessage text={message.text} className="maia-transcript-body" />
+                    <AttachmentChips chips={message.attachments ?? []} />
+                    <FactsUsed
+                      ids={factsUsed?.get(message.message_id) ?? []}
+                      onOpen={() =>
+                        onInspectFacts?.(
+                          message.message_id,
+                          factsUsed?.get(message.message_id) ?? [],
+                        )
+                      }
+                    />
                   </article>
                 </div>
               </li>
@@ -157,20 +237,57 @@ export function RouterConversation({
           })}
         </ol>
       </div>
+      {latestOffer ? (
+        <button type="button" className="maia-btn maia-latest" onClick={jumpToLatest}>
+          Latest message
+        </button>
+      ) : null}
       {accessory}
       <form
         className="maia-composer"
         data-testid="composer"
         onSubmit={(event) => {
           event.preventDefault()
-          submit()
+          void submit()
+        }}
+        onDragOver={(event) => {
+          if (!canAttach) return
+          event.preventDefault()
+        }}
+        onDrop={(event) => {
+          if (!canAttach) return
+          event.preventDefault()
+          addFiles(event.dataTransfer.files)
+        }}
+        onPaste={(event) => {
+          if (!canAttach || event.clipboardData.files.length === 0) return
+          addFiles(event.clipboardData.files)
         }}
       >
         <div className="maia-composer-box">
+        {pendingFiles.length > 0 ? (
+          <ul className="maia-attachment-chips" aria-label="Attachments">
+            {pendingFiles.map((file) => (
+              <li key={`${file.name}-${file.size}-${file.lastModified}`}>
+                <span>{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPendingFiles((current) => current.filter((item) => item !== file))
+                  }
+                >
+                  Remove {file.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <label htmlFor="composer-input" className="visually-hidden">
           Message
         </label>
         <textarea
+          ref={fieldRef}
+          key={composerKey}
           id="composer-input"
           placeholder="Message Router"
           value={draft}
@@ -178,40 +295,80 @@ export function RouterConversation({
           aria-disabled={busy}
           aria-invalid={rejection ? true : undefined}
           onChange={(event) => {
+            fitField(event.currentTarget)
             setRejection(null)
             onDraftChange(event.target.value)
           }}
           onKeyDown={(event) => {
+            if (!submitOnEnter) return
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault()
-              submit()
+              void submit()
             }
           }}
         />
         <div className="maia-composer-row">
-          <span className="maia-composer-hint">
-            <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line
-          </span>
+          {submitOnEnter ? (
+            <span className="maia-composer-hint">
+              <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line
+            </span>
+          ) : (
+            <span className="maia-composer-hint" />
+          )}
+          {canAttach ? (
+            <label className="maia-btn">
+              Attach
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp,text/plain,application/pdf"
+                multiple
+                hidden
+                onChange={(event) => {
+                  addFiles(event.currentTarget.files)
+                  event.currentTarget.value = ''
+                }}
+              />
+            </label>
+          ) : null}
           <button type="submit" className="maia-btn maia-btn--primary" disabled={busy}>
             Send
           </button>
         </div>
         </div>
         {status ? (
-          <p
-            className={
-              notice.kind === 'failed' ||
-              notice.kind === 'admitted_failure' ||
-              notice.kind === 'refresh_failed'
-                ? 'maia-status maia-status--failed'
-                : 'maia-status'
-            }
-            role="status"
-          >
-            {status}
-          </p>
+          <div className="maia-status-row">
+            <p
+              className={
+                notice.kind === 'failed' || notice.kind === 'admitted_failure'
+                  ? 'maia-status maia-status--failed'
+                  : 'maia-status'
+              }
+              role="status"
+            >
+              {status}
+            </p>
+            {notice.kind === 'refresh_failed' ? (
+              <button
+                type="button"
+                className="maia-btn"
+                onClick={onRetryTranscript}
+                disabled={operation.kind === 'sending'}
+              >
+                Refresh conversation
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </form>
     </>
+  )
+}
+
+function FactsUsed({ ids, onOpen }: { ids: readonly string[]; onOpen: () => void }) {
+  if (ids.length === 0) return null
+  return (
+    <button type="button" className="maia-btn" onClick={onOpen}>
+      Facts used
+    </button>
   )
 }

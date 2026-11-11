@@ -81,6 +81,7 @@ use maia_daemon::ChildNarrowing;
 use maia_daemon::CompletionEvidence;
 use maia_daemon::HttpIdSupply;
 use maia_daemon::IdSupply;
+use maia_daemon::named_tool_response;
 use maia_daemon::Orchestrator;
 use maia_daemon::OrchestratorConfig;
 use maia_daemon::OrchestratorError;
@@ -128,6 +129,7 @@ struct RouterScript {
 
 enum ScriptedReply {
     Proposal(RouteProposal),
+    Tool { name: String, arguments: String },
     Raw(String),
 }
 
@@ -142,6 +144,15 @@ impl ScriptedRouter {
     }
 
     fn push_proposal(&self, proposal: RouteProposal) {
+        self.push(ScriptedReply::Proposal(proposal));
+        self.push(ScriptedReply::Tool {
+            name: "success".to_owned(),
+            arguments: r#"{"message":"Done."}"#.to_owned(),
+        });
+    }
+
+    /// Queues a route the host will answer itself, so the loop does not call again.
+    fn push_host_ask(&self, proposal: RouteProposal) {
         self.push(ScriptedReply::Proposal(proposal));
     }
 
@@ -188,6 +199,9 @@ impl Router for ScriptedRouter {
                     Some(ScriptedReply::Proposal(proposal)) => Ok(
                         maia_daemon::route_tool_response(request.request_id, &proposal),
                     ),
+                    Some(ScriptedReply::Tool { name, arguments }) => {
+                        Ok(named_tool_response(request.request_id, &name, &arguments))
+                    }
                     Some(ScriptedReply::Raw(body)) => Ok(reply_response(request.request_id, body)),
                     None => Err(RouterError::Protocol {
                         detail: "no scripted proposal".to_owned(),
@@ -268,7 +282,6 @@ impl Env {
                 ids,
                 turn: RouterTurn {
                     model: "fixture-model".to_owned(),
-                    max_output_tokens: 32,
                     reasoning: ReasoningEffort::Low,
                     prefix_hash: PrefixHash::new("fixture-prefix"),
                 },
@@ -499,7 +512,6 @@ fn restore_host(
             ids,
             turn: RouterTurn {
                 model: "fixture-model".to_owned(),
-                max_output_tokens: 32,
                 reasoning: ReasoningEffort::Low,
                 prefix_hash: PrefixHash::new("fixture-prefix"),
             },
@@ -1701,7 +1713,7 @@ fn create_linked_asks_while_running_and_seals_only_the_new_prompt() {
         env.host().phase(&task),
         Some(TaskPhase::Running { .. })
     ));
-    env.router.push_proposal(linked_proposal("task-1"));
+    env.router.push_host_ask(linked_proposal("task-1"));
     let asked = wait(env.host().handle_user_message(LINKED)).expect("ask");
     assert!(matches!(asked.admitted, AdmittedRoute::AskUser { .. }));
     assert!(asked.task.is_none());
@@ -2600,7 +2612,6 @@ fn legacy_thread_survives_create_continue_and_complete() {
             ids: supply(),
             turn: RouterTurn {
                 model: "fixture-model".to_owned(),
-                max_output_tokens: 32,
                 reasoning: ReasoningEffort::Low,
                 prefix_hash: PrefixHash::new("fixture-prefix"),
             },

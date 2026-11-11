@@ -20,10 +20,24 @@ export function MarkdownMessage({ text, className }: { text: string; className?:
   )
 }
 
+function linkText(children: ReactNode): string {
+  return Children.toArray(children)
+    .map((child) => {
+      if (typeof child === 'string' || typeof child === 'number') return String(child)
+      if (isValidElement<{ children?: ReactNode }>(child)) return linkText(child.props.children)
+      return ''
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
   if (!href) return <>{children}</>
+  const external = /^https?:\/\//i.test(href)
+  const name = external ? `${linkText(children)} (opens in a new tab)` : undefined
   return (
-    <a href={href} target="_blank" rel="noreferrer">
+    <a href={href} target="_blank" rel="noreferrer" aria-label={name}>
       {children}
     </a>
   )

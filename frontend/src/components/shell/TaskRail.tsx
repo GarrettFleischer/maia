@@ -1,7 +1,9 @@
 import { useState, type ReactNode } from 'react'
 import type { PinMark, SidebarRow, SidebarSection, TaskPhaseName } from '@/api/superAgentTypes'
 import {
+  ACTIVITY_PREVIEW_LIMIT,
   SIDEBAR_SECTION_ORDER,
+  activityPreview,
   formatElapsed,
   formatPhase,
   groupSidebarRows,
@@ -13,6 +15,12 @@ function phaseMark(phase: TaskPhaseName): string {
   if (phase === 'queued') return 'maia-mark maia-mark--wait'
   if (phase === 'cancelled' || phase === 'abandoned') return 'maia-mark maia-mark--arch'
   return 'maia-mark maia-mark--need'
+}
+
+function ActivityPreview({ summary }: { summary: string }) {
+  const preview = activityPreview(summary, ACTIVITY_PREVIEW_LIMIT)
+  if (preview.length === 0) return null
+  return <span className="maia-task-sum">{preview}</span>
 }
 
 function ArchiveDisclosure({ count, children }: { count: number; children: ReactNode }) {
@@ -36,6 +44,7 @@ function TaskBranch({
   row,
   depth,
   expanded,
+  openTaskId,
   onToggle,
   onOpen,
   onPin,
@@ -43,15 +52,21 @@ function TaskBranch({
   row: SidebarRow
   depth: number
   expanded: ReadonlySet<string>
+  openTaskId: string | null
   onToggle: (taskId: string) => void
   onOpen: (taskId: string) => void
   onPin: (taskId: string, pin: PinMark) => void
 }) {
   const expandedRow = expanded.has(row.task_id)
+  const selected = openTaskId === row.task_id
   const pinLabel = row.section === 'pinned' ? 'Unpin' : 'Pin'
   const nextPin: PinMark = row.section === 'pinned' ? 'unpinned' : 'pinned'
   return (
-    <li aria-label={row.title} className="maia-task-row">
+    <li
+      aria-label={row.title}
+      aria-current={selected ? 'true' : undefined}
+      className={selected ? 'maia-task-row maia-task-row--selected' : 'maia-task-row'}
+    >
       <div className="maia-task-head">
         {row.children.length > 0 ? (
           <button
@@ -68,11 +83,19 @@ function TaskBranch({
         )}
         <button
           type="button"
-          className="maia-task-title"
+          className="maia-task-open"
           aria-label={`Open ${row.title}`}
           onClick={() => onOpen(row.task_id)}
         >
-          {row.title}
+          <span className="maia-task-title">{row.title}</span>
+          <span className="maia-task-phase">
+            <span className={phaseMark(row.phase)} aria-hidden="true" />
+            {formatPhase(row.phase)}
+          </span>
+          <ActivityPreview summary={row.summary} />
+          <span className="maia-task-meta">
+            {formatElapsed(row.elapsed_ms)} · {row.criteria_done}/{row.criteria_total} criteria
+          </span>
         </button>
         {depth === 0 ? (
           <button
@@ -86,14 +109,6 @@ function TaskBranch({
           </button>
         ) : null}
       </div>
-      <p className="maia-task-phase">
-        <span className={phaseMark(row.phase)} aria-hidden="true" />
-        {formatPhase(row.phase)}
-      </p>
-      <p className="maia-task-sum">{row.summary}</p>
-      <p className="maia-task-meta">
-        {formatElapsed(row.elapsed_ms)} · {row.criteria_done}/{row.criteria_total} criteria
-      </p>
       {row.children.length > 0 && expandedRow ? (
         <ul className="maia-task-tree" data-level={String(depth + 1)} aria-label={`Helpers for ${row.title}`}>
           {row.children.map((child) => (
@@ -102,6 +117,7 @@ function TaskBranch({
               row={child}
               depth={depth + 1}
               expanded={expanded}
+              openTaskId={openTaskId}
               onToggle={onToggle}
               onOpen={onOpen}
               onPin={onPin}
@@ -118,6 +134,7 @@ function SidebarSectionBlock({
   section,
   rows,
   expanded,
+  openTaskId,
   onToggle,
   onOpen,
   onPin,
@@ -127,6 +144,7 @@ function SidebarSectionBlock({
   section: SidebarSection
   rows: readonly SidebarRow[]
   expanded: ReadonlySet<string>
+  openTaskId: string | null
   onToggle: (taskId: string) => void
   onOpen: (taskId: string) => void
   onPin: (taskId: string, pin: PinMark) => void
@@ -153,6 +171,7 @@ function SidebarSectionBlock({
           row={row}
           depth={0}
           expanded={expanded}
+          openTaskId={openTaskId}
           onToggle={onToggle}
           onOpen={onOpen}
           onPin={onPin}
@@ -180,10 +199,12 @@ function SidebarSectionBlock({
 
 export function TaskRail({
   rows,
+  openTaskId = null,
   onOpen,
   onPin = () => undefined,
 }: {
   rows: readonly SidebarRow[]
+  openTaskId?: string | null
   onOpen: (taskId: string) => void
   onPin?: (taskId: string, pin: PinMark) => void
 }) {
@@ -207,6 +228,7 @@ export function TaskRail({
           section={entry.section}
           rows={grouped.get(entry.section) ?? []}
           expanded={expanded}
+          openTaskId={openTaskId}
           onToggle={onToggle}
           onOpen={onOpen}
           onPin={onPin}

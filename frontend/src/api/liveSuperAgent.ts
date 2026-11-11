@@ -10,10 +10,14 @@ import type {
   PinMark,
   InspectorSnapshot,
   InspectorTurn,
+  LiveApproval,
   RouterMessage,
   RoutingFailureReason,
   SidebarRow,
   SidebarSection,
+  AttachmentChip,
+  ConnectionPhase,
+  ConnectionSnapshot,
   SubmissionOperationId,
   SuperAgentBackendScope,
   SuperAgentClient,
@@ -89,11 +93,20 @@ export function liveSuperAgentClient(
   socketPorts: LiveWebSocketPorts = browserWebSocketPorts(),
 ): SuperAgentClient {
   const root = trimOrigin(origin)
-  const listeners = new Set<(rows: SidebarRow[]) => void>()
+  const listeners = new Set<(rows: SidebarRow[], approvals?: LiveApproval[]) => void>()
+  const linkListeners = new Set<(snapshot: ConnectionSnapshot) => void>()
   let socket: WebSocket | null = null
   let reconnectHandle: unknown | null = null
   let reconnectAttempt = 0
   let disposed = false
+  let phase: ConnectionPhase = 'connected'
+
+  function publishPhase(next: ConnectionPhase) {
+    if (phase === next) return
+    phase = next
+    const snapshot = { phase, origin: root }
+    for (const listener of linkListeners) listener(snapshot)
+  }
 
   function ensureSocket() {
     if (disposed || listeners.size === 0 || socket || reconnectHandle !== null) return
@@ -106,14 +119,16 @@ export function liveSuperAgentClient(
     }
     socket = next
     next.onopen = () => {
-      if (socket === next) reconnectAttempt = 0
+      if (socket !== next) return
+      reconnectAttempt = 0
+      publishPhase('connected')
     }
     next.onmessage = (event) => {
       if (socket !== next) return
       if (typeof event.data !== 'string') return
       const sidebar = readSocket(event.data)
       if (!sidebar) return
-      for (const listener of listeners) listener(sidebar.rows)
+      for (const listener of listeners) listener(sidebar.rows, sidebar.approvals)
     }
     const disconnected = () => {
       if (socket === next) socket = null
@@ -138,6 +153,7 @@ export function liveSuperAgentClient(
     ) {
       return
     }
+    publishPhase('reconnecting')
     const delays = socketPorts.reconnect_delays_ms
     const index = Math.min(reconnectAttempt, Math.max(delays.length - 1, 0))
     const delay = delays[index] ?? 1_000
@@ -164,19 +180,44 @@ export function liveSuperAgentClient(
     backendScope: `live:${root}` as SuperAgentBackendScope,
     createOperationId: generateOperationId,
     sidebar: () => readJson(root, '/api/super-agent/sidebar', undefined, readSidebar),
+    decideApproval: (approvalId, decision) =>
+      readJson(
+        root,
+        `/api/super-agent/approvals/${encodeURIComponent(approvalId)}`,
+        { method: 'POST', body: JSON.stringify({ decision }) },
+        readApprovalResult,
+      ).then(() => undefined),
     transcript: () => readJson(root, '/api/super-agent/transcript', undefined, readTranscript),
     inspector: () => readJson(root, '/api/super-agent/inspector', undefined, readInspector),
     task: (taskId) =>
       readJson(root, `/api/super-agent/tasks/${encodeURIComponent(taskId)}`, undefined, readDetail),
-    send: (operationId, text) =>
+    send: (operationId, text, attachmentIds) =>
       readJson(
         root,
         '/api/super-agent/messages',
         {
           method: 'POST',
-          body: JSON.stringify({ operation_id: operationId, text }),
+          body: JSON.stringify(
+            attachmentIds && attachmentIds.length > 0
+              ? { operation_id: operationId, text, attachment_ids: attachmentIds }
+              : { operation_id: operationId, text },
+          ),
         },
         readMessageAdmission,
+      ),
+    uploadAttachment: (file) =>
+      readJson(
+        root,
+        '/api/super-agent/attachments',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            name: file.name,
+            media_type: file.mediaType,
+            data_base64: bytesToBase64(file.bytes),
+          }),
+        },
+        readUploadedAttachment,
       ),
     pin: (taskId, pin) =>
       readJson(
@@ -222,9 +263,17 @@ export function liveSuperAgentClient(
         if (listeners.size === 0) stopSocket()
       }
     },
+    subscribeConnection(onChange) {
+      linkListeners.add(onChange)
+      onChange({ phase, origin: root })
+      return () => {
+        linkListeners.delete(onChange)
+      }
+    },
     dispose() {
       disposed = true
       listeners.clear()
+      linkListeners.clear()
       stopSocket()
     },
   }
@@ -299,7 +348,7 @@ async function fail(response: Response): Promise<never> {
   throw new SuperAgentRequestError(code)
 }
 
-function readSocket(data: string): { rows: SidebarRow[] } | null {
+function readSocket(data: string): { rows: SidebarRow[]; approvals: LiveApproval[] } | null {
   try {
     return readSidebar(JSON.parse(data) as unknown)
   } catch {
@@ -307,7 +356,7 @@ function readSocket(data: string): { rows: SidebarRow[] } | null {
   }
 }
 
-function readSidebar(value: unknown): { rows: SidebarRow[] } | null {
+function readSidebar(value: unknown): { rows: SidebarRow[]; approvals: LiveApproval[] } | null {
   if (!isRecord(value) || !Array.isArray(value.rows)) return null
   const rows: SidebarRow[] = []
   for (const row of value.rows) {
@@ -315,7 +364,41 @@ function readSidebar(value: unknown): { rows: SidebarRow[] } | null {
     if (!read) return null
     rows.push(read)
   }
-  return { rows }
+  return { rows, approvals: readApprovals(value.approvals) }
+}
+
+function readApprovals(value: unknown): LiveApproval[] {
+  if (!Array.isArray(value)) return []
+  const approvals: LiveApproval[] = []
+  for (const item of value) {
+    const read = readApproval(item)
+    if (read) approvals.push(read)
+  }
+  return approvals
+}
+
+function readApproval(value: unknown): LiveApproval | null {
+  if (!isRecord(value)) return null
+  if (typeof value.approval_id !== 'string' || typeof value.task_id !== 'string') return null
+  if (value.kind !== 'login' && value.kind !== 'consent' && value.kind !== 'capability') return null
+  if (value.taint !== 'trusted' && value.taint !== 'untrusted') return null
+  if (typeof value.grant_text !== 'string' || typeof value.reason !== 'string') return null
+  if (!isCount(value.created_at) || !isCount(value.expires_at)) return null
+  return {
+    approval_id: value.approval_id,
+    task_id: value.task_id,
+    kind: value.kind,
+    taint: value.taint,
+    grant_text: value.grant_text,
+    reason: value.reason,
+    created_at: value.created_at,
+    expires_at: value.expires_at,
+  }
+}
+
+function readApprovalResult(value: unknown): { status: string } | null {
+  if (!isRecord(value) || typeof value.status !== 'string') return null
+  return { status: value.status }
 }
 
 function readRow(value: unknown): SidebarRow | null {
@@ -355,7 +438,15 @@ function readTranscript(value: unknown): { messages: RouterMessage[] } | null {
     if (message.role !== 'owner' && message.role !== 'router') return null
     const thinking = typeof message.thinking === 'string' && message.thinking.length > 0 ? message.thinking : undefined
     const route = typeof message.route === 'string' && message.route.length > 0 ? message.route : undefined
-    messages.push({ message_id: message.message_id, role: message.role, text: message.text, thinking, route })
+    const attachments = readAttachmentChips(message.attachments)
+    messages.push({
+      message_id: message.message_id,
+      role: message.role,
+      text: message.text,
+      thinking,
+      route,
+      ...(attachments.length > 0 ? { attachments } : {}),
+    })
   }
   return { messages }
 }
@@ -397,6 +488,7 @@ function readInspectorTurn(value: unknown): InspectorTurn | null {
     route: value.route,
     reply: value.reply,
     trace,
+    used: readIds(value.used),
   }
 }
 
@@ -414,12 +506,32 @@ function readInspectorSlot(value: unknown) {
   }
 }
 
-function readRecallItem(value: unknown): { id: string; kind: 'claim' | 'fact'; sentence: string; score: number } | null {
+function readRecallItem(value: unknown): {
+  id: string
+  kind: 'claim' | 'fact'
+  sentence: string
+  score: number
+  taint: 'trusted' | 'untrusted' | null
+  walked: string[]
+} | null {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.sentence !== 'string') return null
   const kind = value.kind === 'claim' ? 'claim' : value.kind === 'fact' ? 'fact' : null
   if (!kind) return null
   if (typeof value.score !== 'number' || !Number.isFinite(value.score)) return null
-  return { id: value.id, kind, sentence: value.sentence, score: value.score }
+  const taint = value.taint === 'trusted' || value.taint === 'untrusted' ? value.taint : null
+  return {
+    id: value.id,
+    kind,
+    sentence: value.sentence,
+    score: value.score,
+    taint,
+    walked: readIds(value.walked),
+  }
+}
+
+function readIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string')
 }
 
 function readTraceStep(value: unknown): { kind: 'reasoning' | 'route' | 'reply'; text: string } | null {
@@ -524,6 +636,38 @@ function readAttempt(value: unknown): TaskDetail['attempts'] {
   return [{ attempt_id: value.attempt_id, phase: value.phase, summary: value.summary }]
 }
 
+function readAttachmentChips(value: unknown): AttachmentChip[] {
+  if (!Array.isArray(value)) return []
+  const chips: AttachmentChip[] = []
+  for (const item of value) {
+    if (!isRecord(item)) continue
+    if (typeof item.attachment_id !== 'string' || typeof item.safe_name !== 'string') continue
+    if (typeof item.media_type !== 'string' || !isCount(item.byte_size)) continue
+    chips.push({
+      attachment_id: item.attachment_id,
+      safe_name: item.safe_name,
+      media_type: item.media_type,
+      byte_size: item.byte_size,
+    })
+  }
+  return chips
+}
+
+function readUploadedAttachment(value: unknown): AttachmentChip | null {
+  const chips = readAttachmentChips([value])
+  return chips[0] ?? null
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const step = 0x8000
+  for (let index = 0; index < bytes.length; index += step) {
+    const slice = bytes.subarray(index, index + step)
+    binary += String.fromCharCode(...slice)
+  }
+  return btoa(binary)
+}
+
 function readDecision(value: unknown): TaskDetail['decisions'] {
   if (!isRecord(value)) return []
   if (typeof value.decision_id !== 'string' || typeof value.text !== 'string') return []
@@ -622,9 +766,10 @@ function readPin(value: unknown): { pin: PinMark } | null {
   return { pin: value.pin }
 }
 
-function readOpen(value: unknown): { view: 'open' } | null {
-  if (!isRecord(value) || value.view !== 'open') return null
-  return { view: 'open' }
+function readOpen(value: unknown): { view: 'open' | 'closed_once' } | null {
+  if (!isRecord(value)) return null
+  if (value.view !== 'open' && value.view !== 'closed_once') return null
+  return { view: value.view }
 }
 
 function readClose(value: unknown): { view: 'closed_once' } | null {

@@ -21,6 +21,15 @@ const MAX_BASE_URL_BYTES: usize = 2048;
 const MAX_MODEL_BYTES: usize = 256;
 const MAX_KEY_BYTES: usize = 2560;
 
+/// How long one chat call stays open.
+///
+/// A local gateway such as FreeLLMAPI gives each upstream provider its own
+/// 60-second hop. Hanging up at that same moment cancels failover and leaves
+/// the slow provider unbenched, so the next message stalls the same way.
+/// Test connection only lists models, which returns immediately. Three minutes
+/// covers two of those hops and the fallback body.
+const LIVE_ROUTER_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
+
 /// Why a model connection form could not be accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelConnectionError {
@@ -179,7 +188,7 @@ pub fn router_from_connection(
     let config = RouterConfig {
         base_url: base_url.to_owned(),
         model: model.to_owned(),
-        request_timeout: Duration::from_secs(60),
+        request_timeout: LIVE_ROUTER_REQUEST_TIMEOUT,
         stream_mode: RouterStreamMode::Json,
         trailing_instruction_placement: TrailingInstructionPlacement::TrailingSystem,
     };
@@ -250,6 +259,13 @@ struct WireTest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_router_outlasts_one_gateway_provider_hop() {
+        let router =
+            router_from_connection("http://127.0.0.1:9/v1", "test-key", "auto").expect("router");
+        assert!(router.request_timeout() >= Duration::from_secs(180));
+    }
 
     #[test]
     fn public_json_omits_the_api_key() {

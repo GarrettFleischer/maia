@@ -88,8 +88,6 @@ pub struct RouterRequest {
     pub recall_hash: Option<PrefixHash>,
     /// Requested reasoning effort.
     pub reasoning_effort: ReasoningEffort,
-    /// Output token cap for the provider.
-    pub max_output_tokens: u32,
     /// Turn-local opaque provider tool state.
     pub prior_provider_tool_state: Option<OpaqueTurnState>,
 }

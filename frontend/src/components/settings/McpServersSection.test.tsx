@@ -27,7 +27,17 @@ const pending = {
 }
 
 describe('McpServersSection', () => {
-  it('lets a phone admit a listed hash without editing the transport', async () => {
+  it('hides Admit and Revoke when the phone cannot edit the transport', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(pending)))
+    render(<McpServersSection source="live" editable={false} />)
+    expect(await screen.findByText('Web: pending approval')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Admit' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'List tools' })).toBeNull()
+    expect(screen.queryByLabelText('URL')).toBeNull()
+  })
+
+  it('admits a listed hash only when editing is allowed', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: URL | RequestInfo) => {
@@ -41,12 +51,28 @@ describe('McpServersSection', () => {
       }),
     )
     const user = userEvent.setup()
-    render(<McpServersSection source="live" editable={false} />)
+    render(<McpServersSection source="live" editable />)
     expect(await screen.findByRole('button', { name: 'Admit' })).toBeTruthy()
-    expect(screen.queryByLabelText('URL')).toBeNull()
-    expect(screen.queryByLabelText('Secret')).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Admit' }))
     expect(await screen.findByText('Web: live')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+  })
+
+  it('shows saved servers after the daemon was unreachable', async () => {
+    let calls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls += 1
+        if (calls === 1) throw new TypeError('Failed to fetch')
+        return jsonResponse(pending)
+      }),
+    )
+
+    render(<McpServersSection source="live" editable />)
+
+    expect(await screen.findByText('Web: pending approval', {}, { timeout: 3000 })).toBeTruthy()
+    vi.unstubAllGlobals()
   })
 
   it('does not keep the secret on screen after save', async () => {

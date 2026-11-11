@@ -61,6 +61,31 @@ describe('ModelConnectionSection', () => {
     vi.unstubAllGlobals()
   })
 
+  it('shows the saved connection after the daemon was unreachable', async () => {
+    let calls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls += 1
+        if (calls === 1) throw new TypeError('Failed to fetch')
+        return jsonResponse({
+          base_url: 'http://127.0.0.1:31415/v1',
+          key_set: true,
+          model: 'auto',
+          reasoning: 'high',
+          models: [],
+        })
+      }),
+    )
+
+    render(<ModelConnectionSection source="live" editable />)
+
+    expect(await screen.findByDisplayValue('http://127.0.0.1:31415/v1', {}, { timeout: 3000 })).toBeVisible()
+    expect(screen.getByLabelText('Model')).toHaveValue('auto')
+    expect(screen.getByText('Saved. Future model calls use this connection.')).toBeVisible()
+    vi.unstubAllGlobals()
+  })
+
   it('keeps model connection read-only on the phone', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
       base_url: 'https://example.test/v1',

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { NodeChoiceList } from '@/components/brain/NodeChoiceList'
 import {
   layoutBrainMap,
   validateFactSentence,
@@ -61,7 +62,16 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
   if (map.nodes.length === 0) {
     return (
       <section className="maia-brain" aria-label="Brain map">
-        <p>No facts in the brain yet.</p>
+        <div className="maia-brain-toolbar">
+          <input
+            type="search"
+            aria-label="Search the brain"
+            placeholder="Search the brain"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <p>Nothing has been promoted yet. Episodes remain searchable.</p>
       </section>
     )
   }
@@ -114,6 +124,7 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
         <input
           type="search"
           aria-label="Search the brain"
+          placeholder="Search the brain"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -203,19 +214,16 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           </g>
         </svg>
         <div className="maia-brain-side">
-          <ul className="maia-brain-list" aria-label="Brain nodes">
-            {visible.map((node) => (
-              <li key={node.id}>
-                <button
-                  type="button"
-                  aria-pressed={node.id === selectedId}
-                  onClick={() => selectNode(node.id)}
-                >
-                  {node.label}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <NodeChoiceList
+            label="Brain nodes"
+            selectedId={selectedId}
+            onSelect={selectNode}
+            items={visible.map((node) => ({
+              id: node.id,
+              label: node.label,
+              taint: node.taint,
+            }))}
+          />
           <div className="maia-brain-detail">
             {selected ? (
               <>

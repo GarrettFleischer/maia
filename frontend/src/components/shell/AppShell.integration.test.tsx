@@ -193,8 +193,8 @@ describe('Live shell integration', () => {
 
     expect(await screen.findByText('Live phone transcript')).toBeVisible()
     expect(screen.queryByTestId('phone-stop-bar')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Open agents drawer' }))
-    const drawer = screen.getByRole('dialog', { name: 'Agents' })
+    await user.click(screen.getByRole('button', { name: 'Open tasks drawer' }))
+    const drawer = screen.getByRole('dialog', { name: 'Tasks' })
     expect(within(drawer).queryByTestId('activity-counts')).not.toBeInTheDocument()
     expect(within(drawer).getByRole('button', { name: 'Settings' })).toBeVisible()
     await user.keyboard('{Escape}')
@@ -291,8 +291,9 @@ describe('Live shell integration', () => {
     expect(screen.queryByText('The router could not be reached.')).not.toBeInTheDocument()
     expect(document.body).not.toHaveTextContent('private.invalid')
     expect(document.body).not.toHaveTextContent('sk-SECRET')
-    expect(composer).toHaveValue('')
-    expect(composer).toBeEnabled()
+    const cleared = screen.getByRole('textbox', { name: 'Message' })
+    expect(cleared).toHaveValue('')
+    expect(cleared).toBeEnabled()
     expect(sends).toBe(1)
   })
 
@@ -369,8 +370,9 @@ describe('Live shell integration', () => {
       ).toHaveLength(1),
     )
     expect(screen.getAllByRole('status')).toHaveLength(1)
-    expect(composer).toHaveValue('')
-    expect(composer).toBeEnabled()
+    const cleared = screen.getByRole('textbox', { name: 'Message' })
+    expect(cleared).toHaveValue('')
+    expect(cleared).toBeEnabled()
     expect(sends).toBe(1)
     expect(transcriptReads).toBe(2)
     expect(document.body).not.toHaveTextContent('private.invalid')
@@ -429,8 +431,8 @@ describe('single global stop', () => {
     window.dispatchEvent(new Event('resize'))
     const user = userEvent.setup()
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, { initialState: onboarded() })
-    await user.click(screen.getByRole('button', { name: 'Open agents drawer' }))
-    const drawer = screen.getByRole('dialog', { name: 'Agents' })
+    await user.click(screen.getByRole('button', { name: 'Open tasks drawer' }))
+    const drawer = screen.getByRole('dialog', { name: 'Tasks' })
     const stopAll = within(drawer).getByRole('button', { name: 'Stop all running threads' })
 
     expect(stopAll).toHaveClass('maia-btn')
@@ -463,13 +465,13 @@ describe('Phone shell controls', () => {
     window.dispatchEvent(new Event('resize'))
     const user = userEvent.setup()
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, { initialState: onboarded() })
-    const agentsButton = screen.getByRole('button', { name: /open agents drawer/i })
+    const agentsButton = screen.getByRole('button', { name: /open tasks drawer/i })
     agentsButton.focus()
     await user.click(agentsButton)
-    const drawer = screen.getByRole('dialog', { name: /agents/i })
+    const drawer = screen.getByRole('dialog', { name: /tasks/i })
     expect(drawer).toBeVisible()
     await user.keyboard('{Escape}')
-    expect(screen.queryByRole('dialog', { name: /agents/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: /tasks/i })).not.toBeInTheDocument()
     expect(agentsButton).toHaveFocus()
   })
 
@@ -549,5 +551,128 @@ describe('Inspector tabs', () => {
     expect(screen.getByRole('tab', { name: 'Brain' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Trace' })).toBeInTheDocument()
     expect(screen.getByTestId('inspector-cache-slot-slot-tools')).toBeInTheDocument()
+    expect(screen.getByTestId('inspector-cache-slot-slot-recall')).toHaveTextContent('Untrusted')
+  })
+})
+
+const liveRow = {
+  task_id: 'task-run',
+  title: 'Running task',
+  section: 'working' as const,
+  phase: 'running' as const,
+  summary: 'Working',
+  elapsed_ms: 10,
+  criteria_done: 0,
+  criteria_total: 1,
+  children: [],
+}
+
+describe('Live phone stop and connection', () => {
+  it('shows the phone stop bar when live work is running', async () => {
+    window.innerWidth = 390
+    window.dispatchEvent(new Event('resize'))
+    vi.stubGlobal('WebSocket', class {
+      onmessage: ((event: MessageEvent) => void) | null = null
+      onclose: (() => void) | null = null
+      onerror: (() => void) | null = null
+      close() {
+        this.onclose?.()
+      }
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: URL | RequestInfo) => {
+        const path = new URL(String(input)).pathname
+        if (path === '/api/super-agent/sidebar') return jsonResponse({ rows: [liveRow] })
+        if (path === '/api/super-agent/transcript') {
+          return jsonResponse({ messages: [{ message_id: 'm', role: 'router', text: 'Live running' }] })
+        }
+        return jsonResponse({ error: 'unknown_route' }, 404)
+      }),
+    )
+    renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    expect(await screen.findByText('Live running')).toBeVisible()
+    expect(screen.getByTestId('phone-stop-bar')).toHaveTextContent('1 running')
+    expect(screen.getByRole('button', { name: 'Stop all running threads' })).toBeVisible()
+  })
+
+  it('shows the phone stop bar when live work is waiting', async () => {
+    window.innerWidth = 390
+    window.dispatchEvent(new Event('resize'))
+    vi.stubGlobal('WebSocket', class {
+      close() {}
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: URL | RequestInfo) => {
+        const path = new URL(String(input)).pathname
+        if (path === '/api/super-agent/sidebar') {
+          return jsonResponse({
+            rows: [{ ...liveRow, section: 'needs_you', phase: 'waiting_for_user' }],
+          })
+        }
+        if (path === '/api/super-agent/transcript') {
+          return jsonResponse({ messages: [{ message_id: 'm', role: 'router', text: 'Live waiting' }] })
+        }
+        return jsonResponse({ error: 'unknown_route' }, 404)
+      }),
+    )
+    renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    expect(await screen.findByText('Live waiting')).toBeVisible()
+    expect(screen.getByTestId('phone-stop-bar')).toHaveTextContent('1 needs you')
+  })
+
+  it('shows a reconnecting banner and keeps the draft', async () => {
+    class Socket {
+      static current: Socket | null = null
+      onopen: (() => void) | null = null
+      onclose: (() => void) | null = null
+      onerror: (() => void) | null = null
+      onmessage: ((event: MessageEvent) => void) | null = null
+      constructor() {
+        Socket.current = this
+      }
+      close() {
+        this.onclose?.()
+      }
+    }
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
+    vi.stubGlobal('WebSocket', Socket)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: URL | RequestInfo) => {
+        const path = new URL(String(input)).pathname
+        if (path === '/api/super-agent/sidebar') return jsonResponse({ rows: [] })
+        if (path === '/api/super-agent/transcript') {
+          return jsonResponse({ messages: [{ message_id: 'm', role: 'router', text: 'Live hello' }] })
+        }
+        return jsonResponse({ error: 'unknown_route' }, 404)
+      }),
+    )
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    expect(await screen.findByText('Live hello')).toBeVisible()
+    expect(screen.queryByText('Reconnecting to this computer')).not.toBeInTheDocument()
+    const composer = screen.getByRole('textbox', { name: 'Message' })
+    await user.type(composer, 'keep this')
+    Socket.current?.onclose?.()
+    expect(await screen.findByText('Reconnecting to this computer')).toBeVisible()
+    expect(screen.getByText('http://127.0.0.1:4178')).toBeVisible()
+    expect(composer).toHaveValue('keep this')
+  })
+
+  it('does not present fixture security settings as live', async () => {
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
+    vi.stubGlobal('WebSocket', class {
+      close() {}
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'unknown_route' }, 404)))
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    await user.click(await screen.findByRole('button', { name: 'Settings' }))
+    expect(screen.getByText('Preview, not connected yet')).toBeVisible()
+    expect(screen.queryByTestId('security-settings')).not.toBeInTheDocument()
   })
 })

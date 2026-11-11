@@ -49,7 +49,7 @@ describe('MarkdownMessage', () => {
       <MarkdownMessage text="see [docs](https://example.com/maia) and [x](javascript:alert(1))" />,
     )
 
-    expect(screen.getByRole('link', { name: 'docs' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'docs (opens in a new tab)' })).toHaveAttribute(
       'href',
       'https://example.com/maia',
     )
