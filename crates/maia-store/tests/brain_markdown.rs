@@ -7,9 +7,6 @@ use std::path::PathBuf;
 
 use maia_core::agents::AgentId;
 use maia_core::audit::Timestamp;
-use maia_core::brain::graph_from_docs;
-use maia_core::brain::parse_neuron;
-use maia_core::brain::rank_paths;
 use maia_core::brain::LexicalPolicy;
 use maia_core::brain::NeuronDoc;
 use maia_core::brain::PageRankParams;
@@ -17,6 +14,9 @@ use maia_core::brain::RankPolicy;
 use maia_core::brain::RecallQuery;
 use maia_core::brain::RecallTaintMode;
 use maia_core::brain::ScoreWeights;
+use maia_core::brain::graph_from_docs;
+use maia_core::brain::parse_neuron;
+use maia_core::brain::rank_paths;
 use maia_core::credit::AgeUnit;
 use maia_store::AppendEvents;
 use maia_store::ConsolidationWrite;
@@ -40,10 +40,8 @@ struct TestDb {
 
 impl TestDb {
     fn open(name: &str) -> Self {
-        let directory = std::env::temp_dir().join(format!(
-            "maia-brain-md-{name}-{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("maia-brain-md-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap_or_else(|error| panic!("{error}"));
         let owner = SqliteOwner::open(OwnerOpen {
@@ -165,8 +163,8 @@ fn consolidate(owner: &SqliteOwner, sentence: &str) {
 }
 
 #[test]
-fn schema_version_is_eleven() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 11);
+fn schema_version_is_twelve() {
+    assert_eq!(LATEST_SCHEMA_VERSION, 12);
 }
 
 #[test]
@@ -203,13 +201,70 @@ fn keyword_arm_finds_names_and_windows_paths_without_an_embedder() {
 }
 
 #[test]
+fn keyword_arm_matches_plurals_and_verb_tenses() {
+    let db = TestDb::open("stem");
+    seed_thread(db.owner());
+    must(db.owner().insert_episode(episode(
+        "Bob lives in Portland. Carol goes to Seattle. The box sits on the shelf. A person wrote the note. Sam bought the ticket.",
+        MemoryTaint::Trusted,
+    )));
+    promote(
+        db.owner(),
+        vec![
+            claim(
+                "claim-bob",
+                "Bob lives in Portland.",
+                MemoryTaint::Trusted,
+                &["bob", "portland"],
+            ),
+            claim(
+                "claim-carol",
+                "Carol goes to Seattle.",
+                MemoryTaint::Trusted,
+                &["carol", "seattle"],
+            ),
+            claim(
+                "claim-box",
+                "The box sits on the shelf.",
+                MemoryTaint::Trusted,
+                &["box", "shelf"],
+            ),
+            claim(
+                "claim-person",
+                "A person wrote the note.",
+                MemoryTaint::Trusted,
+                &["person", "note"],
+            ),
+            claim(
+                "claim-buy",
+                "Sam bought the ticket.",
+                MemoryTaint::Trusted,
+                &["sam", "ticket"],
+            ),
+        ],
+    );
+    let find = |query: &str, id: &str| {
+        let hits = must(db.owner().search_neurons(query, 8));
+        assert!(
+            hits.iter().any(|hit| hit.id == id),
+            "{query} missed {id}: {hits:?}"
+        );
+    };
+    find("where does Bob live", "claim-bob");
+    find("who went to Seattle", "claim-carol");
+    find("boxes", "claim-box");
+    find("people", "claim-person");
+    find("will buy", "claim-buy");
+}
+
+#[test]
 fn keyword_index_follows_body_edits_and_soft_deletes() {
     let db = TestDb::open("edit");
     seed_thread(db.owner());
-    must(db.owner().insert_episode(episode(
-        "Zephyr keeps a path.",
-        MemoryTaint::Trusted,
-    )));
+    must(
+        db.owner()
+            .insert_episode(episode("Zephyr keeps a path.", MemoryTaint::Trusted)),
+    );
     promote(
         db.owner(),
         vec![claim(
@@ -221,24 +276,33 @@ fn keyword_index_follows_body_edits_and_soft_deletes() {
     );
     let dir = db.directory.join("md");
     must(db.owner().export_brain_markdown(&dir, 100));
-    let file = dir.join("claim").join("zephyr-keeps-f-development-ideas--claim-path.md");
+    let file = dir
+        .join("claim")
+        .join("zephyr-keeps-f-development-ideas--claim-path.md");
     let text = fs::read_to_string(&file).unwrap_or_else(|error| panic!("{error}"));
     let edited = rewrite_updated_at(
-        &text.replace("Zephyr keeps F:\\Development\\Ideas.", "Quartz keeps the vault."),
+        &text.replace(
+            "Zephyr keeps F:\\Development\\Ideas.",
+            "Quartz keeps the vault.",
+        ),
         500,
     );
     fs::write(&file, edited).unwrap_or_else(|error| panic!("{error}"));
     must(db.owner().sync_brain_markdown(&dir, 500));
     let quartz = must(db.owner().search_neurons("Quartz", 8));
     assert!(quartz.iter().any(|hit| hit.id == "claim-path"));
-    assert!(must(db.owner().search_neurons("Zephyr", 8))
-        .iter()
-        .all(|hit| hit.id != "claim-path"));
+    assert!(
+        must(db.owner().search_neurons("Zephyr", 8))
+            .iter()
+            .all(|hit| hit.id != "claim-path")
+    );
     fs::remove_file(&file).unwrap_or_else(|error| panic!("{error}"));
     must(db.owner().sync_brain_markdown(&dir, 600));
-    assert!(must(db.owner().search_neurons("Quartz", 8))
-        .iter()
-        .all(|hit| hit.id != "claim-path"));
+    assert!(
+        must(db.owner().search_neurons("Quartz", 8))
+            .iter()
+            .all(|hit| hit.id != "claim-path")
+    );
 }
 
 fn rewrite_updated_at(text: &str, stamp: i64) -> String {
@@ -264,7 +328,12 @@ fn export_import_round_trip_keeps_rank_inputs() {
     promote(
         db.owner(),
         vec![
-            claim("claim-old", "Bob used Obsidian.", MemoryTaint::Trusted, &["bob", "obsidian"]),
+            claim(
+                "claim-old",
+                "Bob used Obsidian.",
+                MemoryTaint::Trusted,
+                &["bob", "obsidian"],
+            ),
             claim(
                 "claim-new",
                 "Bob lives in Portland.",
@@ -337,8 +406,14 @@ fn export_import_round_trip_keeps_rank_inputs() {
         &BTreeSet::<AgentId>::new(),
     )
     .unwrap_or_else(|error| panic!("{error:?}"));
-    let left_ids: Vec<String> = rank_left.iter().map(|row| row.scores.tie_break.clone()).collect();
-    let right_ids: Vec<String> = rank_right.iter().map(|row| row.scores.tie_break.clone()).collect();
+    let left_ids: Vec<String> = rank_left
+        .iter()
+        .map(|row| row.scores.tie_break.clone())
+        .collect();
+    let right_ids: Vec<String> = rank_right
+        .iter()
+        .map(|row| row.scores.tie_break.clone())
+        .collect();
     assert_eq!(left_ids, right_ids);
     assert!(left_ids.iter().any(|id| id.contains("fact-1")));
     assert!(left_ids.iter().all(|id| !id.contains("claim-old")));
@@ -391,43 +466,68 @@ fn auto_link_is_idempotent_pending_then_resolved_and_tainted() {
     let first = must(db.owner().relink_neurons());
     let second = must(db.owner().relink_neurons());
     assert_eq!(first.edges, second.edges);
-    assert!(first.by_type.iter().any(|(kind, count)| kind == "pending" && *count >= 1));
+    assert!(
+        first
+            .by_type
+            .iter()
+            .any(|(kind, count)| kind == "pending" && *count >= 1)
+    );
     let dir = db.directory.join("md");
     must(db.owner().export_brain_markdown(&dir, 80));
     let created = "---\nid: \"projects/missing\"\nkind: \"claim\"\nupdated_at: 90\nsource_episode: \"episode-1\"\ntaint: \"trusted\"\n---\nThe missing project note.\n";
     fs::create_dir_all(dir.join("claim")).unwrap_or_else(|error| panic!("{error}"));
-    fs::write(dir.join("claim").join("missing.md"), created).unwrap_or_else(|error| panic!("{error}"));
+    fs::write(dir.join("claim").join("missing.md"), created)
+        .unwrap_or_else(|error| panic!("{error}"));
     must(db.owner().sync_brain_markdown(&dir, 90));
     let resolved = must(db.owner().relink_neurons());
-    assert!(resolved.by_type.iter().any(|(kind, count)| kind == "wikilink" && *count >= 1));
+    assert!(
+        resolved
+            .by_type
+            .iter()
+            .any(|(kind, count)| kind == "wikilink" && *count >= 1)
+    );
     let check = db.directory.join("check");
     must(db.owner().export_brain_markdown(&check, 100));
-    let episode_doc = match docs_in(&check).into_iter().find(|doc| doc.id == "episode-1") {
+    let episode_doc = match docs_in(&check)
+        .into_iter()
+        .find(|doc| doc.id == "episode-1")
+    {
         Some(doc) => doc,
         None => panic!("missing episode"),
     };
-    let link = match episode_doc.edges.iter().find(|edge| {
-        edge.edge_type == "wikilink" && edge.to_id == "projects/missing"
-    }) {
+    let link = match episode_doc
+        .edges
+        .iter()
+        .find(|edge| edge.edge_type == "wikilink" && edge.to_id == "projects/missing")
+    {
         Some(edge) => edge,
         None => panic!("missing wikilink"),
     };
     assert_eq!(link.taint, "untrusted");
     let target = must(db.owner().search_neurons("missing project", 8));
-    assert!(target.iter().any(|hit| hit.id == "projects/missing" && hit.taint == "trusted"));
+    assert!(
+        target
+            .iter()
+            .any(|hit| hit.id == "projects/missing" && hit.taint == "trusted")
+    );
 }
 
 #[test]
 fn sync_keeps_the_newer_database_sentence() {
     let db = TestDb::open("conflict");
     seed_thread(db.owner());
-    must(db.owner().insert_episode(episode(
-        "Bob used Obsidian.",
-        MemoryTaint::Trusted,
-    )));
+    must(
+        db.owner()
+            .insert_episode(episode("Bob used Obsidian.", MemoryTaint::Trusted)),
+    );
     promote(
         db.owner(),
-        vec![claim("claim-old", "Bob used Obsidian.", MemoryTaint::Trusted, &["bob"])],
+        vec![claim(
+            "claim-old",
+            "Bob used Obsidian.",
+            MemoryTaint::Trusted,
+            &["bob"],
+        )],
     );
     consolidate(db.owner(), "Bob used Obsidian.");
     let dir = db.directory.join("md");
@@ -439,10 +539,18 @@ fn sync_keeps_the_newer_database_sentence() {
     }));
     let file = dir.join("fact").join("bob-used-obsidian--fact-1.md");
     let text = fs::read_to_string(&file).unwrap_or_else(|error| panic!("{error}"));
-    fs::write(&file, text.replace("Bob used Obsidian.", "File copy loses."))
-        .unwrap_or_else(|error| panic!("{error}"));
+    fs::write(
+        &file,
+        text.replace("Bob used Obsidian.", "File copy loses."),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     let report = must(db.owner().sync_brain_markdown(&dir, 80));
-    assert!(report.conflicts.iter().any(|conflict| conflict.id == "fact-1"));
+    assert!(
+        report
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.id == "fact-1")
+    );
     let hits = must(db.owner().search_neurons("Database", 8));
     assert!(hits.iter().any(|hit| hit.id == "fact-1"));
 }

@@ -16,15 +16,16 @@ use std::time::Duration;
 use maia_core::audit::RequestId;
 use maia_core::audit::Timestamp;
 use maia_core::brain::ClaimId;
-use maia_core::brain::RRF_K;
-use maia_core::brain::reciprocal_rank_fusion;
 use maia_core::brain::EmbedderModel;
 use maia_core::brain::EpisodeId;
 use maia_core::brain::LexicalPolicy;
 use maia_core::brain::QueryEmbedding;
+use maia_core::brain::RRF_K;
 use maia_core::brain::RecallGraph;
 use maia_core::brain::StoredEmbedding;
 use maia_core::brain::lexemes_for_sentence;
+use maia_core::brain::reciprocal_rank_fusion;
+use maia_core::brain::same_keyword_term;
 use maia_core::dream::ApplyFault;
 use maia_core::dream::ClaimSeed;
 use maia_core::dream::DEFAULT_PROMOTION_FAILURE_LIMIT;
@@ -1165,17 +1166,31 @@ fn link_keyword_overlap(
     }
     for id in claim_ids {
         let claim_id = ClaimId::new(id.clone());
-        let Some(sentence) = graph.claims.get(&claim_id).map(|claim| claim.sentence.clone()) else {
+        let Some(sentence) = graph
+            .claims
+            .get(&claim_id)
+            .map(|claim| claim.sentence.clone())
+        else {
             continue;
         };
-        connect_overlap(graph, &query_lexemes, &sentence, maia_core::brain::NodeId::Claim(claim_id));
+        connect_overlap(
+            graph,
+            &query_lexemes,
+            &sentence,
+            maia_core::brain::NodeId::Claim(claim_id),
+        );
     }
     for id in fact_ids {
         let fact_id = maia_core::brain::FactId::new(id.clone());
         let Some(sentence) = graph.facts.get(&fact_id).map(|fact| fact.sentence.clone()) else {
             continue;
         };
-        connect_overlap(graph, &query_lexemes, &sentence, maia_core::brain::NodeId::Fact(fact_id));
+        connect_overlap(
+            graph,
+            &query_lexemes,
+            &sentence,
+            maia_core::brain::NodeId::Fact(fact_id),
+        );
     }
 }
 
@@ -1187,7 +1202,10 @@ fn connect_overlap(
 ) {
     let sentence_lexemes = lexemes_for_sentence(sentence, &DEFAULT_LEXICAL());
     for lexeme in query_lexemes {
-        if !sentence_lexemes.iter().any(|item| item == lexeme) {
+        if !sentence_lexemes
+            .iter()
+            .any(|item| same_keyword_term(item.as_str(), lexeme.as_str()))
+        {
             continue;
         }
         let from = maia_core::brain::NodeId::Lexeme(lexeme.clone());

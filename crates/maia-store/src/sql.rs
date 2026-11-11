@@ -148,6 +148,15 @@ pub(crate) const MIGRATION_V11: &[&str] = &[
     "INSERT INTO neuron_fts (kind, neuron_id, title, body) SELECT kind, neuron_id, title, body FROM neuron_text",
 ];
 
+/// Migration 12 rebuilds the neuron keyword index with the Porter stemmer.
+///
+/// Neuron text is copied into the new index. Claim, fact, and episode rows stay put.
+pub(crate) const MIGRATION_V12: &[&str] = &[
+    "DROP TABLE neuron_fts",
+    "CREATE VIRTUAL TABLE neuron_fts USING fts5(kind UNINDEXED, neuron_id UNINDEXED, title, body, tokenize='porter unicode61 remove_diacritics 2')",
+    "INSERT INTO neuron_fts (kind, neuron_id, title, body) SELECT kind, neuron_id, title, body FROM neuron_text",
+];
+
 /// Migration 10 stores approval waits, ledger reversals, and untrusted attachments.
 pub(crate) const MIGRATION_V10: &[&str] = &[
     "CREATE TABLE ledger_reversals (ledger_id TEXT PRIMARY KEY, reversed_at INTEGER NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id))",

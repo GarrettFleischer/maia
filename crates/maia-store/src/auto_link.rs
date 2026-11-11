@@ -7,6 +7,7 @@ use maia_core::brain::ExtractedLink;
 use maia_core::brain::KnownNeuron;
 use maia_core::brain::LinkTarget;
 use maia_core::brain::extract_links;
+use maia_core::brain::link_match_keys;
 use maia_core::brain::neuron_slug;
 use maia_core::brain::neuron_title;
 use maia_core::security::Taint;
@@ -38,7 +39,11 @@ pub(crate) fn on_neuron_written(
 }
 
 /// Updates the keyword title without creating links.
-pub(crate) fn index_neuron(connection: &Connection, kind: &str, id: &str) -> Result<(), StoreError> {
+pub(crate) fn index_neuron(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+) -> Result<(), StoreError> {
     let Some((body, taint)) = neuron_body(connection, kind, id)? else {
         return Ok(());
     };
@@ -99,7 +104,8 @@ pub(crate) fn link_report(connection: &Connection) -> Result<AutoLinkReport, Sto
         by_type.push((kind, count));
     }
     drop(statement);
-    let pending: i64 = connection.query_row("SELECT COUNT(*) FROM pending_links", [], |row| row.get(0))?;
+    let pending: i64 =
+        connection.query_row("SELECT COUNT(*) FROM pending_links", [], |row| row.get(0))?;
     let pending = u64::try_from(pending).unwrap_or(0);
     if pending > 0 {
         by_type.push(("pending".to_owned(), pending));
@@ -196,7 +202,15 @@ fn write_link(
                 "INSERT OR IGNORE INTO pending_links \
                  (source_kind, source_id, span_start, span_end, target_ref, edge_type, taint) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![kind, id, span_start, span_end, reference, link.edge_type, taint],
+                params![
+                    kind,
+                    id,
+                    span_start,
+                    span_end,
+                    reference,
+                    link.edge_type,
+                    taint
+                ],
             )?;
         }
     }
@@ -234,7 +248,10 @@ fn resolve_pending_for(connection: &Connection, neuron: &KnownNeuron) -> Result<
         if source_kind == neuron.kind && source_id == neuron.id {
             continue;
         }
-        if keys.contains(&target_ref.to_lowercase()) {
+        if link_match_keys(&target_ref)
+            .iter()
+            .any(|key| keys.contains(key))
+        {
             hits.push((
                 source_kind,
                 source_id,
@@ -278,9 +295,13 @@ fn match_keys(neuron: &KnownNeuron) -> BTreeSet<String> {
     keys.insert(neuron.id.to_lowercase());
     keys.insert(format!("{}/{}", neuron.kind, neuron.id).to_lowercase());
     keys.insert(neuron.slug.to_lowercase());
-    keys.insert(neuron.title.to_lowercase());
+    for key in link_match_keys(&neuron.title) {
+        keys.insert(key);
+    }
     for alias in &neuron.aliases {
-        keys.insert(alias.to_lowercase());
+        for key in link_match_keys(alias) {
+            keys.insert(key);
+        }
     }
     keys
 }

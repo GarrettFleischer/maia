@@ -63,40 +63,25 @@ pub fn reciprocal_rank_fusion(arms: &[Vec<String>], k: u32) -> Result<Vec<FusedR
 
 /// Turns arbitrary recall text into a quoted FTS5 `OR` query.
 ///
-/// Operators, quotes, backslashes, and punctuation never reach `MATCH`.
-/// An empty string means "no keyword query", not an error.
+/// Tokens are case-folded. Stopwords and a possessive `'s` are dropped.
+/// Irregular verbs and plurals expand to their other surface forms so the
+/// Porter tokenizer can meet the indexed word. Operators, quotes, backslashes,
+/// and punctuation never reach `MATCH`. An empty string means "no keyword query".
 #[must_use]
 pub fn sanitize_fts_query(raw: &str) -> String {
     const MAX_TOKENS: usize = 24;
     const MAX_TOKEN_CHARS: usize = 64;
     const MAX_BYTES: usize = 480;
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let flush = |current: &mut String, tokens: &mut Vec<String>| {
-        if current.is_empty() {
-            return;
-        }
-        if tokens.len() < MAX_TOKENS {
-            tokens.push(std::mem::take(current));
-        } else {
-            current.clear();
-        }
-    };
-    for ch in raw.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            if current.chars().count() < MAX_TOKEN_CHARS {
-                current.push(ch);
-            }
-        } else {
-            flush(&mut current, &mut tokens);
-        }
-    }
-    flush(&mut current, &mut tokens);
+    let terms = super::stem::keyword_query_terms(raw, MAX_TOKENS, MAX_TOKEN_CHARS);
+    quote_or(&terms, MAX_BYTES)
+}
+
+fn quote_or(terms: &[String], max_bytes: usize) -> String {
     let mut query = String::new();
-    for token in tokens {
-        let piece = format!("\"{token}\"");
+    for term in terms {
+        let piece = format!("\"{term}\"");
         let extra = piece.len() + if query.is_empty() { 0 } else { 4 };
-        if query.len().saturating_add(extra) > MAX_BYTES {
+        if query.len().saturating_add(extra) > max_bytes {
             break;
         }
         if !query.is_empty() {
@@ -110,7 +95,11 @@ pub fn sanitize_fts_query(raw: &str) -> String {
 /// Short activity line. Titles are truncated and never include raw recall text beyond those titles.
 #[must_use]
 pub fn recall_activity_label(note_count: usize, titles: &[String]) -> String {
-    let shown: Vec<String> = titles.iter().take(3).map(|title| clip_title(title)).collect();
+    let shown: Vec<String> = titles
+        .iter()
+        .take(3)
+        .map(|title| clip_title(title))
+        .collect();
     let noun = if note_count == 1 { "note" } else { "notes" };
     if shown.is_empty() {
         return format!("recalled {note_count} {noun}");
@@ -172,15 +161,45 @@ mod tests {
     #[test]
     fn sanitize_quotes_paths_and_drops_fts_operators() {
         let path = sanitize_fts_query(r"F:\Development\Ideas");
-        assert!(path.contains("\"Development\""));
-        assert!(path.contains("\"Ideas\""));
+        assert!(path.contains("\"development\""));
+        assert!(path.contains("\"ideas\""));
         assert!(!path.contains('\\'));
         assert!(!path.contains(':'));
         let odd = sanitize_fts_query("))) OR (\" * :");
         assert!(odd.is_empty() || (odd.starts_with('"') && odd.ends_with('"')));
-        assert!(!sanitize_fts_query("bob's best").contains('\''));
+        let possessive = sanitize_fts_query("bob's best");
+        assert!(!possessive.contains('\''));
+        assert!(!possessive.split(" OR ").any(|piece| piece == "\"s\""));
         assert!(sanitize_fts_query("zephyr_id").contains("\"zephyr_id\""));
         assert_eq!(sanitize_fts_query("***"), "");
+    }
+
+    #[test]
+    fn sanitize_drops_stopwords_strips_possessives_and_expands_irregulars() {
+        assert_eq!(
+            sanitize_fts_query("where does Bob live"),
+            "\"bob\" OR \"live\""
+        );
+        assert_eq!(sanitize_fts_query("Bob's"), "\"bob\"");
+        assert_eq!(sanitize_fts_query("where does the"), "");
+        assert_eq!(
+            sanitize_fts_query("who went to Seattle"),
+            "\"went\" OR \"go\" OR \"goes\" OR \"gone\" OR \"going\" OR \"seattle\""
+        );
+        assert_eq!(
+            sanitize_fts_query("will buy"),
+            "\"buy\" OR \"buys\" OR \"bought\" OR \"buying\""
+        );
+        assert_eq!(
+            sanitize_fts_query("people"),
+            "\"people\" OR \"person\" OR \"persons\""
+        );
+        assert_eq!(sanitize_fts_query("children"), "\"children\" OR \"child\"");
+        assert_eq!(sanitize_fts_query("boxes"), "\"boxes\"");
+        assert_eq!(
+            sanitize_fts_query("ran"),
+            "\"ran\" OR \"run\" OR \"runs\" OR \"running\""
+        );
     }
 
     #[test]

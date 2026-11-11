@@ -6,14 +6,16 @@ mod graph;
 mod ids;
 mod lexemes;
 mod markdown;
+mod porter;
 mod rank;
+mod stem;
 
 pub use autolink::{
-    extract_links, ExtractedLink, KnownNeuron, LinkTarget, AUTO_LINK_SOURCE, MENTION_MIN_CHARS,
+    AUTO_LINK_SOURCE, ExtractedLink, KnownNeuron, LinkTarget, MENTION_MIN_CHARS, extract_links,
 };
 pub use fusion::{
-    recall_activity_label, reciprocal_rank_fusion, sanitize_fts_query, FusedRank, FusionError,
-    RRF_K,
+    FusedRank, FusionError, RRF_K, recall_activity_label, reciprocal_rank_fusion,
+    sanitize_fts_query,
 };
 pub use graph::{
     ComponentScores, EmbedderModel, GraphClaim, GraphEdge, GraphEpisode, GraphFact, MemoryScope,
@@ -23,8 +25,9 @@ pub use graph::{
 pub use ids::{ClaimId, EpisodeId, FactId, LexemeId, MemoryRef, NodeId, SlotId};
 pub use lexemes::{LexicalPolicy, lexemes_for_sentence};
 pub use markdown::{
-    assign_markdown_paths, body_fingerprint, disambiguate_paths, graph_from_docs, markdown_path,
-    neuron_slug, neuron_title, parse_neuron, render_neuron, MarkdownError, NeuronDoc, NeuronEdge,
-    NeuronPresentation, NeuronSegment,
+    MarkdownError, NeuronDoc, NeuronEdge, NeuronPresentation, NeuronSegment, assign_markdown_paths,
+    body_fingerprint, disambiguate_paths, graph_from_docs, markdown_path, neuron_slug,
+    neuron_title, parse_neuron, render_neuron,
 };
 pub use rank::rank_paths;
+pub use stem::{link_match_keys, same_keyword_term};

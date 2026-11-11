@@ -1,5 +1,6 @@
 //! Deterministic links from neuron text. No model calls.
 
+use super::stem::link_match_keys;
 use crate::security::Taint;
 
 /// Title mentions shorter than this are ignored.
@@ -59,7 +60,12 @@ pub struct ExtractedLink {
 
 /// Extracts typed links. Longest non-overlapping match wins.
 #[must_use]
-pub fn extract_links(text: &str, known: &[KnownNeuron], source: &KnownNeuron, taint: Taint) -> Vec<ExtractedLink> {
+pub fn extract_links(
+    text: &str,
+    known: &[KnownNeuron],
+    source: &KnownNeuron,
+    taint: Taint,
+) -> Vec<ExtractedLink> {
     let mut found = Vec::new();
     found.extend(wikilinks(text, known, source, taint));
     found.extend(mentions(text, known, source, taint));
@@ -67,7 +73,12 @@ pub fn extract_links(text: &str, known: &[KnownNeuron], source: &KnownNeuron, ta
     keep_longest(found)
 }
 
-fn wikilinks(text: &str, known: &[KnownNeuron], source: &KnownNeuron, taint: Taint) -> Vec<ExtractedLink> {
+fn wikilinks(
+    text: &str,
+    known: &[KnownNeuron],
+    source: &KnownNeuron,
+    taint: Taint,
+) -> Vec<ExtractedLink> {
     let mut links = Vec::new();
     let bytes = text.as_bytes();
     let mut index = 0;
@@ -116,7 +127,12 @@ fn wiki_target(inner: &str) -> String {
     before_anchor.trim().to_owned()
 }
 
-fn mentions(text: &str, known: &[KnownNeuron], source: &KnownNeuron, taint: Taint) -> Vec<ExtractedLink> {
+fn mentions(
+    text: &str,
+    known: &[KnownNeuron],
+    source: &KnownNeuron,
+    taint: Taint,
+) -> Vec<ExtractedLink> {
     let mut links = Vec::new();
     for neuron in known {
         if same_neuron(neuron, source) {
@@ -125,24 +141,48 @@ fn mentions(text: &str, known: &[KnownNeuron], source: &KnownNeuron, taint: Tain
         if neuron.title.chars().count() < MENTION_MIN_CHARS {
             continue;
         }
-        for (start, end) in phrase_spans(text, &neuron.title) {
-            links.push(ExtractedLink {
-                edge_type: "mention",
-                target: LinkTarget::Resolved {
-                    kind: neuron.kind.clone(),
-                    id: neuron.id.clone(),
-                },
-                span_start: start,
-                span_end: end,
-                taint,
-                source_tag: AUTO_LINK_SOURCE,
-            });
+        for phrase in mention_phrases(&neuron.title) {
+            for (start, end) in phrase_spans(text, &phrase) {
+                links.push(ExtractedLink {
+                    edge_type: "mention",
+                    target: LinkTarget::Resolved {
+                        kind: neuron.kind.clone(),
+                        id: neuron.id.clone(),
+                    },
+                    span_start: start,
+                    span_end: end,
+                    taint,
+                    source_tag: AUTO_LINK_SOURCE,
+                });
+            }
         }
     }
     links
 }
 
-fn references(text: &str, known: &[KnownNeuron], source: &KnownNeuron, taint: Taint) -> Vec<ExtractedLink> {
+fn mention_phrases(title: &str) -> Vec<String> {
+    let mut phrases = vec![title.to_owned()];
+    for key in link_match_keys(title) {
+        if key.chars().count() < MENTION_MIN_CHARS {
+            continue;
+        }
+        if phrases
+            .iter()
+            .any(|phrase| phrase.eq_ignore_ascii_case(&key))
+        {
+            continue;
+        }
+        phrases.push(key);
+    }
+    phrases
+}
+
+fn references(
+    text: &str,
+    known: &[KnownNeuron],
+    source: &KnownNeuron,
+    taint: Taint,
+) -> Vec<ExtractedLink> {
     let mut links = Vec::new();
     for (start, end, raw) in path_and_url_spans(text) {
         if let Some(link) = link_for("reference", &raw, start, end, known, source, taint, false) {
@@ -188,15 +228,24 @@ fn link_for(
 }
 
 fn resolve<'a>(reference: &str, known: &'a [KnownNeuron]) -> Option<&'a KnownNeuron> {
-    let folded = reference.to_lowercase();
     known.iter().find(|neuron| {
         neuron.id == reference
             || format!("{}/{}", neuron.kind, neuron.id) == reference
             || neuron.slug == reference
             || format!("{}/{}", neuron.kind, neuron.slug) == reference
-            || neuron.title.to_lowercase() == folded
-            || neuron.aliases.iter().any(|alias| alias.to_lowercase() == folded)
+            || labels_match(&neuron.title, reference)
+            || neuron
+                .aliases
+                .iter()
+                .any(|alias| labels_match(alias, reference))
     })
+}
+
+fn labels_match(left: &str, right: &str) -> bool {
+    let left_keys = link_match_keys(left);
+    link_match_keys(right)
+        .iter()
+        .any(|key| left_keys.iter().any(|left_key| left_key == key))
 }
 
 fn same_neuron(left: &KnownNeuron, right: &KnownNeuron) -> bool {
@@ -215,9 +264,10 @@ fn phrase_spans(text: &str, phrase: &str) -> Vec<(usize, usize)> {
         if !chars_equal(text_chars[start].1, phrase_chars[0]) {
             continue;
         }
-        let matched = phrase_chars.iter().enumerate().all(|(offset, expected)| {
-            chars_equal(text_chars[start + offset].1, *expected)
-        });
+        let matched = phrase_chars
+            .iter()
+            .enumerate()
+            .all(|(offset, expected)| chars_equal(text_chars[start + offset].1, *expected));
         if !matched {
             continue;
         }
@@ -482,7 +532,8 @@ mod tests {
 
     #[test]
     fn paths_and_urls_become_reference_edges() {
-        let text = r"Notes live at F:\Development\Ideas and https://example.com/a plus /vault/notes.";
+        let text =
+            r"Notes live at F:\Development\Ideas and https://example.com/a plus /vault/notes.";
         let links = extract_links(text, &[alice()], &source(), Taint::Trusted);
         let refs: Vec<&str> = links
             .iter()
@@ -492,8 +543,14 @@ mod tests {
                 LinkTarget::Resolved { id, .. } => id.as_str(),
             })
             .collect();
-        assert!(refs.iter().any(|reference| reference.contains(r"F:\Development\Ideas")));
-        assert!(refs.iter().any(|reference| reference.contains("https://example.com/a")));
+        assert!(
+            refs.iter()
+                .any(|reference| reference.contains(r"F:\Development\Ideas"))
+        );
+        assert!(
+            refs.iter()
+                .any(|reference| reference.contains("https://example.com/a"))
+        );
         assert!(refs.iter().any(|reference| *reference == "/vault/notes"));
     }
 
@@ -510,9 +567,39 @@ mod tests {
     }
 
     #[test]
+    fn possessive_and_irregular_mentions_link_the_base_title() {
+        let child = KnownNeuron {
+            kind: "claim".to_owned(),
+            id: "claim-child".to_owned(),
+            title: "child".to_owned(),
+            aliases: Vec::new(),
+            slug: "claim/child--claim-child".to_owned(),
+        };
+        let text = "Alice's vault holds the notes. The children arrived. See [[children]].";
+        let links = extract_links(text, &[alice(), child], &source(), Taint::Trusted);
+        assert!(links.iter().any(|link| {
+            link.edge_type == "mention"
+                && matches!(&link.target, LinkTarget::Resolved { id, .. } if id == "claim-alice")
+        }));
+        assert!(links.iter().any(|link| {
+            link.edge_type == "mention"
+                && matches!(&link.target, LinkTarget::Resolved { id, .. } if id == "claim-child")
+        }));
+        assert!(links.iter().any(|link| {
+            link.edge_type == "wikilink"
+                && matches!(&link.target, LinkTarget::Resolved { id, .. } if id == "claim-child")
+        }));
+    }
+
+    #[test]
     fn a_neuron_does_not_link_to_itself() {
         let self_note = alice();
-        let links = extract_links("Alice wrote [[people/alice]].", &[alice()], &self_note, Taint::Trusted);
+        let links = extract_links(
+            "Alice wrote [[people/alice]].",
+            &[alice()],
+            &self_note,
+            Taint::Trusted,
+        );
         assert!(links.is_empty());
     }
 }

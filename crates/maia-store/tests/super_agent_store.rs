@@ -848,15 +848,18 @@ fn closed_detail_high_water_survives_restart() {
 }
 
 #[test]
-fn fresh_open_is_schema_version_eleven() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 11);
+fn fresh_open_is_schema_version_twelve() {
+    assert_eq!(LATEST_SCHEMA_VERSION, 12);
     let db = TestDb::open("version", 1);
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 11);
+    assert_eq!(settings.user_version, 12);
     let rows = must(db.owner().migrations());
-    assert_eq!(rows.len(), 11);
-    assert_eq!(rows.last().map(|row| row.version), Some(11));
-    assert_eq!(rows.last().map(|row| row.name.as_str()), Some("brain_markdown"));
+    assert_eq!(rows.len(), 12);
+    assert_eq!(rows.last().map(|row| row.version), Some(12));
+    assert_eq!(
+        rows.last().map(|row| row.name.as_str()),
+        Some("neuron_fts_porter")
+    );
 }
 
 #[test]
