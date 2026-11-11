@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::VecDeque;
 use std::future::Future;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
@@ -20,6 +21,7 @@ use std::task::Poll;
 use std::task::Wake;
 use std::task::Waker;
 use std::time::Duration;
+use std::time::Instant;
 
 use axum::Json;
 use axum::RequestExt;
@@ -49,6 +51,7 @@ use maia_core::router::ReasoningEffort;
 use maia_core::router::Router as RouterPort;
 use maia_core::router::RouterError;
 use maia_core::router::RouterRequest;
+use maia_core::router::RouterResponse;
 use maia_core::super_agent::AdmittedRoute;
 use maia_core::super_agent::CompletionView;
 use maia_core::super_agent::CompletionViewError;
@@ -105,6 +108,20 @@ use crate::model_connection::parse_reasoning_effort;
 use crate::model_connection::reasoning_name;
 use crate::model_connection::resolve_key;
 use crate::model_connection::router_from_connection;
+use crate::orchestrator::ActivityLog;
+use crate::orchestrator::FastAdmission;
+use crate::orchestrator::McpToolReply;
+use crate::orchestrator::MessageOutcome;
+use crate::orchestrator::OwnerNotice;
+use crate::orchestrator::QueuedChat;
+use crate::orchestrator::RouteEvent;
+use crate::orchestrator::RouteMachine;
+use crate::orchestrator::ToolJob;
+use crate::orchestrator::ToolParcel;
+use crate::orchestrator::ToolStart;
+use crate::orchestrator::WorkerAttempts;
+use crate::orchestrator::WorkerEvent;
+use crate::orchestrator::WorkerMachine;
 use crate::orchestrator::present_router_body;
 use crate::remote::ListenerClass;
 use crate::remote::RemoteHub;
@@ -391,6 +408,7 @@ impl Drop for SuperAgentServer {
 ///
 /// The orchestrator can await this proxy off that runtime, so store calls stay
 /// off the worker that would panic inside `blocking_send`.
+#[derive(Clone)]
 pub struct RuntimeRouter {
     tx: mpsc::Sender<RouterJob>,
 }
@@ -817,7 +835,7 @@ pub fn serve_super_agent_with_ids<R>(
     ids: HttpIdSupply,
 ) -> Result<SuperAgentServer, ServeFailure>
 where
-    R: RouterPort + Send + 'static,
+    R: RouterPort + Clone + Send + 'static,
 {
     serve_super_agent_with_model(
         orchestrator,
@@ -839,7 +857,7 @@ pub fn serve_super_agent_with_model<R>(
     ports: ModelPorts,
 ) -> Result<SuperAgentServer, ServeFailure>
 where
-    R: RouterPort + Send + 'static,
+    R: RouterPort + Clone + Send + 'static,
 {
     serve_super_agent_with_source(orchestrator, database, dist, bind, ids, ports)
 }
@@ -861,7 +879,7 @@ fn serve_super_agent_with_source<R>(
     ports: ModelPorts,
 ) -> Result<SuperAgentServer, ServeFailure>
 where
-    R: RouterPort + Send + 'static,
+    R: RouterPort + Clone + Send + 'static,
 {
     if !is_loopback_ip(bind.ip()) {
         return Err(ServeFailure::Bind);
@@ -912,7 +930,7 @@ fn server_thread<R>(
     ready: std::sync::mpsc::Sender<Result<SocketAddr, ServeFailure>>,
     shutdown: oneshot::Receiver<()>,
 ) where
-    R: RouterPort + Send + 'static,
+    R: RouterPort + Clone + Send + 'static,
 {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -942,6 +960,9 @@ fn server_thread<R>(
             return;
         }
     };
+    let activity = ActivityLog::new();
+    let mut orchestrator = orchestrator;
+    orchestrator.set_activity_log(activity.clone());
     let (commands_tx, commands_rx) = mpsc::channel(32);
     let (updates_tx, updates_rx) = watch::channel(String::new());
     drop(updates_rx);
@@ -989,6 +1010,7 @@ fn server_thread<R>(
             remote: remote.clone(),
             database: config.database.clone(),
             mcp_secrets,
+            activity,
         },
         config.dist,
     );
@@ -1035,6 +1057,7 @@ struct AppState {
     remote: RemoteHub,
     database: PathBuf,
     mcp_secrets: Arc<dyn McpSecretStore>,
+    activity: ActivityLog,
 }
 
 struct WatchPublication {
@@ -1147,6 +1170,20 @@ struct Actor<R> {
     mcp_secrets: Arc<dyn McpSecretStore>,
 }
 
+struct LiveRoute {
+    operation: SubmissionId,
+    machine: RouteMachine,
+    inflight: Option<std::sync::mpsc::Receiver<Result<RouterResponse, RouterError>>>,
+    pause_until: Option<Instant>,
+}
+
+struct LiveWorker {
+    machine: WorkerMachine,
+    inflight: Option<std::sync::mpsc::Receiver<Result<RouterResponse, RouterError>>>,
+    tool: Option<std::sync::mpsc::Receiver<ToolParcel>>,
+    waiting_tool: Option<ToolJob>,
+}
+
 fn actor_loop<R>(
     host: Orchestrator<R>,
     database: PathBuf,
@@ -1156,7 +1193,7 @@ fn actor_loop<R>(
     model: ModelHub,
     mcp_secrets: Arc<dyn McpSecretStore>,
 ) where
-    R: RouterPort + Send + 'static,
+    R: RouterPort + Clone + Send + 'static,
 {
     let mut actor = Actor {
         host,
@@ -1174,8 +1211,376 @@ fn actor_loop<R>(
     // The listener is already bound. Resume here so a parent model call does
     // not keep Settings unreachable until that call finishes.
     actor.host.work_queued_parents();
-    while let Some(call) = commands.blocking_recv() {
-        dispatch(&mut actor, call);
+    actor.host.defer_model_work();
+    let mut inbox = VecDeque::new();
+    let mut route = None;
+    let mut workers = Vec::new();
+    loop {
+        pump(&mut actor, &mut inbox, &mut route, &mut workers);
+        let idle = route.is_none() && workers.is_empty() && inbox.is_empty();
+        let call = if idle {
+            match commands.blocking_recv() {
+                Some(call) => call,
+                None => break,
+            }
+        } else {
+            match commands.try_recv() {
+                Ok(call) => call,
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    std::thread::sleep(pump_wait(&route));
+                    continue;
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        };
+        match call {
+            ActorCall::Message {
+                operation,
+                text,
+                attachments,
+                reply,
+            } => accept_message(
+                &mut actor,
+                &mut inbox,
+                operation,
+                &text,
+                &attachments,
+                reply,
+            ),
+            other => dispatch(&mut actor, other),
+        }
+    }
+}
+
+fn pump_wait(route: &Option<LiveRoute>) -> Duration {
+    if let Some(route) = route
+        && route.inflight.is_none()
+        && let Some(until) = route.pause_until
+    {
+        let now = Instant::now();
+        if until > now {
+            return until.saturating_duration_since(now);
+        }
+    }
+    Duration::from_millis(15)
+}
+
+fn accept_message<R: RouterPort>(
+    actor: &mut Actor<R>,
+    inbox: &mut VecDeque<QueuedChat>,
+    operation: SubmissionId,
+    text: &str,
+    attachments: &[crate::orchestrator::StagedAttachment],
+    reply: oneshot::Sender<Result<Value, ApiError>>,
+) {
+    install_from_store(&mut actor.host, &actor.mcp_secrets);
+    let accepted = match actor.host.admit_fast(&operation, text, attachments) {
+        Ok(FastAdmission::Immediate(admission)) => Ok(submission_value(admission)),
+        Ok(FastAdmission::Queued(queued)) => {
+            let pending = submission_value(SubmissionAdmission::Pending {
+                message: queued.message.clone(),
+            });
+            inbox.push_back(queued);
+            Ok(pending)
+        }
+        Err(error) => Err(map_submission_orchestrator(error)),
+    };
+    let _ = reply.send(accepted);
+}
+
+fn pump<R>(
+    actor: &mut Actor<R>,
+    inbox: &mut VecDeque<QueuedChat>,
+    route: &mut Option<LiveRoute>,
+    workers: &mut Vec<LiveWorker>,
+) where
+    R: RouterPort + Clone + Send + 'static,
+{
+    loop {
+        poll_route(actor, route);
+        poll_workers(actor, workers);
+        let started = start_ready_workers(actor, workers);
+        if route.is_some() {
+            return;
+        }
+        if let Some(queued) = inbox.pop_front() {
+            *route = begin_route(actor, queued);
+            if route.is_some() {
+                return;
+            }
+            continue;
+        }
+        if started {
+            continue;
+        }
+        return;
+    }
+}
+
+fn begin_route<R>(actor: &mut Actor<R>, queued: QueuedChat) -> Option<LiveRoute>
+where
+    R: RouterPort + Clone + Send + 'static,
+{
+    let operation = queued.operation.clone();
+    let mut live = match actor
+        .host
+        .open_route(queued.message, &queued.text, &queued.attachments)
+    {
+        Ok(machine) => LiveRoute {
+            operation: operation.clone(),
+            machine,
+            inflight: None,
+            pause_until: None,
+        },
+        Err(outcome) => {
+            settle_route(actor, &operation, outcome);
+            return None;
+        }
+    };
+    if advance_route(actor, &mut live, RouteEvent::Start) {
+        Some(live)
+    } else {
+        None
+    }
+}
+
+/// Returns true while the route still needs another pump.
+fn advance_route<R>(actor: &mut Actor<R>, live: &mut LiveRoute, event: RouteEvent) -> bool
+where
+    R: RouterPort + Clone + Send + 'static,
+{
+    match actor.host.drive_route(&mut live.machine, event) {
+        crate::orchestrator::RouteDrive::Await(request) => {
+            live.inflight = Some(actor.host.spawn_model_call(request));
+            true
+        }
+        crate::orchestrator::RouteDrive::Pause(duration) => {
+            live.pause_until = Some(Instant::now() + duration);
+            true
+        }
+        crate::orchestrator::RouteDrive::Done(outcome) => {
+            let operation = live.operation.clone();
+            settle_route(actor, &operation, outcome);
+            false
+        }
+    }
+}
+
+fn poll_route<R>(actor: &mut Actor<R>, route: &mut Option<LiveRoute>)
+where
+    R: RouterPort + Clone + Send + 'static,
+{
+    let Some(live) = route else {
+        return;
+    };
+    let event = if let Some(receiver) = live.inflight.as_ref() {
+        match receiver.try_recv() {
+            Ok(result) => {
+                live.inflight = None;
+                Some(RouteEvent::Model(result))
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                live.inflight = None;
+                Some(RouteEvent::Model(Err(RouterError::Protocol {
+                    detail: "model thread stopped".to_owned(),
+                })))
+            }
+        }
+    } else if live.pause_until.is_some_and(|until| Instant::now() >= until) {
+        live.pause_until = None;
+        Some(RouteEvent::Resumed)
+    } else {
+        None
+    };
+    let Some(event) = event else {
+        return;
+    };
+    if !advance_route(actor, live, event) {
+        *route = None;
+    }
+}
+
+fn start_ready_workers<R>(actor: &mut Actor<R>, workers: &mut Vec<LiveWorker>) -> bool
+where
+    R: RouterPort + Clone + Send + 'static,
+{
+    let tasks = actor.host.take_background_tasks();
+    if tasks.is_empty() {
+        return false;
+    }
+    for task in tasks {
+        let Ok(machine) =
+            actor
+                .host
+                .open_worker(&task, WorkerAttempts::UntilAnswer, OwnerNotice::Chat)
+        else {
+            continue;
+        };
+        let mut live = LiveWorker {
+            machine,
+            inflight: None,
+            tool: None,
+            waiting_tool: None,
+        };
+        if advance_worker(actor, &mut live, WorkerEvent::Start) {
+            workers.push(live);
+        }
+    }
+    true
+}
+
+fn advance_worker<R>(actor: &mut Actor<R>, live: &mut LiveWorker, event: WorkerEvent) -> bool
+where
+    R: RouterPort + Clone + Send + 'static,
+{
+    match actor.host.drive_worker(&mut live.machine, event) {
+        crate::orchestrator::WorkerDrive::Await(request) => {
+            live.inflight = Some(actor.host.spawn_model_call(request));
+            true
+        }
+        crate::orchestrator::WorkerDrive::Tool(job) => launch_tool(actor, live, job),
+        crate::orchestrator::WorkerDrive::Done(_) => false,
+    }
+}
+
+fn launch_tool<R>(actor: &mut Actor<R>, live: &mut LiveWorker, job: ToolJob) -> bool
+where
+    R: RouterPort + Clone + Send + 'static,
+{
+    match actor.host.spawn_tool_job(&job) {
+        ToolStart::Started(receiver) => {
+            live.tool = Some(receiver);
+            true
+        }
+        ToolStart::Busy => {
+            live.waiting_tool = Some(job);
+            true
+        }
+        ToolStart::Done(reply) => advance_worker(actor, live, WorkerEvent::Tool(reply)),
+    }
+}
+
+fn tool_stopped() -> McpToolReply {
+    McpToolReply {
+        sent: false,
+        completed: false,
+        text: "The tool thread stopped.".to_owned(),
+        image_png_base64: None,
+    }
+}
+
+fn poll_workers<R>(actor: &mut Actor<R>, workers: &mut Vec<LiveWorker>)
+where
+    R: RouterPort + Clone + Send + 'static,
+{
+    let mut index = 0;
+    while index < workers.len() {
+        if workers[index].tool.is_none()
+            && let Some(job) = workers[index].waiting_tool.take()
+        {
+            if !launch_tool(actor, &mut workers[index], job) {
+                workers.swap_remove(index);
+                continue;
+            }
+        }
+        let event = if let Some(receiver) = workers[index].tool.as_ref() {
+            match receiver.try_recv() {
+                Ok(parcel) => {
+                    workers[index].tool = None;
+                    let reply = actor.host.accept_tool_parcel(parcel);
+                    Some(WorkerEvent::Tool(reply))
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    workers[index].tool = None;
+                    Some(WorkerEvent::Tool(tool_stopped()))
+                }
+            }
+        } else if let Some(receiver) = workers[index].inflight.as_ref() {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    workers[index].inflight = None;
+                    Some(WorkerEvent::Model(result))
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    workers[index].inflight = None;
+                    Some(WorkerEvent::Model(Err(RouterError::Protocol {
+                        detail: "model thread stopped".to_owned(),
+                    })))
+                }
+            }
+        } else {
+            None
+        };
+        let Some(event) = event else {
+            index += 1;
+            continue;
+        };
+        if advance_worker(actor, &mut workers[index], event) {
+            index += 1;
+        } else {
+            workers.swap_remove(index);
+        }
+    }
+}
+
+fn settle_route<R: RouterPort>(
+    actor: &mut Actor<R>,
+    operation: &SubmissionId,
+    outcome: MessageOutcome,
+) {
+    match outcome {
+        MessageOutcome::Routed(outcome) => {
+            if let Some(task) = outcome.task.clone()
+                && actor.host.tools().pending_parent() > 0
+                && actor.host.step_parent(&task).is_err()
+            {
+                actor.host.record_processing_failure();
+                let _ = actor.host.finish_submission(
+                    operation,
+                    outcome.message,
+                    AdmittedOutcome::ProcessingFailed,
+                );
+                return;
+            }
+            if publish(actor).is_err() {
+                actor.host.record_processing_failure();
+                let _ = actor.host.finish_submission(
+                    operation,
+                    outcome.message,
+                    AdmittedOutcome::ProcessingFailed,
+                );
+                return;
+            }
+            let route = match outcome.admitted {
+                AdmittedRoute::Admit(_) => RoutedOutcome::Admit,
+                AdmittedRoute::AskUser { .. } => RoutedOutcome::Ask,
+                AdmittedRoute::Refuse { .. } => RoutedOutcome::Refuse,
+            };
+            let _ = actor.host.finish_submission(
+                operation,
+                outcome.message,
+                AdmittedOutcome::Routed(route),
+            );
+        }
+        MessageOutcome::RoutingFailed {
+            message, reason, ..
+        } => {
+            let _ = actor.host.finish_submission(
+                operation,
+                message,
+                AdmittedOutcome::RoutingFailed(reason),
+            );
+        }
+        MessageOutcome::ProcessingFailed { message, .. } => {
+            let _ = actor.host.finish_submission(
+                operation,
+                message,
+                AdmittedOutcome::ProcessingFailed,
+            );
+        }
     }
 }
 
@@ -1945,9 +2350,12 @@ async fn transcript(State(state): State<AppState>) -> Response {
     // Read the committed transcript off the actor. A model call keeps that
     // thread busy, and the phone still needs to see the stored message.
     let database = state.database.clone();
+    let activity = state.activity.snapshot();
     let read = tokio::task::spawn_blocking(move || {
         let connection = open_read(&database)?;
-        transcript_value(&connection)
+        let mut value = transcript_value(&connection)?;
+        value["activity"] = serde_json::to_value(&activity).unwrap_or(Value::Array(Vec::new()));
+        Ok(value)
     })
     .await;
     match read {

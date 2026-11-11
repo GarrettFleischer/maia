@@ -2,6 +2,7 @@
 //!
 //! These tests do not read provider env, spawn a process, or open `.env`.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::fs;
@@ -309,14 +310,16 @@ impl Env {
             .reserve_runtime_id_block(4096)
             .expect("reserve HTTP ids");
         let (_, http) = reserved.into_parts();
-        serve_super_agent_with_ids(
+        let server = serve_super_agent_with_ids(
             host,
             self.database.clone(),
             self.dist.clone(),
             SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             HttpIdSupply::from_reserved(http).expect("reserved HTTP ids"),
         )
-        .expect("serve")
+        .expect("serve");
+        register_database(server.origin(), &self.database);
+        server
     }
 }
 
@@ -639,7 +642,106 @@ async fn post_json(origin: &str, path: &str, body: Value) -> (u16, Value) {
     let status = response.status().as_u16();
     let text = response.text().await.expect("body");
     let value = serde_json::from_str(&text).unwrap_or(Value::String(text));
-    (status, value)
+    if path != "/api/super-agent/messages" || status != 200 || !pending_outcome(&value) {
+        return (status, value);
+    }
+    let operation = body
+        .get("operation_id")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let settled = wait_terminal_submission(origin, &operation);
+    (status, settled.unwrap_or(value))
+}
+
+fn pending_outcome(value: &Value) -> bool {
+    value
+        .get("outcome")
+        .and_then(|outcome| outcome.get("kind"))
+        .and_then(|kind| kind.as_str())
+        == Some("processing_pending")
+}
+
+fn register_database(origin: &str, database: &Path) {
+    let port = origin.rsplit(':').next().unwrap_or("").to_owned();
+    databases()
+        .lock()
+        .expect("database map")
+        .insert(port, database.to_path_buf());
+}
+
+fn databases() -> &'static Mutex<BTreeMap<String, PathBuf>> {
+    static DATABASES: std::sync::OnceLock<Mutex<BTreeMap<String, PathBuf>>> =
+        std::sync::OnceLock::new();
+    DATABASES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn wait_terminal_submission(origin: &str, operation: &str) -> Option<Value> {
+    let port = origin.rsplit(':').next().unwrap_or("");
+    let database = databases()
+        .lock()
+        .expect("database map")
+        .get(port)
+        .cloned()?;
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_secs(8) {
+        if let Some(value) = read_terminal_submission(&database, operation) {
+            return Some(value);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    None
+}
+
+fn read_terminal_submission(database: &Path, operation: &str) -> Option<Value> {
+    let connection = Connection::open(database).ok()?;
+    let row = connection
+        .query_row(
+            "SELECT state, message_id, outcome_kind, outcome_detail FROM message_submissions \
+             WHERE operation_id = ?1",
+            [operation],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .ok()?;
+    if row.0 != "terminal" {
+        return None;
+    }
+    let message_id = row.1;
+    let kind = row.2.unwrap_or_else(|| "unknown_outcome".to_owned());
+    let detail = row.3.unwrap_or_default();
+    Some(match kind.as_str() {
+        "routed" => json!({
+            "admitted": detail,
+            "admission": "admitted",
+            "message_id": message_id,
+            "outcome": { "kind": "routed", "route": detail },
+        }),
+        "routing_failed" => json!({
+            "admission": "admitted",
+            "message_id": message_id,
+            "outcome": { "kind": "routing_failed", "reason": detail },
+        }),
+        "processing_failed" => json!({
+            "admission": "admitted",
+            "message_id": message_id,
+            "outcome": {
+                "kind": "processing_failed",
+                "reason": "processing_unavailable",
+            },
+        }),
+        _ => json!({
+            "admission": "admitted",
+            "message_id": message_id,
+            "outcome": { "kind": "unknown_outcome" },
+        }),
+    })
 }
 
 async fn get_json(origin: &str, path: &str) -> (u16, Value) {

@@ -10,10 +10,10 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::task::Context;
 use std::task::Poll;
 
@@ -32,6 +32,7 @@ use maia_core::router::RouterUsage;
 use maia_core::router::UsageValue;
 use maia_core::security::SecurityProfile;
 use maia_core::security::Taint;
+use maia_core::super_agent::admit_completion;
 use maia_core::super_agent::AdmittedRoute;
 use maia_core::super_agent::AdvisoryBrief;
 use maia_core::super_agent::AttemptId;
@@ -70,14 +71,23 @@ use maia_core::super_agent::RoutingReason;
 use maia_core::super_agent::SessionRole;
 use maia_core::super_agent::SnapshotId;
 use maia_core::super_agent::SourcedSlice;
+use maia_core::super_agent::SubmissionId;
 use maia_core::super_agent::TaskEnvelope;
 use maia_core::super_agent::TaskId;
 use maia_core::super_agent::TaskPhase;
 use maia_core::super_agent::UserPromptBytes;
 use maia_core::super_agent::WaitReason;
-use maia_core::super_agent::admit_completion;
 use maia_core::thread_cache::ChatRole;
+use maia_daemon::accepted_routing_policy;
+use maia_daemon::canonical_phase;
+use maia_daemon::encode_route_proposal;
+use maia_daemon::named_tool_response;
+use maia_daemon::open_routing_policy;
+use maia_daemon::parse_canonical_phase;
+use maia_daemon::present_router_body;
+use maia_daemon::route_tool_response;
 use maia_daemon::AdmittedMcpTool;
+use maia_daemon::AdmittedOutcome;
 use maia_daemon::ApprovalKind;
 use maia_daemon::ChildNarrowing;
 use maia_daemon::CompletionEvidence;
@@ -89,20 +99,15 @@ use maia_daemon::OrchestratorConfig;
 use maia_daemon::OrchestratorError;
 use maia_daemon::ParentWork;
 use maia_daemon::ReplayGuard;
+use maia_daemon::RoutedOutcome;
 use maia_daemon::RouterTurn;
 use maia_daemon::RoutingFailureReason;
 use maia_daemon::ScriptedCall;
 use maia_daemon::ScriptedToolHost;
 use maia_daemon::StagedAttachment;
+use maia_daemon::SubmissionAdmission;
 use maia_daemon::ToolHostError;
 use maia_daemon::UNKNOWN_OUTCOME_SUMMARY;
-use maia_daemon::accepted_routing_policy;
-use maia_daemon::canonical_phase;
-use maia_daemon::encode_route_proposal;
-use maia_daemon::named_tool_response;
-use maia_daemon::parse_canonical_phase;
-use maia_daemon::present_router_body;
-use maia_daemon::route_tool_response;
 use maia_store::AppendEvents;
 use maia_store::ApprovalDecision;
 use maia_store::ApprovalSettlement;
@@ -876,12 +881,10 @@ fn unknown_outcome_records_one_call_and_continue_does_not_replay() {
         }
     );
     assert_eq!(harness.host().tools().call_count(), 1);
-    assert!(
-        harness
-            .host()
-            .tools()
-            .replay_blocked(&CallId("call-1".to_owned()))
-    );
+    assert!(harness
+        .host()
+        .tools()
+        .replay_blocked(&CallId("call-1".to_owned())));
     assert_eq!(stepped.summary, UNKNOWN_OUTCOME_SUMMARY);
     harness.host().tools().push_parent(ScriptedCall::Progress {
         summary: "replay me".to_owned(),
@@ -1411,12 +1414,10 @@ fn parent_and_child_scripts_stay_explicit_and_child_unknown_waits_parent() {
         }
     );
     assert_eq!(harness.host().tools().call_count(), 2);
-    assert!(
-        harness
-            .host()
-            .tools()
-            .replay_blocked(&CallId("call-2".to_owned()))
-    );
+    assert!(harness
+        .host()
+        .tools()
+        .replay_blocked(&CallId("call-2".to_owned())));
     assert_eq!(
         texts(&harness.database, "SELECT child_id FROM child_assignments"),
         vec!["child-1".to_owned()]
@@ -1805,25 +1806,29 @@ impl Future for YieldOnce {
 }
 
 #[test]
-fn unreadable_router_reply_creates_no_task_and_hides_the_body() {
+fn unreadable_router_reply_starts_the_owner_task_and_hides_the_body() {
     let mut harness = Harness::open("bad-reply", supply());
     let raw = "{not-json api_key=SECRET BASE_URL=http://example.test".to_owned();
     harness.router.push_raw(raw.clone());
-    let error = wait(harness.host().handle_user_message(USER_TEXT)).expect_err("bad proposal");
-    assert!(matches!(error, OrchestratorError::Proposal(_)));
+    let outcome = wait(harness.host().handle_user_message(USER_TEXT)).expect("recovered spawn");
+    assert!(matches!(
+        outcome.admitted,
+        AdmittedRoute::Admit(RouteDecision::CreateTask)
+    ));
     assert_eq!(
         count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
-        0
+        1
     );
     let bodies = texts(
         &harness.database,
         "SELECT body FROM router_messages ORDER BY ordinal",
     );
     assert_eq!(bodies[0], USER_TEXT);
-    assert!(!bodies[1].contains("SECRET"));
-    assert!(!bodies[1].contains("BASE_URL"));
-    assert!(!bodies[1].contains("example.test"));
-    assert!(!bodies[1].contains("not-json"));
+    let stored = bodies.join("\n");
+    assert!(!stored.contains("SECRET"));
+    assert!(!stored.contains("BASE_URL"));
+    assert!(!stored.contains("example.test"));
+    assert!(!stored.contains("not-json"));
 }
 
 #[test]
@@ -1844,13 +1849,17 @@ fn router_failure_is_an_admitted_orchestrator_outcome() {
             ..
         } if id == "m-user"
     ));
-    assert_eq!(harness.router.requests().len(), 1);
+    assert_eq!(harness.router.requests().len(), 2);
     assert_eq!(
         texts(
             &harness.database,
             "SELECT role FROM router_messages ORDER BY ordinal"
         ),
-        vec!["user".to_owned(), "assistant".to_owned()]
+        vec![
+            "user".to_owned(),
+            "assistant".to_owned(),
+            "assistant".to_owned(),
+        ]
     );
     assert_eq!(
         texts(
@@ -1859,6 +1868,7 @@ fn router_failure_is_an_admitted_orchestrator_outcome() {
         ),
         vec![
             USER_TEXT.to_owned(),
+            "The provider is busy, retrying.".to_owned(),
             "The model provider is unavailable.".to_owned(),
         ]
     );
@@ -1938,21 +1948,17 @@ fn unreadable_route_note_and_route_apply_failure_are_admitted() {
         .expect("unreadable route is post-admission");
     assert!(matches!(
         unreadable_outcome,
-        MessageOutcome::RoutingFailed {
-            reason: RoutingFailureReason::RouteUnreadable,
-            ..
-        }
+        MessageOutcome::Routed(ref outcome)
+            if matches!(outcome.admitted, AdmittedRoute::Admit(RouteDecision::CreateTask))
     ));
-    assert_eq!(
-        texts(
-            &unreadable.database,
-            "SELECT body FROM router_messages ORDER BY ordinal"
-        ),
-        vec![
-            USER_TEXT.to_owned(),
-            "The router proposal could not be read.".to_owned(),
-        ]
-    );
+    let stored = texts(
+        &unreadable.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    )
+    .join("\n");
+    assert!(!stored.contains("secret"));
+    assert!(!stored.contains("do-not-copy"));
+    assert!(!stored.contains("not-json"));
 
     let mut apply_ids = supply();
     apply_ids.tasks.clear();
@@ -2047,6 +2053,10 @@ fn assert_control_contract(system: &str) {
     assert!(system.contains("Never invent an id."));
     assert!(system.contains("Never target a child."));
     assert!(system.contains("If two listed tasks could match"));
+    assert!(system.contains("read a folder"));
+    assert!(system.contains("explain a project"));
+    assert!(system.contains("check a website"));
+    assert!(system.contains("let the subagent try"));
     assert!(system.contains("Candidates:"));
     assert!(system.contains("Copying a dispatch sentence does not start work"));
     for token in ["modifies", "follows_up", "shape:\"single\"", "0..1000"] {
@@ -2071,7 +2081,7 @@ fn assert_route_tools(tools: &CanonicalJson) {
     ] {
         assert!(tools.0.contains(name), "missing {name}");
     }
-    for token in ["task_id", "modifies", "follows_up"] {
+    for token in ["task_id", "modifies", "follows_up", "reading a folder"] {
         assert!(tools.0.contains(token), "schema missing {token}");
     }
     for forbidden in ["shell", "filesystem", "browser", "vault"] {
@@ -2250,12 +2260,10 @@ fn natural_language_router_reply_creates_no_task() {
             "Hello, Garrett. What should I take on?".to_owned(),
         ]
     );
-    assert!(
-        harness.router.requests()[0]
-            .tools_json
-            .0
-            .contains("spawn_task")
-    );
+    assert!(harness.router.requests()[0]
+        .tools_json
+        .0
+        .contains("spawn_task"));
     let (system, user) = request_pair(&harness);
     assert_eq!(user, "Hello, this is Garrett");
     assert_control_contract(&system);
@@ -2316,11 +2324,9 @@ fn later_turn_remembers_the_conversation_and_records_the_spawn() {
         &harness.database,
         "SELECT body FROM router_messages ORDER BY ordinal",
     );
-    assert!(
-        bodies
-            .iter()
-            .any(|body| present_router_body(body).text == "Dispatched as one new task: Canby OR.")
-    );
+    assert!(bodies
+        .iter()
+        .any(|body| present_router_body(body).text == "Dispatched as one new task: Canby OR."));
 }
 
 #[test]
@@ -2361,6 +2367,8 @@ fn model_worker_starts_the_admitted_parent_and_relays_its_answer() {
     assert!(contract.contains("Call failure"));
     assert!(contract.contains("Call waiting"));
     assert!(contract.contains("Do not invent"));
+    assert!(contract.contains("call bash"));
+    assert!(contract.contains("F:\\Development"));
     assert_eq!(worker.messages[1].content, owner);
 }
 
@@ -2574,14 +2582,12 @@ fn continue_on_a_finished_parent_asks_instead_of_another_worker_turn() {
         harness.host().phase(&task),
         Some(TaskPhase::Completed { .. })
     ));
-    assert!(
-        shown(
-            &harness.database,
-            "SELECT body FROM router_messages ORDER BY ordinal"
-        )
-        .iter()
-        .any(|body| body.contains("already finished"))
-    );
+    assert!(shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal"
+    )
+    .iter()
+    .any(|body| body.contains("already finished")));
 }
 
 #[test]
@@ -2653,16 +2659,14 @@ fn model_worker_retries_a_running_parent_that_never_reported() {
             attempt: AttemptId("attempt-1".to_owned()),
         })
     );
-    assert!(
-        texts(
-            &harness.database,
-            "SELECT body FROM router_messages ORDER BY ordinal"
-        )
-        .iter()
-        .any(|body| {
-            present_router_body(body).text == "The task started, but the worker did not answer."
-        })
-    );
+    assert!(texts(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal"
+    )
+    .iter()
+    .any(|body| {
+        present_router_body(body).text == "The task started, but the worker did not answer."
+    }));
     harness
         .router
         .push_tool("success", &success_arguments("It is 54 F in Canby."));
@@ -2671,14 +2675,12 @@ fn model_worker_retries_a_running_parent_that_never_reported() {
         texts(&harness.database, "SELECT summary FROM task_reports"),
         vec!["It is 54 F in Canby.".to_owned()]
     );
-    assert!(
-        texts(
-            &harness.database,
-            "SELECT body FROM router_messages ORDER BY ordinal"
-        )
-        .iter()
-        .any(|body| present_router_body(body).text == "It is 54 F in Canby.")
-    );
+    assert!(texts(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal"
+    )
+    .iter()
+    .any(|body| present_router_body(body).text == "It is 54 F in Canby."));
 }
 
 #[test]
@@ -2769,13 +2771,11 @@ fn reported_cache_percent_is_cached_tokens_over_input_tokens() {
         "SELECT slots_json FROM router_turn_snapshots",
     ))
     .expect("slots");
-    assert!(
-        slots
-            .as_array()
-            .expect("slots")
-            .iter()
-            .all(|slot| slot["residence"] == "unreported")
-    );
+    assert!(slots
+        .as_array()
+        .expect("slots")
+        .iter()
+        .all(|slot| slot["residence"] == "unreported"));
 }
 
 #[test]
@@ -2788,23 +2788,17 @@ fn a_stored_claim_is_packed_into_the_router_request() {
     wait(harness.host().handle_user_message("What about obsidian?")).expect("chat");
     let request = harness.router.requests();
     let router_request = request.first().expect("router request");
-    assert!(
-        router_request.messages[0]
-            .content
-            .starts_with("You are Maia")
-    );
-    assert!(
-        router_request
-            .messages
-            .iter()
-            .any(|message| message.content.contains("Obsidian opens the vault."))
-    );
-    assert!(
-        router_request
-            .messages
-            .iter()
-            .any(|message| message.content.starts_with("## recall\n"))
-    );
+    assert!(router_request.messages[0]
+        .content
+        .starts_with("You are Maia"));
+    assert!(router_request
+        .messages
+        .iter()
+        .any(|message| message.content.contains("Obsidian opens the vault.")));
+    assert!(router_request
+        .messages
+        .iter()
+        .any(|message| message.content.starts_with("## recall\n")));
     let recall: Value = serde_json::from_str(&scalar(
         &harness.database,
         "SELECT recall_json FROM router_turn_snapshots",
@@ -2812,12 +2806,10 @@ fn a_stored_claim_is_packed_into_the_router_request() {
     .expect("recall");
     assert_eq!(recall[0]["id"], "claim-1");
     assert_eq!(recall[0]["kind"], "claim");
-    assert!(
-        recall[0]["sentence"]
-            .as_str()
-            .unwrap_or("")
-            .contains("Obsidian opens the vault.")
-    );
+    assert!(recall[0]["sentence"]
+        .as_str()
+        .unwrap_or("")
+        .contains("Obsidian opens the vault."));
     assert_eq!(count(&harness.database, "SELECT COUNT(*) FROM claims"), 1);
     assert_eq!(
         count(
@@ -2938,14 +2930,17 @@ fn owner_chat_sees_admitted_tools_and_cannot_call_them() {
     .expect("owner message was admitted");
     assert!(matches!(
         outcome,
-        MessageOutcome::RoutingFailed {
-            reason: RoutingFailureReason::RouteUnreadable,
-            ..
-        }
+        MessageOutcome::Routed(ref routed)
+            if matches!(routed.admitted, AdmittedRoute::Admit(RouteDecision::CreateTask))
     ));
     assert_eq!(calls.load(Ordering::Relaxed), 0);
-    assert_eq!(harness.host().seal_count(), 0);
-    let request = harness.router.requests().pop().expect("router request");
+    assert_eq!(harness.host().seal_count(), 1);
+    let request = harness
+        .router
+        .requests()
+        .into_iter()
+        .find(|request| request.tools_json.0.contains("spawn_task"))
+        .expect("router request");
     assert!(request.messages[0].content.contains("web__scrape"));
     assert!(request.messages[0].content.contains("Read a page"));
     assert!(request.tools_json.0.contains("spawn_task"));
@@ -2997,16 +2992,12 @@ fn worker_calls_an_admitted_tool_without_changing_the_sealed_prompt() {
     assert!(!requests[0].tools_json.0.contains("web__scrape"));
     let worker = &requests[1];
     assert!(worker.tools_json.0.contains("web__scrape"));
-    assert!(
-        worker.messages[0]
-            .content
-            .contains("sealed owner text wins")
-    );
-    assert!(
-        worker.messages[0]
-            .content
-            .contains("Router guidance (advisory)")
-    );
+    assert!(worker.messages[0]
+        .content
+        .contains("sealed owner text wins"));
+    assert!(worker.messages[0]
+        .content
+        .contains("Router guidance (advisory)"));
     assert!(worker.messages[0].content.contains("Use the scrape tool."));
     assert_eq!(worker.messages[1].content, owner);
     let follow = &requests[2];
@@ -3105,11 +3096,9 @@ fn unknown_tool_result_keeps_the_worker_until_success() {
         .expect("tool result");
     assert!(tool.content.contains(UNKNOWN_OUTCOME_SUMMARY));
     assert!(tool.content.contains("success or failure"));
-    assert!(
-        !texts(&harness.database, "SELECT phase FROM task_sessions")
-            .iter()
-            .any(|phase| phase.starts_with("waiting:"))
-    );
+    assert!(!texts(&harness.database, "SELECT phase FROM task_sessions")
+        .iter()
+        .any(|phase| phase.starts_with("waiting:")));
 }
 
 #[test]
@@ -3430,12 +3419,16 @@ fn worker_rejects_bad_mcp_arguments_before_the_transport() {
 }
 
 #[test]
-fn guidance_longer_than_the_limit_creates_no_task() {
+fn oversized_guidance_is_dropped_and_the_task_still_starts() {
     let mut harness = Harness::open_model("mcp-guidance", prompt_supply());
     let guidance = "x".repeat(2001);
     harness
         .router
         .push_tool("spawn_task", &format!(r#"{{"guidance":"{guidance}"}}"#));
+    harness.router.push_tool(
+        "success",
+        &success_arguments("Started without the long note."),
+    );
     let outcome = wait(
         harness
             .host()
@@ -3444,16 +3437,22 @@ fn guidance_longer_than_the_limit_creates_no_task() {
     .expect("owner message was admitted");
     assert!(matches!(
         outcome,
-        MessageOutcome::RoutingFailed {
-            reason: RoutingFailureReason::RouteUnreadable,
-            ..
-        }
+        MessageOutcome::Routed(ref routed)
+            if matches!(routed.admitted, AdmittedRoute::Admit(RouteDecision::CreateTask))
     ));
-    assert_eq!(harness.host().seal_count(), 0);
+    assert_eq!(harness.host().seal_count(), 1);
+    assert_eq!(
+        harness
+            .host()
+            .store()
+            .task_guidance("task-1")
+            .expect("guidance read"),
+        None
+    );
 }
 
 #[test]
-fn unfinished_prose_is_not_the_owner_reply() {
+fn plain_text_without_a_tool_is_the_owner_reply() {
     let mut harness = Harness::open("unfinished-prose", prompt_supply());
     harness
         .router
@@ -3475,10 +3474,10 @@ fn unfinished_prose_is_not_the_owner_reply() {
         ),
         vec![
             "What hardware is in this PC?".to_owned(),
-            "I'll check the hardware.".to_owned(),
+            "The owner is asking about their PC. I need a subagent.".to_owned(),
         ]
     );
-    assert!(harness.router.requests().len() >= 2);
+    assert_eq!(harness.router.requests().len(), 1);
 }
 
 #[test]
@@ -3609,14 +3608,12 @@ fn an_approval_wait_uses_code_copy_and_approve_returns_the_task_to_the_queue() {
         .expect("approve");
     assert!(matches!(settled, ApprovalSettlement::Approved { .. }));
     assert_eq!(harness.host().phase(&task), Some(&TaskPhase::Queued));
-    assert!(
-        harness
-            .host()
-            .store()
-            .pending_approvals(NOW)
-            .expect("cleared")
-            .is_empty()
-    );
+    assert!(harness
+        .host()
+        .store()
+        .pending_approvals(NOW)
+        .expect("cleared")
+        .is_empty());
 }
 
 #[test]
@@ -3731,6 +3728,247 @@ fn an_attachment_is_a_separate_untrusted_message_and_episode_segment() {
         ),
         "untrusted"
     );
+}
+
+const FOLDER_REQUEST: &str = "Can you check out f: development ideas folder for my cursor remote project and explain it to me";
+
+fn open_harness(name: &str) -> Harness {
+    Harness::open_policy(
+        name,
+        prompt_supply(),
+        SecurityProfile::Protected,
+        open_routing_policy(),
+    )
+}
+
+#[test]
+fn folder_request_spawns_when_the_model_reports_confidence_300_margin_0() {
+    let mut harness = open_harness("open-low-confidence");
+    harness
+        .router
+        .push_tool("spawn_task", r#"{"confidence":300,"margin":0}"#);
+    harness
+        .router
+        .push_tool("success", &success_arguments("Reading that folder."));
+    let outcome = wait(harness.host().handle_user_message(FOLDER_REQUEST)).expect("spawn");
+    assert!(matches!(
+        outcome.admitted,
+        AdmittedRoute::Admit(RouteDecision::CreateTask)
+    ));
+    assert_eq!(outcome.task, Some(TaskId("task-1".to_owned())));
+    assert_eq!(
+        harness.host().prompt("task-1").expect("prompt"),
+        FOLDER_REQUEST.as_bytes()
+    );
+    assert_eq!(
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
+        1
+    );
+}
+
+#[test]
+fn malformed_route_is_repaired_once_then_a_valid_spawn_starts_one_task() {
+    let mut harness = open_harness("repair-spawn");
+    harness.router.push_tool("spawn_task", "not-json");
+    harness
+        .router
+        .push_tool("spawn_task", r#"{"confidence":900,"margin":200}"#);
+    harness
+        .router
+        .push_tool("success", &success_arguments("Started."));
+    let outcome = wait(harness.host().handle_user_message(FOLDER_REQUEST)).expect("spawn");
+    assert!(matches!(
+        outcome.admitted,
+        AdmittedRoute::Admit(RouteDecision::CreateTask)
+    ));
+    assert_eq!(
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
+        1
+    );
+    let requests = harness.router.requests();
+    assert!(requests.len() >= 2);
+    assert!(requests[1]
+        .messages
+        .iter()
+        .any(|message| message.content.contains("not a valid route")));
+}
+
+#[test]
+fn plain_text_answer_does_not_start_a_task() {
+    let mut harness = open_harness("plain-answer");
+    harness
+        .router
+        .push_raw("Hello. I can help from here.".to_owned());
+    let outcome = wait(harness.host().handle_user_message("Hello")).expect("chat");
+    assert!(outcome.task.is_none());
+    assert_eq!(harness.router.requests().len(), 1);
+    assert_eq!(
+        shown(
+            &harness.database,
+            "SELECT body FROM router_messages ORDER BY ordinal"
+        ),
+        vec![
+            "Hello".to_owned(),
+            "Hello. I can help from here.".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn bad_task_id_on_new_work_becomes_spawn_task() {
+    let mut harness = open_harness("bad-id-spawn");
+    harness.router.push_tool(
+        "continue_task",
+        r#"{"task_id":"missing-task","confidence":900,"margin":200}"#,
+    );
+    harness
+        .router
+        .push_tool("success", &success_arguments("Started."));
+    let outcome = wait(harness.host().handle_user_message(FOLDER_REQUEST)).expect("spawn");
+    assert!(matches!(
+        outcome.admitted,
+        AdmittedRoute::Admit(RouteDecision::CreateTask)
+    ));
+    assert_eq!(
+        harness.host().prompt("task-1").expect("prompt"),
+        FOLDER_REQUEST.as_bytes()
+    );
+    assert_eq!(
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
+        1
+    );
+}
+
+#[test]
+fn bad_task_id_on_a_follow_up_asks_for_a_listed_task() {
+    let mut harness = open_harness("bad-id-ask");
+    harness.router.push_tool(
+        "continue_task",
+        r#"{"task_id":"missing-task","confidence":900,"margin":200}"#,
+    );
+    let outcome = wait(harness.host().handle_user_message("continue")).expect("ask");
+    assert!(matches!(outcome.admitted, AdmittedRoute::AskUser { .. }));
+    assert!(outcome.task.is_none());
+    assert_eq!(
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
+        0
+    );
+    let body = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    )
+    .into_iter()
+    .nth(1)
+    .expect("ask");
+    assert!(body.contains("No task has that id"));
+    assert!(body.contains("There is no listed task yet."));
+}
+
+#[test]
+fn provider_errors_then_one_spawn_and_the_same_operation_does_not_spawn_again() {
+    let mut harness = open_harness("provider-retry");
+    harness
+        .router
+        .push_failure(RouterError::Server { code: 503 });
+    harness.router.push_failure(RouterError::RateLimited);
+    harness
+        .router
+        .push_tool("spawn_task", r#"{"confidence":300,"margin":0}"#);
+    harness
+        .router
+        .push_tool("success", &success_arguments("Started."));
+    let operation = SubmissionId("11111111-1111-4111-8111-111111111111".to_owned());
+    let first = wait(harness.host().handle_submission(&operation, FOLDER_REQUEST)).expect("first");
+    let message = match &first {
+        SubmissionAdmission::NewRouted(outcome) => {
+            assert!(matches!(
+                outcome.admitted,
+                AdmittedRoute::Admit(RouteDecision::CreateTask)
+            ));
+            outcome.message.clone()
+        }
+        other => panic!("expected a new route, got {other:?}"),
+    };
+    harness.host().finish_submission(
+        &operation,
+        message,
+        AdmittedOutcome::Routed(RoutedOutcome::Admit),
+    );
+    let second =
+        wait(harness.host().handle_submission(&operation, FOLDER_REQUEST)).expect("replay");
+    assert!(matches!(second, SubmissionAdmission::Terminal { .. }));
+    assert_eq!(
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
+        1
+    );
+    assert!(shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal"
+    )
+    .iter()
+    .any(|body| body == "The provider is busy, retrying."));
+    assert!(harness.router.requests().len() >= 3);
+}
+
+#[test]
+fn unreadable_provider_body_is_repaired_once_then_spawn_starts_one_task() {
+    let mut harness = open_harness("unreadable-body-spawn");
+    harness.router.push_failure(RouterError::Protocol {
+        detail: "tool arguments must be valid JSON object".to_owned(),
+    });
+    harness
+        .router
+        .push_tool("spawn_task", r#"{"confidence":900,"margin":200}"#);
+    harness
+        .router
+        .push_tool("success", &success_arguments("Started."));
+    let outcome = wait(harness.host().handle_user_message(FOLDER_REQUEST)).expect("spawn");
+    assert!(matches!(
+        outcome.admitted,
+        AdmittedRoute::Admit(RouteDecision::CreateTask)
+    ));
+    assert_eq!(
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
+        1
+    );
+    let requests = harness.router.requests();
+    assert!(requests.len() >= 2);
+    assert!(requests[1]
+        .messages
+        .iter()
+        .any(|message| message.content.contains("not a valid route")));
+    let bodies = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert!(bodies.iter().all(|body| !body.contains("tool arguments")));
+}
+
+#[test]
+fn unreadable_provider_body_on_thanks_asks_instead_of_spawning() {
+    let mut harness = open_harness("unreadable-body-thanks");
+    harness.router.push_failure(RouterError::Protocol {
+        detail: "unknown tool name".to_owned(),
+    });
+    harness.router.push_failure(RouterError::Protocol {
+        detail: "unknown tool name".to_owned(),
+    });
+    let outcome = wait(harness.host().handle_user_message("thanks")).expect("ask");
+    assert!(outcome.task.is_none());
+    assert_eq!(
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
+        0
+    );
+    let body = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    )
+    .into_iter()
+    .nth(1)
+    .expect("ask");
+    assert!(body.contains("What should I do with that?"));
+    assert!(!body.contains("unknown tool name"));
+    assert!(!body.contains("The model provider is unavailable."));
 }
 
 fn scalar(path: &Path, sql: &str) -> String {

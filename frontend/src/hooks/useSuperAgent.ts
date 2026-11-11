@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type {
+  ActivityLine,
   ComposerNotice,
   HostCommand,
   LiveApproval,
+  OutgoingMessage,
   PinMark,
   RouterMessage,
   SidebarRow,
@@ -104,6 +106,7 @@ interface ClientActivation {
   select_task: (taskId: string | null) => void
   selected_task: () => string | null
   send_owner: () => SendOperationToken | null
+  owns_send: (token: SendOperationToken) => boolean
   try_start_send: () => SendOperationToken | null
   finish_send: (token: SendOperationToken) => void
   try_start_shell_action: (key: ShellActionKey) => ShellActionToken | null
@@ -144,6 +147,7 @@ function createClientActivation(session: ClientSession): ClientActivation {
     task_id: string
   } | null = null
   let selectedTask: string | null = null
+  const sendOwners = new Set<SendOperationToken>()
   let sendOwner: SendOperationToken | null = null
   const shellActionOwners = new Map<ShellActionKey, symbol>()
   return {
@@ -169,12 +173,14 @@ function createClientActivation(session: ClientSession): ClientActivation {
     },
     selected_task: () => selectedTask,
     send_owner: () => sendOwner,
+    owns_send: (token) => sendOwners.has(token),
     try_start_send: () => {
-      if (sendOwner !== null) return null
       sendOwner = Symbol('super-agent-send')
+      sendOwners.add(sendOwner)
       return sendOwner
     },
     finish_send: (token) => {
+      sendOwners.delete(token)
       if (sendOwner === token) sendOwner = null
     },
     try_start_shell_action: (key) => {
@@ -190,6 +196,7 @@ function createClientActivation(session: ClientSession): ClientActivation {
     },
     dispose: () => {
       shellActionOwners.clear()
+      sendOwners.clear()
       sendOwner = null
       detailOwner = null
       controller.abort()
@@ -338,11 +345,17 @@ export interface RouterBindings {
   decideApproval: (approvalId: string, decision: 'approve' | 'deny') => Promise<void>
   canAttach: boolean
   stageAttachments: (files: readonly File[]) => Promise<void>
+  outgoing: readonly OutgoingMessage[]
+  retryOutgoing: (id: string) => void
+  activity: readonly ActivityLine[]
 }
 
 export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   rows: SidebarRow[]
   openTask: (taskId: string) => Promise<void>
+  outgoing: OutgoingMessage[]
+  retryOutgoing: (id: string) => void
+  activity: ActivityLine[]
 } {
   const session = useMemo(() => createClientSession(client), [client])
   const submissionController = useMemo(
@@ -352,6 +365,13 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   const activeActivation = useRef<ClientActivation | null>(null)
   const closeSendWatch = useRef<(() => void) | null>(null)
   const pendingAttachmentIds = useRef<string[]>([])
+  const queuedText = useRef<string | null>(null)
+  const inflightText = useRef(new Map<string, SendOperationToken>())
+  const [activity, setActivity] = useState<ActivityLine[]>([])
+  const [outgoing, setOutgoing] = useState<OutgoingMessage[]>([])
+  const outgoingRef = useRef(outgoing)
+  outgoingRef.current = outgoing
+  const submitRef = useRef<() => Promise<void>>(async () => undefined)
   const [storedState, dispatch] = useReducer(
     reduceSuperAgentState,
     session,
@@ -417,6 +437,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       })
       try {
         const transcript = await activation.session.client.transcript()
+        setActivity(transcript.activity ?? [])
         if (!isActiveActivation(activation)) return { kind: 'stale' }
         dispatch({
           type: 'transcript_loaded',
@@ -565,11 +586,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   const updateDraft = useCallback(
     (nextDraft: string) => {
       const activation = activeActivation.current
-      if (
-        !activation ||
-        activation.session !== session ||
-        activation.send_owner() !== null
-      ) {
+      if (!activation || activation.session !== session) {
         return
       }
       submissionController.reconcile_text(nextDraft.trim())
@@ -586,11 +603,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   const quote = useCallback(
     async (taskId: string) => {
       const activation = activeActivation.current
-      if (
-        !activation ||
-        activation.session !== session ||
-        activation.send_owner() !== null
-      ) {
+      if (!activation || activation.session !== session) {
         return
       }
       const token = activation.try_start_shell_action(
@@ -741,23 +754,31 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   }, [loadTranscript, session, state.transcript])
 
   const submit = useCallback(async () => {
-    const text = draft.trim()
+    const text = (queuedText.current ?? draft).trim()
+    queuedText.current = null
     const activation = activeActivation.current
     if (
       !activation ||
       activation.session !== session ||
       state.transcript.baseline !== 'ready' ||
-      text.length === 0
+      text.length === 0 ||
+      inflightText.current.has(text)
     ) {
       return
     }
     const token = activation.try_start_send()
     if (!token) return
+    inflightText.current.set(text, token)
     closeSendWatch.current?.()
     const submission = submissionController.submission_for(
       text,
       () => session.client.createOperationId(),
     )
+    const outgoingId = String(submission.operation_id)
+    setOutgoing((current) => [
+      ...current.filter((item) => item.text !== text),
+      { id: outgoingId, text, state: 'pending' },
+    ])
     dispatch({
       type: 'send_started',
       session: session.id,
@@ -802,6 +823,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         activation: activation.id,
         token,
       })
+      if (inflightText.current.get(text) === token) inflightText.current.delete(text)
       activation.finish_send(token)
     }
     const showStored = async (
@@ -856,6 +878,11 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       if (lastView === 'absent') {
         if (!closeWatch() || !ownsSend()) return
         submissionController.discard(submission.operation_id)
+        setOutgoing((current) =>
+          current.map((item) =>
+            item.id === String(submission.operation_id) ? { ...item, state: 'failed' } : item,
+          ),
+        )
         dispatch({
           type: 'send_failed',
           session: session.id,
@@ -893,6 +920,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
           session: session.id,
           activation: activation.id,
           token,
+          sent_text: text,
         })
       } else {
         closeWatch()
@@ -959,6 +987,11 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         SEND_TRANSCRIPT_PROBE_MS,
       )
       if (!ownsSend()) return
+      setOutgoing((current) =>
+        current.map((item) =>
+          item.id === String(submission.operation_id) ? { ...item, state: 'failed' } : item,
+        ),
+      )
       dispatch({
         type: 'send_failed',
         session: session.id,
@@ -967,6 +1000,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         text: error instanceof SuperAgentRequestError ? error.message : SEND_FAILED_TEXT,
       })
     } finally {
+      if (inflightText.current.get(text) === token) inflightText.current.delete(text)
       closeWatch()
       activation.finish_send(token)
     }
@@ -977,6 +1011,52 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     state.transcript.baseline,
     submissionController,
   ])
+
+  submitRef.current = submit
+
+  const retryOutgoing = useCallback((id: string) => {
+    const item = outgoingRef.current.find((entry) => entry.id === id)
+    if (!item || item.state !== 'failed') return
+    queuedText.current = item.text
+    void submitRef.current()
+  }, [])
+
+  useEffect(() => {
+    setOutgoing((current) => {
+      const next = current.filter(
+        (item) =>
+          item.state === 'failed' ||
+          !state.transcript.messages.some(
+            (message) => message.role === 'owner' && message.text === item.text,
+          ),
+      )
+      return next.length === current.length ? current : next
+    })
+  }, [state.transcript.messages])
+
+  const messageIds = useRef('')
+  messageIds.current = state.transcript.messages.map((message) => message.message_id).join('\n')
+  useEffect(() => {
+    if (client.dataSource !== 'live') return
+    if (outgoing.length === 0 && activity.length === 0) return
+    let stopped = false
+    const timer = window.setInterval(() => {
+      const activation = activeActivation.current
+      if (!activation || activation.session !== session || stopped) return
+      void activation.session.client.transcript().then((body) => {
+        if (stopped || !isActiveActivation(activation)) return
+        setActivity(body.activity ?? [])
+        const nextIds = body.messages.map((message) => message.message_id).join('\n')
+        if (nextIds !== messageIds.current) {
+          void loadTranscript(activation, 'refresh', TRANSCRIPT_REFRESH_ERROR, 'silent')
+        }
+      })
+    }, 1000)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+    }
+  }, [activity.length, client.dataSource, loadTranscript, outgoing.length, session])
 
   const acknowledgeAnnouncement = useCallback(
     (sequence: number) => {
@@ -1055,5 +1135,8 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     decideApproval,
     canAttach: client.uploadAttachment !== undefined,
     stageAttachments,
+    outgoing,
+    retryOutgoing,
+    activity,
   }
 }

@@ -34,7 +34,7 @@ pub use orchestrator::{
     MessageOutcome, Orchestrator, OrchestratorConfig, OrchestratorError, ParentWork,
     PhaseCodecError, ProposalParseError, ReplayGuard, RoutedOutcome, RouterTurn,
     RoutingFailureReason, StagedAttachment, StepOutcome, SubmissionAdmission, TurnOutcome,
-    UNKNOWN_OUTCOME_SUMMARY, accepted_routing_policy, canonical_phase, encode_route_proposal,
+    UNKNOWN_OUTCOME_SUMMARY, accepted_routing_policy, open_routing_policy, canonical_phase, encode_route_proposal,
     named_tool_response, parse_canonical_phase, present_router_body, route_tool_response,
     validate_runtime_snapshot,
 };

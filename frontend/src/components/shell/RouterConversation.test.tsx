@@ -53,6 +53,9 @@ function RouterHarness({ client }: { client: FixtureSuperAgentClient }) {
           onRetryTranscript={agent.retryTranscript}
           onAnnouncementAcknowledged={agent.acknowledgeAnnouncement}
           onSubmit={agent.submit}
+          outgoing={agent.outgoing}
+          onRetryOutgoing={agent.retryOutgoing}
+          activity={agent.activity}
         />
       )}
     </>
@@ -159,7 +162,37 @@ describe('RouterConversation', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
   })
 
-  it('disables composer and transcript retry while send is pending', () => {
+  it('shows working activity and can stop one task', () => {
+    const onStopTask = vi.fn()
+    render(
+      <RouterConversation
+        messages={[]}
+        transcriptState={{ kind: 'ready' }}
+        admission={{ kind: 'ready' }}
+        operation={{ kind: 'idle' }}
+        announcement={null}
+        draft=""
+        notice={{ kind: 'idle' }}
+        disabled={false}
+        activity={[
+          { seq: 1, label: 'Router: reading your message' },
+          { seq: 2, label: 'Task task-1: listing F:\\Development\\Ideas', task_id: 'task-1' },
+        ]}
+        onStopTask={onStopTask}
+        onDraftChange={() => undefined}
+        onRetryTranscript={() => undefined}
+        onAnnouncementAcknowledged={() => undefined}
+        onSubmit={() => undefined}
+      />,
+    )
+    expect(screen.getByText('Router: reading your message')).toBeInTheDocument()
+    expect(screen.getByText(/Task task-1: listing/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop task-1' }))
+    expect(onStopTask).toHaveBeenCalledWith('task-1')
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+  })
+
+  it('keeps the composer usable while a send is pending', () => {
     render(
       <ReviewedRouterConversation
         messages={[]}
@@ -177,8 +210,8 @@ describe('RouterConversation', () => {
       />,
     )
 
-    expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Retry conversation' })).toBeDisabled()
   })
 
@@ -493,7 +526,7 @@ describe('RouterConversation', () => {
     expect(onRetryTranscript).toHaveBeenCalledOnce()
   })
 
-  it('offers Latest message after new text arrives while the transcript is scrolled up', () => {
+  it('offers New messages after new text arrives while the transcript is scrolled up', () => {
     const props = {
       transcriptState: { kind: 'ready' as const },
       admission: { kind: 'ready' as const },
@@ -527,8 +560,8 @@ describe('RouterConversation', () => {
         ]}
       />,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Latest message' }))
-    expect(screen.queryByRole('button', { name: 'Latest message' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'New messages' }))
+    expect(screen.queryByRole('button', { name: 'New messages' })).not.toBeInTheDocument()
     expect(transcript.scrollTop).toBe(400)
   })
 
@@ -590,12 +623,54 @@ describe('RouterConversation', () => {
     expect(next).toBeEnabled()
   })
 
-  it('speaks pending and failed sends in plain language', () => {
-    const { rerender } = render(<DraftHarness operation={{ kind: 'sending' }} onSubmit={vi.fn()} />)
-    expect(screen.getByRole('status')).toHaveTextContent('Sending.')
-    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
-    rerender(<DraftHarness notice={{ kind: 'failed', text: 'Message failed. Try again.' }} onSubmit={vi.fn()} />)
+  it('keeps the composer open while a send is pending and speaks a failed send', () => {
+    const { rerender } = render(
+      <DraftHarness
+        operation={{ kind: 'sending' }}
+        onSubmit={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeEnabled()
+    rerender(
+      <RouterConversation
+        messages={[{ message_id: 'm1', role: 'owner', text: 'Hello' }]}
+        transcriptState={{ kind: 'ready' }}
+        admission={{ kind: 'ready' }}
+        operation={{ kind: 'sending' }}
+        announcement={null}
+        draft=""
+        notice={{ kind: 'idle' }}
+        disabled={false}
+        outgoing={[{ id: 'local-1', text: 'Add a pin control', state: 'pending' }]}
+        onDraftChange={() => undefined}
+        onRetryTranscript={() => undefined}
+        onAnnouncementAcknowledged={() => undefined}
+        onSubmit={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('Sending.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+    rerender(
+      <RouterConversation
+        messages={[{ message_id: 'm1', role: 'owner', text: 'Hello' }]}
+        transcriptState={{ kind: 'ready' }}
+        admission={{ kind: 'ready' }}
+        operation={{ kind: 'idle' }}
+        announcement={null}
+        draft=""
+        notice={{ kind: 'failed', text: 'Message failed. Try again.' }}
+        disabled={false}
+        outgoing={[{ id: 'local-1', text: 'Add a pin control', state: 'failed' }]}
+        onDraftChange={() => undefined}
+        onRetryTranscript={() => undefined}
+        onAnnouncementAcknowledged={() => undefined}
+        onSubmit={vi.fn()}
+      />,
+    )
     expect(screen.getByRole('status')).toHaveTextContent('Message failed. Try again.')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
   })
 
   it('inserts a task reference without clearing the draft', async () => {
@@ -651,10 +726,14 @@ describe('RouterConversation', () => {
     const box = await screen.findByRole('textbox', { name: 'Message' })
     await user.type(box, 'Add a pin control')
     await user.click(screen.getByRole('button', { name: 'Send' }))
-    expect(screen.getByRole('status')).toHaveTextContent('Sending.')
+    expect(screen.getByText('Sending.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+    expect(box).toHaveValue('Add a pin control')
+    fireEvent.change(box, { target: { value: 'Next while the first is sending' } })
     client.releaseHeldSend('fail')
     expect(await screen.findByRole('status')).toHaveTextContent('Message failed. Try again.')
-    expect(box).toHaveValue('Add a pin control')
+    expect(box).toHaveValue('Next while the first is sending')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
   })
 
   it('admits a message into the router transcript', async () => {

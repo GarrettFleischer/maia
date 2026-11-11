@@ -243,7 +243,7 @@ describe('reduceSuperAgentState send ownership', () => {
     expect(next).toBe(before)
   })
 
-  it('ignores all draft mutations while a send token owns the draft', () => {
+  it('clears the sent draft and accepts the next draft while a send is in flight', () => {
     const token = Symbol('draft-owner') as SendOperationToken
     const drafted = reduceSuperAgentState(hydratedState(), {
       type: 'draft_changed',
@@ -263,16 +263,17 @@ describe('reduceSuperAgentState send ownership', () => {
       activation,
       draft: 'Later text',
     })
-    const quoted = reduceSuperAgentState(sending, {
+    const quoted = reduceSuperAgentState(changed, {
       type: 'draft_reference_inserted',
       session,
       activation,
       insert: 'task:task-1 ',
     })
 
-    expect(changed).toBe(sending)
-    expect(quoted).toBe(sending)
     expect(sending.draft).toBe('Owned draft')
+    expect(sending.operation).toEqual({ kind: 'sending', token })
+    expect(changed.draft).toBe('Later text')
+    expect(quoted.draft).toBe('Later text task:task-1 ')
   })
 
   it('clears a matching draft when admission arrives after the send was given up', () => {

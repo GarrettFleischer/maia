@@ -117,6 +117,12 @@ export function ConversationPane({
             onInspectFacts={onInspectFacts}
             canAttach={router.canAttach}
             stageAttachments={router.stageAttachments}
+            outgoing={router.outgoing}
+            onRetryOutgoing={router.retryOutgoing}
+            activity={router.activity}
+            onStopTask={(taskId) => {
+              void router.hostCommand({ command: 'stop', task_id: taskId })
+            }}
             accessory={
               phoneStop ? (
                 <div className="maia-phone-stop" data-testid="phone-stop-bar">

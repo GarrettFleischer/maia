@@ -5,6 +5,7 @@ import {
   ROUTE_UNREADABLE_TEXT,
 } from '@/api/superAgentOutcome'
 import type {
+  ActivityLine,
   AdmittedRouteName,
   MessageAdmissionResult,
   PinMark,
@@ -448,7 +449,20 @@ function readTranscript(value: unknown): { messages: RouterMessage[] } | null {
       ...(attachments.length > 0 ? { attachments } : {}),
     })
   }
-  return { messages }
+  const activity = readActivity(value.activity)
+  return { messages, ...(activity.length > 0 ? { activity } : {}) }
+}
+
+function readActivity(value: unknown): ActivityLine[] {
+  if (!Array.isArray(value)) return []
+  const lines: ActivityLine[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.label !== 'string' || item.label.length === 0) continue
+    if (typeof item.seq !== 'number' || !Number.isFinite(item.seq)) continue
+    const task_id = typeof item.task_id === 'string' && item.task_id.length > 0 ? item.task_id : undefined
+    lines.push({ seq: item.seq, label: item.label, ...(task_id ? { task_id } : {}) })
+  }
+  return lines
 }
 
 function readInspector(value: unknown): InspectorSnapshot | null {

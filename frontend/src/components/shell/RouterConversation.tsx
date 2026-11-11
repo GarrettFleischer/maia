@@ -1,7 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { AttachmentChips, attachmentAllowed } from '@/components/shell/AttachmentChips'
 import { MarkdownMessage } from '@/components/shell/MarkdownMessage'
-import type { ComposerNotice, RouterMessage, TranscriptState } from '@/api/superAgentTypes'
+import type {
+  ActivityLine,
+  ComposerNotice,
+  OutgoingMessage,
+  RouterMessage,
+  TranscriptState,
+} from '@/api/superAgentTypes'
 import { composerStatusText } from '@/api/superAgentFormat'
 import { composerFieldPx } from '@/components/shell/composerField'
 import { useTranscriptPosition } from '@/components/shell/transcriptPosition'
@@ -10,6 +16,15 @@ import {
   type AdmissionState,
   type RouterAnnouncement,
 } from '@/state/superAgentSession'
+
+function latestActivity(lines: readonly ActivityLine[]): ActivityLine[] {
+  const router = lines.filter((line) => line.task_id === undefined).slice(-1)
+  const tasks = new Map<string, ActivityLine>()
+  for (const line of lines) {
+    if (line.task_id) tasks.set(line.task_id, line)
+  }
+  return [...router, ...tasks.values()]
+}
 
 function routeSummary(route: string): string {
   if (route === 'relay_report') return 'Relay · task report'
@@ -43,6 +58,10 @@ export function RouterConversation({
   onInspectFacts,
   canAttach = false,
   stageAttachments,
+  outgoing = [],
+  onRetryOutgoing,
+  activity = [],
+  onStopTask,
 }: {
   messages: readonly RouterMessage[]
   transcriptState: TranscriptState
@@ -63,6 +82,10 @@ export function RouterConversation({
   onInspectFacts?: (messageId: string, ids: readonly string[]) => void
   canAttach?: boolean
   stageAttachments?: (files: readonly File[]) => Promise<void>
+  outgoing?: readonly OutgoingMessage[]
+  onRetryOutgoing?: (id: string) => void
+  activity?: readonly ActivityLine[]
+  onStopTask?: (taskId: string) => void
 }) {
   const [rejection, setRejection] = useState<string | null>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
@@ -83,9 +106,16 @@ export function RouterConversation({
     draft,
     sending: operation.kind === 'sending',
   }
-  const busy = disabled || admission.kind === 'blocked' || operation.kind === 'sending'
-  const status =
-    operation.kind === 'sending' ? 'Sending.' : composerStatusText(notice, rejection)
+  const busy = disabled || admission.kind === 'blocked'
+  const status = composerStatusText(notice, rejection)
+  const [clock, setClock] = useState(() => Date.now())
+  const activityStarted = useRef(new Map<string, number>())
+  useEffect(() => {
+    if (activity.length === 0) return
+    const timer = window.setInterval(() => setClock(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [activity.length])
+  const activityCards = latestActivity(activity)
   const visibleMessages = dedupeRouterMessages(messages)
   const messageKey = JSON.stringify(visibleMessages.map((message) => message.message_id))
   const { transcriptRef, onScroll, latestOffer, jumpToLatest } = useTranscriptPosition(
@@ -235,11 +265,54 @@ export function RouterConversation({
               </li>
             )
           })}
+          {outgoing.map((item) => (
+            <li key={item.id}>
+              <article className="maia-run maia-run--you" aria-label="Message from You">
+                <p className="maia-speaker">You</p>
+                <p className="maia-transcript-body">{item.text}</p>
+                <p>{item.state === 'pending' ? 'Sending.' : 'Not sent.'}</p>
+                {item.state === 'failed' ? (
+                  <button type="button" className="maia-btn" onClick={() => onRetryOutgoing?.(item.id)}>
+                    Retry
+                  </button>
+                ) : null}
+              </article>
+            </li>
+          ))}
         </ol>
       </div>
+      {activityCards.length > 0 ? (
+        <ul className="maia-activity" aria-label="Working">
+          {activityCards.map((line) => {
+            const key = line.task_id ?? `router-${line.seq}`
+            if (!activityStarted.current.has(key)) activityStarted.current.set(key, clock)
+            const elapsed = Math.max(
+              0,
+              Math.floor((clock - (activityStarted.current.get(key) ?? clock)) / 1000),
+            )
+            return (
+              <li key={key}>
+                <p role="status">
+                  {line.label}
+                  {elapsed > 0 ? ` · ${elapsed}s` : ''}
+                </p>
+                {line.task_id ? (
+                  <button
+                    type="button"
+                    className="maia-btn"
+                    onClick={() => onStopTask?.(line.task_id ?? '')}
+                  >
+                    Stop {line.task_id}
+                  </button>
+                ) : null}
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
       {latestOffer ? (
         <button type="button" className="maia-btn maia-latest" onClick={jumpToLatest}>
-          Latest message
+          New messages
         </button>
       ) : null}
       {accessory}

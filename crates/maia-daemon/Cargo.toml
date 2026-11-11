@@ -31,6 +31,7 @@ tower-http = { version = "0.6.11", features = ["fs"] }
 
 [dev-dependencies]
 dotenvy = "0.15.7"
+http = "1"
 futures-util = { workspace = true }
 maia-core = { workspace = true }
 maia-router = { workspace = true }

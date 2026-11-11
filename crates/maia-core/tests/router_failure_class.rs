@@ -1,8 +1,26 @@
 //! Secret-safe router failure classes. These tests do not perform network I/O.
 
 use maia_core::router::{
-    RouterConfigError, RouterError, RouterFailureClass, classify_router_failure,
+    classify_router_failure, RouterConfigError, RouterError, RouterFailureClass,
 };
+
+#[test]
+fn unreadable_model_output_is_schema_or_json_not_transport() {
+    let schema = classify_router_failure(&RouterError::Protocol {
+        detail: "tool arguments must be valid JSON object".to_owned(),
+    });
+    assert!(schema.is_unreadable_model_output());
+    let json = classify_router_failure(&RouterError::Protocol {
+        detail: "body must be a JSON object".to_owned(),
+    });
+    assert!(json.is_unreadable_model_output());
+    let transport = classify_router_failure(&RouterError::Protocol {
+        detail: "transport failure".to_owned(),
+    });
+    assert!(!transport.is_unreadable_model_output());
+    assert!(!classify_router_failure(&RouterError::Timeout).is_unreadable_model_output());
+    assert!(!classify_router_failure(&RouterError::Authentication).is_unreadable_model_output());
+}
 
 #[test]
 fn unexpected_http_status_is_a_numeric_class() {

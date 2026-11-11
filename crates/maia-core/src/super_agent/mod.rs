@@ -16,6 +16,9 @@ pub use completion::admit_completion;
 pub use envelope::{recall_query_text, seal_envelope};
 pub use memory::advisory_items;
 pub use phase::reduce_phase;
-pub use route::{admit_route, authorize_control, host_ask_user};
+pub use route::{
+    admit_route, authorize_control, host_ask_user, missing_parent_should_spawn,
+    owner_text_is_new_work,
+};
 pub use sidebar::{place_sidebar, reduce_completion_view};
 pub use types::*;

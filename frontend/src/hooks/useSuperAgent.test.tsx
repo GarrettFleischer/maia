@@ -1154,7 +1154,7 @@ describe('useSuperAgent submission and transcript state', () => {
     expect(result.current.notice).toEqual({ kind: 'idle' })
   })
 
-  it('ignores quote and draft mutations while a deferred send owns the draft', async () => {
+  it('accepts a new draft and a quote while a deferred send is in flight', async () => {
     const pendingSend = deferred<MessageAdmissionResult>()
     const insertReference = vi.fn().mockResolvedValue({ composer_insert: 'task:task-1 ' })
     const client = clientWith({
@@ -1173,8 +1173,8 @@ describe('useSuperAgent submission and transcript state', () => {
     await act(async () => result.current.quote('task-1'))
     act(() => result.current.setDraft('Later intent'))
 
-    expect(insertReference).not.toHaveBeenCalled()
-    expect(result.current.draft).toBe('Owned draft')
+    expect(insertReference).toHaveBeenCalledWith('task-1')
+    expect(result.current.draft).toContain('Later intent')
 
     pendingSend.resolve(routed())
     await act(async () => submission)

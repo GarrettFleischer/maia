@@ -74,6 +74,18 @@ export interface RouterMessage {
   attachments?: AttachmentChip[]
 }
 
+export interface ActivityLine {
+  seq: number
+  label: string
+  task_id?: string
+}
+
+export interface OutgoingMessage {
+  id: string
+  text: string
+  state: 'pending' | 'failed'
+}
+
 export interface TranscriptLine {
   id: string
   author: string
@@ -170,7 +182,7 @@ export interface SuperAgentClient {
   createOperationId(): SubmissionOperationId
   sidebar(): Promise<{ rows: SidebarRow[]; approvals?: LiveApproval[] }>
   decideApproval?(approvalId: string, decision: 'approve' | 'deny'): Promise<void>
-  transcript(): Promise<{ messages: RouterMessage[] }>
+  transcript(): Promise<{ messages: RouterMessage[]; activity?: ActivityLine[] }>
   task(taskId: string): Promise<TaskDetail>
   send(
     operationId: SubmissionOperationId,

@@ -99,6 +99,17 @@ impl RouterFailureClass {
         self.status_code
     }
 
+    /// The provider returned a body that is not a usable model turn.
+    ///
+    /// Transport, authentication, and server failures are not unreadable output.
+    #[must_use]
+    pub fn is_unreadable_model_output(self) -> bool {
+        matches!(
+            self.category,
+            FailureCategory::Schema | FailureCategory::Json | FailureCategory::EmptyReply
+        )
+    }
+
     /// One stable line. Tokens are fixed; the only integer is an HTTP status.
     pub fn redacted_log(self) -> String {
         match (self.category, self.status_code, self.kind) {

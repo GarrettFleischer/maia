@@ -26,7 +26,7 @@ use maia_daemon::RouterPromoter;
 use maia_daemon::RouterTurn;
 use maia_daemon::RuntimeRouter;
 use maia_daemon::ScriptedToolHost;
-use maia_daemon::accepted_routing_policy;
+use maia_daemon::open_routing_policy;
 use maia_daemon::discover_model_id;
 use maia_daemon::live_model_lister;
 use maia_daemon::native_router_key_store;
@@ -152,7 +152,7 @@ fn boot() -> Result<(), BootError> {
         store,
         ScriptedToolHost::create(),
         OrchestratorConfig {
-            policy: accepted_routing_policy(),
+            policy: open_routing_policy(),
             ids: supplies.orchestrator,
             turn: RouterTurn {
                 model: chosen.model.clone(),

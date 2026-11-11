@@ -468,14 +468,12 @@ export function reduceSuperAgentState(
         admitted_status_message_id: null,
       }
     case 'draft_changed':
-      if (state.operation.kind === 'sending') return state
       return {
         ...state,
         draft: event.draft,
         notice: state.notice.kind === 'failed' ? { kind: 'idle' } : state.notice,
       }
     case 'draft_reference_inserted':
-      if (state.operation.kind === 'sending') return state
       return {
         ...state,
         draft: appendReference(state.draft, event.insert),
@@ -486,7 +484,8 @@ export function reduceSuperAgentState(
     case 'shell_action_failed':
       return { ...state, notice: { kind: 'failed', text: event.text } }
     case 'send_started':
-      if (state.operation.kind === 'sending' || state.transcript.baseline !== 'ready') return state
+      if (state.transcript.baseline !== 'ready') return state
+      if (state.operation.kind === 'sending' && state.operation.token === event.token) return state
       return {
         ...state,
         operation: { kind: 'sending', token: event.token },
@@ -503,6 +502,13 @@ export function reduceSuperAgentState(
           return { ...state, draft: '', notice: { kind: 'idle' } }
         }
         return state
+      }
+      if (
+        event.sent_text !== undefined &&
+        state.draft.length > 0 &&
+        state.draft !== event.sent_text
+      ) {
+        return { ...state, notice: { kind: 'idle' } }
       }
       return { ...state, draft: '', notice: { kind: 'idle' } }
     case 'stored_send_unanswered':

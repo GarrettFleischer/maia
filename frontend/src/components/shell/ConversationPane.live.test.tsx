@@ -41,6 +41,9 @@ function bindings(decideApproval: RouterBindings['decideApproval']): RouterBindi
     decideApproval,
     canAttach: false,
     stageAttachments: async () => undefined,
+    outgoing: [],
+    retryOutgoing: () => undefined,
+    activity: [],
   }
 }
 

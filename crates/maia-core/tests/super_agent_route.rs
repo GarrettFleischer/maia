@@ -3,21 +3,16 @@ use std::collections::BTreeMap;
 use maia_core::super_agent::*;
 
 const CLARIFY_UNKNOWN_TASK: &str =
-    "Which existing task should the router use? The cited task id is not in the session.";
-const CLARIFY_CHILD_TARGET: &str =
-    "The router cannot route user control to a nested helper; name the parent task instead.";
+    "No task has that id. Reply with a task id from the list, or tell me to start a new task.";
+const CLARIFY_CHILD_TARGET: &str = "That id is a nested helper, not a task. Name the parent task id, or tell me to start a new task.";
 const CLARIFY_SPLIT: &str =
-    "Send one goal per message; the router cannot split one message into multiple new tasks.";
+    "I can start only one task from a message. Send the first goal by itself, then send the next.";
 const CLARIFY_USER_RELAY: &str =
-    "Say what you want in this message; the router cannot relay a report from your chat line.";
-const CLARIFY_TERMINAL_CONTINUE: &str =
-    "That task is already finished; say whether to inspect it, link a follow-up, or start fresh.";
-const CLARIFY_LIVE_LINKED: &str =
-    "That task is still active; continue it or finish it before opening a linked task.";
-const CLARIFY_RETRY_INELIGIBLE: &str =
-    "Retry applies only to a failed or stopped task; say continue, cancel, or inspect instead.";
-const CLARIFY_POLICY: &str =
-    "The router is not confident enough to act; restate which task or action you want.";
+    "Tell me what you want done in this message. I cannot relay a report from a chat line.";
+const CLARIFY_TERMINAL_CONTINUE: &str = "That task is already finished. Say inspect to look at it, follow up to open a linked task, or send the new work as its own request.";
+const CLARIFY_LIVE_LINKED: &str = "That task is still running. Say continue to hand it this message, or wait until it finishes before opening a linked task.";
+const CLARIFY_RETRY_INELIGIBLE: &str = "Retry applies only to a failed or stopped task. Say continue to add this message, cancel to stop it, or inspect to look at it.";
+const CLARIFY_POLICY: &str = "Name the task to continue, or tell me to start a new task.";
 
 fn policy() -> RoutingPolicy {
     RoutingPolicy {
@@ -519,4 +514,86 @@ fn split_on_user_message_asks() {
         &BTreeMap::new(),
     );
     assert_host_ask(admitted, CLARIFY_SPLIT);
+}
+
+const FOLDER_REQUEST: &str = "Can you check out f: development ideas folder for my cursor remote project and explain it to me";
+
+fn open_policy() -> RoutingPolicy {
+    RoutingPolicy {
+        min_confidence: Confidence::from_thousandths(0).unwrap(),
+        min_margin: Confidence::from_thousandths(0).unwrap(),
+        max_considered: 64,
+    }
+}
+
+#[test]
+fn open_thresholds_admit_create_at_confidence_300_margin_0() {
+    let admitted = admit_route(
+        &proposal(ProposedRouteDecision::CreateTask, 300, 0, vec![]),
+        &open_policy(),
+        &user_message(),
+        &BTreeMap::new(),
+    );
+    assert!(matches!(
+        admitted,
+        AdmittedRoute::Admit(RouteDecision::CreateTask)
+    ));
+}
+
+#[test]
+fn missing_parent_on_the_folder_request_should_spawn() {
+    let proposed = proposal(
+        ProposedRouteDecision::Continue {
+            target: parent("missing-task"),
+        },
+        900,
+        200,
+        vec![],
+    );
+    assert!(missing_parent_should_spawn(
+        &proposed,
+        FOLDER_REQUEST,
+        &BTreeMap::new()
+    ));
+}
+
+#[test]
+fn missing_parent_on_continue_does_not_spawn() {
+    let proposed = proposal(
+        ProposedRouteDecision::Continue {
+            target: parent("missing-task"),
+        },
+        900,
+        200,
+        vec![],
+    );
+    assert!(!missing_parent_should_spawn(
+        &proposed,
+        "continue",
+        &BTreeMap::new()
+    ));
+}
+
+#[test]
+fn cancel_of_a_missing_parent_does_not_spawn() {
+    let proposed = proposal(
+        ProposedRouteDecision::Cancel {
+            target: parent("missing-task"),
+        },
+        900,
+        200,
+        vec![],
+    );
+    assert!(!missing_parent_should_spawn(
+        &proposed,
+        FOLDER_REQUEST,
+        &BTreeMap::new()
+    ));
+}
+
+#[test]
+fn short_add_is_new_work_and_additional_is_not() {
+    assert!(owner_text_is_new_work("Add a pin control"));
+    assert!(!owner_text_is_new_work("additional notes"));
+    assert!(!owner_text_is_new_work("hi"));
 }

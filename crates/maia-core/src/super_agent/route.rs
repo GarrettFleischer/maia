@@ -8,21 +8,16 @@ use super::types::{
 };
 
 const CLARIFY_UNKNOWN_TASK: &str =
-    "Which existing task should the router use? The cited task id is not in the session.";
-const CLARIFY_CHILD_TARGET: &str =
-    "The router cannot route user control to a nested helper; name the parent task instead.";
+    "No task has that id. Reply with a task id from the list, or tell me to start a new task.";
+const CLARIFY_CHILD_TARGET: &str = "That id is a nested helper, not a task. Name the parent task id, or tell me to start a new task.";
 const CLARIFY_SPLIT: &str =
-    "Send one goal per message; the router cannot split one message into multiple new tasks.";
+    "I can start only one task from a message. Send the first goal by itself, then send the next.";
 const CLARIFY_USER_RELAY: &str =
-    "Say what you want in this message; the router cannot relay a report from your chat line.";
-const CLARIFY_TERMINAL_CONTINUE: &str =
-    "That task is already finished; say whether to inspect it, link a follow-up, or start fresh.";
-const CLARIFY_LIVE_LINKED: &str =
-    "That task is still active; continue it or finish it before opening a linked task.";
-const CLARIFY_RETRY_INELIGIBLE: &str =
-    "Retry applies only to a failed or stopped task; say continue, cancel, or inspect instead.";
-const CLARIFY_POLICY: &str =
-    "The router is not confident enough to act; restate which task or action you want.";
+    "Tell me what you want done in this message. I cannot relay a report from a chat line.";
+const CLARIFY_TERMINAL_CONTINUE: &str = "That task is already finished. Say inspect to look at it, follow up to open a linked task, or send the new work as its own request.";
+const CLARIFY_LIVE_LINKED: &str = "That task is still running. Say continue to hand it this message, or wait until it finishes before opening a linked task.";
+const CLARIFY_RETRY_INELIGIBLE: &str = "Retry applies only to a failed or stopped task. Say continue to add this message, cancel to stop it, or inspect to look at it.";
+const CLARIFY_POLICY: &str = "Name the task to continue, or tell me to start a new task.";
 
 /// Builds a host-generated clarification question with explicit non-empty text.
 pub fn host_ask_user(text: &str) -> AdmittedRoute {
@@ -232,6 +227,104 @@ pub fn authorize_control(
         Err(RouteRefuse::ChildTarget) => refuse_child_on_source(source),
         Err(reason) => AdmittedRoute::Refuse { reason },
     }
+}
+
+/// Whether `owner_text` is a fresh request rather than a short follow-up.
+///
+/// A follow-up is an exact phrase such as "continue" or "thanks". Anything
+/// of 24 characters or more, or a shorter line that names work, is new work.
+#[must_use]
+pub fn owner_text_is_new_work(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_lowercase();
+    if is_follow_up_phrase(&lower) {
+        return false;
+    }
+    trimmed.chars().count() >= 24 || contains_work_cue(&lower)
+}
+
+/// Continue, inspect, or link aimed at a missing parent becomes a new task
+/// when the owner text is new work and does not name a listed task.
+///
+/// Cancel and retry of a missing id stay questions. A known task id inside
+/// the owner text stays a question so the host does not open a second task.
+#[must_use]
+pub fn missing_parent_should_spawn(
+    proposal: &RouteProposal,
+    owner_text: &str,
+    phases: &BTreeMap<TaskId, TaskPhase>,
+) -> bool {
+    if !owner_text_is_new_work(owner_text) {
+        return false;
+    }
+    if phases
+        .keys()
+        .any(|task| owner_text.contains(task.0.as_str()))
+    {
+        return false;
+    }
+    if !cited_parent_missing(&proposal.proposed, phases) {
+        return false;
+    }
+    matches!(
+        proposal.proposed,
+        ProposedRouteDecision::Continue { .. }
+            | ProposedRouteDecision::Inspect { .. }
+            | ProposedRouteDecision::CreateLinked { .. }
+    )
+}
+
+fn is_follow_up_phrase(lower: &str) -> bool {
+    const PHRASES: &[&str] = &[
+        "continue",
+        "keep going",
+        "go on",
+        "status",
+        "what happened",
+        "try again",
+        "retry",
+        "cancel",
+        "cancel it",
+        "stop",
+        "stop it",
+        "stop that",
+        "that one",
+        "the last one",
+        "this one",
+        "the task",
+        "that task",
+        "inspect",
+        "what is it doing",
+        "how's it going",
+        "how is it going",
+        "ok",
+        "okay",
+        "yes",
+        "no",
+        "hi",
+        "hello",
+        "hey",
+        "thanks",
+        "thank you",
+    ];
+    PHRASES.contains(&lower)
+}
+
+fn contains_work_cue(lower: &str) -> bool {
+    const CUES: &[&str] = &[
+        "check", "read", "explain", "edit", "search", "look", "open", "write", "fix", "list",
+        "find", "create", "add", "update", "show", "run", "build", "review", "folder", "file",
+        "website", "http", "project", "code", "bug",
+    ];
+    CUES.iter().any(|cue| contains_word(lower, cue))
+}
+
+fn contains_word(text: &str, word: &str) -> bool {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|part| part == word)
 }
 
 /// Runs structural admission then applies explicit routing policy thresholds.

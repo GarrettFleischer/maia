@@ -18,9 +18,9 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::task::Waker;
 use std::task::Context;
 use std::task::Poll;
+use std::task::Waker;
 use std::thread;
 use std::time::Duration;
 
@@ -238,6 +238,7 @@ impl Drop for ReleaseOnDrop {
     }
 }
 
+#[derive(Clone)]
 struct HoldingRouter {
     inner: ScriptedRouter,
     gate: Arc<HoldGate>,
@@ -285,6 +286,44 @@ impl Future for HoldUntil {
     }
 }
 
+#[derive(Clone)]
+struct SplitHold {
+    route: ScriptedRouter,
+    worker: ScriptedRouter,
+    gate: Arc<HoldGate>,
+    worker_started: Arc<AtomicBool>,
+}
+
+impl Router for SplitHold {
+    fn complete(
+        &self,
+        request: &RouterRequest,
+    ) -> impl Future<Output = Result<RouterResponse, RouterError>> + Send {
+        let worker = request.messages.first().is_some_and(|message| {
+            message.content.starts_with("Maia task worker")
+        });
+        let request = request.clone();
+        if worker {
+            let inner = self.worker.clone();
+            let gate = Arc::clone(&self.gate);
+            let started = Arc::clone(&self.worker_started);
+            futures_util::future::Either::Left(async move {
+                started.store(true, Ordering::SeqCst);
+                HoldUntil { gate }.await;
+                inner.complete(&request).await
+            })
+        } else {
+            let inner = self.route.clone();
+            futures_util::future::Either::Right(async move { inner.complete(&request).await })
+        }
+    }
+
+    async fn cancel(&self, _request_id: RequestId) -> Result<(), RouterError> {
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
 struct PendingFirst {
     inner: ScriptedRouter,
 }
@@ -351,6 +390,7 @@ struct Session {
     database: PathBuf,
     dist: PathBuf,
     http_count: u64,
+    parent_work: ParentWork,
 }
 
 impl Session {
@@ -381,7 +421,13 @@ impl Session {
             dist,
             directory,
             http_count: 4096,
+            parent_work: ParentWork::Script,
         }
+    }
+
+    fn with_model_work(mut self) -> Self {
+        self.parent_work = ParentWork::ModelTurn;
+        self
     }
 
     fn with_http_count(mut self, count: u64) -> Self {
@@ -442,7 +488,7 @@ impl Session {
 
     fn spawn_router<R>(self, router: R) -> Running
     where
-        R: Router + Send + 'static,
+        R: Router + Clone + Send + 'static,
     {
         self.try_spawn_router_at(router, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
             .unwrap_or_else(|error| panic!("serve: {error}"))
@@ -450,7 +496,7 @@ impl Session {
 
     fn try_spawn_router_at<R>(self, router: R, bind: SocketAddr) -> Result<Running, ServeFailure>
     where
-        R: Router + Send + 'static,
+        R: Router + Clone + Send + 'static,
     {
         let owner = SqliteOwner::open(OwnerOpen {
             path: self.database.clone(),
@@ -472,7 +518,7 @@ impl Session {
                     prefix_hash: PrefixHash::new("fixture-prefix"),
                 },
                 profile: SecurityProfile::Protected,
-                parent_work: ParentWork::Script,
+                parent_work: self.parent_work,
             },
         );
         orchestrator.set_ranked_memories(self.memories);
@@ -581,14 +627,104 @@ async fn post_json(server: &Running, path: &str, body: Value) -> reqwest::Respon
             Value::String(format!("00000000-0000-4000-8000-{sequence:012}")),
         );
     }
-    server
+    let response = server
         .client
         .post(format!("{}{path}", server.origin))
         .header("content-type", "application/json")
         .json(&body)
         .send()
         .await
-        .expect("post")
+        .expect("post");
+    if path != "/api/super-agent/messages" {
+        return response;
+    }
+    let status = response.status();
+    let value: Value = response.json().await.expect("message json");
+    if status != reqwest::StatusCode::OK || !pending_outcome(&value) {
+        return json_response(status, value);
+    }
+    let operation = body
+        .get("operation_id")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let settled = wait_terminal_submission(&server.database, &operation, Duration::from_secs(8));
+    json_response(reqwest::StatusCode::OK, settled.unwrap_or(value))
+}
+
+fn pending_outcome(value: &Value) -> bool {
+    value
+        .get("outcome")
+        .and_then(|outcome| outcome.get("kind"))
+        .and_then(|kind| kind.as_str())
+        == Some("processing_pending")
+}
+
+fn wait_terminal_submission(database: &Path, operation: &str, limit: Duration) -> Option<Value> {
+    let started = std::time::Instant::now();
+    while started.elapsed() < limit {
+        if let Some(value) = read_terminal_submission(database, operation) {
+            return Some(value);
+        }
+        thread::sleep(Duration::from_millis(15));
+    }
+    None
+}
+
+fn read_terminal_submission(database: &Path, operation: &str) -> Option<Value> {
+    let connection = Connection::open(database).ok()?;
+    let row = connection
+        .query_row(
+            "SELECT state, message_id, outcome_kind, outcome_detail FROM message_submissions \
+             WHERE operation_id = ?1",
+            [operation],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .ok()?;
+    if row.0 != "terminal" {
+        return None;
+    }
+    let message_id = row.1;
+    let kind = row.2.unwrap_or_else(|| "unknown_outcome".to_owned());
+    let detail = row.3.unwrap_or_default();
+    Some(match kind.as_str() {
+        "routed" => routed_body(&message_id, &detail),
+        "routing_failed" => json!({
+            "admission": "admitted",
+            "message_id": message_id,
+            "outcome": { "kind": "routing_failed", "reason": detail },
+        }),
+        "processing_failed" => json!({
+            "admission": "admitted",
+            "message_id": message_id,
+            "outcome": {
+                "kind": "processing_failed",
+                "reason": "processing_unavailable",
+            },
+        }),
+        _ => json!({
+            "admission": "admitted",
+            "message_id": message_id,
+            "outcome": { "kind": "unknown_outcome" },
+        }),
+    })
+}
+
+fn json_response(status: reqwest::StatusCode, body: Value) -> reqwest::Response {
+    let bytes = serde_json::to_vec(&body).expect("json bytes");
+    let response = http::Response::builder()
+        .status(status)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(reqwest::Body::from(bytes))
+        .expect("response");
+    reqwest::Response::from(response)
 }
 
 async fn get(server: &Running, path: &str) -> reqwest::Response {
@@ -1119,7 +1255,7 @@ async fn request_note_and_route_apply_failures_replay_without_side_effects() {
         .await
         .expect("note replay body");
     assert_eq!(replay, first);
-    assert_eq!(note_router.request_count(), 1);
+    assert_eq!(note_router.request_count(), 2);
     assert_eq!(
         count(
             &note_server.database,
@@ -1195,7 +1331,11 @@ async fn router_failure_is_an_admitted_http_outcome_with_one_safe_note() {
             &server.database,
             "SELECT role FROM router_messages ORDER BY ordinal"
         ),
-        vec!["user".to_owned(), "assistant".to_owned()]
+        vec![
+            "user".to_owned(),
+            "assistant".to_owned(),
+            "assistant".to_owned(),
+        ]
     );
     assert_eq!(
         texts(
@@ -1204,12 +1344,13 @@ async fn router_failure_is_an_admitted_http_outcome_with_one_safe_note() {
         ),
         vec![
             USER_TEXT.to_owned(),
+            "The provider is busy, retrying.".to_owned(),
             "The model provider is unavailable.".to_owned(),
         ]
     );
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM router_messages"),
-        2
+        3
     );
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM task_sessions"),
@@ -1226,10 +1367,10 @@ async fn router_failure_is_an_admitted_http_outcome_with_one_safe_note() {
         replay.json::<Value>().await.expect("replay body"),
         serde_json::from_str::<Value>(&body).expect("first body")
     );
-    assert_eq!(router.request_count(), 1);
+    assert_eq!(router.request_count(), 2);
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM router_messages"),
-        2
+        3
     );
 }
 
@@ -1999,6 +2140,7 @@ async fn terminal_persistence_failure_after_side_effects_restarts_pending_withou
         database,
         dist,
         http_count: 4096,
+        parent_work: ParentWork::Script,
     };
     second.queue_create();
     let replay_server = second.spawn();
@@ -3712,4 +3854,348 @@ async fn mcp_settings_hide_secrets_and_admit_only_the_listed_hash() {
     let admitted_body = admitted.text().await.expect("admitted");
     assert!(admitted_body.contains("\"status\":\"live\""));
     assert!(!admitted_body.contains(secret));
+}
+
+fn operation(suffix: &str) -> String {
+    format!("00000000-0000-4000-8000-{suffix}")
+}
+
+async fn post_now(server: &Running, operation_id: &str, text: &str) -> reqwest::Response {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .expect("client");
+    client
+        .post(format!("{}/api/super-agent/messages", server.origin))
+        .header("content-type", "application/json")
+        .json(&json!({
+            "operation_id": operation_id,
+            "text": text,
+        }))
+        .send()
+        .await
+        .expect("send returned")
+}
+
+fn push_success(router: &ScriptedRouter, message: &str) {
+    router.push(ScriptedReply::Tool {
+        name: "success".to_owned(),
+        arguments: format!(r#"{{"message":"{message}"}}"#),
+    });
+}
+
+async fn wait_text(server: &Running, needle: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let body = get(server, "/api/super-agent/transcript")
+            .await
+            .text()
+            .await
+            .expect("transcript");
+        if body.contains(needle) {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("transcript never contained {needle}: {body}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn second_message_is_accepted_while_a_router_turn_is_blocked() {
+    let session = Session::open("accept-while-blocked");
+    session.queue_create();
+    session.queue_create();
+    let gate = HoldGate::create();
+    let started = Arc::new(AtomicBool::new(false));
+    let router = HoldingRouter {
+        inner: session.router.clone(),
+        gate: Arc::clone(&gate),
+        started: Arc::clone(&started),
+    };
+    let server = session.spawn_router(router);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    let origin = server.origin.clone();
+    let first = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("{origin}/api/super-agent/messages"))
+            .header("content-type", "application/json")
+            .json(&json!({
+                "operation_id": operation("0000000000a1"),
+                "text": "first folder check",
+            }))
+            .send()
+            .await
+            .expect("first post")
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !started.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            panic!("router did not start");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let began = std::time::Instant::now();
+    let second = post_now(&server, &operation("0000000000a2"), "second while busy").await;
+    assert!(began.elapsed() < Duration::from_secs(1));
+    assert_eq!(second.status(), 200);
+    let transcript = get(&server, "/api/super-agent/transcript")
+        .await
+        .text()
+        .await
+        .expect("transcript");
+    assert!(transcript.contains("first folder check"));
+    assert!(transcript.contains("second while busy"));
+    let first_at = transcript.find("first folder check").expect("first");
+    let second_at = transcript.find("second while busy").expect("second");
+    assert!(first_at < second_at);
+    gate.release();
+    let posted = tokio::time::timeout(Duration::from_secs(5), first)
+        .await
+        .expect("first finished")
+        .expect("first task");
+    assert_eq!(posted.status(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_messages_route_in_arrival_order() {
+    let session = Session::open("ordered-queue");
+    session.queue_create();
+    session.queue_create();
+    session.queue_create();
+    let gate = HoldGate::create();
+    let started = Arc::new(AtomicBool::new(false));
+    let router = HoldingRouter {
+        inner: session.router.clone(),
+        gate: Arc::clone(&gate),
+        started: Arc::clone(&started),
+    };
+    let server = session.spawn_router(router);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    let origin = server.origin.clone();
+    let first = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("{origin}/api/super-agent/messages"))
+            .header("content-type", "application/json")
+            .json(&json!({
+                "operation_id": operation("0000000000b1"),
+                "text": "alpha",
+            }))
+            .send()
+            .await
+            .expect("first")
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !started.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            panic!("router did not start");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    post_now(&server, &operation("0000000000b2"), "beta").await;
+    post_now(&server, &operation("0000000000b3"), "gamma").await;
+    gate.release();
+    tokio::time::timeout(Duration::from_secs(5), first)
+        .await
+        .expect("first finished")
+        .expect("join");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if count(&server.database, "SELECT COUNT(*) FROM task_sessions") == 3 {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("three tasks did not start");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let owners = texts(
+        &server.database,
+        "SELECT body FROM router_messages WHERE role = 'user' ORDER BY ordinal, message_id",
+    );
+    assert_eq!(owners, vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()]);
+    let tasks = texts(
+        &server.database,
+        "SELECT task_id FROM task_sessions ORDER BY task_id",
+    );
+    assert_eq!(
+        tasks,
+        vec!["task-1".to_owned(), "task-2".to_owned(), "task-3".to_owned()]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resend_while_a_turn_is_open_does_not_route_twice() {
+    let session = Session::open("idempotent-while-open");
+    session.queue_create();
+    let probe = session.router.clone();
+    let gate = HoldGate::create();
+    let started = Arc::new(AtomicBool::new(false));
+    let router = HoldingRouter {
+        inner: session.router.clone(),
+        gate: Arc::clone(&gate),
+        started: Arc::clone(&started),
+    };
+    let server = session.spawn_router(router);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    let operation_id = operation("0000000000c1");
+    let origin = server.origin.clone();
+    let operation_for_first = operation_id.clone();
+    let first = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("{origin}/api/super-agent/messages"))
+            .header("content-type", "application/json")
+            .json(&json!({
+                "operation_id": operation_for_first,
+                "text": "only once",
+            }))
+            .send()
+            .await
+            .expect("first")
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !started.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            panic!("router did not start");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let began = std::time::Instant::now();
+    let replay = post_now(&server, &operation_id, "only once").await;
+    assert!(began.elapsed() < Duration::from_secs(1));
+    assert_eq!(replay.status(), 200);
+    gate.release();
+    tokio::time::timeout(Duration::from_secs(5), first)
+        .await
+        .expect("first finished")
+        .expect("join");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if probe.request_count() >= 2 {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("route did not finish");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(probe.request_count(), 2);
+    assert_eq!(
+        count(&server.database, "SELECT COUNT(*) FROM task_sessions"),
+        1
+    );
+    assert_eq!(
+        count(
+            &server.database,
+            "SELECT COUNT(*) FROM router_messages WHERE role = 'user'",
+        ),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn router_and_task_tool_steps_emit_activity() {
+    let session = Session::open("activity-steps").with_model_work();
+    session.router.push_proposal(create_task(900, 200));
+    session.router.push(ScriptedReply::Tool {
+        name: "bash".to_owned(),
+        arguments: r#"{"command":"Get-ChildItem F:\\Development\\Ideas"}"#.to_owned(),
+    });
+    push_success(&session.router, "Listed the ideas folder.");
+    let server = session.spawn();
+    let posted = post_json(
+        &server,
+        "/api/super-agent/messages",
+        json!({"text": "Check F:\\Development\\Ideas"}),
+    )
+    .await;
+    assert_eq!(posted.status(), 200);
+    wait_text(&server, "Router: reading your message").await;
+    wait_text(&server, "listing f:").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_running_task_does_not_block_the_next_message() {
+    let session = Session::open("task-does-not-block").with_model_work();
+    let route = session.router.clone();
+    let worker = ScriptedRouter::create();
+    route.push_proposal(create_task(900, 200));
+    route.push(ScriptedReply::Tool {
+        name: "success".to_owned(),
+        arguments: r#"{"message":"You live in Canby."}"#.to_owned(),
+    });
+    push_success(&worker, "Listed the ideas folder.");
+    let gate = HoldGate::create();
+    let worker_started = Arc::new(AtomicBool::new(false));
+    let router = SplitHold {
+        route,
+        worker,
+        gate: Arc::clone(&gate),
+        worker_started: Arc::clone(&worker_started),
+    };
+    let server = session.spawn_router(router);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    let posted = post_json(
+        &server,
+        "/api/super-agent/messages",
+        json!({"text": "Check F:\\Development\\Ideas"}),
+    )
+    .await;
+    assert_eq!(posted.status(), 200);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !worker_started.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            panic!("worker did not start");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let began = std::time::Instant::now();
+    let second = post_now(
+        &server,
+        &operation("0000000000e2"),
+        "I'm Garrett and I live in Canby Oregon",
+    )
+    .await;
+    assert!(began.elapsed() < Duration::from_secs(1));
+    assert_eq!(second.status(), 200);
+    wait_text(&server, "You live in Canby.").await;
+    assert_eq!(
+        count(&server.database, "SELECT COUNT(*) FROM task_sessions"),
+        1
+    );
+    let phase = texts(
+        &server.database,
+        "SELECT phase FROM task_sessions WHERE task_id = 'task-1'",
+    );
+    assert_eq!(phase.len(), 1);
+    assert!(!phase[0].starts_with("completed"));
+    gate.release();
+    wait_text(&server, "Task task-1: Listed the ideas folder.").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repeat_of_a_running_folder_does_not_spawn_a_second_task() {
+    let session = Session::open("no-duplicate-folder");
+    session.queue_create();
+    session.queue_create();
+    let server = session.spawn();
+    let first = post_json(
+        &server,
+        "/api/super-agent/messages",
+        json!({"text": "Can you check out the F:\\Development\\Ideas folder"}),
+    )
+    .await;
+    assert_eq!(first.status(), 200);
+    let second = post_json(
+        &server,
+        "/api/super-agent/messages",
+        json!({"text": "Yes check the F:\\Development\\Ideas folder like I told you"}),
+    )
+    .await;
+    assert_eq!(second.status(), 200);
+    assert_eq!(
+        count(&server.database, "SELECT COUNT(*) FROM task_sessions"),
+        1
+    );
 }
