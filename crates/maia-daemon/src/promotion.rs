@@ -16,6 +16,8 @@ use std::time::Duration;
 use maia_core::audit::RequestId;
 use maia_core::audit::Timestamp;
 use maia_core::brain::ClaimId;
+use maia_core::brain::RRF_K;
+use maia_core::brain::reciprocal_rank_fusion;
 use maia_core::brain::EmbedderModel;
 use maia_core::brain::EpisodeId;
 use maia_core::brain::LexicalPolicy;
@@ -1037,40 +1039,102 @@ fn block_on_timeout<T>(
     }))
 }
 
-/// Builds recall seeds from FTS, same-model vectors, and lexemes, then ranks two hops.
+/// Keyword, vector, and graph hit counts for one recall.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecallArms {
+    /// Notes the keyword arm returned.
+    pub keyword: i64,
+    /// Notes the vector arm returned.
+    pub vector: i64,
+    /// Notes the graph arm returned.
+    pub graph: i64,
+    /// Ranked lines after fusion and the existing ranker. Empty when nothing packed.
+    pub packed: Option<crate::inspector::PackedRecall>,
+}
+
+/// Builds recall seeds from keyword, vector, and graph arms, then ranks two hops.
 pub fn bounded_recall(
     store: &SqliteOwner,
     query: &str,
     now: Timestamp,
     embedder: Option<&dyn ClaimEmbedder>,
 ) -> Option<crate::inspector::PackedRecall> {
+    recall_run(store, query, now, embedder).packed
+}
+
+/// Same path as [`bounded_recall`], including the arm counts recorded for the Brain tab.
+pub fn recall_run(
+    store: &SqliteOwner,
+    query: &str,
+    now: Timestamp,
+    embedder: Option<&dyn ClaimEmbedder>,
+) -> RecallArms {
     let lexical = DEFAULT_LEXICAL();
     let lexeme_ids: Vec<String> = lexemes_for_sentence(query, &lexical)
         .iter()
         .map(|lexeme| lexeme.as_str().to_owned())
         .collect();
-    let fts = fts_query(query);
-    let fts_rows = if fts.is_empty() {
-        Vec::new()
-    } else {
-        store
-            .nearest_claims(&fts, NEAREST_CLAIM_LIMIT)
-            .unwrap_or_default()
-    };
+    let keyword_hits = store
+        .search_neurons(query, NEAREST_CLAIM_LIMIT)
+        .unwrap_or_default();
     let (vector_seeds, query_embedding) = vector_seeds(store, query, embedder);
-    let claim_ids = merge_claim_seeds(
-        &seeds_from_rows(&fts_rows),
-        &vector_seeds,
-        NEAREST_CLAIM_LIMIT as usize,
-    )
-    .into_iter()
-    .map(|seed| seed.claim_id)
-    .collect::<Vec<_>>();
-    let map = store.recall_subgraph(&claim_ids, &lexeme_ids, 2).ok()?;
+    let graph_hits = store
+        .graph_arm(&lexeme_ids, NEAREST_CLAIM_LIMIT)
+        .unwrap_or_default();
+    let keyword_arm = keyword_hits
+        .iter()
+        .map(|hit| format!("{}:{}", hit.kind, hit.id))
+        .collect::<Vec<_>>();
+    let vector_arm = vector_seeds
+        .iter()
+        .map(|seed| format!("claim:{}", seed.claim_id.as_str()))
+        .collect::<Vec<_>>();
+    let graph_arm_ids = graph_hits
+        .iter()
+        .map(|hit| format!("{}:{}", hit.kind, hit.id))
+        .collect::<Vec<_>>();
+    let fused = reciprocal_rank_fusion(&[keyword_arm, vector_arm, graph_arm_ids], RRF_K)
+        .unwrap_or_default();
+    let mut claim_ids = Vec::new();
+    let mut fact_ids = Vec::new();
+    for rank in fused.iter().take(NEAREST_CLAIM_LIMIT as usize) {
+        let Some((kind, id)) = rank.id.split_once(':') else {
+            continue;
+        };
+        if id.is_empty() {
+            continue;
+        }
+        if kind == "claim" {
+            claim_ids.push(id.to_owned());
+        } else if kind == "fact" {
+            fact_ids.push(id.to_owned());
+        }
+    }
+    let keyword_count = i64::try_from(keyword_hits.len()).unwrap_or(0);
+    let vector_count = i64::try_from(vector_seeds.len()).unwrap_or(0);
+    let graph_count = i64::try_from(graph_hits.len()).unwrap_or(0);
+    let _ = store.record_recall_arms(keyword_count, vector_count, graph_count);
+    let Some(map) = store
+        .recall_subgraph_seeded(&claim_ids, &fact_ids, &lexeme_ids, 2)
+        .ok()
+    else {
+        return RecallArms {
+            keyword: keyword_count,
+            vector: vector_count,
+            graph: graph_count,
+            packed: None,
+        };
+    };
     if map.nodes.is_empty() {
-        return None;
+        return RecallArms {
+            keyword: keyword_count,
+            vector: vector_count,
+            graph: graph_count,
+            packed: None,
+        };
     }
     let (mut graph, quarantine) = crate::inspector::recall_graph(&map);
+    link_keyword_overlap(&mut graph, query, &claim_ids, &fact_ids);
     if let Some(embedding) = &query_embedding {
         attach_model_vectors(store, &mut graph, embedding);
     }
@@ -1080,7 +1144,66 @@ pub fn bounded_recall(
     } else {
         crate::inspector::pack_recall_with_embedding(&graph, query, now, &quarantine, embedding)
     };
-    packed.ok().flatten()
+    RecallArms {
+        keyword: keyword_count,
+        vector: vector_count,
+        graph: graph_count,
+        packed: packed.ok().flatten(),
+    }
+}
+
+fn link_keyword_overlap(
+    graph: &mut RecallGraph,
+    query: &str,
+    claim_ids: &[String],
+    fact_ids: &[String],
+) {
+    let lexical = DEFAULT_LEXICAL();
+    let query_lexemes = lexemes_for_sentence(query, &lexical);
+    for lexeme in &query_lexemes {
+        graph.lexemes.insert(lexeme.clone());
+    }
+    for id in claim_ids {
+        let claim_id = ClaimId::new(id.clone());
+        let Some(sentence) = graph.claims.get(&claim_id).map(|claim| claim.sentence.clone()) else {
+            continue;
+        };
+        connect_overlap(graph, &query_lexemes, &sentence, maia_core::brain::NodeId::Claim(claim_id));
+    }
+    for id in fact_ids {
+        let fact_id = maia_core::brain::FactId::new(id.clone());
+        let Some(sentence) = graph.facts.get(&fact_id).map(|fact| fact.sentence.clone()) else {
+            continue;
+        };
+        connect_overlap(graph, &query_lexemes, &sentence, maia_core::brain::NodeId::Fact(fact_id));
+    }
+}
+
+fn connect_overlap(
+    graph: &mut RecallGraph,
+    query_lexemes: &[maia_core::brain::LexemeId],
+    sentence: &str,
+    target: maia_core::brain::NodeId,
+) {
+    let sentence_lexemes = lexemes_for_sentence(sentence, &DEFAULT_LEXICAL());
+    for lexeme in query_lexemes {
+        if !sentence_lexemes.iter().any(|item| item == lexeme) {
+            continue;
+        }
+        let from = maia_core::brain::NodeId::Lexeme(lexeme.clone());
+        if graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == from && edge.to == target)
+        {
+            continue;
+        }
+        graph.edges.push(maia_core::brain::GraphEdge {
+            from,
+            to: target.clone(),
+            weight: 1.0,
+        });
+    }
 }
 
 fn attach_model_vectors(store: &SqliteOwner, graph: &mut RecallGraph, query: &QueryEmbedding) {

@@ -407,7 +407,7 @@ fn owner_thread_is_named_maia_sqlite_and_shutdown_reopens() {
     db.reopen(11);
     assert_eq!(must(db.owner().thread_name()), "maia-sqlite");
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 10);
+    assert_eq!(settings.user_version, 11);
 }
 
 #[test]
@@ -463,16 +463,16 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
         db.file(),
         "SELECT CAST(version AS TEXT), name, CAST(applied_at AS TEXT) \
          FROM schema_migrations ORDER BY version",
-        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100",
+        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100\n11|brain_markdown|100",
     );
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 10);
+    assert_eq!(settings.user_version, 11);
     db.reopen(250);
     assert_dump(
         db.file(),
         "SELECT CAST(version AS TEXT), name, CAST(applied_at AS TEXT) \
          FROM schema_migrations ORDER BY version",
-        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100",
+        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100\n11|brain_markdown|100",
     );
     db.shutdown();
 
@@ -502,12 +502,12 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
         &upgrade_file,
         "SELECT CAST(version AS TEXT), name, CAST(applied_at AS TEXT) \
          FROM schema_migrations ORDER BY version",
-        "1|schema_migrations|111\n2|durable_schema|222\n3|super_agent_schema|222\n4|message_submission_idempotency|222\n5|runtime_id_high_water|222\n6|model_connection|222\n7|router_turn_snapshots|222\n8|mcp_connections|222\n9|promotion_brain|222\n10|approvals_attachments|222",
+        "1|schema_migrations|111\n2|durable_schema|222\n3|super_agent_schema|222\n4|message_submission_idempotency|222\n5|runtime_id_high_water|222\n6|model_connection|222\n7|router_turn_snapshots|222\n8|mcp_connections|222\n9|promotion_brain|222\n10|approvals_attachments|222\n11|brain_markdown|222",
     );
 
     let future = db.directory.join("future.sqlite");
     let connection = ready(Connection::open(&future));
-    ready(connection.pragma_update(None, "user_version", 11_i64));
+    ready(connection.pragma_update(None, "user_version", 12_i64));
     drop(connection);
     let opened = SqliteOwner::open(OwnerOpen {
         path: future.clone(),
@@ -518,13 +518,13 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
     assert_eq!(
         opened.err(),
         Some(StoreError::DatabaseTooNew {
-            found: 11,
-            supported: 10,
+            found: 12,
+            supported: 11,
         })
     );
     let connection = ready(Connection::open(&future));
     let version: i64 = ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     assert_dump(
         &future,
         "SELECT name FROM sqlite_master WHERE name = 'schema_migrations'",
@@ -538,7 +538,7 @@ fn initial_schema_matches_the_locked_catalog() {
     let settings = must(db.owner().connection_settings());
     assert_eq!(settings.journal_mode, "wal");
     assert_eq!(settings.foreign_keys, 1);
-    assert_eq!(settings.user_version, 10);
+    assert_eq!(settings.user_version, 11);
     db.shutdown();
     let actual = master_dump(db.file());
     let expected = include_str!("expected_schema.txt")
@@ -1001,7 +1001,7 @@ fn apply_promotion_same_and_replaces_is_atomic() {
     assert_dump(
         db.file(),
         "SELECT from_id, to_id FROM edges WHERE edge_kind = 'mention' ORDER BY from_id, to_id",
-        "claim-new|episode-2\nclaim-old|episode-1\nclaim-same|episode-1\nclaim-same|episode-2",
+        "claim-new|episode-2\nclaim-old|episode-1\nclaim-same|episode-1\nclaim-same|episode-2\nepisode-2|claim-new",
     );
     assert_dump(
         db.file(),
@@ -1957,7 +1957,7 @@ fn concurrent_opens_of_one_path_share_one_migration_journal() {
             "SELECT CAST(version AS TEXT), CAST(applied_at AS TEXT) FROM schema_migrations ORDER BY version",
         );
         let lines: Vec<&str> = journal.lines().collect();
-        assert_eq!(lines.len(), 10, "journal for round {round}: {journal}");
+        assert_eq!(lines.len(), 11, "journal for round {round}: {journal}");
         for (index, line) in lines.iter().enumerate() {
             assert!(
                 line.starts_with(&format!("{}|", index + 1)),

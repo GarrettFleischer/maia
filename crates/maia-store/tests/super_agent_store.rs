@@ -848,14 +848,15 @@ fn closed_detail_high_water_survives_restart() {
 }
 
 #[test]
-fn fresh_open_is_schema_version_ten() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 10);
+fn fresh_open_is_schema_version_eleven() {
+    assert_eq!(LATEST_SCHEMA_VERSION, 11);
     let db = TestDb::open("version", 1);
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 10);
+    assert_eq!(settings.user_version, 11);
     let rows = must(db.owner().migrations());
-    assert_eq!(rows.len(), 10);
-    assert_eq!(rows.last().map(|row| row.version), Some(10));
+    assert_eq!(rows.len(), 11);
+    assert_eq!(rows.last().map(|row| row.version), Some(11));
+    assert_eq!(rows.last().map(|row| row.name.as_str()), Some("brain_markdown"));
 }
 
 #[test]

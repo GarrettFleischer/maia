@@ -119,6 +119,35 @@ pub(crate) const MIGRATION_V9: &[&str] = &[
     "CREATE TABLE promotion_day_stats (day_key TEXT PRIMARY KEY, calls INTEGER NOT NULL, tokens INTEGER NOT NULL)",
 ];
 
+/// Migration 11 adds a rebuildable neuron index, keyword search, and auto-link provenance.
+///
+/// Existing rows are copied into the new tables. No claim, fact, or episode is rewritten.
+pub(crate) const MIGRATION_V11: &[&str] = &[
+    "ALTER TABLE edges ADD COLUMN source_tag TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE edges ADD COLUMN taint TEXT NOT NULL DEFAULT 'trusted'",
+    "ALTER TABLE edges ADD COLUMN span_start INTEGER",
+    "ALTER TABLE edges ADD COLUMN span_end INTEGER",
+    "CREATE TABLE neuron_text (kind TEXT NOT NULL, neuron_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, taint TEXT NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER, aliases TEXT NOT NULL DEFAULT '', PRIMARY KEY (kind, neuron_id))",
+    "CREATE VIRTUAL TABLE neuron_fts USING fts5(kind UNINDEXED, neuron_id UNINDEXED, title, body, tokenize='unicode61')",
+    "CREATE TABLE pending_links (source_kind TEXT NOT NULL, source_id TEXT NOT NULL, span_start INTEGER NOT NULL, span_end INTEGER NOT NULL, target_ref TEXT NOT NULL, edge_type TEXT NOT NULL, taint TEXT NOT NULL CHECK (taint IN ('trusted', 'untrusted')), PRIMARY KEY (source_kind, source_id, span_start, target_ref))",
+    "CREATE TABLE brain_md_state (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), exported_at INTEGER, directory TEXT NOT NULL DEFAULT '', neuron_count INTEGER NOT NULL DEFAULT 0, edge_count INTEGER NOT NULL DEFAULT 0, keyword_count INTEGER NOT NULL DEFAULT 0, vector_count INTEGER NOT NULL DEFAULT 0, graph_count INTEGER NOT NULL DEFAULT 0)",
+    "INSERT INTO brain_md_state (singleton) VALUES (1)",
+    "CREATE TABLE brain_md_member (kind TEXT NOT NULL, neuron_id TEXT NOT NULL, updated_at INTEGER NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY (kind, neuron_id))",
+    "CREATE TRIGGER neuron_claim_ai AFTER INSERT ON claims BEGIN INSERT INTO neuron_text (kind, neuron_id, title, body, taint, updated_at, deleted_at, aliases) VALUES ('claim', new.claim_id, new.sentence, new.sentence, new.taint, new.valid_from, NULL, ''); INSERT INTO neuron_fts (kind, neuron_id, title, body) VALUES ('claim', new.claim_id, new.sentence, new.sentence); END",
+    "CREATE TRIGGER neuron_claim_au AFTER UPDATE OF sentence, taint, status ON claims BEGIN UPDATE neuron_text SET title = new.sentence, body = new.sentence, taint = new.taint, updated_at = neuron_text.updated_at + 1, deleted_at = NULL WHERE kind = 'claim' AND neuron_id = new.claim_id; DELETE FROM neuron_fts WHERE kind = 'claim' AND neuron_id = old.claim_id; INSERT INTO neuron_fts (kind, neuron_id, title, body) VALUES ('claim', new.claim_id, new.sentence, new.sentence); END",
+    "CREATE TRIGGER neuron_claim_ad AFTER DELETE ON claims BEGIN DELETE FROM neuron_text WHERE kind = 'claim' AND neuron_id = old.claim_id; DELETE FROM neuron_fts WHERE kind = 'claim' AND neuron_id = old.claim_id; DELETE FROM pending_links WHERE source_kind = 'claim' AND source_id = old.claim_id; END",
+    "CREATE TRIGGER neuron_fact_ai AFTER INSERT ON facts BEGIN INSERT INTO neuron_text (kind, neuron_id, title, body, taint, updated_at, deleted_at, aliases) VALUES ('fact', new.fact_id, new.sentence, new.sentence, new.taint, new.valid_from, NULL, ''); INSERT INTO neuron_fts (kind, neuron_id, title, body) VALUES ('fact', new.fact_id, new.sentence, new.sentence); END",
+    "CREATE TRIGGER neuron_fact_au AFTER UPDATE OF sentence, taint ON facts BEGIN UPDATE neuron_text SET title = new.sentence, body = new.sentence, taint = new.taint, updated_at = neuron_text.updated_at + 1, deleted_at = NULL WHERE kind = 'fact' AND neuron_id = new.fact_id; DELETE FROM neuron_fts WHERE kind = 'fact' AND neuron_id = old.fact_id; INSERT INTO neuron_fts (kind, neuron_id, title, body) VALUES ('fact', new.fact_id, new.sentence, new.sentence); END",
+    "CREATE TRIGGER neuron_fact_ad AFTER DELETE ON facts BEGIN DELETE FROM neuron_text WHERE kind = 'fact' AND neuron_id = old.fact_id; DELETE FROM neuron_fts WHERE kind = 'fact' AND neuron_id = old.fact_id; DELETE FROM pending_links WHERE source_kind = 'fact' AND source_id = old.fact_id; END",
+    "CREATE TRIGGER neuron_episode_ai AFTER INSERT ON episodes BEGIN INSERT INTO neuron_text (kind, neuron_id, title, body, taint, updated_at, deleted_at, aliases) VALUES ('episode', new.episode_id, substr(new.body, 1, 80), new.body, new.taint, new.created_at, NULL, ''); INSERT INTO neuron_fts (kind, neuron_id, title, body) VALUES ('episode', new.episode_id, substr(new.body, 1, 80), new.body); END",
+    "CREATE TRIGGER neuron_episode_au AFTER UPDATE OF body, taint ON episodes BEGIN UPDATE neuron_text SET title = substr(new.body, 1, 80), body = new.body, taint = new.taint, updated_at = neuron_text.updated_at + 1, deleted_at = NULL WHERE kind = 'episode' AND neuron_id = new.episode_id; DELETE FROM neuron_fts WHERE kind = 'episode' AND neuron_id = old.episode_id; INSERT INTO neuron_fts (kind, neuron_id, title, body) VALUES ('episode', new.episode_id, substr(new.body, 1, 80), new.body); END",
+    "CREATE TRIGGER neuron_episode_ad AFTER DELETE ON episodes BEGIN DELETE FROM neuron_text WHERE kind = 'episode' AND neuron_id = old.episode_id; DELETE FROM neuron_fts WHERE kind = 'episode' AND neuron_id = old.episode_id; DELETE FROM pending_links WHERE source_kind = 'episode' AND source_id = old.episode_id; END",
+    "INSERT INTO neuron_text (kind, neuron_id, title, body, taint, updated_at, deleted_at, aliases) SELECT 'claim', claim_id, sentence, sentence, taint, valid_from, NULL, '' FROM claims",
+    "INSERT INTO neuron_text (kind, neuron_id, title, body, taint, updated_at, deleted_at, aliases) SELECT 'fact', fact_id, sentence, sentence, taint, valid_from, NULL, '' FROM facts",
+    "INSERT INTO neuron_text (kind, neuron_id, title, body, taint, updated_at, deleted_at, aliases) SELECT 'episode', episode_id, substr(body, 1, 80), body, taint, created_at, NULL, '' FROM episodes",
+    "INSERT INTO neuron_fts (kind, neuron_id, title, body) SELECT kind, neuron_id, title, body FROM neuron_text",
+];
+
 /// Migration 10 stores approval waits, ledger reversals, and untrusted attachments.
 pub(crate) const MIGRATION_V10: &[&str] = &[
     "CREATE TABLE ledger_reversals (ledger_id TEXT PRIMARY KEY, reversed_at INTEGER NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id))",

@@ -61,6 +61,29 @@ function clientFor(initial: BrainMap) {
 }
 
 describe('BrainMapView', () => {
+  it('shows the last export time and recall arm counts', async () => {
+    const { client } = clientFor(sampleMap())
+    client.loadIndex = async () => ({
+      exported_at: 1700000000,
+      neuron_count: 4,
+      edge_count: 2,
+      keyword_count: 3,
+      vector_count: 1,
+      graph_count: 2,
+    })
+    client.exportMarkdown = async () => ({
+      exported_at: 1700000001,
+      neuron_count: 4,
+      edge_count: 2,
+      keyword_count: 3,
+      vector_count: 1,
+      graph_count: 2,
+    })
+    render(<BrainMapView client={client} />)
+    expect(await screen.findByText(/Last export 1700000000/)).toBeVisible()
+    expect(screen.getByText(/keyword 3 · vector 1 · graph 2/)).toBeVisible()
+  })
+
   it('says when nothing has been promoted and still offers search', async () => {
     const { client } = clientFor({ nodes: [], edges: [] })
     render(<BrainMapView client={client} />)

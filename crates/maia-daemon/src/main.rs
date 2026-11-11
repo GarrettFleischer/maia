@@ -44,6 +44,22 @@ use maia_store::RuntimeSnapshot;
 use maia_store::SqliteOwner;
 
 fn main() -> ExitCode {
+    let args = std::env::args().collect::<Vec<_>>();
+    if let Some(parsed) = maia_daemon::parse_brain_args(&args) {
+        return match parsed {
+            Ok(command) => match run_brain_command(&command) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::FAILURE
+                }
+            },
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     match boot() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -51,6 +67,71 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn run_brain_command(command: &maia_daemon::BrainCli) -> Result<(), BootError> {
+    let now = unix_seconds();
+    let database = database_path(std::env::var("MAIA_DATABASE").ok().as_deref());
+    if let Some(parent) = database.parent() {
+        std::fs::create_dir_all(parent).map_err(|_| BootError::Store)?;
+    }
+    copy_pre_fts_backup(&database)?;
+    let store = SqliteOwner::open(OwnerOpen {
+        path: database,
+        now,
+        normal_capacity: 4,
+        panic_capacity: 1,
+    })
+    .map_err(|_| BootError::Store)?;
+    match command.verb {
+        maia_daemon::BrainVerb::Export => {
+            let report = store
+                .export_brain_markdown(&command.directory, now)
+                .map_err(|_| BootError::Store)?;
+            println!(
+                "exported {} notes, {} edges",
+                report.neurons, report.edges
+            );
+        }
+        maia_daemon::BrainVerb::Import => {
+            let report = store
+                .import_brain_markdown(&command.directory, now)
+                .map_err(|_| BootError::Store)?;
+            println!(
+                "imported {} notes, {} edges",
+                report.neurons, report.edges
+            );
+        }
+        maia_daemon::BrainVerb::Sync => {
+            let report = store
+                .sync_brain_markdown(&command.directory, now)
+                .map_err(|_| BootError::Store)?;
+            println!(
+                "synced created {} updated {} deleted {} conflicts {}",
+                report.created, report.updated, report.soft_deleted, report.conflicts.len()
+            );
+        }
+    }
+    store.shutdown().map_err(|_| BootError::Store)?;
+    Ok(())
+}
+
+/// Copies `maia.sqlite` to `maia.sqlite.pre-fts.bak` once, next to the file.
+///
+/// Other database names are left alone so tests and spare databases are not copied.
+fn copy_pre_fts_backup(path: &std::path::Path) -> Result<(), BootError> {
+    if path.file_name().and_then(|name| name.to_str()) != Some("maia.sqlite") {
+        return Ok(());
+    }
+    if !path.is_file() {
+        return Ok(());
+    }
+    let backup = path.with_file_name("maia.sqlite.pre-fts.bak");
+    if backup.exists() {
+        return Ok(());
+    }
+    std::fs::copy(path, &backup).map_err(|_| BootError::Store)?;
+    Ok(())
 }
 
 fn attach_subagent_tools<R: maia_core::router::Router>(orchestrator: &mut Orchestrator<R>) {
@@ -81,6 +162,7 @@ fn boot() -> Result<(), BootError> {
     if let Some(parent) = database.parent() {
         std::fs::create_dir_all(parent).map_err(|_| BootError::Store)?;
     }
+    copy_pre_fts_backup(&database)?;
     let store = SqliteOwner::open(OwnerOpen {
         path: database.clone(),
         now,

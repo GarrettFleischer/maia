@@ -32,6 +32,8 @@
 //! when the caller includes them in `canonical`.
 
 mod approval_ops;
+mod auto_link;
+mod brain_md;
 mod attachment_ops;
 mod audit_ops;
 mod brain_ops;
@@ -100,6 +102,12 @@ pub use types::AppendOutcome;
 pub use types::AuditActor;
 pub use types::AuditAppend;
 pub use types::AuditHead;
+pub use auto_link::AutoLinkReport;
+pub use brain_md::BrainConflict;
+pub use brain_md::BrainExportReport;
+pub use brain_md::BrainIndex;
+pub use brain_md::BrainSyncReport;
+pub use brain_md::NeuronHit;
 pub use types::BrainEdge;
 pub use types::BrainMap;
 pub use types::BrainNode;

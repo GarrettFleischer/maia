@@ -1124,6 +1124,12 @@ enum ActorCall {
     BrainMap {
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
+    BrainIndex {
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    ExportBrain {
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
     ReviseFact {
         fact_id: String,
         sentence: String,
@@ -1659,6 +1665,12 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
         }
         ActorCall::BrainMap { reply } => {
             let _ = reply.send(read_brain(actor));
+        }
+        ActorCall::BrainIndex { reply } => {
+            let _ = reply.send(read_brain_index(actor));
+        }
+        ActorCall::ExportBrain { reply } => {
+            let _ = reply.send(export_brain(actor));
         }
         ActorCall::ReviseFact {
             fact_id,
@@ -2280,6 +2292,8 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
         .route("/remote/session", get(remote_session))
         .route("/remote/unpair", post(remote_unpair))
         .route("/brain/map", get(brain_map))
+        .route("/brain/index", get(brain_index))
+        .route("/brain/export", post(export_brain_markdown))
         .route(
             "/brain/facts/{fact_id}",
             patch(patch_fact).delete(delete_fact),
@@ -2823,6 +2837,14 @@ async fn brain_map(State(state): State<AppState>) -> Response {
     finish(ask(&state, |reply| ActorCall::BrainMap { reply }).await)
 }
 
+async fn brain_index(State(state): State<AppState>) -> Response {
+    finish(ask(&state, |reply| ActorCall::BrainIndex { reply }).await)
+}
+
+async fn export_brain_markdown(State(state): State<AppState>) -> Response {
+    finish(ask(&state, |reply| ActorCall::ExportBrain { reply }).await)
+}
+
 async fn patch_fact(
     State(state): State<AppState>,
     Path(fact_id): Path<String>,
@@ -2853,6 +2875,37 @@ fn read_brain<R: RouterPort>(actor: &Actor<R>) -> Result<Value, ApiError> {
         .brain_map()
         .map(|map| brain_map_value(&map))
         .map_err(map_brain_store)
+}
+
+fn read_brain_index<R: RouterPort>(actor: &Actor<R>) -> Result<Value, ApiError> {
+    actor
+        .host
+        .store()
+        .brain_index()
+        .map(|index| brain_index_value(&index))
+        .map_err(map_brain_store)
+}
+
+fn export_brain<R: RouterPort>(actor: &Actor<R>) -> Result<Value, ApiError> {
+    let directory = PathBuf::from("data").join("brain-md");
+    actor
+        .host
+        .store()
+        .export_brain_markdown(&directory, unix_now())
+        .map_err(map_brain_store)?;
+    read_brain_index(actor)
+}
+
+fn brain_index_value(index: &maia_store::BrainIndex) -> Value {
+    serde_json::json!({
+        "exported_at": index.exported_at,
+        "neuron_count": index.neuron_count,
+        "edge_count": index.edge_count,
+        "keyword_count": index.keyword_count,
+        "vector_count": index.vector_count,
+        "graph_count": index.graph_count,
+        "directory": index.directory,
+    })
 }
 
 fn revise_brain_fact<R: RouterPort>(

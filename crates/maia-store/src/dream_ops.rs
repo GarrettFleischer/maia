@@ -93,6 +93,7 @@ pub(crate) fn insert_episode(
         "INSERT INTO episode_fts (episode_id, body) VALUES (?1, ?2)",
         params![request.episode_id, request.body],
     )?;
+    crate::auto_link::on_neuron_written(&transaction, "episode", &request.episode_id)?;
     transaction.commit()?;
     Ok(())
 }
@@ -272,6 +273,10 @@ pub(crate) fn apply_promotion(
             entity: "episode",
             id: request.episode_id.clone(),
         });
+    }
+    crate::auto_link::on_neuron_written(&transaction, "episode", &request.episode_id)?;
+    for claim in &request.claims {
+        crate::auto_link::on_neuron_written(&transaction, "claim", &claim.claim_id)?;
     }
     transaction.commit()?;
     Ok(())
@@ -499,6 +504,17 @@ pub(crate) fn nearest_claims(
     Ok(rows)
 }
 
+fn deleted_neurons(connection: &Connection) -> Result<BTreeSet<(String, String)>, StoreError> {
+    let mut statement = connection
+        .prepare("SELECT kind, neuron_id FROM neuron_text WHERE deleted_at IS NOT NULL")?;
+    let mapped = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    let mut ids = BTreeSet::new();
+    for id in mapped {
+        ids.insert(id?);
+    }
+    Ok(ids)
+}
+
 fn closed_claim_ids(connection: &Connection) -> Result<BTreeSet<String>, StoreError> {
     let mut statement = connection.prepare(
         "SELECT claim_id FROM claims \
@@ -542,6 +558,7 @@ pub(crate) fn claim_rows(
 pub(crate) fn recall_subgraph(
     connection: &Connection,
     seed_claim_ids: &[String],
+    seed_fact_ids: &[String],
     seed_lexeme_ids: &[String],
     hops: i64,
 ) -> Result<BrainMap, StoreError> {
@@ -553,15 +570,19 @@ pub(crate) fn recall_subgraph(
     for id in seed_claim_ids {
         require_text("seed_claim_id", id)?;
     }
+    for id in seed_fact_ids {
+        require_text("seed_fact_id", id)?;
+    }
     for id in seed_lexeme_ids {
         require_text("seed_lexeme_id", id)?;
     }
     let closed = closed_claim_ids(connection)?;
+    let deleted = deleted_neurons(connection)?;
     let full = brain_ops::map(connection)?;
     let mut selected: BTreeSet<(String, String)> = BTreeSet::new();
     let mut frontier: VecDeque<(String, String, i64)> = VecDeque::new();
     for id in seed_claim_ids {
-        if closed.contains(id) {
+        if closed.contains(id) || deleted.contains(&("claim".to_owned(), id.clone())) {
             continue;
         }
         if full
@@ -571,6 +592,19 @@ pub(crate) fn recall_subgraph(
         {
             selected.insert(("claim".to_owned(), id.clone()));
             frontier.push_back(("claim".to_owned(), id.clone(), 0));
+        }
+    }
+    for id in seed_fact_ids {
+        if deleted.contains(&("fact".to_owned(), id.clone())) {
+            continue;
+        }
+        if full
+            .nodes
+            .iter()
+            .any(|node| node.kind == BrainNodeKind::Fact && node.id == *id)
+        {
+            selected.insert(("fact".to_owned(), id.clone()));
+            frontier.push_back(("fact".to_owned(), id.clone(), 0));
         }
     }
     for id in seed_lexeme_ids {
@@ -599,6 +633,9 @@ pub(crate) fn recall_subgraph(
                 continue;
             };
             if next_kind == "claim" && closed.contains(&next_id) {
+                continue;
+            }
+            if deleted.contains(&(next_kind.clone(), next_id.clone())) {
                 continue;
             }
             if selected.insert((next_kind.clone(), next_id.clone())) {
@@ -865,6 +902,9 @@ pub(crate) fn apply_consolidation(
             "INSERT INTO projection_folders (batch_id, folder) VALUES (?1, ?2)",
             params![request.batch_id, folder],
         )?;
+    }
+    for fact in &request.facts {
+        crate::auto_link::on_neuron_written(&transaction, "fact", &fact.fact_id)?;
     }
     transaction.commit()?;
     Ok(())

@@ -8,6 +8,11 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::oneshot;
 
 use crate::approval_ops;
+use crate::auto_link::AutoLinkReport;
+use crate::brain_md::BrainExportReport;
+use crate::brain_md::BrainIndex;
+use crate::brain_md::BrainSyncReport;
+use crate::brain_md::NeuronHit;
 use crate::attachment_ops;
 use crate::audit_ops;
 use crate::brain_ops;
@@ -178,6 +183,7 @@ enum NormalCommand {
     },
     RecallSubgraph {
         seed_claim_ids: Vec<String>,
+        seed_fact_ids: Vec<String>,
         seed_lexeme_ids: Vec<String>,
         hops: i64,
         reply: Reply<BrainMap>,
@@ -558,6 +564,43 @@ enum NormalCommand {
     InsertMcpAudit {
         request: McpAuditWrite,
         reply: Reply<Executed<()>>,
+    },
+    ExportBrain {
+        directory: std::path::PathBuf,
+        now: i64,
+        reply: Reply<BrainExportReport>,
+    },
+    ImportBrain {
+        directory: std::path::PathBuf,
+        now: i64,
+        reply: Reply<BrainExportReport>,
+    },
+    SyncBrain {
+        directory: std::path::PathBuf,
+        now: i64,
+        reply: Reply<BrainSyncReport>,
+    },
+    SearchNeurons {
+        query: String,
+        limit: i64,
+        reply: Reply<Vec<NeuronHit>>,
+    },
+    GraphArm {
+        lexeme_ids: Vec<String>,
+        limit: i64,
+        reply: Reply<Vec<NeuronHit>>,
+    },
+    BrainIndex {
+        reply: Reply<BrainIndex>,
+    },
+    RecordRecallArms {
+        keyword: i64,
+        vector: i64,
+        graph: i64,
+        reply: Reply<()>,
+    },
+    RelinkNeurons {
+        reply: Reply<AutoLinkReport>,
     },
 }
 
@@ -1000,10 +1043,26 @@ impl SqliteOwner {
         seed_lexeme_ids: &[String],
         hops: i64,
     ) -> Result<BrainMap, StoreError> {
+        self.recall_subgraph_seeded(seed_claim_ids, &[], seed_lexeme_ids, hops)
+    }
+
+    /// Brain-map subset reachable from seed claims, facts, and lexemes within `hops`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn recall_subgraph_seeded(
+        &self,
+        seed_claim_ids: &[String],
+        seed_fact_ids: &[String],
+        seed_lexeme_ids: &[String],
+        hops: i64,
+    ) -> Result<BrainMap, StoreError> {
         let (reply, rx) = oneshot::channel();
         self.send_normal(
             NormalCommand::RecallSubgraph {
                 seed_claim_ids: seed_claim_ids.to_vec(),
+                seed_fact_ids: seed_fact_ids.to_vec(),
                 seed_lexeme_ids: seed_lexeme_ids.to_vec(),
                 hops,
                 reply,
@@ -1305,6 +1364,162 @@ impl SqliteOwner {
     pub fn brain_map(&self) -> Result<BrainMap, StoreError> {
         let (reply, rx) = oneshot::channel();
         self.send_normal(NormalCommand::BrainMap { reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Writes each neuron as Markdown under `directory`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite or filesystem failure.
+    pub fn export_brain_markdown(
+        &self,
+        directory: &std::path::Path,
+        now: i64,
+    ) -> Result<BrainExportReport, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::ExportBrain {
+                directory: directory.to_path_buf(),
+                now,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Loads Markdown into an empty brain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::InvalidRequest`] when the brain already has neurons.
+    pub fn import_brain_markdown(
+        &self,
+        directory: &std::path::Path,
+        now: i64,
+    ) -> Result<BrainExportReport, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::ImportBrain {
+                directory: directory.to_path_buf(),
+                now,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Applies Markdown edits that are newer than the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite or filesystem failure. Conflicts are listed, not raised.
+    pub fn sync_brain_markdown(
+        &self,
+        directory: &std::path::Path,
+        now: i64,
+    ) -> Result<BrainSyncReport, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::SyncBrain {
+                directory: directory.to_path_buf(),
+                now,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Keyword search over neuron titles and bodies.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure. Malformed text becomes an empty list.
+    pub fn search_neurons(
+        &self,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<NeuronHit>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::SearchNeurons {
+                query: query.to_owned(),
+                limit,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Graph-arm hits for the supplied lexeme ids.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn graph_arm(
+        &self,
+        lexeme_ids: &[String],
+        limit: i64,
+    ) -> Result<Vec<NeuronHit>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::GraphArm {
+                lexeme_ids: lexeme_ids.to_vec(),
+                limit,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Last Markdown export and the last recall's arm counts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn brain_index(&self) -> Result<BrainIndex, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::BrainIndex { reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Records keyword, vector, and graph hit counts for the Brain tab.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn record_recall_arms(
+        &self,
+        keyword: i64,
+        vector: i64,
+        graph: i64,
+    ) -> Result<(), StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::RecordRecallArms {
+                keyword,
+                vector,
+                graph,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Rebuilds model-free links for every neuron.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn relink_neurons(&self) -> Result<AutoLinkReport, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::RelinkNeurons { reply }, Submit::Wait)?;
         Pending { rx }.wait()
     }
 
@@ -2749,12 +2964,19 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
         }
         NormalCommand::RecallSubgraph {
             seed_claim_ids,
+            seed_fact_ids,
             seed_lexeme_ids,
             hops,
             reply,
         } => send(
             reply,
-            dream_ops::recall_subgraph(connection, &seed_claim_ids, &seed_lexeme_ids, hops),
+            dream_ops::recall_subgraph(
+                connection,
+                &seed_claim_ids,
+                &seed_fact_ids,
+                &seed_lexeme_ids,
+                hops,
+            ),
         ),
         NormalCommand::BumpPromotionDayStats {
             day_key,
@@ -3273,6 +3495,56 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
         }
         NormalCommand::InsertMcpAudit { request, reply } => {
             executed(reply, sequence, mcp_ops::insert_audit(connection, &request));
+        }
+        NormalCommand::ExportBrain {
+            directory,
+            now,
+            reply,
+        } => send(
+            reply,
+            crate::brain_md::export_markdown(connection, &directory, now),
+        ),
+        NormalCommand::ImportBrain {
+            directory,
+            now,
+            reply,
+        } => send(
+            reply,
+            crate::brain_md::import_markdown(connection, &directory, now),
+        ),
+        NormalCommand::SyncBrain {
+            directory,
+            now,
+            reply,
+        } => send(
+            reply,
+            crate::brain_md::sync_markdown(connection, &directory, now),
+        ),
+        NormalCommand::SearchNeurons {
+            query,
+            limit,
+            reply,
+        } => send(reply, crate::brain_md::search_neurons(connection, &query, limit)),
+        NormalCommand::GraphArm {
+            lexeme_ids,
+            limit,
+            reply,
+        } => send(
+            reply,
+            crate::brain_md::graph_arm(connection, &lexeme_ids, limit),
+        ),
+        NormalCommand::BrainIndex { reply } => send(reply, crate::brain_md::brain_index(connection)),
+        NormalCommand::RecordRecallArms {
+            keyword,
+            vector,
+            graph,
+            reply,
+        } => send(
+            reply,
+            crate::brain_md::record_recall_arms(connection, keyword, vector, graph),
+        ),
+        NormalCommand::RelinkNeurons { reply } => {
+            send(reply, crate::auto_link::relink_all(connection))
         }
     }
 }

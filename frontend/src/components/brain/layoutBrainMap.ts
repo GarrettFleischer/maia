@@ -41,10 +41,29 @@ export interface LayoutSize {
   height: number
 }
 
+export interface BrainIndex {
+  exported_at: number | null
+  neuron_count: number
+  edge_count: number
+  keyword_count: number
+  vector_count: number
+  graph_count: number
+}
+
 export interface BrainMapClient {
   load(): Promise<BrainMap>
   reviseFact(id: string, sentence: string): Promise<BrainMap>
   deleteFact(id: string): Promise<BrainMap>
+  loadIndex?(): Promise<BrainIndex>
+  exportMarkdown?(): Promise<BrainIndex>
+}
+
+export function brainStatusLine(index: BrainIndex): string {
+  const exported =
+    index.exported_at === null
+      ? 'No markdown export yet'
+      : `Last export ${index.exported_at} · ${index.neuron_count} notes · ${index.edge_count} edges`
+  return `${exported}. Last recall: keyword ${index.keyword_count} · vector ${index.vector_count} · graph ${index.graph_count}.`
 }
 
 const KINDS: readonly BrainNodeKind[] = ['fact', 'claim', 'episode', 'lexeme']

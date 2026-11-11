@@ -3758,6 +3758,7 @@ impl<R: Router> Orchestrator<R> {
             Err(error) => return Err(self.admitted_failure(message, error)),
         };
         let recall = self.recall_for(text);
+        self.note_recall(recall.as_ref(), None);
         let request_id = match self.ids.pop_request() {
             Ok(id) => RequestId(id),
             Err(error) => return Err(self.admitted_failure(message, error)),
@@ -4525,6 +4526,23 @@ impl<R: Router> Orchestrator<R> {
         )
     }
 
+    fn note_recall(&mut self, recall: Option<&PackedRecall>, task: Option<&TaskId>) {
+        let Some(packed) = recall else {
+            return;
+        };
+        if packed.items.is_empty() {
+            return;
+        }
+        let titles = packed
+            .items
+            .iter()
+            .map(|item| item.sentence.clone())
+            .collect::<Vec<_>>();
+        let label = maia_core::brain::recall_activity_label(packed.items.len(), &titles);
+        self.activity
+            .push(label, task.map(|task| task.0.clone()));
+    }
+
     fn persist_router_turn(
         &self,
         message: &MessageId,
@@ -5066,6 +5084,13 @@ impl<R: Router> Orchestrator<R> {
         messages.push(ChatMessage::text(ChatRole::System, contract));
         for turn in self.worker_turns(task, &prompt) {
             messages.push(ChatMessage::text(ChatRole::User, turn));
+        }
+        let recall = self.recall_for(&prompt);
+        self.note_recall(recall.as_ref(), Some(task));
+        if let Some(packed) = recall
+            && !packed.bytes.is_empty()
+        {
+            messages.push(ChatMessage::text(ChatRole::User, packed.bytes));
         }
         Ok(WorkerMachine {
             task: task.clone(),

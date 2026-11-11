@@ -4,6 +4,7 @@
 //! Composition root: configuration, scheduling, and framework hooks.
 
 mod attachment_prompt;
+mod brain_cli;
 mod attribution_wire;
 mod discovery;
 mod env;
@@ -42,10 +43,11 @@ pub use promoter_env::{
     DEFAULT_PROMOTER_DAILY_CALL_CAP, DEFAULT_PROMOTER_DAILY_TOKEN_CAP, DEFAULT_PROMOTER_MODEL,
     PromoterEnv, read_promoter_env,
 };
+pub use brain_cli::{BrainCli, BrainVerb, parse_brain_args};
 pub use promotion::{
     ClaimEmbedder, ClaimEmbedderIdentity, CoreClaimEmbedder, EmbedFailure, PromoterModel,
-    PromotionAttempt, PromotionCaps, PromotionRunner, RouterPromoter, ScriptedPromoter,
-    bounded_recall, open_candle_claim_embedder,
+    PromotionAttempt, PromotionCaps, PromotionRunner, RecallArms, RouterPromoter, ScriptedPromoter,
+    bounded_recall, open_candle_claim_embedder, recall_run,
 };
 pub use scripted_tools::{
     ApprovalKind, CompletionEvidence, ScriptedCall, ScriptedToolHost, ToolHostError,

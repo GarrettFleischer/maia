@@ -84,6 +84,10 @@ pub(crate) fn revise(
     replace_lexeme_edges(&transaction, "fact", &request.fact_id, &request.lexemes)?;
     drop_embedding(&transaction, "fact", &request.fact_id)?;
     prune_lexemes(&transaction)?;
+    crate::auto_link::on_neuron_written(&transaction, "fact", &request.fact_id)?;
+    for claim_id in &claims {
+        crate::auto_link::on_neuron_written(&transaction, "claim", claim_id)?;
+    }
     let map = map(&transaction)?;
     transaction.commit()?;
     Ok(map)

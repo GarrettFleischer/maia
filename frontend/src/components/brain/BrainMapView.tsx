@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { NodeChoiceList } from '@/components/brain/NodeChoiceList'
 import {
+  brainStatusLine,
   layoutBrainMap,
   validateFactSentence,
   visibleBrainNodes,
   type BrainEdge,
+  type BrainIndex,
   type BrainMap,
   type BrainMapClient,
   type BrainMapMode,
@@ -24,6 +26,7 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
   const [draft, setDraft] = useState('')
   const [confirmTrim, setConfirmTrim] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [index, setIndex] = useState<BrainIndex | null>(null)
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [drag, setDrag] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null)
@@ -36,6 +39,22 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
       },
       () => {
         if (!cancelled) setError('The brain map could not be loaded.')
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [client])
+
+  useEffect(() => {
+    if (!client.loadIndex) return
+    let cancelled = false
+    void client.loadIndex().then(
+      (loaded) => {
+        if (!cancelled) setIndex(loaded)
+      },
+      () => {
+        if (!cancelled) setIndex(null)
       },
     )
     return () => {
@@ -72,6 +91,19 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           />
         </div>
         <p>Nothing has been promoted yet. Episodes remain searchable.</p>
+        <BrainStatus
+          index={index}
+          onExport={
+            client.exportMarkdown
+              ? () => {
+                  void client.exportMarkdown?.().then(
+                    (next) => setIndex(next),
+                    () => setError('That export was not saved.'),
+                  )
+                }
+              : undefined
+          }
+        />
       </section>
     )
   }
@@ -169,6 +201,19 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
         <button type="button" className="maia-btn" onClick={() => setZoom((value) => clampZoom(value / 1.15))}>
           Zoom out
         </button>
+        <BrainStatus
+          index={index}
+          onExport={
+            client.exportMarkdown
+              ? () => {
+                  void client.exportMarkdown?.().then(
+                    (next) => setIndex(next),
+                    () => setError('That export was not saved.'),
+                  )
+                }
+              : undefined
+          }
+        />
       </div>
       <div className="maia-brain-layout">
         <svg
@@ -266,6 +311,20 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
         </div>
       </div>
     </section>
+  )
+}
+
+function BrainStatus({ index, onExport }: { index: BrainIndex | null; onExport?: () => void }) {
+  if (!index && !onExport) return null
+  return (
+    <div className="maia-brain-status">
+      {index ? <p>{brainStatusLine(index)}</p> : null}
+      {onExport ? (
+        <button type="button" className="maia-btn" onClick={onExport}>
+          Export markdown
+        </button>
+      ) : null}
+    </div>
   )
 }
 
