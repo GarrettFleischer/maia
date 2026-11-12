@@ -4,8 +4,8 @@ import {
   ACTIVITY_PREVIEW_LIMIT,
   SIDEBAR_SECTION_ORDER,
   activityPreview,
-  formatElapsed,
   formatPhase,
+  taskCardMeta,
   groupSidebarRows,
 } from '@/api/superAgentFormat'
 
@@ -59,6 +59,7 @@ function TaskBranch({
 }) {
   const expandedRow = expanded.has(row.task_id)
   const selected = openTaskId === row.task_id
+  const meta = taskCardMeta(row.phase, row.elapsed_ms, row.criteria_done, row.criteria_total)
   const pinLabel = row.section === 'pinned' ? 'Unpin' : 'Pin'
   const nextPin: PinMark = row.section === 'pinned' ? 'unpinned' : 'pinned'
   return (
@@ -93,9 +94,7 @@ function TaskBranch({
             {formatPhase(row.phase)}
           </span>
           <ActivityPreview summary={row.summary} />
-          <span className="maia-task-meta">
-            {formatElapsed(row.elapsed_ms)} · {row.criteria_done}/{row.criteria_total} criteria
-          </span>
+          {meta.length > 0 ? <span className="maia-task-meta">{meta}</span> : null}
         </button>
         {depth === 0 ? (
           <button

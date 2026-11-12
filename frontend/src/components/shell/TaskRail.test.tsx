@@ -58,6 +58,40 @@ const inspection: TaskDetailData = {
 }
 
 describe('TaskRail', () => {
+  it('names a wait instead of a zero duration', () => {
+    render(
+      <TaskRail
+        rows={[
+          row({
+            task_id: 'wait',
+            title: 'Investigate the chat',
+            section: 'needs_you',
+            phase: 'waiting_for_user',
+            elapsed_ms: 0,
+            criteria_done: 0,
+            criteria_total: 1,
+          }),
+          row({
+            task_id: 'done',
+            title: 'Weather',
+            section: 'completed',
+            phase: 'completed',
+            elapsed_ms: 0,
+            criteria_done: 1,
+            criteria_total: 1,
+          }),
+        ]}
+        onOpen={vi.fn()}
+      />,
+    )
+    const waiting = screen.getByRole('region', { name: 'Needs you' })
+    expect(waiting).toHaveTextContent('Waiting · 0/1 criteria')
+    expect(waiting).not.toHaveTextContent('0 ms')
+    const done = screen.getByRole('region', { name: 'Completed' })
+    expect(done).toHaveTextContent('1/1 criteria')
+    expect(done).not.toHaveTextContent('0 ms')
+  })
+
   it('shows a completed parent and nests the helper', async () => {
     const user = userEvent.setup()
     const onOpen = vi.fn()
@@ -279,7 +313,8 @@ describe('TaskDetail', () => {
     expect(within(conversation).getByRole('list', { name: 'Attempts' })).toHaveTextContent('Ready to review')
     expect(within(conversation).getByRole('list', { name: 'Criteria' })).toHaveTextContent('Pin control is visible')
     expect(within(conversation).getByRole('list', { name: 'Helpers' })).toHaveTextContent('Write the control')
-    expect(within(conversation).getByText('None recorded.')).toBeInTheDocument()
+    expect(within(conversation).queryByText('None recorded.')).not.toBeInTheDocument()
+    expect(within(conversation).queryByRole('heading', { name: 'Decisions' })).not.toBeInTheDocument()
   })
 
   it('routes quote, pin, and close through typed callbacks', async () => {

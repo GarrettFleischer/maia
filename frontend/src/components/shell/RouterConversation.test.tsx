@@ -176,7 +176,7 @@ describe('RouterConversation', () => {
         disabled={false}
         activity={[
           { seq: 1, label: 'Router: reading your message' },
-          { seq: 2, label: 'Task task-1: listing F:\\Development\\Ideas', task_id: 'task-1' },
+          { seq: 2, label: 'Step 1: listing F:\\Development\\Ideas', task_id: 'task-1' },
         ]}
         onStopTask={onStopTask}
         onDraftChange={() => undefined}
@@ -186,8 +186,10 @@ describe('RouterConversation', () => {
       />,
     )
     expect(screen.getByText('Router: reading your message')).toBeInTheDocument()
-    expect(screen.getByText(/Task task-1: listing/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Stop task-1' }))
+    expect(screen.getByText(/Step 1: listing/)).toBeInTheDocument()
+    const stop = screen.getByRole('button', { name: 'Stop' })
+    expect(stop).not.toHaveTextContent('task-1')
+    fireEvent.click(stop)
     expect(onStopTask).toHaveBeenCalledWith('task-1')
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
   })

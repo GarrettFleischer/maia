@@ -82,7 +82,6 @@ use maia_daemon::ChildNarrowing;
 use maia_daemon::CompletionEvidence;
 use maia_daemon::HttpIdSupply;
 use maia_daemon::IdSupply;
-use maia_daemon::named_tool_response;
 use maia_daemon::Orchestrator;
 use maia_daemon::OrchestratorConfig;
 use maia_daemon::OrchestratorError;
@@ -93,6 +92,7 @@ use maia_daemon::ScriptedCall;
 use maia_daemon::ScriptedToolHost;
 use maia_daemon::ToolHostError;
 use maia_daemon::accepted_routing_policy;
+use maia_daemon::named_tool_response;
 use maia_daemon::serve_super_agent_with_ids;
 use maia_store::AppendEvents;
 use maia_store::ChildAssignmentWrite;
@@ -199,41 +199,42 @@ impl Router for ScriptedRouter {
         &self,
         request: &RouterRequest,
     ) -> impl Future<Output = Result<RouterResponse, RouterError>> + Send {
-        let prepared = {
-            if let Some(reply) = auxiliary_reply(request) {
-                Ok(reply_response(request.request_id, reply))
-            } else {
-            let mut script = self.inner.lock().expect("router lock");
-            script.requests.push(request.clone());
-            if request
-                .messages
-                .first()
-                .is_some_and(|message| message.content.starts_with("Maia task-report relay."))
+        let prepared =
             {
-                let body = match script.replies.front() {
-                    Some(ScriptedReply::Raw(_)) => match script.replies.pop_front() {
-                        Some(ScriptedReply::Raw(body)) => body,
-                        _ => "Relayed.".to_owned(),
-                    },
-                    _ => "Relayed.".to_owned(),
-                };
-                Ok(reply_response(request.request_id, body))
-            } else {
-                match script.replies.pop_front() {
-                    Some(ScriptedReply::Proposal(proposal)) => Ok(
-                        maia_daemon::route_tool_response(request.request_id, &proposal),
-                    ),
-                    Some(ScriptedReply::Tool { name, arguments }) => {
-                        Ok(named_tool_response(request.request_id, &name, &arguments))
+                if let Some(reply) = auxiliary_reply(request) {
+                    Ok(reply_response(request.request_id, reply))
+                } else {
+                    let mut script = self.inner.lock().expect("router lock");
+                    script.requests.push(request.clone());
+                    if request.messages.first().is_some_and(|message| {
+                        message.content.starts_with("Maia task-report relay.")
+                    }) {
+                        let body = match script.replies.front() {
+                            Some(ScriptedReply::Raw(_)) => match script.replies.pop_front() {
+                                Some(ScriptedReply::Raw(body)) => body,
+                                _ => "Relayed.".to_owned(),
+                            },
+                            _ => "Relayed.".to_owned(),
+                        };
+                        Ok(reply_response(request.request_id, body))
+                    } else {
+                        match script.replies.pop_front() {
+                            Some(ScriptedReply::Proposal(proposal)) => Ok(
+                                maia_daemon::route_tool_response(request.request_id, &proposal),
+                            ),
+                            Some(ScriptedReply::Tool { name, arguments }) => {
+                                Ok(named_tool_response(request.request_id, &name, &arguments))
+                            }
+                            Some(ScriptedReply::Raw(body)) => {
+                                Ok(reply_response(request.request_id, body))
+                            }
+                            None => Err(RouterError::Protocol {
+                                detail: "no scripted proposal".to_owned(),
+                            }),
+                        }
                     }
-                    Some(ScriptedReply::Raw(body)) => Ok(reply_response(request.request_id, body)),
-                    None => Err(RouterError::Protocol {
-                        detail: "no scripted proposal".to_owned(),
-                    }),
                 }
-            }
-            }
-        };
+            };
         async move { prepared }
     }
 

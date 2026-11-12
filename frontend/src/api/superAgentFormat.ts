@@ -153,6 +153,29 @@ export function formatElapsed(elapsedMs: number): string {
   return `${seconds}s`
 }
 
+const UNMEASURED_CARD_STATUS: Partial<Record<TaskPhaseName, string>> = {
+  queued: 'Not started',
+  running: 'Working',
+  waiting_for_user: 'Waiting',
+}
+
+/** Measured work time, or a status that is not a clock. Zero is not a duration. */
+export function taskCardMeta(
+  phase: TaskPhaseName,
+  elapsedMs: number,
+  criteriaDone: number,
+  criteriaTotal: number,
+): string {
+  const parts: string[] = []
+  if (Number.isFinite(elapsedMs) && elapsedMs > 0) parts.push(formatElapsed(elapsedMs))
+  else {
+    const status = UNMEASURED_CARD_STATUS[phase]
+    if (status) parts.push(status)
+  }
+  if (criteriaTotal > 0) parts.push(`${criteriaDone}/${criteriaTotal} criteria`)
+  return parts.join(' · ')
+}
+
 export function appendReference(draft: string, insert: string): string {
   if (draft.length === 0) return insert
   if (/\s$/.test(draft)) return `${draft}${insert}`

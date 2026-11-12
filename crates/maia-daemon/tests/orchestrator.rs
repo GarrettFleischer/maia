@@ -139,6 +139,7 @@ struct ScriptedRouter {
 struct RouterScript {
     replies: VecDeque<ScriptedReply>,
     requests: Vec<RouterRequest>,
+    seen_at: Vec<std::time::Instant>,
 }
 
 enum ScriptedReply {
@@ -166,6 +167,7 @@ impl ScriptedRouter {
             inner: Arc::new(Mutex::new(RouterScript {
                 replies: VecDeque::new(),
                 requests: Vec::new(),
+                seen_at: Vec::new(),
             })),
         }
     }
@@ -217,6 +219,14 @@ impl ScriptedRouter {
             .requests
             .clone()
     }
+
+    fn seen_at(&self) -> Vec<std::time::Instant> {
+        self.inner
+            .lock()
+            .expect("router script lock")
+            .seen_at
+            .clone()
+    }
 }
 
 fn auxiliary_reply(request: &RouterRequest) -> Option<String> {
@@ -244,64 +254,64 @@ impl Router for ScriptedRouter {
         &self,
         request: &RouterRequest,
     ) -> impl Future<Output = Result<RouterResponse, RouterError>> + Send {
-        let prepared = {
-            if let Some(reply) = auxiliary_reply(request) {
-                Ok(reply_response(request.request_id, reply))
-            } else {
-            let mut script = self.inner.lock().expect("router script lock");
-            script.requests.push(request.clone());
-            if request
-                .messages
-                .first()
-                .is_some_and(|message| message.content.starts_with("Maia task-report relay."))
+        let prepared =
             {
-                Ok(reply_response(request.request_id, "Relayed.".to_owned()))
-            } else if request
-                .messages
-                .first()
-                .is_some_and(|message| message.content.starts_with("Maia context compaction."))
-            {
-                Ok(reply_response(
-                    request.request_id,
-                    "Earlier steps were folded. The original goal stays.".to_owned(),
-                ))
-            } else {
-                match script.replies.pop_front() {
-                    Some(ScriptedReply::Proposal(proposal)) => {
-                        Ok(route_tool_response(request.request_id, &proposal))
-                    }
-                    Some(ScriptedReply::Tool { name, arguments }) => {
-                        Ok(named_tool_response(request.request_id, &name, &arguments))
-                    }
-                    Some(ScriptedReply::Raw(body)) => Ok(reply_response(request.request_id, body)),
-                    Some(ScriptedReply::Reasoning { thinking, reply }) => {
-                        Ok(reasoning_response(request.request_id, reply, thinking))
-                    }
-                    Some(ScriptedReply::Metered {
-                        reply,
-                        input_tokens,
-                        cached_input_tokens,
-                    }) => {
-                        let mut response = named_tool_response(
+                if let Some(reply) = auxiliary_reply(request) {
+                    Ok(reply_response(request.request_id, reply))
+                } else {
+                    let mut script = self.inner.lock().expect("router script lock");
+                    script.requests.push(request.clone());
+                    script.seen_at.push(std::time::Instant::now());
+                    if request.messages.first().is_some_and(|message| {
+                        message.content.starts_with("Maia task-report relay.")
+                    }) {
+                        Ok(reply_response(request.request_id, "Relayed.".to_owned()))
+                    } else if request.messages.first().is_some_and(|message| {
+                        message.content.starts_with("Maia context compaction.")
+                    }) {
+                        Ok(reply_response(
                             request.request_id,
-                            "success",
-                            &success_arguments(&reply),
-                        );
-                        response.usage = RouterUsage {
-                            input_tokens: UsageValue::Reported(input_tokens),
-                            output_tokens: UsageValue::Reported(4),
-                            cached_input_tokens: UsageValue::Reported(cached_input_tokens),
-                        };
-                        Ok(response)
+                            "Earlier steps were folded. The original goal stays.".to_owned(),
+                        ))
+                    } else {
+                        match script.replies.pop_front() {
+                            Some(ScriptedReply::Proposal(proposal)) => {
+                                Ok(route_tool_response(request.request_id, &proposal))
+                            }
+                            Some(ScriptedReply::Tool { name, arguments }) => {
+                                Ok(named_tool_response(request.request_id, &name, &arguments))
+                            }
+                            Some(ScriptedReply::Raw(body)) => {
+                                Ok(reply_response(request.request_id, body))
+                            }
+                            Some(ScriptedReply::Reasoning { thinking, reply }) => {
+                                Ok(reasoning_response(request.request_id, reply, thinking))
+                            }
+                            Some(ScriptedReply::Metered {
+                                reply,
+                                input_tokens,
+                                cached_input_tokens,
+                            }) => {
+                                let mut response = named_tool_response(
+                                    request.request_id,
+                                    "success",
+                                    &success_arguments(&reply),
+                                );
+                                response.usage = RouterUsage {
+                                    input_tokens: UsageValue::Reported(input_tokens),
+                                    output_tokens: UsageValue::Reported(4),
+                                    cached_input_tokens: UsageValue::Reported(cached_input_tokens),
+                                };
+                                Ok(response)
+                            }
+                            Some(ScriptedReply::Fail(error)) => Err(error),
+                            None => Err(RouterError::Protocol {
+                                detail: "no scripted proposal".to_owned(),
+                            }),
+                        }
                     }
-                    Some(ScriptedReply::Fail(error)) => Err(error),
-                    None => Err(RouterError::Protocol {
-                        detail: "no scripted proposal".to_owned(),
-                    }),
                 }
-            }
-            }
-        };
+            };
         async move { prepared }
     }
 
@@ -2680,6 +2690,100 @@ fn a_stalled_worker_keeps_going_until_the_main_window_has_its_answer() {
 }
 
 #[test]
+fn a_provider_timeout_waits_before_the_worker_tries_again() {
+    let mut harness = Harness::open_model("worker-stall-pause", prompt_supply());
+    let owner = "Check the weather in Canby, Oregon and report it back.";
+    harness.router.push_tool("spawn_task", "{}");
+    harness.router.push_failure(RouterError::Timeout);
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+    let seen = harness.router.seen_at();
+    let gap = seen
+        .windows(2)
+        .map(|pair| pair[1].saturating_duration_since(pair[0]))
+        .max()
+        .unwrap_or_default();
+    assert!(
+        gap >= std::time::Duration::from_millis(150),
+        "a timeout should wait before the next worker call, gap {gap:?}, calls {}",
+        seen.len()
+    );
+}
+
+#[test]
+fn deferred_boot_queues_a_running_parent_without_another_model_call() {
+    let mut harness = Harness::open_model("deferred-boot", prompt_supply());
+    let owner = "Check the weather in Canby, Oregon and report it back.";
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_failure(RouterError::Server { code: 502 });
+    harness.router.push_failure(RouterError::Protocol {
+        detail: "stop".to_owned(),
+    });
+    harness.router.push_tool(
+        "success",
+        &success_arguments("The task started, but the worker did not answer."),
+    );
+    let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Running { .. })
+    ));
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    harness.host().defer_model_work();
+    let before = harness.router.requests().len();
+    harness.host().work_queued_parents();
+    assert_eq!(harness.router.requests().len(), before);
+    assert!(
+        harness
+            .host()
+            .take_background_tasks()
+            .iter()
+            .any(|queued| queued == &task),
+        "a restart should hand the running parent to the background pump"
+    );
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Running { .. })
+    ));
+}
+
+#[test]
+fn a_working_parent_does_not_print_its_id_on_the_activity_line() {
+    let mut harness = Harness::open_model("activity-without-id", prompt_supply());
+    let owner = "Check the weather in Canby, Oregon and report it back.";
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
+    let task = outcome.task.expect("task");
+    let labels = harness.host().activity_labels();
+    assert!(labels.iter().any(|label| label == "Working"), "{labels:?}");
+    assert!(
+        labels.iter().all(|label| !label.contains(&task.0)),
+        "{labels:?}"
+    );
+}
+
+#[test]
 fn model_worker_retries_a_running_parent_that_never_reported() {
     let mut harness = Harness::open_model("model-worker-retry", prompt_supply());
     let owner = "Check the weather in Canby, Oregon and report it back.";
@@ -4123,7 +4227,7 @@ fn a_task_finishes_after_more_than_one_hundred_distinct_tool_calls() {
         harness.host().phase(&task)
     );
     let labels = harness.host().activity_labels();
-    assert!(labels.iter().any(|label| label.contains("step 100")));
+    assert!(labels.iter().any(|label| label.contains("Step 100")));
     assert!(
         labels
             .iter()

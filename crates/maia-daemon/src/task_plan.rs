@@ -15,6 +15,8 @@ use maia_core::task_loop::Addition;
 use maia_core::task_loop::GoalContract;
 use maia_core::task_loop::HandoffNotes;
 use maia_core::task_loop::ReviewEffect;
+use maia_core::task_loop::StepObservation;
+use maia_core::task_loop::StepStatus;
 use maia_core::task_loop::TodoList;
 use maia_core::task_loop::TodoStatus;
 use maia_core::task_loop::accept_model_brief;
@@ -39,8 +41,6 @@ use maia_core::task_loop::propose_addition;
 use maia_core::task_loop::review_is_due;
 use maia_core::task_loop::review_prompt;
 use maia_core::task_loop::start_item;
-use maia_core::task_loop::StepObservation;
-use maia_core::task_loop::StepStatus;
 use maia_core::thread_cache::ChatMessage;
 use maia_core::thread_cache::ChatRole;
 
@@ -78,7 +78,11 @@ pub(super) fn list_lines(list: &TodoList) -> String {
 }
 
 impl<R: Router> Orchestrator<R> {
-    pub(super) fn ensure_plan(&mut self, task: &TaskId, prompt: &str) -> (GoalContract, TodoList, u32) {
+    pub(super) fn ensure_plan(
+        &mut self,
+        task: &TaskId,
+        prompt: &str,
+    ) -> (GoalContract, TodoList, u32) {
         if let Ok(Some((goal_json, todo_json, count, _))) = self.store.task_plan(&task.0)
             && let Some((contract, list, _, _)) = parse_stored_plan(&goal_json, &todo_json)
         {
@@ -101,7 +105,11 @@ impl<R: Router> Orchestrator<R> {
     }
 
     pub(super) fn maybe_review(&mut self, machine: &mut WorkerMachine) -> Option<WorkerDrive> {
-        let elapsed = machine.review_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        let elapsed = machine
+            .review_at
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
         if !review_is_due(
             machine.steps_since_review,
             elapsed,
@@ -136,7 +144,10 @@ impl<R: Router> Orchestrator<R> {
                 self.record_activity(activity, Some(&machine.task.clone()));
                 None
             }
-            ReviewEffect::Steer { activity, correction } => {
+            ReviewEffect::Steer {
+                activity,
+                correction,
+            } => {
                 self.record_activity(activity, Some(&machine.task.clone()));
                 machine
                     .messages
@@ -149,7 +160,12 @@ impl<R: Router> Orchestrator<R> {
                 } else {
                     notes
                 };
-                Some(self.hand_off(machine, &what, "check-in", machine.loops.handoff_count().saturating_add(1)))
+                Some(self.hand_off(
+                    machine,
+                    &what,
+                    "check-in",
+                    machine.loops.handoff_count().saturating_add(1),
+                ))
             }
         }
     }
@@ -192,7 +208,13 @@ impl<R: Router> Orchestrator<R> {
             }
         };
         let carried = inherit_list(&machine.todos);
-        self.save_plan(&successor, &machine.contract, &carried, handoff_number, Some(task.0.clone()));
+        self.save_plan(
+            &successor,
+            &machine.contract,
+            &carried,
+            handoff_number,
+            Some(task.0.clone()),
+        );
         if let Ok(command) = self.ids.next_command() {
             let command = CommandId(command);
             if self.ids.consume_command(command.0).is_ok() {
@@ -233,7 +255,10 @@ impl<R: Router> Orchestrator<R> {
         let output = match name {
             "todo_done" => {
                 let id = message.split_whitespace().next().unwrap_or("todo-1");
-                let result = message.split_once(' ').map(|(_, rest)| rest).unwrap_or("Done.");
+                let result = message
+                    .split_once(' ')
+                    .map(|(_, rest)| rest)
+                    .unwrap_or("Done.");
                 if complete_item(&mut machine.todos, id, result) {
                     format!("Checked off {id}. {result}")
                 } else {
@@ -277,10 +302,12 @@ impl<R: Router> Orchestrator<R> {
         };
         let tasks: Vec<TaskId> = self.phases.keys().cloned().collect();
         for task in tasks {
-            let Ok(Some((goal_json, todo_json, count, handoff_of))) = self.store.task_plan(&task.0) else {
+            let Ok(Some((goal_json, todo_json, count, handoff_of))) = self.store.task_plan(&task.0)
+            else {
                 continue;
             };
-            let Some((mut contract, mut list, _, _)) = parse_stored_plan(&goal_json, &todo_json) else {
+            let Some((mut contract, mut list, _, _)) = parse_stored_plan(&goal_json, &todo_json)
+            else {
                 continue;
             };
             if list.proposed.is_empty() {
@@ -340,7 +367,10 @@ impl<R: Router> Orchestrator<R> {
                     .iter()
                     .find(|item| item.status == TodoStatus::Pending)
             });
-        let activity = maia_core::bots::work_status_line(&contract.goal, active.map(|item| item.text.as_str()));
+        let activity = maia_core::bots::work_status_line(
+            &contract.goal,
+            active.map(|item| item.text.as_str()),
+        );
         let _ = self.store.bots(maia_store::BotRequest::UpsertWork {
             bot_id,
             goal: contract.goal.clone(),
@@ -360,7 +390,8 @@ impl<R: Router> Orchestrator<R> {
             ],
             "[]".to_owned(),
         );
-        let response = wait_router(self.router.complete(&request)).map_err(|_| "model call failed".to_owned())?;
+        let response = wait_router(self.router.complete(&request))
+            .map_err(|_| "model call failed".to_owned())?;
         Ok(response.reply.unwrap_or_default())
     }
 }

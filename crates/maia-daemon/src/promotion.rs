@@ -832,7 +832,10 @@ fn cosine_millis(cosine: f64) -> Option<i32> {
     i32::try_from(scaled as i64).ok()
 }
 
-fn reconcile_claims(decision: &mut maia_core::dream::PromotionDecision, nearest: &[NearestClaimRow]) {
+fn reconcile_claims(
+    decision: &mut maia_core::dream::PromotionDecision,
+    nearest: &[NearestClaimRow],
+) {
     use maia_core::dream::ClaimJudgment;
     use maia_core::dream::ReplaceDraft;
     use maia_core::dream::judge_claim;

@@ -287,7 +287,7 @@ export function RouterConversation({
                     className="maia-btn"
                     onClick={() => onStopTask?.(line.task_id ?? '')}
                   >
-                    Stop {line.task_id}
+                    Stop
                   </button>
                 ) : null}
               </li>

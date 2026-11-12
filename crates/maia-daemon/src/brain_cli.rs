@@ -79,16 +79,13 @@ mod tests {
             .expect("command")
             .expect("parsed");
         assert_eq!(export.verb, BrainVerb::Export);
-        assert_eq!(export.directory, std::path::PathBuf::from("data").join("brain-md"));
-        let import = parse_brain_args(&args(&[
-            "maia-daemon",
-            "brain",
-            "import",
-            "--dir",
-            "notes",
-        ]))
-        .expect("command")
-        .expect("parsed");
+        assert_eq!(
+            export.directory,
+            std::path::PathBuf::from("data").join("brain-md")
+        );
+        let import = parse_brain_args(&args(&["maia-daemon", "brain", "import", "--dir", "notes"]))
+            .expect("command")
+            .expect("parsed");
         assert_eq!(import.verb, BrainVerb::Import);
         assert_eq!(import.directory, std::path::PathBuf::from("notes"));
     }

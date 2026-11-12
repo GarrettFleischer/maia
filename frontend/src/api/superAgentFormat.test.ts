@@ -5,13 +5,13 @@ import {
   countActivity,
   formatPhase,
   phoneStopLabel,
+  taskCardMeta,
   chatActivityLabel,
   taskStripLabel,
   shortWorkStatus,
   isNonTerminalPhase,
   routeFold,
   shownAcceptanceContext,
-  inspectionGroups,
   visibleInspectionGroups,
 } from '@/api/superAgentFormat'
 import type { SidebarRow, TaskDetail } from '@/api/superAgentTypes'
@@ -81,6 +81,17 @@ describe('countActivity', () => {
   it('labels a stopped phase as Stopped and keeps it resumable', () => {
     expect(formatPhase('stopped')).toBe('Stopped')
     expect(isNonTerminalPhase('stopped')).toBe(true)
+  })
+
+  it('does not call a missing duration work time', () => {
+    expect(taskCardMeta('waiting_for_user', 0, 0, 1)).toBe('Waiting · 0/1 criteria')
+    expect(taskCardMeta('waiting_for_user', 0, 0, 1)).not.toContain('0 ms')
+    expect(taskCardMeta('queued', 0, 0, 1)).toBe('Not started · 0/1 criteria')
+    expect(taskCardMeta('running', 0, 0, 1)).toBe('Working · 0/1 criteria')
+    expect(taskCardMeta('completed', 0, 1, 1)).toBe('1/1 criteria')
+    expect(taskCardMeta('completed', 0, 1, 1)).not.toContain('ms')
+    expect(taskCardMeta('running', 90_000, 0, 1)).toBe('1m 30s · 0/1 criteria')
+    expect(taskCardMeta('cancelled', 0, 0, 0)).toBe('')
   })
 })
 

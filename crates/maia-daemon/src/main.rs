@@ -26,11 +26,11 @@ use maia_daemon::RouterPromoter;
 use maia_daemon::RouterTurn;
 use maia_daemon::RuntimeRouter;
 use maia_daemon::ScriptedToolHost;
-use maia_daemon::open_routing_policy;
 use maia_daemon::discover_model_id;
 use maia_daemon::live_model_lister;
 use maia_daemon::native_router_key_store;
 use maia_daemon::open_candle_claim_embedder;
+use maia_daemon::open_routing_policy;
 use maia_daemon::parse_reasoning_effort;
 use maia_daemon::read_model_env;
 use maia_daemon::read_promoter_env;
@@ -88,19 +88,13 @@ fn run_brain_command(command: &maia_daemon::BrainCli) -> Result<(), BootError> {
             let report = store
                 .export_brain_markdown(&command.directory, now)
                 .map_err(|_| BootError::Store)?;
-            println!(
-                "exported {} notes, {} edges",
-                report.neurons, report.edges
-            );
+            println!("exported {} notes, {} edges", report.neurons, report.edges);
         }
         maia_daemon::BrainVerb::Import => {
             let report = store
                 .import_brain_markdown(&command.directory, now)
                 .map_err(|_| BootError::Store)?;
-            println!(
-                "imported {} notes, {} edges",
-                report.neurons, report.edges
-            );
+            println!("imported {} notes, {} edges", report.neurons, report.edges);
         }
         maia_daemon::BrainVerb::Sync => {
             let report = store
@@ -108,7 +102,10 @@ fn run_brain_command(command: &maia_daemon::BrainCli) -> Result<(), BootError> {
                 .map_err(|_| BootError::Store)?;
             println!(
                 "synced created {} updated {} deleted {} conflicts {}",
-                report.created, report.updated, report.soft_deleted, report.conflicts.len()
+                report.created,
+                report.updated,
+                report.soft_deleted,
+                report.conflicts.len()
             );
         }
     }

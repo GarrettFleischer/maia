@@ -28,10 +28,8 @@ use maia_store::ThreadEventWrite;
 const NOW: i64 = 1_763_000_000;
 
 fn open_temp(label: &str) -> (PathBuf, SqliteOwner) {
-    let directory = std::env::temp_dir().join(format!(
-        "maia-brain-live-{label}-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("maia-brain-live-{label}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&directory);
     fs::create_dir_all(&directory).expect("temp dir");
     let path = directory.join("brain.sqlite");
@@ -238,26 +236,23 @@ fn live_recall_export_and_autolink_on_a_temp_database() {
     let report = store
         .export_brain_markdown(&exported, NOW + 4)
         .expect("export");
-    println!(
-        "export neurons={} edges={}",
-        report.neurons, report.edges
-    );
+    println!("export neurons={} edges={}", report.neurons, report.edges);
     assert!(report.neurons >= 30, "seeded {}", report.neurons);
 
     let (import_dir, imported) = open_temp("import");
     let again = imported
         .import_brain_markdown(&exported, NOW + 5)
         .expect("import");
-    println!(
-        "import neurons={} edges={}",
-        again.neurons, again.edges
-    );
+    println!("import neurons={} edges={}", again.neurons, again.edges);
     assert_eq!(again.neurons, report.neurons);
     assert_eq!(again.edges, report.edges);
     let original = store.search_neurons("Alice Chen", 5).expect("search");
     let copied = imported.search_neurons("Alice Chen", 5).expect("search");
     assert_eq!(
-        original.iter().map(|hit| hit.id.clone()).collect::<Vec<_>>(),
+        original
+            .iter()
+            .map(|hit| hit.id.clone())
+            .collect::<Vec<_>>(),
         copied.iter().map(|hit| hit.id.clone()).collect::<Vec<_>>()
     );
 
