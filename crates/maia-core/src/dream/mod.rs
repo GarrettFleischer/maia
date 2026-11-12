@@ -6,12 +6,12 @@ mod consolidate;
 mod decision;
 mod error;
 mod json;
+mod memory;
 mod parse;
 mod plan;
 mod prepass;
 mod project;
 mod related;
-mod memory;
 mod schedule;
 mod seeds;
 mod select;
@@ -40,24 +40,22 @@ pub use decision::{
 pub use error::{
     ConsolidationPhase, DreamError, ModelFailure, PromotionError, PromotionPhase, SentenceIssue,
 };
-pub use parse::{ClaimDraft, parse_promotion};
-pub use related::{
-    RELATEDNESS_FANOUT, EntityLink, EntitySlug, LEXICAL_MIN_MILLIS, RelatedCandidate,
-    RelatedChannel, RelatedLink, VECTOR_MIN_MILLIS, select_entity_links, select_related_claims,
-};
-pub use seeds::{ClaimSeed, merge_claim_seeds, promotion_backoff_seconds, promotion_claim_id};
 pub use memory::{
-    categorize, episode_record, extract_entities, is_status_text, judge_claim, looks_like_reasoning,
-    near_duplicate, owner_visible_reply, subject_name, supersedes, ClaimJudgment, FactCategory,
-    NamedEntity,
+    ClaimJudgment, FactCategory, NamedEntity, categorize, episode_record, extract_entities,
+    is_status_text, judge_claim, looks_like_reasoning, near_duplicate, owner_visible_reply,
+    place_city, subject_name, supersedes,
 };
-pub use skip::{PromotionSkipReason, should_skip_promotion};
+pub use parse::{ClaimDraft, parse_promotion};
 pub use prepass::{
     ContradictionCandidate, DreamCandidates, DreamEpisode, DreamFact, DuplicateCandidate, EntityId,
     FactCurrency, SubjectKey, propose_dream_candidates,
 };
 pub use project::{
     PageOutcome, PageSource, ProjectionRender, render_projection, screen_projection_path,
+};
+pub use related::{
+    EntityLink, EntitySlug, LEXICAL_MIN_MILLIS, RELATEDNESS_FANOUT, RelatedCandidate,
+    RelatedChannel, RelatedLink, VECTOR_MIN_MILLIS, select_entity_links, select_related_claims,
 };
 pub use schedule::{
     CallKind, CallTarget, DEFAULT_PROMOTION_FAILURE_LIMIT, DreamBatchId, EpisodeLedger, NoTools,
@@ -67,8 +65,10 @@ pub use schedule::{
     note_promotion_failure, plan_consolidation_call, plan_promotion_call,
     promotion_orchestration_ports, release_quarantine, schedule_promotion,
 };
+pub use seeds::{ClaimSeed, merge_claim_seeds, promotion_backoff_seconds, promotion_claim_id};
 pub use select::{
     BatchPolicy, BatchQueue, BatchSelection, BatchSkip, DEFAULT_CONSOLIDATION_FAILURE_LIMIT,
     DEFAULT_IDLE_SECONDS, DEFAULT_UNCONSOLIDATED_THRESHOLD, DreamRequestMode, SelectableClaim,
     SelectedBatch, WakeDecision, WakeObservation, WakePolicy, consolidation_due, select_batch,
 };
+pub use skip::{PromotionSkipReason, should_skip_promotion};

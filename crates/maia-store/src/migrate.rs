@@ -24,9 +24,10 @@ use crate::sql::MIGRATION_V10;
 use crate::sql::MIGRATION_V11;
 use crate::sql::MIGRATION_V12;
 use crate::sql::MIGRATION_V13;
+use crate::sql::MIGRATION_V14;
 
 /// Highest `user_version` this binary can open.
-pub const LATEST_SCHEMA_VERSION: i64 = 13;
+pub const LATEST_SCHEMA_VERSION: i64 = 14;
 
 /// How long a second opener waits for the migration writer. This is SQLite's
 /// lock wait, not a process-global path mutex.
@@ -126,6 +127,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "brain_memory",
         statements: MIGRATION_V13,
     },
+    Migration {
+        version: 14,
+        name: "brain_polish",
+        statements: MIGRATION_V14,
+    },
 ];
 
 pub(crate) fn apply(connection: &mut Connection, now: i64) -> Result<(), StoreError> {
@@ -173,6 +179,9 @@ fn apply_one(
     }
     if migration.version == 13 {
         crate::memory_cleanup::cleanup(&transaction)?;
+    }
+    if migration.version == 14 {
+        crate::memory_cleanup::polish(&transaction)?;
     }
     transaction.execute(
         "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
@@ -271,7 +280,7 @@ mod tests {
         let connection = ready(Connection::open(&path));
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         let mut statement = ready(
             connection
                 .prepare("SELECT version, applied_at FROM schema_migrations ORDER BY version"),
@@ -296,7 +305,8 @@ mod tests {
                 (10, 40),
                 (11, 40),
                 (12, 40),
-                (13, 40)
+                (13, 40),
+                (14, 40)
             ]
         );
         let _ = fs::remove_dir_all(directory);
@@ -322,7 +332,7 @@ mod tests {
 
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         let legacy: String = ready(connection.query_row(
             "SELECT body FROM router_messages WHERE message_id = 'legacy-message'",
             [],
@@ -438,7 +448,69 @@ mod tests {
         assert_eq!(ordinals, "0,1");
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
+        drop(connection);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn version_fourteen_merges_a_place_person_and_duplicate_names() {
+        let mut directory = std::env::temp_dir();
+        directory.push(format!("maia-store-polish-{}", process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap_or_else(|error| panic!("temp dir: {error}"));
+        let path = directory.join("maia.sqlite");
+        ready(register_sqlite_vec());
+        let mut connection = ready(Connection::open(&path));
+        ready(apply_migrations(&mut connection, 10, &MIGRATIONS[..13]));
+        ready(connection.execute_batch(
+            "INSERT INTO threads (thread_id, version, participants, created_at) VALUES ('t-1', 1, 'owner', 1);
+             INSERT INTO episodes (episode_id, thread_id, turn_id, body, taint, participants, created_at, write_canonical)
+               VALUES ('episode-1', 't-1', 'turn-1', 'Owner: The owner''s name is Garrett.', 'trusted', 'owner', 1, 'canon-1');
+             INSERT INTO episodes (episode_id, thread_id, turn_id, body, taint, participants, created_at, write_canonical)
+               VALUES ('episode-2', 't-1', 'turn-2', 'Owner: The user''s name is Garrett.', 'trusted', 'owner', 2, 'canon-2');
+             INSERT INTO claims (claim_id, sentence, episode_id, taint, status, valid_from)
+               VALUES ('claim-a', 'The owner''s name is Garrett.', 'episode-1', 'trusted', 'provisional', 1);
+             INSERT INTO claims (claim_id, sentence, episode_id, taint, status, valid_from)
+               VALUES ('claim-b', 'The user''s name is Garrett.', 'episode-2', 'trusted', 'provisional', 2);
+             INSERT INTO entities (entity_id, slug, description, scope_kind, scope_agent, kind)
+               VALUES ('entity-canby', 'canby', 'Canby', 'world', '', 'place');
+             INSERT INTO entities (entity_id, slug, description, scope_kind, scope_agent, kind)
+               VALUES ('entity-canbyoregon', 'canbyoregon', 'Canby Oregon', 'world', '', 'person');
+             INSERT INTO edges (edge_kind, from_kind, from_id, to_kind, to_id, weight)
+               VALUES ('about', 'claim', 'claim-a', 'entity', 'entity-canbyoregon', 1.0);",
+        ));
+        ready(apply(&mut connection, 30));
+        let people: i64 = ready(connection.query_row(
+            "SELECT COUNT(*) FROM entities WHERE description = 'Canby Oregon'",
+            [],
+            |row| row.get(0),
+        ));
+        assert_eq!(people, 0);
+        let kind: String = ready(connection.query_row(
+            "SELECT kind FROM entities WHERE entity_id = 'entity-canby'",
+            [],
+            |row| row.get(0),
+        ));
+        assert_eq!(kind, "place");
+        let target: String = ready(connection.query_row(
+            "SELECT to_id FROM edges WHERE from_id = 'claim-a' AND to_kind = 'entity'",
+            [],
+            |row| row.get(0),
+        ));
+        assert_eq!(target, "entity-canby");
+        let visible: i64 = ready(connection.query_row(
+            "SELECT COUNT(*) FROM claims WHERE hidden_reason IS NULL AND status = 'provisional'",
+            [],
+            |row| row.get(0),
+        ));
+        assert_eq!(visible, 1);
+        let hidden: String = ready(connection.query_row(
+            "SELECT hidden_reason FROM claims WHERE claim_id = 'claim-b'",
+            [],
+            |row| row.get(0),
+        ));
+        assert_eq!(hidden, "duplicate");
         drop(connection);
         let _ = fs::remove_dir_all(directory);
     }

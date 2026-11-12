@@ -2,6 +2,8 @@
 //!
 //! These functions read only their arguments. They do not call a model.
 
+use crate::brain::same_keyword_term;
+
 /// Keep a sentence, or drop it as memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimJudgment {
@@ -107,7 +109,10 @@ pub fn categorize(sentence: &str) -> FactCategory {
     if folded.contains("lives in") || folded.contains("moved to") || folded.contains("located in") {
         return FactCategory::Place;
     }
-    if folded.contains("phone") || folded.contains("pixel") || folded.contains("gamma") || folded.contains("laptop")
+    if folded.contains("phone")
+        || folded.contains("pixel")
+        || folded.contains("gamma")
+        || folded.contains("laptop")
     {
         return FactCategory::Device;
     }
@@ -167,15 +172,47 @@ pub fn extract_entities(sentence: &str) -> Vec<NamedEntity> {
     if sentence.to_lowercase().contains("oregon city") {
         push_unique(&mut found, vec!["Oregon City".to_owned()], "place");
     }
-    push_unique(&mut found, capitalized_names(sentence), "person");
+    for name in capitalized_names(sentence) {
+        if let Some(city) = place_city(&name) {
+            push_unique(&mut found, vec![city], "place");
+        } else {
+            push_unique(&mut found, vec![name], "person");
+        }
+    }
     merge_owner(&mut found);
     found
 }
 
+/// City when `name` is `City, State` or `City State`.
+///
+/// The second word must be a US state. `Canby`, `Canby, Oregon`, and
+/// `Canby Oregon` are the same place, so this returns `Canby`.
+#[must_use]
+pub fn place_city(name: &str) -> Option<String> {
+    let words = place_words(name);
+    let [city, state] = words.as_slice() else {
+        return None;
+    };
+    if is_us_state(state) {
+        Some(city.clone())
+    } else {
+        None
+    }
+}
+
 /// True when two sentences say the same fact.
+///
+/// `user`, `owner`, and `the user` are one subject. Punctuation is ignored.
+/// Tokens match when they share a stem.
 #[must_use]
 pub fn near_duplicate(left: &str, right: &str) -> bool {
-    normalize_fact(left) == normalize_fact(right)
+    let left_tokens = fact_tokens(left);
+    let right_tokens = fact_tokens(right);
+    left_tokens.len() == right_tokens.len()
+        && left_tokens
+            .iter()
+            .zip(right_tokens.iter())
+            .all(|(left_token, right_token)| same_keyword_term(left_token, right_token))
 }
 
 /// True when `newer` replaces `older`, such as a new home city.
@@ -227,12 +264,13 @@ pub fn episode_record(owner: &str, reply: &str) -> (String, Option<&'static str>
         return (format!("Owner: {owner}"), Some("reasoning"));
     }
     if is_small_line(owner) && (visible.is_empty() || is_small_line(&visible)) {
-        return (
-            format!("Owner: {owner}\nMaia: {visible}"),
-            Some("chitchat"),
-        );
+        return (format!("Owner: {owner}\nMaia: {visible}"), Some("chitchat"));
     }
-    let shown = if visible.is_empty() { reply.trim() } else { visible.as_str() };
+    let shown = if visible.is_empty() {
+        reply.trim()
+    } else {
+        visible.as_str()
+    };
     (format!("Owner: {owner}\nMaia: {shown}"), None)
 }
 
@@ -267,7 +305,9 @@ fn is_task_request(text: &str) -> bool {
         || folded.contains("fix this")
         || folded.contains("wants the chat")
         || folded.contains("wants the task");
-    asks && (folded.contains("owner wants") || folded.contains("user wants") || folded.contains("maia asked"))
+    asks && (folded.contains("owner wants")
+        || folded.contains("user wants")
+        || folded.contains("maia asked"))
 }
 
 fn is_small_line(text: &str) -> bool {
@@ -286,7 +326,11 @@ fn is_small_line(text: &str) -> bool {
 fn recover_paragraph(paragraph: &str) -> Option<String> {
     if !looks_like_reasoning(paragraph) && !is_status_text(paragraph) {
         let trimmed = paragraph.trim();
-        return if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) };
+        return if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        };
     }
     let sentences = split_sentences(paragraph);
     let clean: Vec<&str> = sentences
@@ -308,15 +352,100 @@ fn split_sentences(text: &str) -> Vec<&str> {
         .collect()
 }
 
-fn normalize_fact(text: &str) -> String {
-    text.chars()
-        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
-        .flat_map(|ch| ch.to_lowercase())
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+fn fact_tokens(text: &str) -> Vec<String> {
+    let mut raw = Vec::new();
+    let mut word = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            word.push(ch.to_ascii_lowercase());
+        } else if !word.is_empty() {
+            raw.push(std::mem::take(&mut word));
+        }
+    }
+    if !word.is_empty() {
+        raw.push(word);
+    }
+    let mapped: Vec<String> = raw
+        .into_iter()
+        .map(|token| match token.as_str() {
+            "user" | "users" | "owner" | "owners" => "owner".to_owned(),
+            other => other.to_owned(),
+        })
+        .collect();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < mapped.len() {
+        if mapped[index] == "the" && mapped.get(index + 1).is_some_and(|next| next == "owner") {
+            index += 1;
+            continue;
+        }
+        if mapped[index] == "s" && tokens.last().is_some_and(|previous| previous == "owner") {
+            index += 1;
+            continue;
+        }
+        tokens.push(mapped[index].clone());
+        index += 1;
+    }
+    tokens
 }
+
+fn place_words(name: &str) -> Vec<String> {
+    name.split(|ch: char| ch.is_whitespace() || ch == ',')
+        .map(|word| {
+            word.trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+                .to_owned()
+        })
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+fn is_us_state(word: &str) -> bool {
+    let folded = word.to_ascii_lowercase();
+    US_STATES.binary_search(&folded.as_str()).is_ok()
+}
+
+const US_STATES: &[&str] = &[
+    "alabama",
+    "alaska",
+    "arizona",
+    "arkansas",
+    "california",
+    "colorado",
+    "connecticut",
+    "delaware",
+    "florida",
+    "georgia",
+    "hawaii",
+    "idaho",
+    "illinois",
+    "indiana",
+    "iowa",
+    "kansas",
+    "kentucky",
+    "louisiana",
+    "maine",
+    "maryland",
+    "massachusetts",
+    "michigan",
+    "minnesota",
+    "mississippi",
+    "missouri",
+    "montana",
+    "nebraska",
+    "nevada",
+    "ohio",
+    "oklahoma",
+    "oregon",
+    "pennsylvania",
+    "tennessee",
+    "texas",
+    "utah",
+    "vermont",
+    "virginia",
+    "washington",
+    "wisconsin",
+    "wyoming",
+];
 
 fn windows_paths(text: &str) -> Vec<String> {
     let mut paths = Vec::new();
@@ -331,7 +460,9 @@ fn windows_paths(text: &str) -> Vec<String> {
                 index += 1;
             }
             let path: String = chars[start..index].iter().collect();
-            let path = path.trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ')' | ']')).to_owned();
+            let path = path
+                .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ')' | ']'))
+                .to_owned();
             if !path.is_empty() {
                 paths.push(path);
             }
@@ -386,7 +517,9 @@ fn is_sentence_start(index: usize, words: &[&str]) -> bool {
     if index == 0 {
         return true;
     }
-    words[index - 1].ends_with('.') || words[index - 1].ends_with('!') || words[index - 1].ends_with('?')
+    words[index - 1].ends_with('.')
+        || words[index - 1].ends_with('!')
+        || words[index - 1].ends_with('?')
 }
 
 fn is_capital_word(word: &str) -> bool {
@@ -403,7 +536,11 @@ fn trim_word(word: &str) -> &str {
 
 fn push_unique(found: &mut Vec<NamedEntity>, names: Vec<String>, kind: &'static str) {
     for name in names {
-        if name.is_empty() || found.iter().any(|item| item.name.eq_ignore_ascii_case(&name)) {
+        if name.is_empty()
+            || found
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(&name))
+        {
             continue;
         }
         found.push(NamedEntity { name, kind });
@@ -430,5 +567,17 @@ fn merge_owner(found: &mut Vec<NamedEntity>) {
                 kind: "person",
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::US_STATES;
+
+    #[test]
+    fn us_states_stay_sorted_for_lookup() {
+        assert!(US_STATES.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(US_STATES.contains(&"oregon"));
+        assert!(US_STATES.contains(&"texas"));
     }
 }

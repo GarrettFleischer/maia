@@ -2,15 +2,17 @@
 //!
 //! Junk is marked hidden. Rows are not deleted.
 
+use maia_core::dream::ClaimJudgment;
+use maia_core::dream::categorize;
 use maia_core::dream::episode_record;
 use maia_core::dream::extract_entities;
 use maia_core::dream::judge_claim;
-use maia_core::dream::categorize;
+use maia_core::dream::near_duplicate;
+use maia_core::dream::place_city;
 use maia_core::dream::subject_name;
-use maia_core::dream::ClaimJudgment;
-use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 
 use crate::error::StoreError;
 
@@ -24,11 +26,20 @@ pub(crate) fn cleanup(connection: &Connection) -> Result<(), StoreError> {
 }
 
 /// Replaces a claim sentence and marks the edit as the owner's.
-pub(crate) fn edit_claim(connection: &Connection, claim_id: &str, sentence: &str) -> Result<(), StoreError> {
+pub(crate) fn edit_claim(
+    connection: &Connection,
+    claim_id: &str,
+    sentence: &str,
+) -> Result<(), StoreError> {
     let updated = connection.execute(
         "UPDATE claims SET sentence = ?1, owner_edited = 1, category = ?2, subject = ?3, \
          confidence_millis = 1000, hidden_reason = NULL WHERE claim_id = ?4",
-        params![sentence, categorize(sentence).as_str(), subject_name(sentence), claim_id],
+        params![
+            sentence,
+            categorize(sentence).as_str(),
+            subject_name(sentence),
+            claim_id
+        ],
     )?;
     if updated != 1 {
         return Err(StoreError::NotFound {
@@ -71,7 +82,11 @@ pub(crate) fn restore_claim(connection: &Connection, claim_id: &str) -> Result<(
 }
 
 /// Points every edge from `loser` at `winner`, then removes `loser`.
-pub(crate) fn merge_entities(connection: &Connection, winner: &str, loser: &str) -> Result<(), StoreError> {
+pub(crate) fn merge_entities(
+    connection: &Connection,
+    winner: &str,
+    loser: &str,
+) -> Result<(), StoreError> {
     if winner == loser || winner.is_empty() || loser.is_empty() {
         return Err(StoreError::InvalidRequest {
             message: "merge needs two different entities".to_owned(),
@@ -94,12 +109,34 @@ pub(crate) fn merge_entities(connection: &Connection, winner: &str, loser: &str)
     if winner_found.is_none() || loser_found.is_none() {
         return Err(StoreError::NotFound {
             entity: "entity",
-            id: if winner_found.is_none() { winner } else { loser }.to_owned(),
+            id: if winner_found.is_none() {
+                winner
+            } else {
+                loser
+            }
+            .to_owned(),
         });
     }
     retarget_edges(connection, loser, winner)?;
-    connection.execute("DELETE FROM entity_links WHERE from_entity_id = ?1 OR to_entity_id = ?1", params![loser])?;
+    connection.execute(
+        "UPDATE facts SET entity_id = ?1 WHERE entity_id = ?2",
+        params![winner, loser],
+    )?;
+    connection.execute(
+        "DELETE FROM entity_links WHERE from_entity_id = ?1 OR to_entity_id = ?1",
+        params![loser],
+    )?;
     connection.execute("DELETE FROM entities WHERE entity_id = ?1", params![loser])?;
+    Ok(())
+}
+
+/// Merges city-state people into the city place and hides duplicate claims.
+///
+/// Rows stay in the database. Edges move onto the place, and a duplicate claim
+/// points at the claim it repeats.
+pub(crate) fn polish(connection: &Connection) -> Result<(), StoreError> {
+    merge_stray_places(connection)?;
+    hide_duplicate_claims(connection)?;
     Ok(())
 }
 
@@ -124,7 +161,10 @@ pub(crate) fn put_task_plan(
 }
 
 /// Goal JSON, todo JSON, handoff count, and the previous task id.
-pub(crate) fn task_plan(connection: &Connection, task_id: &str) -> Result<Option<(String, String, i64, Option<String>)>, StoreError> {
+pub(crate) fn task_plan(
+    connection: &Connection,
+    task_id: &str,
+) -> Result<Option<(String, String, i64, Option<String>)>, StoreError> {
     connection
         .query_row(
             "SELECT goal_json, todo_json, handoff_count, handoff_of FROM task_plans WHERE task_id = ?1",
@@ -136,7 +176,9 @@ pub(crate) fn task_plan(connection: &Connection, task_id: &str) -> Result<Option
 }
 
 /// Pending inbox rows, oldest first: operation id, message id, text.
-pub(crate) fn pending_submissions(connection: &Connection) -> Result<Vec<(String, String, String)>, StoreError> {
+pub(crate) fn pending_submissions(
+    connection: &Connection,
+) -> Result<Vec<(String, String, String)>, StoreError> {
     let mut statement = connection.prepare(
         "SELECT s.operation_id, s.message_id, s.text FROM message_submissions s \
          JOIN router_messages owner ON owner.message_id = s.message_id \
@@ -158,7 +200,11 @@ pub(crate) fn pending_submissions(connection: &Connection) -> Result<Vec<(String
 }
 
 /// Whether the owner edited this claim.
-pub(crate) fn hide_episode(connection: &Connection, episode_id: &str, reason: &str) -> Result<(), StoreError> {
+pub(crate) fn hide_episode(
+    connection: &Connection,
+    episode_id: &str,
+    reason: &str,
+) -> Result<(), StoreError> {
     connection
         .execute(
             "UPDATE episodes SET hidden_reason = ?2 WHERE episode_id = ?1",
@@ -168,7 +214,10 @@ pub(crate) fn hide_episode(connection: &Connection, episode_id: &str, reason: &s
     Ok(())
 }
 
-pub(crate) fn claim_owner_edited(connection: &Connection, claim_id: &str) -> Result<bool, StoreError> {
+pub(crate) fn claim_owner_edited(
+    connection: &Connection,
+    claim_id: &str,
+) -> Result<bool, StoreError> {
     let edited: Option<i64> = connection
         .query_row(
             "SELECT owner_edited FROM claims WHERE claim_id = ?1",
@@ -183,7 +232,9 @@ fn hide_junk_claims(connection: &Connection) -> Result<(), StoreError> {
     let mut statement = connection.prepare(
         "SELECT claim_id, sentence FROM claims WHERE hidden_reason IS NULL AND status = 'provisional'",
     )?;
-    let mapped = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let mapped = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     let mut junk = Vec::new();
     for row in mapped {
         let (id, sentence) = row?;
@@ -203,7 +254,9 @@ fn hide_junk_claims(connection: &Connection) -> Result<(), StoreError> {
 
 fn clean_episodes(connection: &Connection) -> Result<(), StoreError> {
     let mut statement = connection.prepare("SELECT episode_id, body FROM episodes")?;
-    let mapped = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let mapped = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     let mut updates = Vec::new();
     for row in mapped {
         let (id, body) = row?;
@@ -225,7 +278,9 @@ fn backfill_kept_claims(connection: &Connection) -> Result<(), StoreError> {
     let mut statement = connection.prepare(
         "SELECT claim_id, sentence FROM claims WHERE hidden_reason IS NULL AND status = 'provisional'",
     )?;
-    let mapped = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let mapped = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     let mut kept = Vec::new();
     for row in mapped {
         kept.push(row?);
@@ -245,7 +300,11 @@ fn backfill_kept_claims(connection: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub(crate) fn annotate_new_claim(connection: &Connection, claim_id: &str, sentence: &str) -> Result<(), StoreError> {
+pub(crate) fn annotate_new_claim(
+    connection: &Connection,
+    claim_id: &str,
+    sentence: &str,
+) -> Result<(), StoreError> {
     if judge_claim(sentence) != ClaimJudgment::Keep {
         return Ok(());
     }
@@ -255,10 +314,15 @@ pub(crate) fn annotate_new_claim(connection: &Connection, claim_id: &str, senten
          WHERE claim_id = ?3 AND owner_edited = 0",
         params![category.as_str(), subject_name(sentence), claim_id],
     )?;
-    link_sentence(connection, claim_id, sentence)
+    link_sentence(connection, claim_id, sentence)?;
+    collapse_duplicate(connection, claim_id, sentence)
 }
 
-fn link_sentence(connection: &Connection, claim_id: &str, sentence: &str) -> Result<(), StoreError> {
+fn link_sentence(
+    connection: &Connection,
+    claim_id: &str,
+    sentence: &str,
+) -> Result<(), StoreError> {
     let category = categorize(sentence);
     for entity in extract_entities(sentence) {
         let id = ensure_entity(connection, &entity.name, entity.kind)?;
@@ -295,7 +359,12 @@ fn ensure_entity(connection: &Connection, name: &str, kind: &str) -> Result<Stri
     Ok(id)
 }
 
-fn insert_edge(connection: &Connection, kind: &str, claim_id: &str, entity_id: &str) -> Result<(), StoreError> {
+fn insert_edge(
+    connection: &Connection,
+    kind: &str,
+    claim_id: &str,
+    entity_id: &str,
+) -> Result<(), StoreError> {
     connection.execute(
         "INSERT OR IGNORE INTO edges \
          (edge_kind, from_kind, from_id, to_kind, to_id, weight, source_tag, taint, span_start, span_end) \
@@ -333,7 +402,9 @@ fn retarget_edges(connection: &Connection, loser: &str, winner: &str) -> Result<
         "DELETE FROM edges WHERE (from_kind = 'entity' AND from_id = ?1) OR (to_kind = 'entity' AND to_id = ?1)",
         params![loser],
     )?;
-    for (kind, from_kind, from_id, to_kind, to_id, weight, source, taint, span_start, span_end) in rows {
+    for (kind, from_kind, from_id, to_kind, to_id, weight, source, taint, span_start, span_end) in
+        rows
+    {
         let from_id = if from_kind == "entity" && from_id == loser {
             winner.to_owned()
         } else {
@@ -377,13 +448,140 @@ fn split_episode(body: &str) -> (String, String) {
     }
 }
 
+fn merge_stray_places(connection: &Connection) -> Result<(), StoreError> {
+    let mut statement =
+        connection.prepare("SELECT entity_id, description FROM entities ORDER BY entity_id")?;
+    let mapped = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut rows = Vec::new();
+    for row in mapped {
+        rows.push(row?);
+    }
+    drop(statement);
+    for (id, description) in rows {
+        let Some(city) = place_city(&description) else {
+            continue;
+        };
+        let still_there: Option<i64> = connection
+            .query_row(
+                "SELECT 1 FROM entities WHERE entity_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if still_there.is_none() {
+            continue;
+        }
+        let winner = ensure_entity(connection, &city, "place")?;
+        connection.execute(
+            "UPDATE entities SET kind = 'place', description = ?1 WHERE entity_id = ?2",
+            params![city, winner],
+        )?;
+        if winner != id {
+            merge_entities(connection, &winner, &id)?;
+        }
+    }
+    Ok(())
+}
+
+fn hide_duplicate_claims(connection: &Connection) -> Result<(), StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT claim_id, sentence FROM claims \
+         WHERE hidden_reason IS NULL AND status = 'provisional' \
+         ORDER BY owner_edited DESC, valid_from ASC, claim_id ASC",
+    )?;
+    let mapped = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut rows = Vec::new();
+    for row in mapped {
+        rows.push(row?);
+    }
+    drop(statement);
+    let mut kept: Vec<(String, String)> = Vec::new();
+    for (id, sentence) in rows {
+        if let Some((keeper, _)) = kept
+            .iter()
+            .find(|(_, kept_sentence)| near_duplicate(&sentence, kept_sentence))
+        {
+            hide_as_duplicate(connection, &id, keeper)?;
+        } else {
+            kept.push((id, sentence));
+        }
+    }
+    Ok(())
+}
+
+fn collapse_duplicate(
+    connection: &Connection,
+    claim_id: &str,
+    sentence: &str,
+) -> Result<(), StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT claim_id, sentence FROM claims \
+         WHERE hidden_reason IS NULL AND status = 'provisional' AND claim_id != ?1 \
+         ORDER BY owner_edited DESC, valid_from ASC, claim_id ASC",
+    )?;
+    let mapped = statement.query_map(params![claim_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut keeper = None;
+    for row in mapped {
+        let (id, other) = row?;
+        if near_duplicate(sentence, &other) {
+            keeper = Some(id);
+            break;
+        }
+    }
+    drop(statement);
+    if let Some(keeper) = keeper {
+        hide_as_duplicate(connection, claim_id, &keeper)?;
+    }
+    Ok(())
+}
+
+fn hide_as_duplicate(
+    connection: &Connection,
+    claim_id: &str,
+    keeper: &str,
+) -> Result<(), StoreError> {
+    if claim_id == keeper {
+        return Ok(());
+    }
+    let episode: Option<String> = connection
+        .query_row(
+            "SELECT episode_id FROM claims WHERE claim_id = ?1",
+            params![claim_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(episode) = episode {
+        connection.execute(
+            "INSERT OR IGNORE INTO edges (edge_kind, from_kind, from_id, to_kind, to_id, weight) \
+             VALUES ('mention', 'claim', ?1, 'episode', ?2, 1.0)",
+            params![keeper, episode],
+        )?;
+    }
+    connection.execute(
+        "UPDATE claims SET hidden_reason = 'duplicate', status = 'superseded', replaced_by = ?1 \
+         WHERE claim_id = ?2",
+        params![keeper, claim_id],
+    )?;
+    Ok(())
+}
+
 fn slug_for(name: &str) -> String {
     let slug: String = name
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .flat_map(|ch| ch.to_lowercase())
         .collect();
-    if slug.is_empty() { "item".to_owned() } else { slug }
+    if slug.is_empty() {
+        "item".to_owned()
+    } else {
+        slug
+    }
 }
 
 #[cfg(test)]
@@ -443,7 +641,11 @@ mod tests {
             .expect("good");
         assert_eq!(category, "person");
         let body: String = connection
-            .query_row("SELECT body FROM episodes WHERE episode_id = 'episode-1'", [], |row| row.get(0))
+            .query_row(
+                "SELECT body FROM episodes WHERE episode_id = 'episode-1'",
+                [],
+                |row| row.get(0),
+            )
             .expect("body");
         assert!(body.contains("Garrett"));
         assert!(!body.contains("Handed this message"));

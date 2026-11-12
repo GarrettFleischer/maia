@@ -2,6 +2,7 @@
 
 use maia_core::dream::ClaimJudgment;
 use maia_core::dream::FactCategory;
+use maia_core::dream::PromotionSkipReason;
 use maia_core::dream::categorize;
 use maia_core::dream::episode_record;
 use maia_core::dream::extract_entities;
@@ -11,7 +12,6 @@ use maia_core::dream::owner_visible_reply;
 use maia_core::dream::should_skip_promotion;
 use maia_core::dream::subject_name;
 use maia_core::dream::supersedes;
-use maia_core::dream::PromotionSkipReason;
 
 #[test]
 fn status_text_and_reasoning_are_rejected_and_durable_facts_are_kept() {
@@ -38,8 +38,14 @@ fn status_text_and_reasoning_are_rejected_and_durable_facts_are_kept() {
 
 #[test]
 fn facts_get_a_category_and_the_owner_is_one_entity() {
-    assert_eq!(categorize("The user's name is Garrett."), FactCategory::Person);
-    assert_eq!(categorize("The user lives in Canby, Oregon."), FactCategory::Place);
+    assert_eq!(
+        categorize("The user's name is Garrett."),
+        FactCategory::Person
+    );
+    assert_eq!(
+        categorize("The user lives in Canby, Oregon."),
+        FactCategory::Place
+    );
     assert_eq!(
         categorize("The user has a folder located at F:\\Development\\Ideas."),
         FactCategory::Path
@@ -47,10 +53,22 @@ fn facts_get_a_category_and_the_owner_is_one_entity() {
     assert_eq!(subject_name("The user lives in Canby, Oregon."), "Owner");
     assert_eq!(subject_name("Garrett keeps notes in that folder."), "Owner");
     let names = extract_entities("Garrett uses Gamma at F:\\Development\\Ideas.");
-    assert!(names.iter().any(|item| item.name == "Owner" && item.kind == "person"));
+    assert!(
+        names
+            .iter()
+            .any(|item| item.name == "Owner" && item.kind == "person")
+    );
     assert!(names.iter().any(|item| item.name == "Gamma"));
-    assert!(names.iter().any(|item| item.name.contains("F:\\Development\\Ideas")));
-    assert!(!names.iter().any(|item| item.name.eq_ignore_ascii_case("garrett")));
+    assert!(
+        names
+            .iter()
+            .any(|item| item.name.contains("F:\\Development\\Ideas"))
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|item| item.name.eq_ignore_ascii_case("garrett"))
+    );
 }
 
 #[test]
@@ -63,6 +81,62 @@ fn a_moved_city_supersedes_the_old_one_and_duplicates_collapse() {
         "the user's name is garrett."
     ));
     assert!(!near_duplicate(older, newer));
+}
+
+#[test]
+fn city_and_state_is_a_place_named_for_the_city() {
+    for sentence in [
+        "The user lives in Canby, Oregon.",
+        "The user lives in Canby Oregon.",
+        "Notes mention Austin, Texas.",
+    ] {
+        let names = extract_entities(sentence);
+        assert!(
+            names.iter().any(|item| {
+                (item.name == "Canby" || item.name == "Austin") && item.kind == "place"
+            }),
+            "{sentence} -> {names:?}"
+        );
+        assert!(
+            !names
+                .iter()
+                .any(|item| item.kind == "person" && item.name.to_lowercase().contains("canby")),
+            "{sentence} -> {names:?}"
+        );
+        assert!(
+            !names
+                .iter()
+                .any(|item| item.kind == "person" && item.name.to_lowercase().contains("austin")),
+            "{sentence} -> {names:?}"
+        );
+    }
+    let people = extract_entities("Notes mention Ada Lovelace.");
+    assert!(
+        people
+            .iter()
+            .any(|item| item.name == "Ada Lovelace" && item.kind == "person"),
+        "{people:?}"
+    );
+}
+
+#[test]
+fn user_and_owner_name_facts_are_one_fact() {
+    assert!(near_duplicate(
+        "The owner's name is Garrett.",
+        "The owner's name is Garrett."
+    ));
+    assert!(near_duplicate(
+        "The owner's name is Garrett.",
+        "The user's name is Garrett."
+    ));
+    assert!(near_duplicate(
+        "The user's name is Garrett",
+        "The owner's name is Garrett."
+    ));
+    assert!(!near_duplicate(
+        "The user's name is Garrett.",
+        "The user lives in Canby, Oregon."
+    ));
 }
 
 #[test]

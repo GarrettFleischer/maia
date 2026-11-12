@@ -216,4 +216,85 @@ describe('BrainMapView', () => {
     expect(screen.getByTestId('brain-graph-claim-name')).toBeInTheDocument()
     expect(screen.queryByTestId('brain-graph-lexeme-this')).not.toBeInTheDocument()
   })
+
+  it('keeps Memory, Search, Review, Timeline, and Graph in one tab row', async () => {
+    const client = clientFor(sampleMap())
+    render(<BrainMapView client={client} />)
+    await screen.findByRole('heading', { name: 'About you' })
+    const tablist = screen.getByRole('tablist', { name: 'Brain views' })
+    expect(tablist).toHaveClass('maia-brain-tabs')
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Memory',
+      'Search',
+      'Review',
+      'Timeline',
+      'Graph',
+    ])
+  })
+
+  it('draws short entity names and does not cut claim words', async () => {
+    const user = userEvent.setup()
+    const folder = 'The user has a folder located at F:\\Development\\Ideas.'
+    const map = sampleMap()
+    map.nodes.push(
+      {
+        id: 'entity-canby',
+        kind: 'entity',
+        label: 'Canby Oregon',
+        sentence: 'Canby Oregon',
+        taint: 'trusted',
+        session_id: null,
+        held: false,
+        entity_kind: 'place',
+      },
+      {
+        id: 'entity-ideas',
+        kind: 'entity',
+        label: 'F:\\Development\\Ideas',
+        sentence: 'F:\\Development\\Ideas',
+        taint: 'trusted',
+        session_id: null,
+        held: false,
+        entity_kind: 'path',
+      },
+      {
+        id: 'claim-folder',
+        kind: 'claim',
+        label: folder,
+        sentence: folder,
+        taint: 'trusted',
+        session_id: 'thread-1',
+        held: false,
+        category: 'path',
+        subject: 'Owner',
+        confidence_millis: 800,
+      },
+    )
+    render(<BrainMapView client={clientFor(map)} />)
+    await screen.findByRole('heading', { name: 'About you' })
+    await user.click(screen.getByRole('tab', { name: 'Graph' }))
+    expect(drawnLines('entity-owner')).toEqual(['Owner'])
+    expect(drawnLines('entity-canby')).toEqual(['Canby'])
+    expect(drawnLines('entity-ideas')).toEqual(['Ideas folder'])
+    const claimLines = drawnLines('claim-folder')
+    const shownWords = claimLines.join(' ').split(/\s+/)
+    const words = folder.split(/\s+/)
+    expect(words.slice(0, shownWords.length)).toEqual(shownWords)
+    expect(claimLines.join(' ')).toContain('folder')
+    expect(claimLines.join(' ')).not.toContain('fol ')
+    expect(document.querySelector('[data-testid="brain-graph-claim-folder"] title')?.textContent).toBe(folder)
+    expect(document.querySelector('[data-testid="brain-graph-entity-ideas"] title')?.textContent).toBe(
+      'F:\\Development\\Ideas',
+    )
+    const svg = document.querySelector('.maia-brain-svg')
+    const viewWidth = Number(svg?.getAttribute('viewBox')?.split(' ')[2])
+    expect(viewWidth).toBeGreaterThan(0)
+    expect(Number.parseFloat((svg as SVGElement | null)?.style.minWidth ?? '')).toBeGreaterThanOrEqual(viewWidth)
+  })
 })
+
+function drawnLines(id: string): string[] {
+  return [...document.querySelectorAll(`[data-testid="brain-graph-${id}"] tspan`)].map(
+    (node) => node.textContent ?? '',
+  )
+}

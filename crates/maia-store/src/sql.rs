@@ -173,6 +173,12 @@ pub(crate) const MIGRATION_V13: &[&str] = &[
     "CREATE TABLE task_plans (task_id TEXT PRIMARY KEY, goal_json TEXT NOT NULL, todo_json TEXT NOT NULL, handoff_count INTEGER NOT NULL DEFAULT 0, handoff_of TEXT, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))",
 ];
 
+/// Migration 14 records a polish pass. Tables stay as they are.
+///
+/// Opening the database runs the pass: a city-state person merges into the
+/// city place, and a repeated name claim is marked duplicate. Nothing is deleted.
+pub(crate) const MIGRATION_V14: &[&str] = &[];
+
 /// Migration 10 stores approval waits, ledger reversals, and untrusted attachments.
 pub(crate) const MIGRATION_V10: &[&str] = &[
     "CREATE TABLE ledger_reversals (ledger_id TEXT PRIMARY KEY, reversed_at INTEGER NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id))",

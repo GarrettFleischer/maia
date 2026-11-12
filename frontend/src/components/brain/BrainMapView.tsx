@@ -7,7 +7,12 @@ import {
   type BrainNode,
   type BrainSearchHit,
 } from '@/components/brain/layoutBrainMap'
-import { layoutLabeled } from '@/components/brain/layoutForce'
+import {
+  GRAPH_LINE_HEIGHT,
+  graphDisplayLabel,
+  layoutLabeled,
+  wrapGraphText,
+} from '@/components/brain/layoutForce'
 
 type View = 'memory' | 'search' | 'review' | 'timeline' | 'graph'
 
@@ -130,7 +135,7 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
 
   return (
     <section className="maia-brain" aria-label="Memory">
-      <div className="maia-brain-toolbar" role="tablist" aria-label="Brain views">
+      <div className="maia-brain-toolbar maia-brain-tabs" role="tablist" aria-label="Brain views">
         {(['memory', 'search', 'review', 'timeline', 'graph'] as const).map((item) => (
           <button
             key={item}
@@ -420,7 +425,14 @@ function Graph({
   selected: string | null
   onSelect: (id: string) => void
 }) {
-  const boxes = layoutLabeled(nodes.map((node) => ({ id: node.id, label: node.label })))
+  const rowLimit =
+    typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 727px)').matches
+      ? 368
+      : undefined
+  const boxes = layoutLabeled(
+    nodes.map((node) => ({ id: node.id, label: graphDisplayLabel(node) })),
+    rowLimit,
+  )
   const byId = new Map(boxes.map((box) => [box.id, box]))
   const neighbours = new Set<string>()
   if (selected) {
@@ -439,7 +451,13 @@ function Graph({
         <span className="maia-swatch maia-swatch--entity">Entity</span>
         <span className="maia-swatch maia-swatch--claim">Claim</span>
       </p>
-      <svg className="maia-brain-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Memory graph">
+      <svg
+        className="maia-brain-svg"
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ minWidth: width }}
+        role="img"
+        aria-label="Memory graph"
+      >
         {edges.map((edge) => {
           const from = byId.get(edge.from_id)
           const to = byId.get(edge.to_id)
@@ -458,10 +476,11 @@ function Graph({
         {boxes.map((box) => {
           const node = nodes.find((item) => item.id === box.id)
           const active = selected === null || neighbours.has(box.id)
-          const label = node?.label ?? box.id
+          const full = node?.sentence ?? node?.label ?? box.id
+          const lines = wrapGraphText(node ? graphDisplayLabel(node) : box.id)
           return (
             <g key={box.id} data-testid={`brain-graph-${box.id}`} opacity={active ? 1 : 0.28}>
-              <title>{label}</title>
+              <title>{full}</title>
               <rect
                 x={box.x}
                 y={box.y}
@@ -471,8 +490,12 @@ function Graph({
                 className={node?.kind === 'entity' ? 'maia-brain-entity' : 'maia-brain-claim'}
                 onClick={() => onSelect(box.id)}
               />
-              <text x={box.x + 8} y={box.y + 15} onClick={() => onSelect(box.id)}>
-                {label.slice(0, 18)}
+              <text onClick={() => onSelect(box.id)}>
+                {lines.map((line, index) => (
+                  <tspan key={`${box.id}-${index}`} x={box.x + 8} y={box.y + 14 + index * GRAPH_LINE_HEIGHT}>
+                    {line}
+                  </tspan>
+                ))}
               </text>
             </g>
           )
