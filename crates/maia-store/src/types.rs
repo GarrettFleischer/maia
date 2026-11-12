@@ -647,6 +647,19 @@ pub struct BrainDetail {
     pub entity_kind: Option<String>,
     /// `owner` when the owner edited the sentence.
     pub owner_edited: bool,
+    /// Tag names, primary first.
+    pub tags: Vec<String>,
+}
+
+/// One memory tag the owner can rename, merge, or remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryTag {
+    /// Stable id.
+    pub id: String,
+    /// Name shown in Memory.
+    pub name: String,
+    /// `people`, `places`, `things`, `ideas`, or `custom`.
+    pub role: String,
 }
 
 /// One node in the shared brain map.
@@ -694,6 +707,8 @@ pub struct BrainMap {
     pub nodes: Vec<BrainNode>,
     /// Edges ordered by kind and endpoint ids.
     pub edges: Vec<BrainEdge>,
+    /// Tags the owner can apply, including empty ones.
+    pub tags: Vec<MemoryTag>,
 }
 
 /// Owner rewrite of one canonical fact sentence.

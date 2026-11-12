@@ -425,15 +425,17 @@ describe('single global stop', () => {
     expect(within(rail).queryByRole('button', { name: 'Panic' })).not.toBeInTheDocument()
   })
 
-  it('keeps the same single Stop all and no Panic control in the phone drawer', () => {
+  it('keeps Stop all inside the open chat and off the phone list', async () => {
     window.innerWidth = 390
     window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, { initialState: onboarded() })
-    const stopAll = screen.getByRole('button', { name: 'Stop all running threads' })
-
+    expect(screen.queryByRole('button', { name: 'Stop all running threads' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Panic' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
+    const stopAll = await screen.findByRole('button', { name: 'Stop all running threads' })
     expect(stopAll).toHaveClass('maia-btn')
     expect(stopAll).not.toHaveClass('maia-btn--danger')
-    expect(screen.queryByRole('button', { name: 'Panic' })).not.toBeInTheDocument()
   })
 })
 

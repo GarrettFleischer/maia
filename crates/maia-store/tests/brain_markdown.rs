@@ -164,7 +164,7 @@ fn consolidate(owner: &SqliteOwner, sentence: &str) {
 
 #[test]
 fn schema_version_is_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 15);
+    assert_eq!(LATEST_SCHEMA_VERSION, 16);
 }
 
 #[test]

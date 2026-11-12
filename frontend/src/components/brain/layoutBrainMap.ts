@@ -16,6 +16,7 @@ export interface BrainNode {
   hidden_reason?: string | null
   subject?: string | null
   entity_kind?: string | null
+  tags?: string[]
 }
 
 export interface BrainEdge {
@@ -30,6 +31,7 @@ export interface BrainMap {
   nodes: BrainNode[]
   edges: BrainEdge[]
   hidden?: BrainNode[]
+  tags?: { id: string; name: string; role: string }[]
 }
 
 export interface BrainSearchHit {
@@ -76,6 +78,11 @@ export interface BrainMapClient {
   editClaim?(id: string, sentence: string): Promise<BrainMap>
   forgetClaim?(id: string): Promise<BrainMap>
   restoreClaim?(id: string): Promise<BrainMap>
+  createTag?(name: string): Promise<BrainMap>
+  renameTag?(id: string, name: string): Promise<BrainMap>
+  mergeTags?(keepId: string, dropId: string): Promise<BrainMap>
+  removeTag?(id: string): Promise<BrainMap>
+  setClaimTags?(id: string, tags: readonly string[]): Promise<BrainMap>
 }
 
 export function brainStatusLine(index: BrainIndex): string {
@@ -127,7 +134,8 @@ export function parseBrainMap(body: unknown): BrainMap {
   const nodes = body.nodes.map(parseNode)
   const edges = body.edges.map(parseEdge)
   const hidden = Array.isArray(body.hidden) ? body.hidden.map(parseNode) : []
-  return hidden.length === 0 ? { nodes, edges } : { nodes, edges, hidden }
+  const tags = parseCatalog(body.tag_catalog)
+  return hidden.length === 0 ? { nodes, edges, tags } : { nodes, edges, hidden, tags }
 }
 
 export function emptyBrainMap(): BrainMap {
@@ -256,7 +264,27 @@ function parseNode(value: unknown): BrainNode {
     hidden_reason: optionalText(value.hidden_reason),
     subject: optionalText(value.subject),
     entity_kind: optionalText(value.entity_kind),
+    tags: stringList(value.tags),
   }
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string')
+}
+
+function parseCatalog(value: unknown): BrainMap['tags'] {
+  if (!Array.isArray(value)) return []
+  const tags: NonNullable<BrainMap['tags']> = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id !== 'string' || typeof item.name !== 'string') continue
+    tags.push({
+      id: item.id,
+      name: item.name,
+      role: typeof item.role === 'string' ? item.role : 'custom',
+    })
+  }
+  return tags
 }
 
 function parseEdge(value: unknown): BrainEdge {

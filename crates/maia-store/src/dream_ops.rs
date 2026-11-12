@@ -662,7 +662,11 @@ pub(crate) fn recall_subgraph(
                 && node_keys.contains(&(edge.to_kind.clone(), edge.to_id.clone()))
         })
         .collect();
-    Ok(BrainMap { nodes, edges })
+    Ok(BrainMap {
+        nodes,
+        edges,
+        tags: Vec::new(),
+    })
 }
 
 pub(crate) fn bump_promotion_day_stats(

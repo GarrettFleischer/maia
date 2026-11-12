@@ -769,6 +769,7 @@ describe('RouterConversation', () => {
     window.dispatchEvent(new Event('resize'))
     const client = createFixtureSuperAgentClient()
     renderWithMaia(<AppShell client={client} />, { initialState: undefined })
+    await expandTaskStrip(user)
     await user.click(await screen.findByRole('button', { name: 'Expand Pin control' }))
     await user.click(screen.getByRole('button', { name: 'Open Write the control' }))
     const conversation = screen.getByRole('article', { name: 'Task conversation' })
@@ -903,6 +904,13 @@ describe('fixture client isolation', () => {
   })
 })
 
+async function expandTaskStrip(user: ReturnType<typeof userEvent.setup>) {
+  const toggle = await screen.findByRole('button', { name: /^Tasks/ })
+  if (toggle.getAttribute('aria-expanded') !== 'true') {
+    await user.click(toggle)
+  }
+}
+
 describe('router shell', () => {
   it('opens a sidebar task from the brain into the conversation and returns to chat', async () => {
     window.innerWidth = 1440
@@ -913,6 +921,7 @@ describe('router shell', () => {
     expect(screen.getByRole('heading', { name: 'Brain', level: 1 })).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Brain' }))
 
+    await expandTaskStrip(user)
     await user.click(screen.getByRole('button', { name: 'Open Pin control' }))
 
     const conversation = await screen.findByRole('article', { name: 'Task conversation' })
@@ -938,6 +947,7 @@ describe('router shell', () => {
     renderWithMaia(<AppShell client={client} />, {
       initialState: undefined,
     })
+    await expandTaskStrip(user)
     await user.click(await screen.findByRole('button', { name: 'Open Pin control' }))
     const conversation = screen.getByRole('article', { name: 'Task conversation' })
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
@@ -949,7 +959,7 @@ describe('router shell', () => {
     expect(screen.getByTestId('activity-counts')).toHaveTextContent('0 running · 0 needs you')
   })
 
-  it('shows the task tree in the phone drawer without a second composer', async () => {
+  it('shows the task tree in the phone chat without a second composer', async () => {
     window.innerWidth = 390
     window.dispatchEvent(new Event('resize'))
     const user = userEvent.setup()
@@ -957,6 +967,7 @@ describe('router shell', () => {
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(document.documentElement.clientWidth + 1)
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
+    await expandTaskStrip(user)
     expect(await screen.findByRole('button', { name: 'Open Pin control' })).toBeInTheDocument()
     expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
   })

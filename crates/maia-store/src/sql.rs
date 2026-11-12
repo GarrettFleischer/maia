@@ -179,6 +179,18 @@ pub(crate) const MIGRATION_V13: &[&str] = &[
 /// city place, and a repeated name claim is marked duplicate. Nothing is deleted.
 pub(crate) const MIGRATION_V14: &[&str] = &[];
 
+/// Migration 16 stores owner tags beside claims.
+///
+/// Existing claims stay. A later pass copies the old category onto a tag.
+/// Nothing is deleted.
+pub(crate) const MIGRATION_V16: &[&str] = &[
+    "CREATE TABLE memory_tags (tag_id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, role TEXT NOT NULL, created_at INTEGER NOT NULL)",
+    "INSERT INTO memory_tags (tag_id, name, role, created_at) VALUES ('tag-people', 'People', 'people', 0), ('tag-places', 'Places', 'places', 0), ('tag-things', 'Things', 'things', 0), ('tag-ideas', 'Ideas', 'ideas', 0)",
+    "ALTER TABLE claims ADD COLUMN tags_locked INTEGER NOT NULL DEFAULT 0",
+    "CREATE TABLE claim_tags (claim_id TEXT NOT NULL, tag_id TEXT NOT NULL, ordinal INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (claim_id, tag_id), FOREIGN KEY (claim_id) REFERENCES claims (claim_id) ON DELETE CASCADE, FOREIGN KEY (tag_id) REFERENCES memory_tags (tag_id) ON DELETE CASCADE)",
+    "CREATE INDEX idx_claim_tags_tag ON claim_tags (tag_id)",
+];
+
 /// Migration 15 gives the owner many Super Agents on one shared brain.
 ///
 /// The existing router transcript stays with the first bot, named Maia.

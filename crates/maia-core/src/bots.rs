@@ -38,13 +38,53 @@ pub fn work_status_line(goal: &str, active_item: Option<&str>) -> String {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| first_line(goal));
-    if focus.is_empty() {
+    let short = human_focus(focus);
+    if short.is_empty() {
+        return if focus.to_lowercase().starts_with("working") {
+            "Working".to_owned()
+        } else {
+            String::new()
+        };
+    }
+    format!("Working on {short}")
+}
+
+/// Drops a request preamble and keeps a few words of what the work is about.
+fn human_focus(text: &str) -> String {
+    let trimmed = text.trim();
+    let body = trimmed
+        .strip_prefix("Working on ")
+        .or_else(|| trimmed.strip_prefix("working on "))
+        .unwrap_or(trimmed);
+    clip_words(strip_request_lead(body.trim()), 5)
+}
+
+fn strip_request_lead(text: &str) -> &str {
+    let lower = text.to_lowercase();
+    for lead in [
+        "i want you to ",
+        "i'd like you to ",
+        "i would like you to ",
+        "please ",
+        "can you ",
+        "could you ",
+    ] {
+        if lower.starts_with(lead) {
+            return text[lead.len()..].trim();
+        }
+    }
+    text
+}
+
+fn clip_words(text: &str, max_words: usize) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
         return String::new();
     }
-    if focus.to_lowercase().starts_with("working on ") {
-        return focus.to_owned();
+    if words.len() <= max_words && text.chars().count() <= 42 {
+        return text.to_owned();
     }
-    format!("Working on {focus}")
+    format!("{}…", words.into_iter().take(max_words).collect::<Vec<_>>().join(" "))
 }
 
 /// Last-message preview, collapsed to one line and capped by characters.
@@ -57,9 +97,27 @@ pub fn message_preview(body: &str, limit: usize) -> String {
     if limit == 0 || flat.chars().count() <= limit {
         return flat;
     }
-    let end = limit.saturating_sub(1);
-    let truncated: String = flat.chars().take(end).collect();
-    format!("{truncated}…")
+    let mut kept = String::new();
+    for word in flat.split_whitespace() {
+        let next = if kept.is_empty() {
+            word.chars().count()
+        } else {
+            kept.chars().count() + 1 + word.chars().count()
+        };
+        if next + 1 > limit {
+            break;
+        }
+        if !kept.is_empty() {
+            kept.push(' ');
+        }
+        kept.push_str(word);
+    }
+    if kept.is_empty() {
+        let end = limit.saturating_sub(1);
+        let truncated: String = flat.chars().take(end).collect();
+        return format!("{truncated}…");
+    }
+    format!("{kept}…")
 }
 
 /// Short "also happening" lines for bots other than the one being asked.
@@ -218,10 +276,30 @@ mod tests {
     }
 
     #[test]
+    fn a_long_request_becomes_a_short_status() {
+        let line = work_status_line(
+            "I want you to investigate it and ideally fix the chat layout on the phone",
+            None,
+        );
+        assert!(line.starts_with("Working on "));
+        assert!(!line.to_lowercase().contains("i want you"));
+        assert!(line.chars().count() <= 48);
+        assert_eq!(
+            work_status_line(
+                "Working on I want you to investigate it and ideally fix the chat",
+                None,
+            )
+            .to_lowercase()
+            .contains("i want you"),
+            false
+        );
+    }
+
+    #[test]
     fn colors_cycle_and_previews_stay_one_line() {
         assert_eq!(bot_color(0), "#6f8f7a");
         assert_eq!(bot_color(6), "#6f8f7a");
-        assert_eq!(message_preview("hello\nthere friend", 8), "hello t…");
+        assert_eq!(message_preview("hello\nthere friend", 8), "hello…");
     }
 
     #[test]

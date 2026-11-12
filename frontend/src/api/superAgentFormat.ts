@@ -92,6 +92,35 @@ export function countActivity(rows: readonly SidebarRow[]): { running: number; n
   }
 }
 
+export function chatActivityLabel(counts: { running: number; needsYou: number }): string {
+  if (counts.needsYou > 0) return 'Needs you'
+  if (counts.running > 0) return 'Working'
+  return 'Quiet'
+}
+
+export function taskStripLabel(rows: readonly SidebarRow[]): string {
+  const counts = countActivity(rows)
+  const parts = ['Tasks']
+  if (counts.needsYou > 0) parts.push(`${counts.needsYou} need you`)
+  if (counts.running > 0) parts.push(`${counts.running} working`)
+  const finished = rows.filter((row) => row.section === 'completed').length
+  if (counts.needsYou === 0 && counts.running === 0 && finished > 0) parts.push(`${finished} finished`)
+  return parts.join(' · ')
+}
+
+/** Shortens a stored status so a long request does not fill the chat row. */
+export function shortWorkStatus(line: string): string {
+  let text = line.trim()
+  if (text.length === 0) return ''
+  const working = /^working on\s+/i.test(text)
+  if (working) text = text.replace(/^working on\s+/i, '')
+  text = text.replace(/^(i want you to|i'd like you to|i would like you to|please|can you|could you)\s+/i, '')
+  const words = text.split(/\s+/).filter((word) => word.length > 0)
+  if (words.length > 5 || text.length > 42) text = `${words.slice(0, 5).join(' ')}…`
+  if (text.length === 0) return working ? 'Working' : ''
+  return working ? `Working on ${text}` : text
+}
+
 export function phoneStopLabel(counts: { running: number; needsYou: number }): string | null {
   if (counts.running <= 0 && counts.needsYou <= 0) return null
   if (counts.running > 0 && counts.needsYou > 0) {

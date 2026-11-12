@@ -62,6 +62,7 @@ export function RouterConversation({
   onRetryOutgoing,
   activity = [],
   onStopTask,
+  placeholder = 'Message',
 }: {
   messages: readonly RouterMessage[]
   transcriptState: TranscriptState
@@ -86,6 +87,7 @@ export function RouterConversation({
   onRetryOutgoing?: (id: string) => void
   activity?: readonly ActivityLine[]
   onStopTask?: (taskId: string) => void
+  placeholder?: string
 }) {
   const [rejection, setRejection] = useState<string | null>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
@@ -356,7 +358,7 @@ export function RouterConversation({
           ref={fieldRef}
           key={composerKey}
           id="composer-input"
-          placeholder="Message Router"
+          placeholder={placeholder}
           value={draft}
           disabled={busy}
           aria-disabled={busy}

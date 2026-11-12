@@ -20,6 +20,7 @@ function sampleMap(): BrainMap {
         confidence_millis: 900,
         created_at: 1700000000,
         source_episode: 'episode-1',
+        tags: ['People'],
       },
       {
         id: 'claim-city',
@@ -33,6 +34,7 @@ function sampleMap(): BrainMap {
         subject: 'Owner',
         confidence_millis: 500,
         source_episode: 'episode-1',
+        tags: ['Places'],
       },
       {
         id: 'episode-1',
@@ -64,6 +66,12 @@ function sampleMap(): BrainMap {
       },
     ],
     edges: [],
+    tags: [
+      { id: 'tag-people', name: 'People', role: 'people' },
+      { id: 'tag-places', name: 'Places', role: 'places' },
+      { id: 'tag-things', name: 'Things', role: 'things' },
+      { id: 'tag-ideas', name: 'Ideas', role: 'ideas' },
+    ],
     hidden: [
       {
         id: 'claim-junk',
@@ -147,7 +155,7 @@ describe('BrainMapView', () => {
       graph_count: 2,
     })
     render(<BrainMapView client={client} />)
-    expect(await screen.findByRole('heading', { name: 'About you' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'People' })).toBeVisible()
     expect(screen.getByText("The user's name is Garrett.")).toBeVisible()
     expect(screen.queryByText('this')).not.toBeInTheDocument()
     await user.click(screen.getByText('Settings / Sync'))
@@ -166,24 +174,29 @@ describe('BrainMapView', () => {
   it('searches with recall arms', async () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap(), [
+      { id: 'episode-1', kind: 'episode', sentence: 'I live in Canby', arms: ['keyword'] },
       { id: 'claim-city', kind: 'claim', sentence: 'The user lives in Canby, Oregon.', arms: ['keyword', 'graph'] },
     ])
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'About you' })
+    await screen.findByRole('heading', { name: 'People' })
     await user.click(screen.getByRole('tab', { name: 'Search' }))
     await user.type(screen.getByRole('searchbox', { name: 'Search the brain' }), 'where do I live')
     await user.click(screen.getByRole('button', { name: 'Search' }))
     const results = await screen.findByRole('list', { name: 'Search results' })
     expect(within(results).getByText('The user lives in Canby, Oregon.')).toBeVisible()
-    expect(within(results).getByText('keyword')).toBeVisible()
+    expect(within(results).getAllByText('keyword').length).toBeGreaterThan(0)
     expect(within(results).getByText('graph')).toBeVisible()
+    const items = within(results).getAllByRole('listitem')
+    expect(items[0]).toHaveTextContent('The user lives in Canby, Oregon.')
+    expect(items[0]).toHaveTextContent('Fact')
+    expect(items[1]).toHaveTextContent('Conversation')
   })
 
   it('reviews a low-confidence fact and restores a hidden one', async () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap())
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'About you' })
+    await screen.findByRole('heading', { name: 'People' })
     await user.click(screen.getByRole('tab', { name: 'Review' }))
     expect(screen.getByText('The user lives in Canby, Oregon.')).toBeVisible()
     expect(screen.queryByText("The user's name is Garrett.")).not.toBeInTheDocument()
@@ -199,7 +212,7 @@ describe('BrainMapView', () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap())
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'About you' })
+    await screen.findByRole('heading', { name: 'People' })
     await user.click(screen.getByRole('tab', { name: 'Timeline' }))
     const timeline = screen.getByRole('list', { name: 'Timeline' })
     expect(within(timeline).getByText('Owner: I live in Canby.')).toBeVisible()
@@ -210,7 +223,7 @@ describe('BrainMapView', () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap())
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'About you' })
+    await screen.findByRole('heading', { name: 'People' })
     await user.click(screen.getByRole('tab', { name: 'Graph' }))
     expect(screen.getByTestId('brain-graph-entity-owner')).toBeInTheDocument()
     expect(screen.getByTestId('brain-graph-claim-name')).toBeInTheDocument()
@@ -220,7 +233,7 @@ describe('BrainMapView', () => {
   it('keeps Memory, Search, Review, Timeline, and Graph in one tab row', async () => {
     const client = clientFor(sampleMap())
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'About you' })
+    await screen.findByRole('heading', { name: 'People' })
     const tablist = screen.getByRole('tablist', { name: 'Brain views' })
     expect(tablist).toHaveClass('maia-brain-tabs')
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
@@ -268,10 +281,11 @@ describe('BrainMapView', () => {
         category: 'path',
         subject: 'Owner',
         confidence_millis: 800,
+        tags: ['Things'],
       },
     )
     render(<BrainMapView client={clientFor(map)} />)
-    await screen.findByRole('heading', { name: 'About you' })
+    await screen.findByRole('heading', { name: 'People' })
     await user.click(screen.getByRole('tab', { name: 'Graph' }))
     expect(drawnLines('entity-owner')).toEqual(['Owner'])
     expect(drawnLines('entity-canby')).toEqual(['Canby'])
@@ -290,6 +304,57 @@ describe('BrainMapView', () => {
     const viewWidth = Number(svg?.getAttribute('viewBox')?.split(' ')[2])
     expect(viewWidth).toBeGreaterThan(0)
     expect(Number.parseFloat((svg as SVGElement | null)?.style.minWidth ?? '')).toBeGreaterThanOrEqual(viewWidth)
+  })
+
+  it('lets the owner add, retag, and remove a tag without dropping the fact', async () => {
+    const user = userEvent.setup()
+    let current = sampleMap()
+    const client = clientFor(current)
+    client.load = async () => current
+    client.createTag = async (name) => {
+      current = {
+        ...current,
+        tags: [...(current.tags ?? []), { id: `tag-${name}`, name, role: 'custom' }],
+      }
+      return current
+    }
+    client.setClaimTags = async (id, tags) => {
+      current = {
+        ...current,
+        nodes: current.nodes.map((node) => (node.id === id ? { ...node, tags: [...tags] } : node)),
+      }
+      return current
+    }
+    client.removeTag = async (id) => {
+      const name = current.tags?.find((tag) => tag.id === id)?.name
+      current = {
+        ...current,
+        tags: (current.tags ?? []).filter((tag) => tag.id !== id),
+        nodes: current.nodes.map((node) => ({
+          ...node,
+          tags: (node.tags ?? []).filter((tag) => tag !== name),
+        })),
+      }
+      return current
+    }
+    render(<BrainMapView client={client} />)
+    expect(await screen.findByRole('heading', { name: 'People' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Ideas' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'About you' })).not.toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: 'New tag' }), 'Dogs')
+    await user.click(screen.getByRole('button', { name: 'Add tag' }))
+    const people = await screen.findByRole('region', { name: 'People' })
+    await user.click(within(people).getByRole('button', { name: 'Tags' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Places' }))
+    await user.click(screen.getByRole('button', { name: 'Save tags' }))
+    const fact = within(await screen.findByRole('region', { name: 'People' }))
+      .getByText("The user's name is Garrett.")
+      .closest('article')
+    expect(within(fact as HTMLElement).getByText('Places')).toBeVisible()
+    await user.click(screen.getByText('Edit People'))
+    await user.click(screen.getByRole('button', { name: 'Remove People' }))
+    expect(screen.getByText("The user's name is Garrett.")).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'People' })).not.toBeInTheDocument()
   })
 })
 

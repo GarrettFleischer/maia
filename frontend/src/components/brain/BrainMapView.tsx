@@ -13,27 +13,15 @@ import {
   layoutLabeled,
   wrapGraphText,
 } from '@/components/brain/layoutForce'
+import {
+  groupFactsByPrimaryTag,
+  orderSearchHits,
+  searchKindLabel,
+  type MemoryGroup,
+  type MemoryTag,
+} from '@/components/brain/memoryTags'
 
 type View = 'memory' | 'search' | 'review' | 'timeline' | 'graph'
-
-const GROUPS: { title: string; categories: string[] }[] = [
-  { title: 'About you', categories: ['person', 'other', ''] },
-  { title: 'People', categories: ['person'] },
-  { title: 'Places', categories: ['place'] },
-  { title: 'Projects & folders', categories: ['project', 'path'] },
-  { title: 'Devices', categories: ['device'] },
-  { title: 'Preferences & instructions', categories: ['preference', 'decision'] },
-]
-
-function groupTitle(node: BrainNode): string {
-  const category = node.category ?? ''
-  if (category === 'person' && (node.subject ?? 'Owner') !== 'Owner') return 'People'
-  if (category === 'place') return 'Places'
-  if (category === 'project' || category === 'path') return 'Projects & folders'
-  if (category === 'device') return 'Devices'
-  if (category === 'preference' || category === 'decision') return 'Preferences & instructions'
-  return 'About you'
-}
 
 function facts(map: BrainMap): BrainNode[] {
   return map.nodes.filter((node) => node.kind === 'claim' || node.kind === 'fact')
@@ -55,6 +43,9 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [undo, setUndo] = useState<string | null>(null)
+  const [tagName, setTagName] = useState('')
+  const [retagId, setRetagId] = useState<string | null>(null)
+  const [retagNames, setRetagNames] = useState<string[]>([])
 
   const reload = (next: BrainMap) => {
     setMap(next)
@@ -92,15 +83,11 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
     }
   }, [client])
 
-  const memory = useMemo(() => {
-    const grouped = new Map<string, BrainNode[]>()
-    for (const title of GROUPS.map((group) => group.title)) grouped.set(title, [])
-    for (const node of facts(map ?? { nodes: [], edges: [] })) {
-      const title = groupTitle(node)
-      grouped.get(title)?.push(node)
-    }
-    return grouped
-  }, [map])
+  const memory = useMemo(
+    () => groupFactsByPrimaryTag(facts(map ?? { nodes: [], edges: [] }), map?.tags ?? []),
+    [map],
+  )
+  const catalog = map?.tags ?? []
 
   if (error && !map) return <p role="alert">{error}</p>
   if (!map) return <p role="status">Loading the brain.</p>
@@ -168,9 +155,32 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
       {view === 'memory' ? (
         <MemoryList
           grouped={memory}
+          catalog={catalog}
           empty={facts(map).length === 0}
           editing={editing}
           draft={draft}
+          tagName={tagName}
+          retagId={retagId}
+          retagNames={retagNames}
+          onTagName={setTagName}
+          onAddTag={() => {
+            const name = tagName.trim()
+            if (!name || !client.createTag) return
+            void client.createTag(name).then(reload, () => setError('That tag was not added.'))
+            setTagName('')
+          }}
+          onRenameTag={(tag, name) => {
+            if (!client.renameTag) return
+            void client.renameTag(tag.id, name).then(reload, () => setError('That tag was not renamed.'))
+          }}
+          onMergeTag={(tag, keepId) => {
+            if (!client.mergeTags) return
+            void client.mergeTags(keepId, tag.id).then(reload, () => setError('Those tags were not merged.'))
+          }}
+          onRemoveTag={(tag) => {
+            if (!client.removeTag) return
+            void client.removeTag(tag.id).then(reload, () => setError('That tag was not removed.'))
+          }}
           onDraft={setDraft}
           onEdit={(node) => {
             setEditing(node.id)
@@ -179,6 +189,20 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           onSave={saveEdit}
           onForget={forget}
           onSource={setSelected}
+          onRetagStart={(node) => {
+            setRetagId(node.id)
+            setRetagNames(node.tags ?? [])
+          }}
+          onRetagToggle={(name) => {
+            setRetagNames((current) =>
+              current.includes(name) ? current.filter((item) => item !== name) : [...current, name],
+            )
+          }}
+          onRetagSave={(node) => {
+            if (!client.setClaimTags) return
+            void client.setClaimTags(node.id, retagNames).then(reload, () => setError('Those tags were not saved.'))
+            setRetagId(null)
+          }}
         />
       ) : null}
       {view === 'search' ? <SearchResults hits={hits} onSearch={runSearch} /> : null}
@@ -246,38 +270,79 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
 
 function MemoryList({
   grouped,
+  catalog,
   empty,
   editing,
   draft,
+  tagName,
+  retagId,
+  retagNames,
+  onTagName,
+  onAddTag,
+  onRenameTag,
+  onMergeTag,
+  onRemoveTag,
   onDraft,
   onEdit,
   onSave,
   onForget,
   onSource,
+  onRetagStart,
+  onRetagToggle,
+  onRetagSave,
 }: {
-  grouped: Map<string, BrainNode[]>
+  grouped: MemoryGroup[]
+  catalog: MemoryTag[]
   empty: boolean
   editing: string | null
   draft: string
+  tagName: string
+  retagId: string | null
+  retagNames: string[]
+  onTagName: (value: string) => void
+  onAddTag: () => void
+  onRenameTag: (tag: MemoryTag, name: string) => void
+  onMergeTag: (tag: MemoryTag, keepId: string) => void
+  onRemoveTag: (tag: MemoryTag) => void
   onDraft: (value: string) => void
   onEdit: (node: BrainNode) => void
   onSave: (node: BrainNode) => void
   onForget: (node: BrainNode) => void
   onSource: (id: string) => void
+  onRetagStart: (node: BrainNode) => void
+  onRetagToggle: (name: string) => void
+  onRetagSave: (node: BrainNode) => void
 }) {
-  if (empty) {
-    return (
-        <p>Nothing has been promoted yet. Episodes remain searchable.</p>
-    )
-  }
   return (
     <div>
-      {[...grouped.entries()].map(([title, nodes]) =>
-        nodes.length === 0 ? null : (
-          <section key={title} aria-label={title}>
-            <h2>{title}</h2>
+      <form
+        className="maia-tag-add"
+        onSubmit={(event) => {
+          event.preventDefault()
+          onAddTag()
+        }}
+      >
+        <input
+          aria-label="New tag"
+          placeholder="New tag"
+          value={tagName}
+          onChange={(event) => onTagName(event.target.value)}
+        />
+        <button type="submit" className="maia-btn">
+          Add tag
+        </button>
+      </form>
+      {empty ? <p>Nothing has been promoted yet. Episodes remain searchable.</p> : null}
+      {grouped.map((group) => {
+        const tag = catalog.find((item) => item.id === group.id) ?? catalog.find((item) => item.name === group.title)
+        return (
+          <section key={group.title} aria-label={group.title}>
+            <div className="maia-tag-head">
+              <h2>{group.title}</h2>
+              {tag ? <TagEditor tag={tag} catalog={catalog} onRename={onRenameTag} onMerge={onMergeTag} onRemove={onRemoveTag} /> : null}
+            </div>
             <ul className="maia-brain-list">
-              {nodes.map((node) => (
+              {group.nodes.map((node) => (
                 <li key={node.id}>
                   <article>
                     {editing === node.id ? (
@@ -289,35 +354,116 @@ function MemoryList({
                     ) : (
                       <p>{node.sentence ?? node.label}</p>
                     )}
+                    {(node.tags ?? []).length > 1 ? (
+                      <p className="maia-muted">{(node.tags ?? []).slice(1).join(' · ')}</p>
+                    ) : null}
                     <p className="maia-muted">{learned(node)}</p>
                     <div className="maia-brain-actions">
-                    <button type="button" className="maia-btn" onClick={() => onEdit(node)}>
-                      Edit
-                    </button>
-                    {editing === node.id ? (
-                      <button type="button" className="maia-btn" onClick={() => onSave(node)}>
-                        Save sentence
+                      <button type="button" className="maia-btn" onClick={() => onEdit(node)}>
+                        Edit
                       </button>
-                    ) : null}
-                    <button type="button" className="maia-btn" onClick={() => onForget(node)}>
-                      Forget
-                    </button>
-                    <button
-                      type="button"
-                      className="maia-btn"
-                      onClick={() => onSource(node.source_episode ?? node.id)}
-                    >
-                      View source
-                    </button>
+                      {editing === node.id ? (
+                        <button type="button" className="maia-btn" onClick={() => onSave(node)}>
+                          Save sentence
+                        </button>
+                      ) : null}
+                      <button type="button" className="maia-btn" onClick={() => onRetagStart(node)}>
+                        Tags
+                      </button>
+                      <button type="button" className="maia-btn" onClick={() => onForget(node)}>
+                        Forget
+                      </button>
+                      <button
+                        type="button"
+                        className="maia-btn"
+                        onClick={() => onSource(node.source_episode ?? node.id)}
+                      >
+                        View source
+                      </button>
                     </div>
+                    {retagId === node.id ? (
+                      <fieldset className="maia-tag-picker">
+                        <legend>Tags for this fact</legend>
+                        {catalog.map((item) => (
+                          <label key={item.id}>
+                            <input
+                              type="checkbox"
+                              checked={retagNames.includes(item.name)}
+                              onChange={() => onRetagToggle(item.name)}
+                            />
+                            {item.name}
+                          </label>
+                        ))}
+                        <button type="button" className="maia-btn" onClick={() => onRetagSave(node)}>
+                          Save tags
+                        </button>
+                      </fieldset>
+                    ) : null}
                   </article>
                 </li>
               ))}
             </ul>
           </section>
-        ),
-      )}
+        )
+      })}
     </div>
+  )
+}
+
+function TagEditor({
+  tag,
+  catalog,
+  onRename,
+  onMerge,
+  onRemove,
+}: {
+  tag: MemoryTag
+  catalog: readonly MemoryTag[]
+  onRename: (tag: MemoryTag, name: string) => void
+  onMerge: (tag: MemoryTag, keepId: string) => void
+  onRemove: (tag: MemoryTag) => void
+}) {
+  const [name, setName] = useState(tag.name)
+  const [keepId, setKeepId] = useState('')
+  const others = catalog.filter((item) => item.id !== tag.id)
+  return (
+    <details className="maia-tag-edit">
+      <summary>{`Edit ${tag.name}`}</summary>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault()
+          onRename(tag, name.trim())
+        }}
+      >
+        <input aria-label={`Rename ${tag.name}`} value={name} onChange={(event) => setName(event.target.value)} />
+        <button type="submit" className="maia-btn">
+          Rename
+        </button>
+      </form>
+      {others.length > 0 ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (keepId) onMerge(tag, keepId)
+          }}
+        >
+          <select aria-label={`Merge ${tag.name} into`} value={keepId} onChange={(event) => setKeepId(event.target.value)}>
+            <option value="">Merge into…</option>
+            {others.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+          <button type="submit" className="maia-btn">
+            Merge
+          </button>
+        </form>
+      ) : null}
+      <button type="button" className="maia-btn" onClick={() => onRemove(tag)}>
+        {`Remove ${tag.name}`}
+      </button>
+    </details>
   )
 }
 
@@ -330,16 +476,17 @@ function SearchResults({ hits, onSearch }: { hits: BrainSearchHit[] | null; onSe
       {hits === null ? <p>Search uses the same recall Maia uses.</p> : null}
       {hits?.length === 0 ? <p>Nothing matched.</p> : null}
       <ul aria-label="Search results">
-        {hits?.map((hit) => (
+        {hits ? orderSearchHits(hits).map((hit) => (
           <li key={`${hit.kind}-${hit.id}`}>
             <p>{hit.sentence || hit.id}</p>
+            <span className="maia-chip">{searchKindLabel(hit.kind)}</span>
             {hit.arms.map((arm) => (
               <span key={arm} className="maia-chip">
                 {arm}
               </span>
             ))}
           </li>
-        ))}
+        )) : null}
       </ul>
     </div>
   )
@@ -505,6 +652,7 @@ function Graph({
         <aside className="maia-brain-sheet" aria-label="Selected memory">
           <h2>{chosen.label}</h2>
           <p>{chosen.sentence ?? chosen.label}</p>
+          {(chosen.tags ?? []).length > 0 ? <p>{(chosen.tags ?? []).join(' · ')}</p> : null}
         </aside>
       ) : null}
     </div>

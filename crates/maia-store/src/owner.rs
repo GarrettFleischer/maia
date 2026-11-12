@@ -581,6 +581,10 @@ enum NormalCommand {
         sentence: String,
         reply: Reply<Executed<BrainMap>>,
     },
+    MemoryTags {
+        change: crate::memory_tags::MemoryTagChange,
+        reply: Reply<Executed<BrainMap>>,
+    },
     ForgetClaim {
         claim_id: String,
         reply: Reply<Executed<BrainMap>>,
@@ -2798,6 +2802,20 @@ impl SqliteOwner {
         Pending { rx }.wait()
     }
 
+    /// Adds, renames, merges, or removes a tag, or retags one claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, missing-row, or SQLite failure.
+    pub fn change_memory_tags(
+        &self,
+        change: crate::MemoryTagChange,
+    ) -> Result<Executed<BrainMap>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::MemoryTags { change, reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
     /// Hides a claim. The row stays in the database.
     ///
     /// # Errors
@@ -3759,6 +3777,13 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
             sequence,
             claim_map(connection, |connection| {
                 crate::memory_cleanup::edit_claim(connection, &claim_id, &sentence)
+            }),
+        ),
+        NormalCommand::MemoryTags { change, reply } => executed(
+            reply,
+            sequence,
+            claim_map(connection, |connection| {
+                crate::memory_tags::apply(connection, &change)
             }),
         ),
         NormalCommand::ForgetClaim { claim_id, reply } => executed(

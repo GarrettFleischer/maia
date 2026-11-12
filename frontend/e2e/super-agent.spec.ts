@@ -162,13 +162,12 @@ async function openShell(page: Page) {
 }
 
 async function openTaskSurface(page: Page) {
-  if ((page.viewportSize()?.width ?? 0) < 728) {
-    const openDrawer = page.getByRole('button', { name: 'Open tasks drawer' })
-    await expect(openDrawer).toBeVisible()
-    await expect(openDrawer).toBeEnabled()
-    await openDrawer.click()
-    await expect(page.getByRole('dialog', { name: 'Tasks' })).toBeVisible()
+  const toggle = page.getByRole('button', { name: /^Tasks/ })
+  await expect(toggle).toBeVisible()
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') {
+    await toggle.click()
   }
+  await expect(page.getByRole('region', { name: 'Completed', exact: true })).toBeVisible()
 }
 
 function archiveDisclosure(archive: Locator) {

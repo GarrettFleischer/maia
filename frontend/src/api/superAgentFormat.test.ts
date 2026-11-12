@@ -5,6 +5,9 @@ import {
   countActivity,
   formatPhase,
   phoneStopLabel,
+  chatActivityLabel,
+  taskStripLabel,
+  shortWorkStatus,
   isNonTerminalPhase,
 } from '@/api/superAgentFormat'
 import type { SidebarRow } from '@/api/superAgentTypes'
@@ -56,6 +59,19 @@ describe('countActivity', () => {
     expect(phoneStopLabel(countActivity([
       row({ task_id: 'wait', section: 'needs_you', phase: 'waiting_for_user' }),
     ]))).toBe('1 needs you')
+  })
+
+  it('speaks about the chat instead of dumping a long goal', () => {
+    expect(chatActivityLabel({ running: 1, needsYou: 0 })).toBe('Working')
+    expect(chatActivityLabel({ running: 0, needsYou: 1 })).toBe('Needs you')
+    expect(chatActivityLabel({ running: 0, needsYou: 0 })).toBe('Quiet')
+    expect(taskStripLabel([row({ task_id: 'done', section: 'completed', phase: 'completed' })])).toBe(
+      'Tasks · 1 finished',
+    )
+    expect(
+      shortWorkStatus('Working on I want you to investigate it and ideally fix the chat layout'),
+    ).toBe('Working on investigate it and ideally fix…')
+    expect(shortWorkStatus('Working on the phone layout')).toBe('Working on the phone layout')
   })
 
   it('labels a stopped phase as Stopped and keeps it resumable', () => {

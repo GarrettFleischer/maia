@@ -106,7 +106,7 @@ describe('validateFactSentence', () => {
 
 describe('parseBrainMap', () => {
   it('reads a map and rejects a body that is not a graph', () => {
-    expect(parseBrainMap({ nodes: [], edges: [] })).toEqual({ nodes: [], edges: [] })
+    expect(parseBrainMap({ nodes: [], edges: [] })).toEqual({ nodes: [], edges: [], tags: [] })
     expect(() => parseBrainMap({ nodes: [] })).toThrow(/could not be read/)
   })
 })

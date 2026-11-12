@@ -111,11 +111,12 @@ test('live shell renders API state without fixture surfaces and exposes safe pro
   }
 
   if (testInfo.project.name === 'phone') {
-    await page.getByRole('button', { name: 'Open tasks drawer' }).click()
-    const drawer = page.getByRole('dialog', { name: 'Tasks' })
-    await expect(drawer.getByTestId('activity-counts')).toHaveCount(0)
-    await expect(drawer.getByRole('button', { name: 'Settings' })).toHaveCount(0)
-    await page.keyboard.press('Escape')
+    const tasks = page.getByRole('button', { name: /^Tasks/ })
+    await tasks.click()
+    const strip = page.getByRole('region', { name: 'Tasks' })
+    await expect(strip.getByTestId('activity-counts')).toHaveCount(0)
+    await expect(strip.getByRole('button', { name: 'Settings' })).toHaveCount(0)
+    await tasks.click()
   }
 
   const composer = page.getByRole('textbox', { name: 'Message' })

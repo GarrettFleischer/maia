@@ -128,6 +128,7 @@ textarea {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 .maia-shell--phone .maia-phone-screen {
   flex: 1;
@@ -1039,6 +1040,7 @@ textarea {
   }
   .maia-btn,
   .maia-quiet,
+  .maia-inspect-quiet,
   .maia-chev,
   .maia-pin,
   .maia-foot-link,
@@ -1241,6 +1243,25 @@ textarea {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
+.maia-phone-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.maia-phone-title h1 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 20px;
+  font-weight: 650;
+}
+.maia-phone-title span {
+  color: var(--muted, #9aa39c);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .maia-phone-header {
   grid-column: 1 / -1;
   display: flex;
@@ -1256,6 +1277,53 @@ textarea {
   background: var(--surface);
 }
 
+.maia-inspect-quiet {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted, #9aa39c);
+  font-size: 13px;
+}
+.maia-task-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.maia-task-strip-toggle {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-weight: 650;
+}
+.maia-tag-add,
+.maia-tag-head,
+.maia-tag-picker,
+.maia-tag-edit form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.maia-tag-head {
+  justify-content: space-between;
+}
+.maia-tag-head h2 {
+  margin: 12px 0 4px;
+}
+.maia-tag-edit summary {
+  min-height: 44px;
+  cursor: pointer;
+}
+.maia-tag-picker {
+  margin-top: 8px;
+}
 .maia-phone-header-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1903,8 +1971,12 @@ details:not([open]) > .maia-task-tree {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px;
-  align-items: start;
+  align-items: center;
   position: relative;
+  border-radius: 10px;
+}
+.maia-bot-row--selected {
+  background: #1c2420;
 }
 .maia-bot-open {
   display: grid;
@@ -1921,7 +1993,17 @@ details:not([open]) > .maia-task-tree {
   border-radius: 10px;
 }
 .maia-bot-row--selected .maia-bot-open {
-  background: #1c2420;
+  background: transparent;
+}
+.maia-bot-more {
+  margin-right: 4px;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 20px;
+  line-height: 1;
 }
 .maia-bot-avatar {
   width: 36px;

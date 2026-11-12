@@ -21,6 +21,7 @@ pub(crate) fn cleanup(connection: &Connection) -> Result<(), StoreError> {
     hide_junk_claims(connection)?;
     clean_episodes(connection)?;
     backfill_kept_claims(connection)?;
+    crate::memory_tags::fill_empty(connection)?;
     crate::auto_link::relink_all(connection)?;
     Ok(())
 }
@@ -314,6 +315,7 @@ pub(crate) fn annotate_new_claim(
          WHERE claim_id = ?3 AND owner_edited = 0",
         params![category.as_str(), subject_name(sentence), claim_id],
     )?;
+    crate::memory_tags::fill_claim(connection, claim_id, sentence, category.as_str())?;
     link_sentence(connection, claim_id, sentence)?;
     collapse_duplicate(connection, claim_id, sentence)
 }

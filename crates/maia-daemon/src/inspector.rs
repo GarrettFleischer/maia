@@ -825,6 +825,7 @@ mod tests {
     #[test]
     fn recall_graph_points_a_stored_lexeme_at_the_claim() {
         let map = BrainMap {
+            tags: Vec::new(),
             nodes: vec![
                 BrainNode {
                     id: "claim-1".to_owned(),

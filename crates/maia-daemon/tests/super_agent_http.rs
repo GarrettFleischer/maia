@@ -3688,7 +3688,16 @@ async fn brain_map_is_empty_and_rejects_a_missing_fact() {
     assert_eq!(response.status(), 200);
     assert_eq!(
         response.json::<Value>().await.expect("map"),
-        json!({"nodes": [], "edges": []})
+        json!({
+            "nodes": [],
+            "edges": [],
+            "tag_catalog": [
+                {"id": "tag-people", "name": "People", "role": "people"},
+                {"id": "tag-places", "name": "Places", "role": "places"},
+                {"id": "tag-things", "name": "Things", "role": "things"},
+                {"id": "tag-ideas", "name": "Ideas", "role": "ideas"}
+            ]
+        })
     );
     let missing = patch_json(
         &server,

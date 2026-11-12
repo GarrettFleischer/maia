@@ -1140,6 +1140,10 @@ enum ActorCall {
         sentence: String,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
+    MemoryTags {
+        change: maia_store::MemoryTagChange,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
     ForgetClaim {
         claim_id: String,
         reply: oneshot::Sender<Result<Value, ApiError>>,
@@ -1731,6 +1735,9 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
             reply,
         } => {
             let _ = reply.send(edit_claim(actor, claim_id, sentence));
+        }
+        ActorCall::MemoryTags { change, reply } => {
+            let _ = reply.send(change_memory_tags(actor, change));
         }
         ActorCall::ForgetClaim { claim_id, reply } => {
             let _ = reply.send(forget_claim(actor, claim_id));
@@ -2383,6 +2390,13 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
         .route("/brain/search", post(brain_search))
         .route("/brain/index", get(brain_index))
         .route("/brain/export", post(export_brain_markdown))
+        .route("/brain/tags", post(post_memory_tag))
+        .route("/brain/tags/merge", post(merge_memory_tags))
+        .route(
+            "/brain/tags/{tag_id}",
+            patch(rename_memory_tag).delete(delete_memory_tag),
+        )
+        .route("/brain/claims/{claim_id}/tags", put(put_claim_tags))
         .route("/brain/claims/{claim_id}", patch(patch_claim))
         .route("/brain/claims/{claim_id}/forget", post(forget_claim_route))
         .route("/brain/claims/{claim_id}/restore", post(restore_claim_route))
@@ -3240,17 +3254,107 @@ fn search_brain<R: RouterPort>(actor: &Actor<R>, query: &str) -> Result<Value, A
         maia_core::audit::Timestamp(unix_now()),
         None,
     );
+    let mut hits = arms.hits;
+    hits.sort_by_key(|hit| maia_core::dream::search_kind_rank(&hit.kind));
     Ok(serde_json::json!({
         "keyword": arms.keyword,
         "vector": arms.vector,
         "graph": arms.graph,
-        "hits": arms.hits.iter().map(|hit| serde_json::json!({
+        "hits": hits.iter().map(|hit| serde_json::json!({
             "id": hit.id,
             "kind": hit.kind,
             "sentence": hit.sentence,
             "arms": hit.arms,
         })).collect::<Vec<_>>(),
     }))
+}
+
+fn change_memory_tags<R: RouterPort>(
+    actor: &Actor<R>,
+    change: maia_store::MemoryTagChange,
+) -> Result<Value, ApiError> {
+    let edited = actor
+        .host
+        .store()
+        .change_memory_tags(change)
+        .map_err(map_brain_store)?;
+    Ok(brain_map_value(&edited.value, false))
+}
+
+async fn post_memory_tag(State(state): State<AppState>, request: Request) -> Response {
+    let name = match tag_name(request).await {
+        Ok(name) => name,
+        Err(error) => return error_response(error),
+    };
+    finish(ask(&state, |reply| ActorCall::MemoryTags {
+        change: maia_store::MemoryTagChange::Create { name },
+        reply,
+    }).await)
+}
+
+async fn rename_memory_tag(
+    State(state): State<AppState>,
+    Path(tag_id): Path<String>,
+    request: Request,
+) -> Response {
+    let name = match tag_name(request).await {
+        Ok(name) => name,
+        Err(error) => return error_response(error),
+    };
+    finish(ask(&state, |reply| ActorCall::MemoryTags {
+        change: maia_store::MemoryTagChange::Rename { tag_id, name },
+        reply,
+    }).await)
+}
+
+async fn merge_memory_tags(State(state): State<AppState>, request: Request) -> Response {
+    let value = match read_json(request).await {
+        Ok(value) => value,
+        Err(error) => return error_response(error),
+    };
+    let keep_id = value.get("keep").and_then(|item| item.as_str()).unwrap_or("").to_owned();
+    let drop_id = value.get("drop").and_then(|item| item.as_str()).unwrap_or("").to_owned();
+    finish(ask(&state, |reply| ActorCall::MemoryTags {
+        change: maia_store::MemoryTagChange::Merge { keep_id, drop_id },
+        reply,
+    }).await)
+}
+
+async fn delete_memory_tag(State(state): State<AppState>, Path(tag_id): Path<String>) -> Response {
+    finish(ask(&state, |reply| ActorCall::MemoryTags {
+        change: maia_store::MemoryTagChange::Remove { tag_id },
+        reply,
+    }).await)
+}
+
+async fn put_claim_tags(
+    State(state): State<AppState>,
+    Path(claim_id): Path<String>,
+    request: Request,
+) -> Response {
+    let value = match read_json(request).await {
+        Ok(value) => value,
+        Err(error) => return error_response(error),
+    };
+    let names = value
+        .get("tags")
+        .and_then(|item| item.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    finish(ask(&state, |reply| ActorCall::MemoryTags {
+        change: maia_store::MemoryTagChange::Retag { claim_id, names },
+        reply,
+    }).await)
+}
+
+async fn tag_name(request: Request) -> Result<String, ApiError> {
+    let value = read_json(request).await?;
+    Ok(value.get("name").and_then(|item| item.as_str()).unwrap_or("").to_owned())
 }
 
 fn edit_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String, sentence: String) -> Result<Value, ApiError> {
@@ -3411,6 +3515,18 @@ fn brain_map_value(map: &BrainMap, include_lexemes: bool) -> Value {
     if !hidden.is_empty() {
         value["hidden"] = serde_json::Value::Array(hidden);
     }
+    value["tag_catalog"] = serde_json::Value::Array(
+        map.tags
+            .iter()
+            .map(|tag| {
+                serde_json::json!({
+                    "id": tag.id,
+                    "name": tag.name,
+                    "role": tag.role,
+                })
+            })
+            .collect(),
+    );
     value
 }
 
@@ -3437,6 +3553,7 @@ fn brain_node_value(node: &BrainNode) -> Value {
         "hidden_reason": node.detail.hidden_reason,
         "subject": node.detail.subject,
         "entity_kind": node.detail.entity_kind,
+        "tags": node.detail.tags,
     })
 }
 

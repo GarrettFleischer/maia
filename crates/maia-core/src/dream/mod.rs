@@ -17,6 +17,7 @@ mod seeds;
 mod select;
 mod sentence;
 mod skip;
+mod tags;
 
 pub use apply::{
     ApplyFault, ClaimReplacement, ClaimStatus, CommittedClaim, EpisodeSegment, LexemeEdge,
@@ -66,6 +67,10 @@ pub use schedule::{
     promotion_orchestration_ports, release_quarantine, schedule_promotion,
 };
 pub use seeds::{ClaimSeed, merge_claim_seeds, promotion_backoff_seconds, promotion_claim_id};
+pub use tags::{
+    KnownTag, TagRole, default_tags, names_for_category, normalize_tag_name, search_kind_rank,
+    suggest_tags,
+};
 pub use select::{
     BatchPolicy, BatchQueue, BatchSelection, BatchSkip, DEFAULT_CONSOLIDATION_FAILURE_LIMIT,
     DEFAULT_IDLE_SECONDS, DEFAULT_UNCONSOLIDATED_THRESHOLD, DreamRequestMode, SelectableClaim,

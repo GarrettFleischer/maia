@@ -26,9 +26,10 @@ use crate::sql::MIGRATION_V12;
 use crate::sql::MIGRATION_V13;
 use crate::sql::MIGRATION_V14;
 use crate::sql::MIGRATION_V15;
+use crate::sql::MIGRATION_V16;
 
 /// Highest `user_version` this binary can open.
-pub const LATEST_SCHEMA_VERSION: i64 = 15;
+pub const LATEST_SCHEMA_VERSION: i64 = 16;
 
 /// How long a second opener waits for the migration writer. This is SQLite's
 /// lock wait, not a process-global path mutex.
@@ -138,6 +139,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "bots",
         statements: MIGRATION_V15,
     },
+    Migration {
+        version: 16,
+        name: "memory_tags",
+        statements: MIGRATION_V16,
+    },
 ];
 
 pub(crate) fn apply(connection: &mut Connection, now: i64) -> Result<(), StoreError> {
@@ -188,6 +194,9 @@ fn apply_one(
     }
     if migration.version == 14 {
         crate::memory_cleanup::polish(&transaction)?;
+    }
+    if migration.version == 16 {
+        crate::memory_tags::fill_empty(&transaction)?;
     }
     transaction.execute(
         "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
@@ -286,7 +295,7 @@ mod tests {
         let connection = ready(Connection::open(&path));
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 15);
+        assert_eq!(version, 16);
         let mut statement = ready(
             connection
                 .prepare("SELECT version, applied_at FROM schema_migrations ORDER BY version"),
@@ -313,7 +322,8 @@ mod tests {
                 (12, 40),
                 (13, 40),
                 (14, 40),
-                (15, 40)
+                (15, 40),
+                (16, 40)
             ]
         );
         let _ = fs::remove_dir_all(directory);
@@ -339,7 +349,7 @@ mod tests {
 
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 15);
+        assert_eq!(version, 16);
         let legacy: String = ready(connection.query_row(
             "SELECT body FROM router_messages WHERE message_id = 'legacy-message'",
             [],
@@ -455,7 +465,7 @@ mod tests {
         assert_eq!(ordinals, "0,1");
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 15);
+        assert_eq!(version, 16);
         drop(connection);
         let _ = fs::remove_dir_all(directory);
     }

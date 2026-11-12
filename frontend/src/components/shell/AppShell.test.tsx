@@ -15,7 +15,7 @@ describe('AppShell layout', () => {
     expect(omittedClient).toBeTypeOf('function')
   })
 
-  it('frames the desktop like the Mint Ledger mockup', () => {
+  it('frames the desktop like the Mint Ledger mockup', async () => {
     window.innerWidth = 1440
     window.dispatchEvent(new Event('resize'))
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
@@ -28,7 +28,9 @@ describe('AppShell layout', () => {
     expect(screen.getByRole('button', { name: 'Stop all running threads' })).toHaveTextContent(
       'Stop all running threads',
     )
-    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute('placeholder', 'Message Router')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute('placeholder', 'Message Maia')
+    expect(await screen.findByRole('button', { name: /Tasks/ })).toBeVisible()
+    expect(screen.queryByRole('region', { name: 'Completed' })).not.toBeInTheDocument()
   })
 
   it('keeps composer below transcript without vertical overlap', () => {
@@ -114,14 +116,18 @@ describe('AppShell layout', () => {
     }
   })
 
-  it('shows global stop on phone layout when threads run', () => {
+  it('keeps the phone chat list free of the stop bar', () => {
     window.innerWidth = 390
     window.dispatchEvent(new Event('resize'))
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />)
-    expect(screen.getByTestId('phone-stop-bar')).toBeVisible()
+    expect(screen.queryByTestId('phone-stop-bar')).not.toBeInTheDocument()
+    expect(screen.getByText('Needs you')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Stop all running threads' })).not.toBeInTheDocument()
   })
 
   it('renders unrestricted banner above main content when active', () => {
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
       initialState: {
         ...defaultFixtureState(),

@@ -75,6 +75,50 @@ export function liveBrainMapClient(origin: string): BrainMapClient {
         }),
       )
     },
+    createTag(name: string) {
+      return readMap(
+        fetch(`${root}/api/brain/tags`, {
+          method: 'POST',
+          headers: withCsrf('POST', { 'content-type': 'application/json' }),
+          body: JSON.stringify({ name }),
+        }),
+      )
+    },
+    renameTag(id: string, name: string) {
+      return readMap(
+        fetch(`${root}/api/brain/tags/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: withCsrf('PATCH', { 'content-type': 'application/json' }),
+          body: JSON.stringify({ name }),
+        }),
+      )
+    },
+    mergeTags(keepId: string, dropId: string) {
+      return readMap(
+        fetch(`${root}/api/brain/tags/merge`, {
+          method: 'POST',
+          headers: withCsrf('POST', { 'content-type': 'application/json' }),
+          body: JSON.stringify({ keep: keepId, drop: dropId }),
+        }),
+      )
+    },
+    removeTag(id: string) {
+      return readMap(
+        fetch(`${root}/api/brain/tags/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: withCsrf('DELETE', {}),
+        }),
+      )
+    },
+    setClaimTags(id: string, tags: readonly string[]) {
+      return readMap(
+        fetch(`${root}/api/brain/claims/${encodeURIComponent(id)}/tags`, {
+          method: 'PUT',
+          headers: withCsrf('PUT', { 'content-type': 'application/json' }),
+          body: JSON.stringify({ tags }),
+        }),
+      )
+    },
   }
 }
 

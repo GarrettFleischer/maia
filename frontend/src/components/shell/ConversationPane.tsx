@@ -2,15 +2,49 @@ import { useState, type ReactNode } from 'react'
 import { ApprovalSheet } from '@/components/approval/ApprovalSheet'
 import { NeedsHumanBanner } from '@/components/conversation/NeedsHumanBanner'
 import { LiveApprovalNotice, openLiveApproval } from '@/components/conversation/LiveApprovalNotice'
+import { shortWorkStatus, taskStripLabel } from '@/api/superAgentFormat'
 import { RouterConversation } from '@/components/shell/RouterConversation'
 import { StopAllButton } from '@/components/shell/StopAllButton'
 import { TaskRail } from '@/components/shell/TaskRail'
 import { TaskDetail } from '@/components/shell/TaskDetail'
 import { useMaiaState } from '@/hooks/useMaiaState'
 import type { RouterBindings } from '@/hooks/useSuperAgent'
-import type { SidebarRow, SuperAgentDataSource } from '@/api/superAgentTypes'
+import type { PinMark, SidebarRow, SuperAgentDataSource } from '@/api/superAgentTypes'
 
 export type ConversationLayout = 'desktop' | 'tablet' | 'phone'
+
+export function TaskStrip({
+  rows,
+  onOpen,
+  onPin,
+}: {
+  rows: readonly SidebarRow[]
+  onOpen: (taskId: string) => void
+  onPin: (taskId: string, mark: PinMark) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const needs = rows.filter((row) => row.section === 'needs_you')
+  return (
+    <section className="maia-task-strip" aria-label="Tasks">
+      <button
+        type="button"
+        className="maia-task-strip-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {taskStripLabel(rows)}
+      </button>
+      {!open
+        ? needs.map((row) => (
+            <button key={row.task_id} type="button" className="maia-btn" onClick={() => onOpen(row.task_id)}>
+              {`Open ${shortWorkStatus(row.title) || row.title}`}
+            </button>
+          ))
+        : null}
+      {open ? <TaskRail rows={rows} onOpen={onOpen} onPin={onPin} /> : null}
+    </section>
+  )
+}
 
 export function ConversationPane({
   dataSource,
@@ -79,25 +113,31 @@ export function ConversationPane({
         />
       ) : (
         <>
-          <header className={headerAction || onBack ? 'maia-conv-head maia-conv-head--split' : 'maia-conv-head'}>
-            {onBack ? (
-              <button
-                type="button"
-                className="maia-btn"
-                style={{ minHeight: 44, minWidth: 44 }}
-                onClick={onBack}
-              >
-                Back
-              </button>
-            ) : null}
-            <div>
-              <h1>{title}</h1>
-              <p>One conversation · {activityLabel}</p>
-            </div>
-            {headerAction}
-          </header>
+          {layout === 'phone' ? null : (
+            <header className={headerAction || onBack ? 'maia-conv-head maia-conv-head--split' : 'maia-conv-head'}>
+              {onBack ? (
+                <button
+                  type="button"
+                  className="maia-btn"
+                  style={{ minHeight: 44, minWidth: 44 }}
+                  onClick={onBack}
+                >
+                  Back
+                </button>
+              ) : null}
+              <div>
+                <h1>{title}</h1>
+                <p>One conversation · {activityLabel}</p>
+              </div>
+              {headerAction}
+            </header>
+          )}
           {tasks.length > 0 && onOpenTask ? (
-            <TaskRail rows={tasks} onOpen={onOpenTask} onPin={(taskId, mark) => void router.pin(taskId, mark)} />
+            <TaskStrip
+              rows={tasks}
+              onOpen={onOpenTask}
+              onPin={(taskId, mark) => void router.pin(taskId, mark)}
+            />
           ) : null}
 
           {dataSource === 'fixture' ? (
@@ -145,6 +185,7 @@ export function ConversationPane({
             onStopTask={(taskId) => {
               void router.hostCommand({ command: 'stop', task_id: taskId })
             }}
+            placeholder={`Message ${title}`}
             accessory={
               phoneStop ? (
                 <div className="maia-phone-stop" data-testid="phone-stop-bar">

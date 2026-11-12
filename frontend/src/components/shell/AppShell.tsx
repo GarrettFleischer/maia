@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { countActivity, phoneStopLabel } from '@/api/superAgentFormat'
+import { chatActivityLabel, countActivity, phoneStopLabel } from '@/api/superAgentFormat'
 import { scopeSuperAgentClient } from '@/api/scopeSuperAgent'
 import type { BotSummary, ConnectionSnapshot, InspectorTurn, SuperAgentClient } from '@/api/superAgentTypes'
 import { liveBrainMapClient } from '@/api/liveBrainMap'
@@ -291,10 +291,21 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
     void agent.openTask(taskId)
   }
   const showCounts = dataSource === 'fixture' || agent.rows.length > 0
+  const activity =
+    dataSource === 'fixture'
+      ? { running: state.activity.running, needsYou: state.activity.needs_human }
+      : countActivity(agent.rows)
+  const listedBots = bots.map((bot) => {
+    if (bot.bot_id !== selected.bot_id) return bot
+    if (activity.needsYou > 0) return { ...bot, status_line: 'Needs you' }
+    if (bot.status_line.trim().length > 0) return bot
+    if (activity.running > 0 || bot.running) return { ...bot, status_line: 'Working' }
+    return bot
+  })
   const phoneList = viewport === 'phone' && centerView === 'conversation' && !phoneChat
   const botList = (
     <BotList
-      bots={bots}
+      bots={listedBots}
       selectedId={selected.bot_id}
       onSelect={openBot}
       onCreate={createBot}
@@ -322,11 +333,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
     return <OnboardingView />
   }
 
-  const activity =
-    dataSource === 'fixture'
-      ? { running: state.activity.running, needsYou: state.activity.needs_human }
-      : countActivity(agent.rows)
-  const phoneStop = viewport === 'phone' ? phoneStopLabel(activity) : null
+  const phoneStop = viewport === 'phone' && !phoneList ? phoneStopLabel(activity) : null
   const inspectToggle =
     viewport === 'tablet' ? (
       <InspectToggle open={inspectorOpen} onToggle={() => setInspectorOpen((open) => !open)} />
@@ -381,8 +388,23 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
         </nav>
       ) : (
         <header className="maia-phone-header">
-          <strong>{phoneTitle(centerView, phoneChat, selected.name)}</strong>
-          <button type="button" className="maia-btn" onClick={() => setInspectorOpen(true)}>
+          {phoneChat && centerView === 'conversation' ? (
+            <button type="button" className="maia-btn" onClick={closePhoneChat}>
+              Back
+            </button>
+          ) : null}
+          <div className="maia-phone-title">
+            <h1>{phoneTitle(centerView, phoneChat, selected.name)}</h1>
+            {phoneChat && centerView === 'conversation' ? (
+              <span>{`One conversation · ${chatActivityLabel(activity)}`}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="maia-inspect-quiet"
+            aria-pressed={inspectorOpen}
+            onClick={() => setInspectorOpen((open) => !open)}
+          >
             Inspect
           </button>
         </header>
@@ -407,13 +429,15 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
             className={viewport === 'phone' ? 'maia-conversation maia-phone-screen' : 'maia-conversation'}
             aria-label="Brain"
           >
-            <header className={inspectToggle ? 'maia-conv-head maia-conv-head--split' : 'maia-conv-head'}>
-              <div>
-                <h1>Brain</h1>
-                <p>All sessions</p>
-              </div>
-              {inspectToggle}
-            </header>
+            {viewport === 'phone' ? null : (
+              <header className={inspectToggle ? 'maia-conv-head maia-conv-head--split' : 'maia-conv-head'}>
+                <div>
+                  <h1>Brain</h1>
+                  <p>All sessions</p>
+                </div>
+                {inspectToggle}
+              </header>
+            )}
             <div className="maia-main-body">
               <BrainMapView client={brainClient} />
             </div>
@@ -473,21 +497,28 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
         ) : phoneList ? (
           <section className="maia-conversation maia-phone-screen" aria-label="Chats">
             {botList}
-            {phoneStop ? (
-              <div className="maia-phone-stop" data-testid="phone-stop-bar">
-                <span>{phoneStop}</span>
-                <StopAllButton onStop={stopAll} />
-              </div>
-            ) : null}
           </section>
         ) : (
           <ConversationPane
             dataSource={dataSource}
             layout={conversationLayout}
-            activityLabel={`${activity.running} running · ${activity.needsYou} needs you`}
+            activityLabel={chatActivityLabel(activity)}
             onStopAll={stopAll}
             phoneStop={phoneStop}
-            headerAction={inspectToggle}
+            headerAction={
+              viewport === 'phone' ? (
+                <button
+                  type="button"
+                  className="maia-inspect-quiet"
+                  aria-pressed={inspectorOpen}
+                  onClick={() => setInspectorOpen((open) => !open)}
+                >
+                  Inspect
+                </button>
+              ) : (
+                inspectToggle
+              )
+            }
             router={agent}
             title={selected.name}
             onBack={viewport === 'phone' ? closePhoneChat : undefined}

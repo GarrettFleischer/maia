@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { shortWorkStatus } from '@/api/superAgentFormat'
 import type { BotSummary } from '@/api/superAgentTypes'
 
 export function relativeChatTime(at: number | null, now: number): string {
@@ -244,7 +245,7 @@ function BotRow({
         <span className="maia-bot-copy">
           <span className="maia-bot-name">{bot.name}</span>
           <span className="maia-bot-preview">{bot.preview}</span>
-          {bot.status_line ? <span className="maia-bot-status">{bot.status_line}</span> : null}
+          {bot.status_line ? <span className="maia-bot-status">{shortWorkStatus(bot.status_line)}</span> : null}
         </span>
         <span className="maia-bot-meta">
           <span>{relativeChatTime(bot.last_message_at, now)}</span>
@@ -252,8 +253,8 @@ function BotRow({
           {bot.running ? <span className="maia-bot-dot" aria-label="Running" /> : null}
         </span>
       </button>
-      <button type="button" className="maia-btn" aria-label={`Actions for ${bot.name}`} aria-expanded={menuOpen} onClick={onMenu}>
-        ···
+      <button type="button" className="maia-bot-more" aria-label={`Actions for ${bot.name}`} aria-expanded={menuOpen} onClick={onMenu}>
+        …
       </button>
       {menuOpen ? (
         <div className="maia-bot-menu" role="menu">

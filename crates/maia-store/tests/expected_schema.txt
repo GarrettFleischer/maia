@@ -3,6 +3,7 @@ index|idx_attachments_hash|attachments|CREATE INDEX idx_attachments_hash ON atta
 index|idx_attachments_message|attachments|CREATE INDEX idx_attachments_message ON attachments (message_id)
 index|idx_audit_events_thread|audit_events|CREATE INDEX idx_audit_events_thread ON audit_events (thread_id)
 index|idx_child_assignments_parent|child_assignments|CREATE INDEX idx_child_assignments_parent ON child_assignments (parent_task_id)
+index|idx_claim_tags_tag|claim_tags|CREATE INDEX idx_claim_tags_tag ON claim_tags (tag_id)
 index|idx_claims_episode|claims|CREATE INDEX idx_claims_episode ON claims (episode_id)
 index|idx_claims_status|claims|CREATE INDEX idx_claims_status ON claims (status)
 index|idx_context_snapshots_snapshot|context_snapshots|CREATE INDEX idx_context_snapshots_snapshot ON context_snapshots (snapshot_id, ordinal)
@@ -33,6 +34,7 @@ index|sqlite_autoindex_bot_work_1|bot_work|
 index|sqlite_autoindex_bots_1|bots|
 index|sqlite_autoindex_brain_md_member_1|brain_md_member|
 index|sqlite_autoindex_child_assignments_1|child_assignments|
+index|sqlite_autoindex_claim_tags_1|claim_tags|
 index|sqlite_autoindex_claim_vec_info_1|claim_vec_info|
 index|sqlite_autoindex_claim_vec_vector_chunks00_1|claim_vec_vector_chunks00|
 index|sqlite_autoindex_claims_1|claims|
@@ -65,6 +67,8 @@ index|sqlite_autoindex_lexemes_1|lexemes|
 index|sqlite_autoindex_mcp_connections_1|mcp_connections|
 index|sqlite_autoindex_mcp_secret_slots_1|mcp_secret_slots|
 index|sqlite_autoindex_memory_provenance_1|memory_provenance|
+index|sqlite_autoindex_memory_tags_1|memory_tags|
+index|sqlite_autoindex_memory_tags_2|memory_tags|
 index|sqlite_autoindex_message_bots_1|message_bots|
 index|sqlite_autoindex_message_submissions_1|message_submissions|
 index|sqlite_autoindex_message_submissions_2|message_submissions|
@@ -114,12 +118,13 @@ table|claim_fts_content|claim_fts_content|CREATE TABLE 'claim_fts_content'(id IN
 table|claim_fts_data|claim_fts_data|CREATE TABLE 'claim_fts_data'(id INTEGER PRIMARY KEY, block BLOB)
 table|claim_fts_docsize|claim_fts_docsize|CREATE TABLE 'claim_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB)
 table|claim_fts_idx|claim_fts_idx|CREATE TABLE 'claim_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID
+table|claim_tags|claim_tags|CREATE TABLE claim_tags (claim_id TEXT NOT NULL, tag_id TEXT NOT NULL, ordinal INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (claim_id, tag_id), FOREIGN KEY (claim_id) REFERENCES claims (claim_id) ON DELETE CASCADE, FOREIGN KEY (tag_id) REFERENCES memory_tags (tag_id) ON DELETE CASCADE)
 table|claim_vec|claim_vec|CREATE VIRTUAL TABLE claim_vec USING vec0(embedding float[384])
 table|claim_vec_chunks|claim_vec_chunks|CREATE TABLE "claim_vec_chunks"(chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,validity BLOB NOT NULL,rowids BLOB NOT NULL)
 table|claim_vec_info|claim_vec_info|CREATE TABLE "claim_vec_info" (key text primary key, value any)
 table|claim_vec_rowids|claim_vec_rowids|CREATE TABLE "claim_vec_rowids"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id,chunk_id INTEGER,chunk_offset INTEGER)
 table|claim_vec_vector_chunks00|claim_vec_vector_chunks00|CREATE TABLE "claim_vec_vector_chunks00"(rowid PRIMARY KEY,vectors BLOB NOT NULL)
-table|claims|claims|CREATE TABLE claims (claim_id TEXT PRIMARY KEY, sentence TEXT NOT NULL, episode_id TEXT NOT NULL, taint TEXT NOT NULL CHECK (taint IN ('trusted', 'untrusted')), status TEXT NOT NULL CHECK (status IN ('provisional', 'superseded')), valid_from INTEGER NOT NULL, consolidated_by TEXT, replaced_by TEXT REFERENCES claims (claim_id), category TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', confidence_millis INTEGER NOT NULL DEFAULT 700, last_used_at INTEGER, hidden_reason TEXT, owner_edited INTEGER NOT NULL DEFAULT 0, FOREIGN KEY (episode_id) REFERENCES episodes (episode_id), FOREIGN KEY (consolidated_by) REFERENCES facts (fact_id))
+table|claims|claims|CREATE TABLE claims (claim_id TEXT PRIMARY KEY, sentence TEXT NOT NULL, episode_id TEXT NOT NULL, taint TEXT NOT NULL CHECK (taint IN ('trusted', 'untrusted')), status TEXT NOT NULL CHECK (status IN ('provisional', 'superseded')), valid_from INTEGER NOT NULL, consolidated_by TEXT, replaced_by TEXT REFERENCES claims (claim_id), category TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', confidence_millis INTEGER NOT NULL DEFAULT 700, last_used_at INTEGER, hidden_reason TEXT, owner_edited INTEGER NOT NULL DEFAULT 0, tags_locked INTEGER NOT NULL DEFAULT 0, FOREIGN KEY (episode_id) REFERENCES episodes (episode_id), FOREIGN KEY (consolidated_by) REFERENCES facts (fact_id))
 table|consolidation_batches|consolidation_batches|CREATE TABLE consolidation_batches (batch_id TEXT PRIMARY KEY, canonical TEXT NOT NULL, context_taint TEXT NOT NULL, model TEXT NOT NULL, created_at INTEGER NOT NULL)
 table|context_snapshots|context_snapshots|CREATE TABLE context_snapshots (snapshot_id TEXT NOT NULL, ordinal INTEGER NOT NULL, memory_id TEXT NOT NULL, provenance TEXT NOT NULL, trust TEXT NOT NULL, sentence TEXT NOT NULL, PRIMARY KEY (snapshot_id, ordinal))
 table|correction_holds|correction_holds|CREATE TABLE correction_holds (target_kind TEXT NOT NULL, target_id TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (target_kind, target_id))
@@ -161,6 +166,7 @@ table|mcp_call_audit|mcp_call_audit|CREATE TABLE mcp_call_audit (row_id INTEGER 
 table|mcp_connections|mcp_connections|CREATE TABLE mcp_connections (connection_id TEXT PRIMARY KEY, label TEXT NOT NULL, transport_kind TEXT NOT NULL CHECK (transport_kind IN ('http', 'stdio')), url TEXT, command TEXT, args_json TEXT NOT NULL DEFAULT '[]', admitted_hash TEXT, listed_canonical TEXT, listed_hash TEXT, refresh_error TEXT)
 table|mcp_secret_slots|mcp_secret_slots|CREATE TABLE mcp_secret_slots (connection_id TEXT NOT NULL, ordinal INTEGER NOT NULL, slot_kind TEXT NOT NULL CHECK (slot_kind IN ('header', 'env')), name TEXT NOT NULL, secret_ref TEXT NOT NULL, PRIMARY KEY (connection_id, ordinal), FOREIGN KEY (connection_id) REFERENCES mcp_connections (connection_id) ON DELETE CASCADE)
 table|memory_provenance|memory_provenance|CREATE TABLE memory_provenance (target_kind TEXT NOT NULL, target_id TEXT NOT NULL, bot_id TEXT NOT NULL, session_id TEXT NOT NULL, noted_at INTEGER NOT NULL, PRIMARY KEY (target_kind, target_id), FOREIGN KEY (bot_id) REFERENCES bots (bot_id))
+table|memory_tags|memory_tags|CREATE TABLE memory_tags (tag_id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, role TEXT NOT NULL, created_at INTEGER NOT NULL)
 table|message_bots|message_bots|CREATE TABLE message_bots (message_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, FOREIGN KEY (message_id) REFERENCES router_messages (message_id), FOREIGN KEY (bot_id) REFERENCES bots (bot_id))
 table|message_submissions|message_submissions|CREATE TABLE message_submissions (operation_id TEXT PRIMARY KEY, text TEXT NOT NULL, message_id TEXT NOT NULL UNIQUE, state TEXT NOT NULL CHECK (state IN ('pending', 'terminal')), outcome_kind TEXT, outcome_detail TEXT, created_at INTEGER NOT NULL, FOREIGN KEY (message_id) REFERENCES router_messages (message_id), CHECK ((state = 'pending' AND outcome_kind IS NULL AND outcome_detail IS NULL) OR (state = 'terminal' AND outcome_kind IS NOT NULL)))
 table|model_connection|model_connection|CREATE TABLE model_connection (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), base_url TEXT NOT NULL, model_id TEXT NOT NULL, reasoning TEXT NOT NULL CHECK (reasoning IN ('low', 'medium', 'high')))

@@ -45,6 +45,14 @@ pub(crate) fn map(connection: &Connection) -> Result<BrainMap, StoreError> {
     nodes.extend(load_episodes(connection, &holds)?);
     nodes.extend(load_entities(connection)?);
     nodes.extend(load_lexemes(connection, &holds)?);
+    let claim_tags = crate::memory_tags::claim_tag_names(connection)?;
+    for node in &mut nodes {
+        if node.kind == BrainNodeKind::Claim
+            && let Some(tags) = claim_tags.get(&node.id)
+        {
+            node.detail.tags.clone_from(tags);
+        }
+    }
     nodes.sort_by(|left, right| {
         left.id
             .cmp(&right.id)
@@ -53,6 +61,7 @@ pub(crate) fn map(connection: &Connection) -> Result<BrainMap, StoreError> {
     Ok(BrainMap {
         nodes,
         edges: load_edges(connection)?,
+        tags: crate::memory_tags::list_tags(connection)?,
     })
 }
 
