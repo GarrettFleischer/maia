@@ -466,7 +466,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
                 </button>
               ) : null}
               <div>
-                <h1>Settings</h1>
+                {viewport === 'phone' ? null : <h1>Settings</h1>}
                 <p>
                   {viewport === 'phone'
                     ? 'This computer · Model connection and MCP transports are read-only here'

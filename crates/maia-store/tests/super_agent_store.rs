@@ -865,16 +865,16 @@ fn closed_detail_high_water_survives_restart() {
 
 #[test]
 fn fresh_open_is_schema_version_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 16);
+    assert_eq!(LATEST_SCHEMA_VERSION, 17);
     let db = TestDb::open("version", 1);
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 16);
+    assert_eq!(settings.user_version, 17);
     let rows = must(db.owner().migrations());
-    assert_eq!(rows.len(), 16);
-    assert_eq!(rows.last().map(|row| row.version), Some(16));
+    assert_eq!(rows.len(), 17);
+    assert_eq!(rows.last().map(|row| row.version), Some(17));
     assert_eq!(
         rows.last().map(|row| row.name.as_str()),
-        Some("memory_tags")
+        Some("purge_orphan_bot_tasks")
     );
 }
 
@@ -2115,4 +2115,225 @@ fn deleting_a_bot_removes_its_chat_and_leaves_the_other() {
         .collect::<Vec<_>>();
     assert!(pending_ids.contains(&"episode-m-maia"));
     assert!(!pending_ids.contains(&"episode-m-code"));
+}
+
+#[test]
+fn deleting_a_bot_removes_its_tasks_instead_of_handing_them_to_maia() {
+    let db = TestDb::open("bots-delete-tasks", 40);
+    let coding = match must(db.owner().bots(BotRequest::Create {
+        name: "Coding".to_owned(),
+        instructions: String::new(),
+        now: 41,
+    })) {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("create {other:?}"),
+    };
+    must(db.owner().insert_task(TaskWrite {
+        task_id: "task-pong".to_owned(),
+        phase: "running:attempt-1".to_owned(),
+        title: "Reply with exactly the word pong.".to_owned(),
+        pin: "unpinned".to_owned(),
+        completion_view: "unopened".to_owned(),
+        prior_task_id: None,
+        created_at: 42,
+        attempt_id: "attempt-1".to_owned(),
+        attempt_state: "active".to_owned(),
+    }));
+    must(db.owner().bots(BotRequest::BindTask {
+        task_id: "task-pong".to_owned(),
+        bot_id: coding.bot_id.clone(),
+    }));
+    must(db.owner().insert_task(TaskWrite {
+        task_id: "task-maia".to_owned(),
+        phase: "queued".to_owned(),
+        title: "Keep Maia work".to_owned(),
+        pin: "unpinned".to_owned(),
+        completion_view: "unopened".to_owned(),
+        prior_task_id: None,
+        created_at: 43,
+        attempt_id: "attempt-2".to_owned(),
+        attempt_state: "active".to_owned(),
+    }));
+    must(db.owner().bots(BotRequest::BindTask {
+        task_id: "task-maia".to_owned(),
+        bot_id: "maia".to_owned(),
+    }));
+
+    must(db.owner().bots(BotRequest::Delete {
+        bot_id: coding.bot_id.clone(),
+    }));
+
+    assert_eq!(
+        scalar_i64(
+            db.file(),
+            "SELECT COUNT(*) FROM task_sessions WHERE task_id = 'task-pong'"
+        ),
+        0
+    );
+    assert_eq!(
+        scalar_i64(
+            db.file(),
+            "SELECT COUNT(*) FROM task_bots WHERE task_id = 'task-pong'"
+        ),
+        0
+    );
+    match must(db.owner().bots(BotRequest::List)) {
+        BotResponse::List(bots) => {
+            assert_eq!(bots.len(), 1);
+            assert_eq!(bots[0].bot_id, "maia");
+            assert!(bots[0].running);
+            assert!(bots[0].status_line.contains("Keep Maia work"));
+        }
+        other => panic!("list {other:?}"),
+    }
+    let maia_phase = scalar_text(
+        db.file(),
+        "SELECT phase FROM task_sessions WHERE task_id = 'task-maia'",
+    );
+    assert_eq!(maia_phase, "queued");
+}
+
+#[test]
+fn deleting_a_bot_archives_finished_tasks_and_purges_running_ones() {
+    let mut db = TestDb::open("bots-delete-archive-finished", 50);
+    let coding = match must(db.owner().bots(BotRequest::Create {
+        name: "Coding".to_owned(),
+        instructions: String::new(),
+        now: 51,
+    })) {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("create {other:?}"),
+    };
+    must(db.owner().insert_router_message(RouterMessageWrite {
+        message_id: "m-1".to_owned(),
+        role: "user".to_owned(),
+        body: "goal".to_owned(),
+        created_at: 52,
+    }));
+    must(db.owner().bots(BotRequest::BindMessage {
+        message_id: "m-1".to_owned(),
+        bot_id: coding.bot_id.clone(),
+        preview: "goal".to_owned(),
+        now: 52,
+        from_owner: true,
+    }));
+    let mut finished = sample_task_aggregate("task-done");
+    finished.task.phase = "completed:evidence-1".to_owned();
+    finished.task.title = "Ship the archive".to_owned();
+    finished.task.completion_view = "closed_once".to_owned();
+    finished.task.created_at = 53;
+    must(db.owner().insert_task_aggregate(finished));
+    must(db.owner().bots(BotRequest::BindTask {
+        task_id: "task-done".to_owned(),
+        bot_id: coding.bot_id.clone(),
+    }));
+    must(db.owner().insert_task(TaskWrite {
+        task_id: "task-live".to_owned(),
+        phase: "running:attempt-1".to_owned(),
+        title: "Still working".to_owned(),
+        pin: "unpinned".to_owned(),
+        completion_view: "unopened".to_owned(),
+        prior_task_id: None,
+        created_at: 54,
+        attempt_id: "attempt-1".to_owned(),
+        attempt_state: "active".to_owned(),
+    }));
+    must(db.owner().bots(BotRequest::BindTask {
+        task_id: "task-live".to_owned(),
+        bot_id: coding.bot_id.clone(),
+    }));
+
+    must(db.owner().bots(BotRequest::Delete {
+        bot_id: coding.bot_id.clone(),
+    }));
+
+    assert_eq!(
+        scalar_i64(
+            db.file(),
+            "SELECT COUNT(*) FROM task_sessions WHERE task_id = 'task-live'"
+        ),
+        0
+    );
+    assert_eq!(
+        scalar_i64(
+            db.file(),
+            "SELECT COUNT(*) FROM task_sessions WHERE task_id = 'task-done'"
+        ),
+        1
+    );
+    assert_eq!(
+        scalar_i64(
+            db.file(),
+            "SELECT COUNT(*) FROM task_bots WHERE task_id = 'task-done'"
+        ),
+        0
+    );
+    let archived_title = scalar_text(
+        db.file(),
+        "SELECT title FROM task_sessions WHERE task_id = 'task-done'",
+    );
+    assert!(
+        archived_title.contains("Coding"),
+        "archived title should keep the bot name: {archived_title}"
+    );
+    assert!(
+        archived_title.contains("Ship the archive"),
+        "archived title should keep the original title: {archived_title}"
+    );
+    assert_eq!(
+        scalar_text(
+            db.file(),
+            "SELECT completion_view FROM task_sessions WHERE task_id = 'task-done'"
+        ),
+        "closed_once"
+    );
+    assert_eq!(
+        scalar_text(
+            db.file(),
+            "SELECT source_kind FROM task_criteria WHERE task_id = 'task-done'"
+        ),
+        "accepted_decision"
+    );
+    assert!(
+        scalar_text(
+            db.file(),
+            "SELECT source_ref FROM task_criteria WHERE task_id = 'task-done'"
+        )
+        .starts_with("archived-bot:"),
+        "criterion should soft-reference the deleted bot"
+    );
+    assert_eq!(
+        scalar_i64(
+            db.file(),
+            "SELECT COUNT(*) FROM router_messages WHERE message_id = 'm-1'"
+        ),
+        0
+    );
+    match must(db.owner().bots(BotRequest::List)) {
+        BotResponse::List(bots) => {
+            assert_eq!(bots.len(), 1);
+            assert_eq!(bots[0].bot_id, "maia");
+            assert!(!bots[0].running);
+            assert!(!bots[0].status_line.contains("Ship the archive"));
+            assert!(!bots[0].status_line.contains("Still working"));
+        }
+        other => panic!("list {other:?}"),
+    }
+
+    db.reopen(60);
+    let snapshot = must(db.owner().runtime_snapshot());
+    assert!(
+        snapshot
+            .tasks
+            .iter()
+            .all(|task| task.task_id != "task-done"),
+        "archived deleted-bot tasks must not enter the runtime snapshot"
+    );
+    assert!(
+        snapshot
+            .tasks
+            .iter()
+            .all(|task| task.task_id != "task-live"),
+        "purged running tasks must stay gone after reopen"
+    );
 }

@@ -69,6 +69,12 @@ describe('countActivity', () => {
     expect(chatActivityLabel({ running: 1, needsYou: 0 })).toBe('Working')
     expect(chatActivityLabel({ running: 0, needsYou: 1 })).toBe('Needs you')
     expect(chatActivityLabel({ running: 0, needsYou: 0 })).toBe('Quiet')
+    expect(
+      taskStripLabel([
+        row({ task_id: 'wait', section: 'needs_you', phase: 'waiting_for_user' }),
+        row({ task_id: 'run', section: 'working', phase: 'running' }),
+      ]),
+    ).toBe('Tasks · 1 needs you · 1 working')
     expect(taskStripLabel([row({ task_id: 'done', section: 'completed', phase: 'completed' })])).toBe(
       'Tasks · 1 finished',
     )

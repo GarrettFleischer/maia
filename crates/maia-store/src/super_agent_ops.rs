@@ -574,7 +574,9 @@ fn validate_runtime_references(connection: &Connection) -> Result<(), StoreError
 fn load_runtime_tasks(connection: &Connection) -> Result<Vec<RuntimeTask>, StoreError> {
     let mut statement = connection.prepare(
         "SELECT task_id, phase, title, pinned, completion_view, prior_task_id, created_at \
-         FROM task_sessions ORDER BY created_at, task_id",
+         FROM task_sessions \
+         WHERE title NOT LIKE '[archived:%' \
+         ORDER BY created_at, task_id",
     )?;
     let mapped = statement.query_map([], |row| {
         Ok((

@@ -420,12 +420,26 @@ fn list(connection: &Connection) -> Result<Vec<BotRecord>, StoreError> {
                 COALESCE(w.activity, ''), \
                 EXISTS ( \
                     SELECT 1 FROM task_sessions t \
-                    WHERE COALESCE((SELECT bot_id FROM task_bots tb WHERE tb.task_id = t.task_id), 'maia') = b.bot_id \
+                    WHERE ( \
+                        (SELECT bot_id FROM task_bots tb WHERE tb.task_id = t.task_id) = b.bot_id \
+                        OR ( \
+                            NOT EXISTS (SELECT 1 FROM task_bots tb WHERE tb.task_id = t.task_id) \
+                            AND b.bot_id = 'maia' \
+                            AND t.title NOT LIKE '[archived:%' \
+                        ) \
+                    ) \
                     AND (t.phase = 'queued' OR t.phase LIKE 'running:%' OR t.phase LIKE 'waiting:%' OR t.phase LIKE 'blocked:%') \
                 ), \
                 COALESCE(( \
                     SELECT t.title FROM task_sessions t \
-                    WHERE COALESCE((SELECT bot_id FROM task_bots tb WHERE tb.task_id = t.task_id), 'maia') = b.bot_id \
+                    WHERE ( \
+                        (SELECT bot_id FROM task_bots tb WHERE tb.task_id = t.task_id) = b.bot_id \
+                        OR ( \
+                            NOT EXISTS (SELECT 1 FROM task_bots tb WHERE tb.task_id = t.task_id) \
+                            AND b.bot_id = 'maia' \
+                            AND t.title NOT LIKE '[archived:%' \
+                        ) \
+                    ) \
                     AND (t.phase = 'queued' OR t.phase LIKE 'running:%' OR t.phase LIKE 'waiting:%' OR t.phase LIKE 'blocked:%') \
                     ORDER BY t.created_at DESC \
                     LIMIT 1 \
@@ -539,7 +553,7 @@ fn touch(
 }
 
 fn delete_bot(connection: &mut Connection, bot_id: &str) -> Result<(), StoreError> {
-    let _ = get(connection, bot_id)?;
+    let bot = get(connection, bot_id)?;
     let others: i64 = connection.query_row(
         "SELECT COUNT(*) FROM bots WHERE bot_id != ?1",
         params![bot_id],
@@ -560,6 +574,27 @@ fn delete_bot(connection: &mut Connection, bot_id: &str) -> Result<(), StoreErro
         "UPDATE bot_selection SET bot_id = ?1 WHERE bot_id = ?2",
         params![next, bot_id],
     )?;
+    let task_ids = string_column(
+        &transaction,
+        "SELECT task_id FROM task_bots WHERE bot_id = ?1",
+        bot_id,
+    )?;
+    let mut finished = Vec::new();
+    let mut unfinished = Vec::new();
+    for task_id in task_ids {
+        let phase: String = transaction.query_row(
+            "SELECT phase FROM task_sessions WHERE task_id = ?1",
+            params![task_id],
+            |row| row.get(0),
+        )?;
+        if task_phase_is_finished(&phase) {
+            finished.push(task_id);
+        } else {
+            unfinished.push(task_id);
+        }
+    }
+    archive_finished_tasks(&transaction, &bot.name, &finished)?;
+    purge_tasks(&transaction, &unfinished)?;
     let message_ids = string_column(
         &transaction,
         "SELECT message_id FROM message_bots WHERE bot_id = ?1",
@@ -586,7 +621,6 @@ fn delete_bot(connection: &mut Connection, bot_id: &str) -> Result<(), StoreErro
             params![message_id],
         )?;
     }
-    transaction.execute("DELETE FROM task_bots WHERE bot_id = ?1", params![bot_id])?;
     transaction.execute("DELETE FROM bot_work WHERE bot_id = ?1", params![bot_id])?;
     transaction.execute(
         "DELETE FROM memory_provenance WHERE bot_id = ?1",
@@ -594,6 +628,58 @@ fn delete_bot(connection: &mut Connection, bot_id: &str) -> Result<(), StoreErro
     )?;
     transaction.execute("DELETE FROM bots WHERE bot_id = ?1", params![bot_id])?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn task_phase_is_finished(phase: &str) -> bool {
+    phase.starts_with("completed:")
+        || phase.starts_with("cancelled:")
+        || phase.starts_with("failed:")
+        || phase.starts_with("abandoned:")
+}
+
+/// Keeps finished work as an archive that no longer depends on the bot's chat.
+///
+/// Softens owner-message criteria, stamps the bot name into the title, and
+/// unbinds the task so it cannot fall through to Maia after the catalog row
+/// is removed.
+fn archive_finished_tasks(
+    connection: &rusqlite::Connection,
+    bot_name: &str,
+    task_ids: &[String],
+) -> Result<(), StoreError> {
+    let soft_ref = format!("archived-bot:{bot_name}");
+    for task_id in task_ids {
+        let (title, phase): (String, String) = connection.query_row(
+            "SELECT title, phase FROM task_sessions WHERE task_id = ?1",
+            params![task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let archived_title = if title.starts_with("[archived:") {
+            title
+        } else {
+            format!("[archived: {bot_name}] {title}")
+        };
+        let next_phase = if phase.starts_with("failed:") {
+            "abandoned:bot-deleted".to_owned()
+        } else {
+            phase
+        };
+        connection.execute(
+            "UPDATE task_sessions \
+             SET title = ?1, phase = ?2, completion_view = 'closed_once', pinned = 'unpinned' \
+             WHERE task_id = ?3",
+            params![archived_title, next_phase, task_id],
+        )?;
+        connection.execute(
+            "UPDATE task_criteria \
+             SET source_kind = 'accepted_decision', source_ref = ?1, \
+                 span_start = NULL, span_end = NULL \
+             WHERE task_id = ?2 AND source_kind = 'user_text'",
+            params![soft_ref, task_id],
+        )?;
+        connection.execute("DELETE FROM task_bots WHERE task_id = ?1", params![task_id])?;
+    }
     Ok(())
 }
 
@@ -605,6 +691,74 @@ fn string_column(connection: &Connection, sql: &str, id: &str) -> Result<Vec<Str
         values.push(row?);
     }
     Ok(values)
+}
+
+/// Removes unfinished work before a bot's chat rows are deleted.
+///
+/// Finished tasks are archived instead. Live rows that still point at owner
+/// messages would make the next boot reject the runtime snapshot.
+fn purge_tasks(connection: &rusqlite::Connection, task_ids: &[String]) -> Result<(), StoreError> {
+    for task_id in task_ids {
+        connection.execute(
+            "UPDATE task_sessions SET prior_task_id = NULL WHERE prior_task_id = ?1",
+            params![task_id],
+        )?;
+        connection.execute(
+            "UPDATE task_plans SET handoff_of = NULL WHERE handoff_of = ?1",
+            params![task_id],
+        )?;
+        connection.execute(
+            "DELETE FROM child_assignments WHERE parent_task_id = ?1",
+            params![task_id],
+        )?;
+        connection.execute(
+            "DELETE FROM pending_approvals WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        connection.execute("DELETE FROM task_bots WHERE task_id = ?1", params![task_id])?;
+        connection.execute("DELETE FROM task_plans WHERE task_id = ?1", params![task_id])?;
+        connection.execute(
+            "DELETE FROM task_guidance WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        connection.execute(
+            "DELETE FROM task_reports WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        connection.execute(
+            "DELETE FROM task_evidence WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        connection.execute(
+            "DELETE FROM task_criteria WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        connection.execute("DELETE FROM task_inputs WHERE task_id = ?1", params![task_id])?;
+        connection.execute(
+            "DELETE FROM task_attempts WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        let snapshot_ids = string_column(
+            connection,
+            "SELECT snapshot_id FROM task_envelopes WHERE task_id = ?1",
+            task_id,
+        )?;
+        connection.execute(
+            "DELETE FROM task_envelopes WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        for snapshot_id in snapshot_ids {
+            connection.execute(
+                "DELETE FROM context_snapshots WHERE snapshot_id = ?1",
+                params![snapshot_id],
+            )?;
+        }
+        connection.execute(
+            "DELETE FROM task_sessions WHERE task_id = ?1",
+            params![task_id],
+        )?;
+    }
+    Ok(())
 }
 
 /// Drops a chat episode that has not become a memory yet.

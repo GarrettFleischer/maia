@@ -191,6 +191,40 @@ pub(crate) const MIGRATION_V16: &[&str] = &[
     "CREATE INDEX idx_claim_tags_tag ON claim_tags (tag_id)",
 ];
 
+/// Migration 17 drops tasks whose owner-message source was already deleted.
+///
+/// A deleted bot used to remove chat rows while leaving the task. Restore then
+/// rejects the snapshot because the criterion points at a missing message.
+pub(crate) const MIGRATION_V17: &[&str] = &[
+    "CREATE TEMP TABLE orphan_tasks AS \
+     SELECT DISTINCT c.task_id AS task_id \
+     FROM task_criteria c \
+     WHERE c.source_kind = 'user_text' \
+       AND NOT EXISTS ( \
+         SELECT 1 FROM router_messages m WHERE m.message_id = c.source_ref \
+       )",
+    "UPDATE task_sessions SET prior_task_id = NULL \
+     WHERE prior_task_id IN (SELECT task_id FROM orphan_tasks)",
+    "UPDATE task_plans SET handoff_of = NULL \
+     WHERE handoff_of IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM child_assignments WHERE parent_task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM pending_approvals WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM task_bots WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM task_plans WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM task_guidance WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM task_reports WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM task_evidence WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM task_criteria WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM task_inputs WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM task_attempts WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM context_snapshots WHERE snapshot_id IN ( \
+       SELECT snapshot_id FROM task_envelopes WHERE task_id IN (SELECT task_id FROM orphan_tasks) \
+     )",
+    "DELETE FROM task_envelopes WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DELETE FROM task_sessions WHERE task_id IN (SELECT task_id FROM orphan_tasks)",
+    "DROP TABLE orphan_tasks",
+];
+
 /// Migration 15 gives the owner many Super Agents on one shared brain.
 ///
 /// The existing router transcript stays with the first bot, named Maia.

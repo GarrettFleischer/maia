@@ -1718,6 +1718,11 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
             let _ = reply.send(message(actor, &operation, &text, &bot_id, &attachments));
         }
         ActorCall::Bot { request, reply } => {
+            if let maia_store::BotRequest::Delete { bot_id } = &request {
+                if bot_id != "maia" {
+                    end_live_work_for_bot(actor, bot_id);
+                }
+            }
             let saved = actor
                 .host
                 .store()
@@ -2191,6 +2196,39 @@ fn reference<R: RouterPort>(actor: &Actor<R>, task_id: &str) -> Result<Value, Ap
         return Err(ApiError::UnknownTask);
     }
     Ok(serde_json::json!({ "composer_insert": format!("task:{task_id} ") }))
+}
+
+/// Ends unfinished work owned by a bot before its catalog row is removed.
+///
+/// Deleting the bot binding without this leaves live tasks unbound, and catalog
+/// queries treat unbound live tasks as Maia's.
+fn end_live_work_for_bot<R: RouterPort>(actor: &mut Actor<R>, bot_id: &str) {
+    let Ok(connection) = Connection::open(&actor.database) else {
+        return;
+    };
+    let Ok(tasks) = load_tasks(&connection, Some(bot_id)) else {
+        return;
+    };
+    for task in tasks {
+        let Ok(phase) = parse_canonical_phase(&task.phase) else {
+            continue;
+        };
+        if matches!(
+            phase,
+            TaskPhase::Completed { .. }
+                | TaskPhase::Cancelled { .. }
+                | TaskPhase::Abandoned { .. }
+                | TaskPhase::Failed { .. }
+        ) {
+            continue;
+        }
+        let _ = host_command(
+            actor,
+            WireHost::Abandon {
+                task_id: task.task_id,
+            },
+        );
+    }
 }
 
 fn host_command<R: RouterPort>(actor: &mut Actor<R>, command: WireHost) -> Result<Value, ApiError> {
@@ -4494,7 +4532,15 @@ fn load_tasks(connection: &Connection, bot: Option<&str>) -> Result<Vec<TaskReco
         .prepare(
             "SELECT t.task_id, t.title, t.phase, t.pinned, t.completion_view FROM task_sessions t \
              LEFT JOIN task_bots b ON b.task_id = t.task_id \
-             WHERE (?1 IS NULL OR COALESCE(b.bot_id, 'maia') = ?1) \
+             WHERE ( \
+                ?1 IS NULL \
+                OR b.bot_id = ?1 \
+                OR ( \
+                    b.bot_id IS NULL \
+                    AND ?1 = 'maia' \
+                    AND t.title NOT LIKE '[archived:%' \
+                ) \
+             ) \
              ORDER BY t.created_at, t.task_id",
         )
         .map_err(|_| ApiError::Store)?;

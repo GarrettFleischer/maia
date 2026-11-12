@@ -173,6 +173,8 @@ describe('AppShell layout', () => {
     expect(skip).toHaveAttribute('href', '#main-content')
     expect(document.querySelector('a, button, input, textarea, select')).toBe(skip)
     await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getAllByRole('heading', { level: 1, name: 'Settings' })).toHaveLength(1)
+    expect(screen.getByText(/Model connection and MCP transports are read-only here/i)).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Back to chat' }))
     expect(screen.getByRole('button', { name: (value: string) => value === 'Maia' })).toBeVisible()
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
