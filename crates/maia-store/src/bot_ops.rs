@@ -261,7 +261,12 @@ pub(crate) fn apply(
             name,
             instructions,
             now,
-        } => Ok(BotResponse::Bot(create(connection, name, instructions, *now)?)),
+        } => Ok(BotResponse::Bot(create(
+            connection,
+            name,
+            instructions,
+            *now,
+        )?)),
         BotRequest::Rename { bot_id, name, now } => {
             require_name(name)?;
             touch(connection, bot_id, "name = ?1", name.trim(), *now)?;
@@ -555,20 +560,32 @@ fn delete_bot(connection: &mut Connection, bot_id: &str) -> Result<(), StoreErro
         "UPDATE bot_selection SET bot_id = ?1 WHERE bot_id = ?2",
         params![next, bot_id],
     )?;
-    transaction.execute(
-        "DELETE FROM message_submissions WHERE message_id IN \
-         (SELECT message_id FROM message_bots WHERE bot_id = ?1)",
-        params![bot_id],
+    let message_ids = string_column(
+        &transaction,
+        "SELECT message_id FROM message_bots WHERE bot_id = ?1",
+        bot_id,
     )?;
-    transaction.execute(
-        "DELETE FROM router_messages WHERE message_id IN \
-         (SELECT message_id FROM message_bots WHERE bot_id = ?1)",
-        params![bot_id],
-    )?;
+    for message_id in &message_ids {
+        transaction.execute(
+            "DELETE FROM message_submissions WHERE message_id = ?1",
+            params![message_id],
+        )?;
+    }
     transaction.execute(
         "DELETE FROM message_bots WHERE bot_id = ?1",
         params![bot_id],
     )?;
+    for message_id in &message_ids {
+        remove_unpromoted_episode(&transaction, message_id)?;
+        transaction.execute(
+            "DELETE FROM router_turn_snapshots WHERE message_id = ?1",
+            params![message_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM router_messages WHERE message_id = ?1",
+            params![message_id],
+        )?;
+    }
     transaction.execute("DELETE FROM task_bots WHERE bot_id = ?1", params![bot_id])?;
     transaction.execute("DELETE FROM bot_work WHERE bot_id = ?1", params![bot_id])?;
     transaction.execute(
@@ -577,6 +594,42 @@ fn delete_bot(connection: &mut Connection, bot_id: &str) -> Result<(), StoreErro
     )?;
     transaction.execute("DELETE FROM bots WHERE bot_id = ?1", params![bot_id])?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn string_column(connection: &Connection, sql: &str, id: &str) -> Result<Vec<String>, StoreError> {
+    let mut statement = connection.prepare(sql)?;
+    let rows = statement.query_map(params![id], |row| row.get(0))?;
+    let mut values = Vec::new();
+    for row in rows {
+        values.push(row?);
+    }
+    Ok(values)
+}
+
+/// Drops a chat episode that has not become a memory yet.
+fn remove_unpromoted_episode(connection: &Connection, turn_id: &str) -> Result<(), StoreError> {
+    let episode_ids = string_column(
+        connection,
+        "SELECT episode_id FROM episodes WHERE turn_id = ?1 AND promoted_at IS NULL \
+         AND NOT EXISTS (SELECT 1 FROM claims WHERE claims.episode_id = episodes.episode_id) \
+         AND NOT EXISTS (SELECT 1 FROM fact_episodes WHERE fact_episodes.episode_id = episodes.episode_id)",
+        turn_id,
+    )?;
+    for episode_id in episode_ids {
+        connection.execute(
+            "DELETE FROM episode_fts WHERE episode_id = ?1",
+            params![episode_id],
+        )?;
+        connection.execute(
+            "DELETE FROM episode_segments WHERE episode_id = ?1",
+            params![episode_id],
+        )?;
+        connection.execute(
+            "DELETE FROM episodes WHERE episode_id = ?1",
+            params![episode_id],
+        )?;
+    }
     Ok(())
 }
 

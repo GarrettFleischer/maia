@@ -13,22 +13,20 @@ use maia_store::BotRequest;
 use maia_store::BotResponse;
 use maia_store::ChildAssignmentWrite;
 use maia_store::EpisodeWrite;
-use maia_store::MemoryTaint;
-use maia_store::PromotionClaimWrite;
-use maia_store::PromotionWrite;
-use maia_store::SegmentWrite;
-use maia_store::TextSearch;
-use maia_store::ThreadEventWrite;
 use maia_store::LATEST_SCHEMA_VERSION;
 use maia_store::MAX_PROSE_BYTES;
 use maia_store::MAX_THREAD_EVENT_BODY_BYTES;
+use maia_store::MemoryTaint;
 use maia_store::MessageSubmissionState;
 use maia_store::MessageSubmissionWrite;
 use maia_store::ModelConnectionRecord;
 use maia_store::OwnerOpen;
+use maia_store::PromotionClaimWrite;
+use maia_store::PromotionWrite;
 use maia_store::RUNTIME_ID_NAMESPACE_COUNT;
 use maia_store::RouterMessageWrite;
 use maia_store::RuntimeIdNamespace;
+use maia_store::SegmentWrite;
 use maia_store::SnapshotItemWrite;
 use maia_store::SqliteOwner;
 use maia_store::StoreError;
@@ -41,6 +39,8 @@ use maia_store::TaskEvidenceWrite;
 use maia_store::TaskInputWrite;
 use maia_store::TaskReportWrite;
 use maia_store::TaskWrite;
+use maia_store::TextSearch;
+use maia_store::ThreadEventWrite;
 use maia_store::decode_canonical_fields;
 use maia_store::runtime_id_contracts;
 
@@ -872,7 +872,10 @@ fn fresh_open_is_schema_version_twelve() {
     let rows = must(db.owner().migrations());
     assert_eq!(rows.len(), 16);
     assert_eq!(rows.last().map(|row| row.version), Some(16));
-    assert_eq!(rows.last().map(|row| row.name.as_str()), Some("memory_tags"));
+    assert_eq!(
+        rows.last().map(|row| row.name.as_str()),
+        Some("memory_tags")
+    );
 }
 
 #[test]
@@ -1831,10 +1834,7 @@ fn listed_preview_is_the_turn_sentence_and_a_running_task_sets_status() {
     db.close();
     let connection = ready(Connection::open(&path));
     let body = "\u{1}maia-turn\u{1}{\"route\":\"inspect_task\",\"text\":\"The chat is stuck on the investigation.\"}";
-    ready(connection.execute(
-        "UPDATE bots SET preview = ?1 WHERE bot_id = 'maia'",
-        [body],
-    ));
+    ready(connection.execute("UPDATE bots SET preview = ?1 WHERE bot_id = 'maia'", [body]));
     drop(connection);
     db.reopen(13);
     match must(db.owner().bots(BotRequest::List)) {
@@ -2011,4 +2011,108 @@ fn deleting_the_last_bot_is_refused_and_archive_hides_nothing_from_memory() {
     };
     assert!(archived.archived);
     assert!(!archived.pinned);
+}
+
+#[test]
+fn deleting_a_bot_removes_its_chat_and_leaves_the_other() {
+    let db = TestDb::open("bots-delete-chat", 30);
+    must(db.owner().insert_router_message(RouterMessageWrite {
+        message_id: "m-maia".to_owned(),
+        role: "user".to_owned(),
+        body: "keep maia".to_owned(),
+        created_at: 31,
+    }));
+    let coding = match must(db.owner().bots(BotRequest::Create {
+        name: "Coding".to_owned(),
+        instructions: String::new(),
+        now: 32,
+    })) {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("create {other:?}"),
+    };
+    must(db.owner().begin_message_submission(MessageSubmissionWrite {
+        operation_id: "op-code".to_owned(),
+        text: "temp chat".to_owned(),
+        message: RouterMessageWrite {
+            message_id: "m-code".to_owned(),
+            role: "user".to_owned(),
+            body: "temp chat".to_owned(),
+            created_at: 33,
+        },
+    }));
+    must(db.owner().bots(BotRequest::BindMessage {
+        message_id: "m-code".to_owned(),
+        bot_id: coding.bot_id.clone(),
+        preview: "temp chat".to_owned(),
+        now: 33,
+        from_owner: true,
+    }));
+    must(db.owner().append(AppendEvents {
+        thread_id: "thread-delete-bot".to_owned(),
+        expected_version: 0,
+        participants: "owner".to_owned(),
+        occurred_at: 34,
+        events: vec![ThreadEventWrite {
+            event_id: "event-delete-bot".to_owned(),
+            kind: "user".to_owned(),
+            body: "temp".to_owned(),
+        }],
+    }));
+    must(db.owner().insert_episode(EpisodeWrite {
+        episode_id: "episode-m-code".to_owned(),
+        thread_id: "thread-delete-bot".to_owned(),
+        turn_id: "m-code".to_owned(),
+        body: "Owner: temp chat".to_owned(),
+        taint: MemoryTaint::Trusted,
+        reasoning: None,
+        participants: "owner".to_owned(),
+        created_at: 35,
+        segments: vec![SegmentWrite {
+            text: "temp chat".to_owned(),
+            taint: MemoryTaint::Trusted,
+            sources: "owner".to_owned(),
+        }],
+    }));
+    must(db.owner().insert_episode(EpisodeWrite {
+        episode_id: "episode-m-maia".to_owned(),
+        thread_id: "thread-delete-bot".to_owned(),
+        turn_id: "m-maia".to_owned(),
+        body: "Owner: keep maia".to_owned(),
+        taint: MemoryTaint::Trusted,
+        reasoning: None,
+        participants: "owner".to_owned(),
+        created_at: 36,
+        segments: vec![SegmentWrite {
+            text: "keep maia".to_owned(),
+            taint: MemoryTaint::Trusted,
+            sources: "owner".to_owned(),
+        }],
+    }));
+    must(db.owner().bots(BotRequest::Select {
+        bot_id: coding.bot_id.clone(),
+    }));
+
+    must(db.owner().bots(BotRequest::Delete {
+        bot_id: coding.bot_id.clone(),
+    }));
+
+    assert_eq!(transcript_bodies(&db, "maia"), vec!["keep maia".to_owned()]);
+    match must(db.owner().bots(BotRequest::List)) {
+        BotResponse::List(bots) => {
+            assert_eq!(bots.len(), 1);
+            assert_eq!(bots[0].bot_id, "maia");
+        }
+        other => panic!("list {other:?}"),
+    }
+    match must(db.owner().bots(BotRequest::Selected)) {
+        BotResponse::Text(bot_id) => assert_eq!(bot_id, "maia"),
+        other => panic!("selected {other:?}"),
+    }
+    let pending = must(db.owner().pending_promotions());
+    let pending_ids = pending
+        .iter()
+        .map(|row| row.episode_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(pending_ids.contains(&"episode-m-maia"));
+    assert!(!pending_ids.contains(&"episode-m-code"));
 }
