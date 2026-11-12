@@ -605,7 +605,24 @@ function readDetail(value: unknown): TaskDetail | null {
     decisions,
     criteria,
     helpers,
+    goal: typeof value.goal === 'string' ? value.goal : undefined,
+    todos: readTodos(value.todos),
   }
+}
+
+function readTodos(value: unknown): TaskDetail['todos'] {
+  if (!Array.isArray(value)) return undefined
+  const todos = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id !== 'string' || typeof item.text !== 'string') continue
+    todos.push({
+      id: item.id,
+      text: item.text,
+      status: typeof item.status === 'string' ? item.status : 'pending',
+      note: typeof item.note === 'string' ? item.note : '',
+    })
+  }
+  return todos
 }
 
 function mapAll<T>(values: unknown[], read: (value: unknown) => T[]): T[] | null {

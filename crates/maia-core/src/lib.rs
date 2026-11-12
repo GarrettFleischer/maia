@@ -36,6 +36,9 @@ pub mod embedder;
 /// Super Agent router session, task envelope, and lifecycle contracts.
 pub mod super_agent;
 
+/// Loop detection and transcript compaction for long tasks.
+pub mod task_loop;
+
 /// Published subagent tool catalog and call admission.
 pub mod agent_tools;
 

@@ -162,6 +162,7 @@ pub(crate) fn apply_promotion(
                 params![claim.claim_id, lexeme],
             )?;
         }
+        crate::memory_cleanup::annotate_new_claim(&transaction, &claim.claim_id, &claim.sentence)?;
     }
     for claim_id in &request.same_claim_ids {
         let found: Option<i64> = transaction
@@ -488,6 +489,7 @@ pub(crate) fn nearest_claims(
          WHERE claim_fts MATCH ?1 \
            AND claims.status = 'provisional' \
            AND claims.consolidated_by IS NULL \
+           AND claims.hidden_reason IS NULL \
          ORDER BY bm25(claim_fts) ASC, claims.claim_id ASC \
          LIMIT ?2",
     )?;

@@ -607,6 +607,8 @@ pub enum BrainNodeKind {
     Episode,
     /// Lexeme entry point.
     Lexeme,
+    /// A person, place, project, path, or device.
+    Entity,
 }
 
 impl BrainNodeKind {
@@ -617,8 +619,34 @@ impl BrainNodeKind {
             Self::Claim => "claim",
             Self::Episode => "episode",
             Self::Lexeme => "lexeme",
+            Self::Entity => "entity",
         }
     }
+}
+
+/// Extra memory fields on a brain node. Empty for a bare graph node.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BrainDetail {
+    /// Fact category such as `person` or `place`.
+    pub category: String,
+    /// Confidence times 1000. `700` is 0.7.
+    pub confidence_millis: Option<i64>,
+    /// Unix seconds when the row was written.
+    pub created_at: Option<i64>,
+    /// Unix seconds when the row was last used.
+    pub last_used_at: Option<i64>,
+    /// Episode that produced a claim.
+    pub source_episode: Option<String>,
+    /// Claim status, such as `provisional`.
+    pub status: Option<String>,
+    /// Why the row is hidden. Empty means visible.
+    pub hidden_reason: Option<String>,
+    /// Subject entity name.
+    pub subject: Option<String>,
+    /// Entity kind when this node is an entity.
+    pub entity_kind: Option<String>,
+    /// `owner` when the owner edited the sentence.
+    pub owner_edited: bool,
 }
 
 /// One node in the shared brain map.
@@ -638,6 +666,8 @@ pub struct BrainNode {
     pub session_id: Option<String>,
     /// The row is in `correction_holds`.
     pub held: bool,
+    /// Category, confidence, times, and hide reason.
+    pub detail: BrainDetail,
 }
 
 /// One directed edge in the shared brain map.

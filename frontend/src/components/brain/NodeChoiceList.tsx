@@ -3,7 +3,7 @@ import type { KeyboardEvent } from 'react'
 export interface NodeChoice {
   id: string
   label: string
-  taint?: 'trusted' | 'untrusted' | null
+  taint?: 'trusted' | 'untrusted' | 'owner' | null
   detail?: string
 }
 

@@ -49,6 +49,19 @@ export function TaskDetail({
           </button>
         </div>
         <div className="maia-task-detail-body">
+          {detail.todos && detail.todos.length > 0 ? (
+            <>
+              <h3>Working list</h3>
+              <ul aria-label="Working list">
+                {detail.todos.map((item) => (
+                  <li key={item.id}>
+                    {item.status === 'done' ? '☑' : item.status === 'in_progress' ? '…' : '☐'} {item.text}
+                    {item.note ? ` — ${item.note}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
           <h3>Original prompt</h3>
           <p>{textOrNone(detail.original_prompt)}</p>
           <h3>Acceptance context</h3>

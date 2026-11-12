@@ -174,12 +174,35 @@ impl ScriptedRouter {
     }
 }
 
+fn auxiliary_reply(request: &RouterRequest) -> Option<String> {
+    let text = request.messages.first()?.content.as_str();
+    if text.starts_with("Maia goal contract.") {
+        return Some(
+            r#"{"requirements":["Do the requested work."],"done_criteria":["The requested work is finished."]}"#
+                .to_owned(),
+        );
+    }
+    if text.starts_with("Maia goal check-in.") {
+        return Some(
+            r#"{"on_track":true,"progress_toward_done":60,"scope_creep":[],"stuck":false,"correction":""}"#
+                .to_owned(),
+        );
+    }
+    if text.starts_with("Maia handoff brief.") {
+        return Some("A fresh start is ready.".to_owned());
+    }
+    None
+}
+
 impl Router for ScriptedRouter {
     fn complete(
         &self,
         request: &RouterRequest,
     ) -> impl Future<Output = Result<RouterResponse, RouterError>> + Send {
         let prepared = {
+            if let Some(reply) = auxiliary_reply(request) {
+                Ok(reply_response(request.request_id, reply))
+            } else {
             let mut script = self.inner.lock().expect("router lock");
             script.requests.push(request.clone());
             if request
@@ -208,6 +231,7 @@ impl Router for ScriptedRouter {
                         detail: "no scripted proposal".to_owned(),
                     }),
                 }
+            }
             }
         };
         async move { prepared }

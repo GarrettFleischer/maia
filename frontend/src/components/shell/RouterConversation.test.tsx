@@ -342,8 +342,8 @@ describe('RouterConversation', () => {
       />,
     )
 
-    expect(screen.getByText('Thinking')).toBeVisible()
-    expect(screen.getByText('The owner wants the weather.')).toBeInTheDocument()
+    expect(screen.queryByText('Thinking')).toBeNull()
+    expect(screen.queryByText('The owner wants the weather.')).toBeNull()
     expect(screen.getByText('Route · admitted by host')).toBeVisible()
     expect(screen.getByText('The host admitted one parent task.')).toBeInTheDocument()
     expect(screen.getByText('Dispatched as one new task: Canby OR.')).toBeVisible()
@@ -731,7 +731,9 @@ describe('RouterConversation', () => {
     expect(box).toHaveValue('Add a pin control')
     fireEvent.change(box, { target: { value: 'Next while the first is sending' } })
     client.releaseHeldSend('fail')
-    expect(await screen.findByRole('status')).toHaveTextContent('Message failed. Try again.')
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Waiting to send. Will retry when connected.',
+    )
     expect(box).toHaveValue('Next while the first is sending')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
   })

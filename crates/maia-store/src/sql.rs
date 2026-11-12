@@ -157,6 +157,22 @@ pub(crate) const MIGRATION_V12: &[&str] = &[
     "INSERT INTO neuron_fts (kind, neuron_id, title, body) SELECT kind, neuron_id, title, body FROM neuron_text",
 ];
 
+/// Migration 13 records claim categories, hidden rows, entities, and task plans.
+///
+/// Existing rows stay. Junk claims and status episodes are marked hidden by code
+/// after these columns exist. Nothing is deleted.
+pub(crate) const MIGRATION_V13: &[&str] = &[
+    "ALTER TABLE claims ADD COLUMN category TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE claims ADD COLUMN subject TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE claims ADD COLUMN confidence_millis INTEGER NOT NULL DEFAULT 700",
+    "ALTER TABLE claims ADD COLUMN last_used_at INTEGER",
+    "ALTER TABLE claims ADD COLUMN hidden_reason TEXT",
+    "ALTER TABLE claims ADD COLUMN owner_edited INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE episodes ADD COLUMN hidden_reason TEXT",
+    "ALTER TABLE entities ADD COLUMN kind TEXT NOT NULL DEFAULT 'other'",
+    "CREATE TABLE task_plans (task_id TEXT PRIMARY KEY, goal_json TEXT NOT NULL, todo_json TEXT NOT NULL, handoff_count INTEGER NOT NULL DEFAULT 0, handoff_of TEXT, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))",
+];
+
 /// Migration 10 stores approval waits, ledger reversals, and untrusted attachments.
 pub(crate) const MIGRATION_V10: &[&str] = &[
     "CREATE TABLE ledger_reversals (ledger_id TEXT PRIMARY KEY, reversed_at INTEGER NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id))",

@@ -28,6 +28,7 @@ use axum::RequestExt;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::Path;
+use axum::extract::Query;
 use axum::extract::Request;
 use axum::extract::State;
 use axum::extract::ws::Message;
@@ -1122,6 +1123,29 @@ enum ActorCall {
         reply: oneshot::Sender<Result<(String, String), ApiError>>,
     },
     BrainMap {
+        include_lexemes: bool,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    BrainSearch {
+        query: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    EditClaim {
+        claim_id: String,
+        sentence: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    ForgetClaim {
+        claim_id: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    RestoreClaim {
+        claim_id: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    MergeEntities {
+        winner: String,
+        loser: String,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
     BrainIndex {
@@ -1219,6 +1243,16 @@ fn actor_loop<R>(
     actor.host.work_queued_parents();
     actor.host.defer_model_work();
     let mut inbox = VecDeque::new();
+    if let Ok(pending) = actor.host.store().pending_submissions() {
+        for (operation, message, text) in pending {
+            inbox.push_back(QueuedChat {
+                operation: SubmissionId(operation),
+                message: maia_core::super_agent::MessageId(message),
+                text,
+                attachments: Vec::new(),
+            });
+        }
+    }
     let mut route = None;
     let mut workers = Vec::new();
     loop {
@@ -1663,8 +1697,34 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
         ActorCall::ResolveTest { request, reply } => {
             let _ = reply.send(resolve_test(actor, request));
         }
-        ActorCall::BrainMap { reply } => {
-            let _ = reply.send(read_brain(actor));
+        ActorCall::BrainMap {
+            include_lexemes,
+            reply,
+        } => {
+            let _ = reply.send(read_brain(actor, include_lexemes));
+        }
+        ActorCall::BrainSearch { query, reply } => {
+            let _ = reply.send(search_brain(actor, &query));
+        }
+        ActorCall::EditClaim {
+            claim_id,
+            sentence,
+            reply,
+        } => {
+            let _ = reply.send(edit_claim(actor, claim_id, sentence));
+        }
+        ActorCall::ForgetClaim { claim_id, reply } => {
+            let _ = reply.send(forget_claim(actor, claim_id));
+        }
+        ActorCall::RestoreClaim { claim_id, reply } => {
+            let _ = reply.send(restore_claim(actor, claim_id));
+        }
+        ActorCall::MergeEntities {
+            winner,
+            loser,
+            reply,
+        } => {
+            let _ = reply.send(merge_entities(actor, winner, loser));
         }
         ActorCall::BrainIndex { reply } => {
             let _ = reply.send(read_brain_index(actor));
@@ -2292,8 +2352,13 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
         .route("/remote/session", get(remote_session))
         .route("/remote/unpair", post(remote_unpair))
         .route("/brain/map", get(brain_map))
+        .route("/brain/search", post(brain_search))
         .route("/brain/index", get(brain_index))
         .route("/brain/export", post(export_brain_markdown))
+        .route("/brain/claims/{claim_id}", patch(patch_claim))
+        .route("/brain/claims/{claim_id}/forget", post(forget_claim_route))
+        .route("/brain/claims/{claim_id}/restore", post(restore_claim_route))
+        .route("/brain/entities/merge", post(merge_entities_route))
         .route(
             "/brain/facts/{fact_id}",
             patch(patch_fact).delete(delete_fact),
@@ -2833,8 +2898,64 @@ async fn post_host(State(state): State<AppState>, request: Request) -> Response 
     finish(ask(&state, |reply| ActorCall::Host { command, reply }).await)
 }
 
-async fn brain_map(State(state): State<AppState>) -> Response {
-    finish(ask(&state, |reply| ActorCall::BrainMap { reply }).await)
+async fn brain_map(State(state): State<AppState>, Query(query): Query<BrainQuery>) -> Response {
+    let include_lexemes = query.include.as_deref() == Some("lexemes");
+    finish(ask(&state, |reply| ActorCall::BrainMap { include_lexemes, reply }).await)
+}
+
+#[derive(serde::Deserialize)]
+struct BrainQuery {
+    include: Option<String>,
+}
+
+async fn brain_search(State(state): State<AppState>, request: Request) -> Response {
+    let value = match read_json(request).await {
+        Ok(value) => value,
+        Err(error) => return error_response(error),
+    };
+    let query = value
+        .get("query")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    if query.is_empty() {
+        return error_response(ApiError::InvalidFact);
+    }
+    finish(ask(&state, |reply| ActorCall::BrainSearch { query, reply }).await)
+}
+
+async fn patch_claim(
+    State(state): State<AppState>,
+    Path(claim_id): Path<String>,
+    request: Request,
+) -> Response {
+    let sentence = match read_fact_sentence(request).await {
+        Ok(sentence) => sentence,
+        Err(error) => return error_response(error),
+    };
+    finish(ask(&state, |reply| ActorCall::EditClaim { claim_id, sentence, reply }).await)
+}
+
+async fn forget_claim_route(State(state): State<AppState>, Path(claim_id): Path<String>) -> Response {
+    finish(ask(&state, |reply| ActorCall::ForgetClaim { claim_id, reply }).await)
+}
+
+async fn restore_claim_route(State(state): State<AppState>, Path(claim_id): Path<String>) -> Response {
+    finish(ask(&state, |reply| ActorCall::RestoreClaim { claim_id, reply }).await)
+}
+
+async fn merge_entities_route(State(state): State<AppState>, request: Request) -> Response {
+    let value = match read_json(request).await {
+        Ok(value) => value,
+        Err(error) => return error_response(error),
+    };
+    let winner = value.get("winner").and_then(|item| item.as_str()).unwrap_or("").to_owned();
+    let loser = value.get("loser").and_then(|item| item.as_str()).unwrap_or("").to_owned();
+    if winner.is_empty() || loser.is_empty() {
+        return error_response(ApiError::InvalidFact);
+    }
+    finish(ask(&state, |reply| ActorCall::MergeEntities { winner, loser, reply }).await)
 }
 
 async fn brain_index(State(state): State<AppState>) -> Response {
@@ -2868,13 +2989,69 @@ async fn delete_fact(State(state): State<AppState>, Path(fact_id): Path<String>)
     finish(ask(&state, |reply| ActorCall::DeleteFact { fact_id, reply }).await)
 }
 
-fn read_brain<R: RouterPort>(actor: &Actor<R>) -> Result<Value, ApiError> {
+fn read_brain<R: RouterPort>(actor: &Actor<R>, include_lexemes: bool) -> Result<Value, ApiError> {
     actor
         .host
         .store()
         .brain_map()
-        .map(|map| brain_map_value(&map))
+        .map(|map| brain_map_value(&map, include_lexemes))
         .map_err(map_brain_store)
+}
+
+fn search_brain<R: RouterPort>(actor: &Actor<R>, query: &str) -> Result<Value, ApiError> {
+    let arms = crate::promotion::recall_run(
+        actor.host.store(),
+        query,
+        maia_core::audit::Timestamp(unix_now()),
+        None,
+    );
+    Ok(serde_json::json!({
+        "keyword": arms.keyword,
+        "vector": arms.vector,
+        "graph": arms.graph,
+        "hits": arms.hits.iter().map(|hit| serde_json::json!({
+            "id": hit.id,
+            "kind": hit.kind,
+            "sentence": hit.sentence,
+            "arms": hit.arms,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+fn edit_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String, sentence: String) -> Result<Value, ApiError> {
+    let edited = actor
+        .host
+        .store()
+        .edit_claim(claim_id, sentence)
+        .map_err(map_brain_store)?;
+    Ok(brain_map_value(&edited.value, false))
+}
+
+fn forget_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String) -> Result<Value, ApiError> {
+    let forgotten = actor
+        .host
+        .store()
+        .forget_claim(claim_id)
+        .map_err(map_brain_store)?;
+    Ok(brain_map_value(&forgotten.value, false))
+}
+
+fn restore_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String) -> Result<Value, ApiError> {
+    let restored = actor
+        .host
+        .store()
+        .restore_claim(claim_id)
+        .map_err(map_brain_store)?;
+    Ok(brain_map_value(&restored.value, false))
+}
+
+fn merge_entities<R: RouterPort>(actor: &Actor<R>, winner: String, loser: String) -> Result<Value, ApiError> {
+    let merged = actor
+        .host
+        .store()
+        .merge_entities(winner, loser)
+        .map_err(map_brain_store)?;
+    Ok(brain_map_value(&merged.value, false))
 }
 
 fn read_brain_index<R: RouterPort>(actor: &Actor<R>) -> Result<Value, ApiError> {
@@ -2922,7 +3099,7 @@ fn revise_brain_fact<R: RouterPort>(
             sentence,
         })
         .map_err(map_brain_store)?;
-    Ok(brain_map_value(&revised.value))
+    Ok(brain_map_value(&revised.value, false))
 }
 
 fn delete_brain_fact<R: RouterPort>(actor: &Actor<R>, fact_id: String) -> Result<Value, ApiError> {
@@ -2931,7 +3108,7 @@ fn delete_brain_fact<R: RouterPort>(actor: &Actor<R>, fact_id: String) -> Result
         .store()
         .delete_fact(&fact_id)
         .map_err(map_brain_store)?;
-    Ok(brain_map_value(&deleted.value))
+    Ok(brain_map_value(&deleted.value, false))
 }
 
 fn map_brain_store(error: StoreError) -> ApiError {
@@ -2965,22 +3142,66 @@ fn owner_fact_lexemes(sentence: &str) -> Vec<String> {
         .collect()
 }
 
-fn brain_map_value(map: &BrainMap) -> Value {
-    serde_json::json!({
-        "nodes": map.nodes.iter().map(brain_node_value).collect::<Vec<_>>(),
-        "edges": map.edges.iter().map(brain_edge_value).collect::<Vec<_>>(),
-    })
+fn brain_map_value(map: &BrainMap, include_lexemes: bool) -> Value {
+    let hidden_node = |node: &BrainNode| {
+        node.detail.hidden_reason.is_some() || node.detail.status.as_deref() == Some("superseded")
+    };
+    let lexeme = |node: &BrainNode| node.kind.as_str() == "lexeme";
+    let mut nodes = Vec::new();
+    let mut hidden = Vec::new();
+    let mut hidden_ids = std::collections::BTreeSet::new();
+    for node in &map.nodes {
+        if !include_lexemes && lexeme(node) {
+            continue;
+        }
+        if hidden_node(node) {
+            hidden_ids.insert(node.id.clone());
+            hidden.push(brain_node_value(node));
+        } else {
+            nodes.push(brain_node_value(node));
+        }
+    }
+    let edges = map
+        .edges
+        .iter()
+        .filter(|edge| {
+            if !include_lexemes && (edge.from_kind == "lexeme" || edge.to_kind == "lexeme") {
+                return false;
+            }
+            !hidden_ids.contains(&edge.from_id) && !hidden_ids.contains(&edge.to_id)
+        })
+        .map(brain_edge_value)
+        .collect::<Vec<_>>();
+    let mut value = serde_json::json!({ "nodes": nodes, "edges": edges });
+    if !hidden.is_empty() {
+        value["hidden"] = serde_json::Value::Array(hidden);
+    }
+    value
 }
 
 fn brain_node_value(node: &BrainNode) -> Value {
+    let taint = if node.detail.owner_edited {
+        Some("owner".to_owned())
+    } else {
+        node.taint.clone()
+    };
     serde_json::json!({
         "id": node.id,
         "kind": node.kind.as_str(),
         "label": node.label,
         "sentence": node.sentence,
-        "taint": node.taint,
+        "taint": taint,
         "session_id": node.session_id,
         "held": node.held,
+        "category": node.detail.category,
+        "confidence_millis": node.detail.confidence_millis,
+        "created_at": node.detail.created_at,
+        "last_used_at": node.detail.last_used_at,
+        "source_episode": node.detail.source_episode,
+        "status": node.detail.status,
+        "hidden_reason": node.detail.hidden_reason,
+        "subject": node.detail.subject,
+        "entity_kind": node.detail.entity_kind,
     })
 }
 

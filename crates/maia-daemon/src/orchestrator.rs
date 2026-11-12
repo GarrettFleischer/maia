@@ -114,6 +114,19 @@ use maia_core::super_agent::narrow_child;
 use maia_core::super_agent::owner_text_is_new_work;
 use maia_core::super_agent::reduce_phase as reduce_phase_leaf;
 use maia_core::super_agent::seal_envelope;
+use maia_core::task_loop::COMPACTION_KEEP_TAIL;
+use maia_core::task_loop::DEFAULT_CONTEXT_TOKEN_BUDGET;
+use maia_core::task_loop::HistoryRole;
+use maia_core::task_loop::HistoryTurn;
+use maia_core::task_loop::LoopSignal;
+use maia_core::task_loop::LoopTracker;
+use maia_core::task_loop::StepObservation;
+use maia_core::task_loop::StepStatus;
+use maia_core::task_loop::compaction_request_text;
+use maia_core::task_loop::estimate_tokens;
+use maia_core::task_loop::nears_context_budget;
+use maia_core::task_loop::split_for_compaction;
+use maia_core::task_loop::summary_note;
 use maia_core::thread_cache::ChatMessage;
 use maia_core::thread_cache::ChatRole;
 use maia_store::AppendEvents;
@@ -232,10 +245,10 @@ fn worker_gave_up(misses: u32, attempts: WorkerAttempts) -> bool {
     }
 }
 
-/// Model calls in one wake before the host parks the work as waiting.
-const LOOP_BUDGET: u32 = 32;
 const UNFINISHED_NUDGE: &str = "You have not finished. Call success, failure, or waiting.";
-const BUDGET_WAITING: &str = "I stopped after 32 unfinished replies and I am waiting on you.";
+
+#[path = "task_plan.rs"]
+mod task_plan;
 
 const PARENT_WORKER_CONTRACT: &str = "\
 Maia task worker. You are the subagent for this one task.\n\
@@ -245,7 +258,8 @@ Call failure when the goal cannot be done. message is the reason.\n\
 Call waiting when you need the owner or an outside event. message says what you are waiting for. The task stays alive.\n\
 A plan or a cut-off sentence is not finished. Call a tool.\n\
 Do not invent results. To read or list a file or folder, call bash. On Windows the command is PowerShell and a path looks like F:\\Development.\n\
-Stay inside this task. Do not start another task.\n";
+Stay inside this task. Do not start another task.\n\
+Work only on the current in-progress list item. If a step is missing, add it first. Tests, error handling, matching style, and a bug in the same files can be added. Anything else: call ask_owner and keep working on the list.\n";
 
 #[derive(Clone, Copy)]
 enum ReportDelivery {
@@ -1563,7 +1577,18 @@ fn first_line(text: &str) -> String {
 }
 
 fn chat_source(response: &RouterResponse) -> Option<&str> {
-    nonempty(response.reply.as_deref()).or_else(|| nonempty(response.reasoning.as_deref()))
+    nonempty(response.reply.as_deref())
+}
+
+fn sanitize_owner_sentence(sentence: String) -> String {
+    if maia_core::dream::is_status_text(&sentence) {
+        return sentence;
+    }
+    let visible = maia_core::dream::owner_visible_reply(&sentence);
+    if visible.is_empty() && maia_core::dream::looks_like_reasoning(&sentence) {
+        return "Working on that.".to_owned();
+    }
+    if visible.is_empty() { sentence } else { visible }
 }
 
 fn distinct_thinking(response: &RouterResponse) -> Option<String> {
@@ -1780,6 +1805,27 @@ fn route_tools_json() -> String {
     serde_json::Value::Array(tools).to_string()
 }
 
+fn plan_tools() -> Vec<serde_json::Value> {
+    vec![
+        terminal_tool(
+            "todo_add",
+            "Add a step to the working list. message is the step. Obvious steps are added. Other steps are asked first.",
+        ),
+        terminal_tool(
+            "todo_done",
+            "Mark the current list item done. message is the item id and a one-line result.",
+        ),
+        terminal_tool(
+            "todo_start",
+            "Mark a list item in progress. message is the item id.",
+        ),
+        terminal_tool(
+            "ask_owner",
+            "Ask the owner about a step that is not on the list. message is the step. Keep working on the list.",
+        ),
+    ]
+}
+
 fn terminal_tool(name: &str, description: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "function",
@@ -1818,6 +1864,7 @@ fn with_terminal_tools(tools_json: &str) -> String {
     let mut tools: Vec<serde_json::Value> =
         serde_json::from_str(tools_json).unwrap_or_else(|_| Vec::new());
     tools.extend(terminal_tools());
+    tools.extend(plan_tools());
     serde_json::Value::Array(tools).to_string()
 }
 
@@ -1881,7 +1928,9 @@ fn candidate_parent_json(
         .iter()
         .take(limit)
         .map(|(task, phase)| {
-            let title = prompts.get(task).and_then(|bytes| candidate_title(bytes, current_text));
+            let title = prompts
+                .get(task)
+                .and_then(|bytes| candidate_title(bytes, current_text));
             let activity = activity
                 .get(task)
                 .map(|line| truncate_activity(line))
@@ -2244,6 +2293,9 @@ pub(crate) struct RouteMachine {
     thinking: Option<String>,
     usage: RouterUsage,
     step: u32,
+    loops: LoopTracker,
+    compacting: bool,
+    compaction_burst: u8,
 }
 
 /// What the route pump should do next.
@@ -2277,6 +2329,15 @@ pub(crate) struct WorkerMachine {
     attempts: WorkerAttempts,
     notice: OwnerNotice,
     pending_tool: Option<ToolMeta>,
+    loops: LoopTracker,
+    compacting: bool,
+    compaction_burst: u8,
+    todos: maia_core::task_loop::TodoList,
+    contract: maia_core::task_loop::GoalContract,
+    steps_since_review: u32,
+    review_at: std::time::Instant,
+    review_now: bool,
+    new_subgoal: bool,
 }
 
 /// A tool call the HTTP pump runs off the actor thread.
@@ -2301,6 +2362,7 @@ struct ToolMeta {
     manifest_hash: String,
     assistant: ChatMessage,
     tool_call_id: String,
+    arguments: String,
 }
 
 /// How a tool launch left the actor.
@@ -2386,6 +2448,10 @@ pub struct Orchestrator<R> {
     /// Latest one-line activity for each parent, shown to the router.
     task_activity: BTreeMap<TaskId, String>,
     activity: ActivityLog,
+    /// Estimated tokens a task transcript may approach before older steps are summarized.
+    context_token_budget: u32,
+    /// Independent check-in. When empty, the worker's model endpoint is used with a fresh prompt.
+    reviewer: Option<Box<dyn FnMut(&str) -> Result<String, String> + Send>>,
 }
 
 /// One admitted tool plus the connection and hash that pin it.
@@ -3136,12 +3202,33 @@ impl<R: Router> Orchestrator<R> {
             background: Vec::new(),
             task_activity: BTreeMap::new(),
             activity: ActivityLog::new(),
+            context_token_budget: DEFAULT_CONTEXT_TOKEN_BUDGET,
+            reviewer: None,
         }
+    }
+
+    /// Uses this closure for goal check-ins instead of the worker model.
+    pub fn set_reviewer(&mut self, reviewer: impl FnMut(&str) -> Result<String, String> + Send + 'static) {
+        self.reviewer = Some(Box::new(reviewer));
     }
 
     /// Shares the activity log with the HTTP transcript.
     pub fn set_activity_log(&mut self, log: ActivityLog) {
         self.activity = log;
+    }
+
+    /// Labels of the activity feed, oldest first.
+    pub fn activity_labels(&self) -> Vec<String> {
+        self.activity
+            .snapshot()
+            .into_iter()
+            .map(|event| event.label)
+            .collect()
+    }
+
+    /// Sets how many tokens a task transcript may approach before older steps are summarized.
+    pub fn set_context_token_budget(&mut self, tokens: u32) {
+        self.context_token_budget = tokens.max(1);
     }
 
     /// Model parent work is queued and does not run inside the router turn.
@@ -3178,8 +3265,7 @@ impl<R: Router> Orchestrator<R> {
         if let Some(task) = task {
             self.task_activity.insert(task.clone(), label.clone());
         }
-        self.activity
-            .push(label, task.map(|task| task.0.clone()));
+        self.activity.push(label, task.map(|task| task.0.clone()));
     }
 
     /// Uses this embedder to seed and score recall. Missing vectors stay on text search.
@@ -3242,7 +3328,8 @@ impl<R: Router> Orchestrator<R> {
                 if self.mcp_borrowed {
                     return ToolStart::Busy;
                 }
-                let mut transport = std::mem::replace(&mut self.mcp_call, Box::new(disconnected_mcp));
+                let mut transport =
+                    std::mem::replace(&mut self.mcp_call, Box::new(disconnected_mcp));
                 self.mcp_borrowed = true;
                 let connection = job.connection_id.clone();
                 let wire = job.wire.clone();
@@ -3515,7 +3602,26 @@ impl<R: Router> Orchestrator<R> {
     /// text is not canonical.
     pub fn read_inspection(&self, task_id: &str) -> Result<serde_json::Value, OrchestratorError> {
         let view = self.store.load_task_view(task_id)?;
-        project_task_view(&view)
+        let mut value = project_task_view(&view)?;
+        if let Ok(Some((goal_json, todo_json, _, _))) = self.store.task_plan(task_id)
+            && let Some((contract, list, _, _)) = maia_core::task_loop::parse_stored_plan(&goal_json, &todo_json)
+            && let Some(object) = value.as_object_mut()
+        {
+            object.insert("goal".to_owned(), serde_json::Value::String(contract.goal));
+            object.insert("todos".to_owned(), serde_json::json!(list.items.iter().map(|item| serde_json::json!({
+                "id": item.id,
+                "text": item.text,
+                "status": match item.status {
+                    maia_core::task_loop::TodoStatus::Pending => "pending",
+                    maia_core::task_loop::TodoStatus::InProgress => "in_progress",
+                    maia_core::task_loop::TodoStatus::Done => "done",
+                    maia_core::task_loop::TodoStatus::Dropped => "dropped",
+                },
+                "note": item.note,
+                "added": item.added,
+            })).collect::<Vec<_>>()));
+        }
+        Ok(value)
     }
 
     /// Installs ranked memories used the next time a task snapshot is sealed.
@@ -3676,9 +3782,11 @@ impl<R: Router> Orchestrator<R> {
                 message: MessageId(message_id),
                 outcome: admitted_outcome_from_store(outcome)?,
             })),
-            MessageSubmissionState::Missing => Err(OrchestratorError::Store(StoreError::InvalidRequest {
-                message: "submission begin returned missing".to_owned(),
-            })),
+            MessageSubmissionState::Missing => {
+                Err(OrchestratorError::Store(StoreError::InvalidRequest {
+                    message: "submission begin returned missing".to_owned(),
+                }))
+            }
         }
     }
 
@@ -3717,6 +3825,7 @@ impl<R: Router> Orchestrator<R> {
         text: &str,
         attachments: &[StagedAttachment],
     ) -> MessageOutcome {
+        self.apply_owner_answer(text);
         let mut machine = match self.open_route(message, text, attachments) {
             Ok(machine) => machine,
             Err(outcome) => return outcome,
@@ -3800,11 +3909,18 @@ impl<R: Router> Orchestrator<R> {
                 cached_input_tokens: UsageValue::Unavailable,
             },
             step: 0,
+            loops: LoopTracker::default(),
+            compacting: false,
+            compaction_burst: 0,
         })
     }
 
     /// Advances one router turn by a single model boundary.
-    pub(crate) fn drive_route(&mut self, machine: &mut RouteMachine, event: RouteEvent) -> RouteDrive {
+    pub(crate) fn drive_route(
+        &mut self,
+        machine: &mut RouteMachine,
+        event: RouteEvent,
+    ) -> RouteDrive {
         match event {
             RouteEvent::Start | RouteEvent::Resumed => self.issue_route_request(machine),
             RouteEvent::Model(result) => self.apply_route_model(machine, result),
@@ -3812,18 +3928,21 @@ impl<R: Router> Orchestrator<R> {
     }
 
     fn issue_route_request(&mut self, machine: &mut RouteMachine) -> RouteDrive {
-        if machine.step >= LOOP_BUDGET {
-            return RouteDrive::Done(self.finish_route_budget(machine));
+        if !machine.compacting
+            && let Some(request) =
+                self.compaction_request(&mut machine.compaction_burst, &machine.messages)
+        {
+            machine.compacting = true;
+            return RouteDrive::Await(request);
         }
+        machine.compaction_burst = 0;
         let request_id = if machine.step == 0 {
             machine.first_request_id.clone()
         } else {
             match self.ids.pop_request() {
                 Ok(id) => RequestId(id),
                 Err(error) => {
-                    return RouteDrive::Done(
-                        self.admitted_failure(machine.message.clone(), error),
-                    );
+                    return RouteDrive::Done(self.admitted_failure(machine.message.clone(), error));
                 }
             }
         };
@@ -3845,6 +3964,9 @@ impl<R: Router> Orchestrator<R> {
         machine: &mut RouteMachine,
         result: Result<RouterResponse, RouterError>,
     ) -> RouteDrive {
+        if machine.compacting {
+            return self.finish_route_compaction(machine, &result);
+        }
         let response = match result {
             Ok(response) => response,
             Err(error)
@@ -3935,40 +4057,42 @@ impl<R: Router> Orchestrator<R> {
                 ))
             }
             RouterStop::Work(call) if machine.applied.is_some() => {
-                push_tool_exchange(
-                    &mut machine.messages,
-                    &response,
-                    &call,
-                    "A task is already started for this message. Call success with the sentence the owner should read.",
-                );
-                self.issue_route_request(machine)
+                let result = "A task is already started for this message. Call success with the sentence the owner should read.";
+                push_tool_exchange(&mut machine.messages, &response, &call, result);
+                self.resume_route(machine, &call, result)
             }
             RouterStop::Work(call) => {
                 let text = machine.text.clone();
                 let message = machine.message.clone();
                 match self.execute_route_tool(&message, &text, &call) {
-                    Ok(RouteExecution::TellOwner(sentence)) => RouteDrive::Done(self.finish_owner_turn(
-                        machine.message.clone(),
-                        &machine.text.clone(),
-                        sentence,
-                        None,
-                        machine.thinking.clone(),
-                        machine.usage.clone(),
-                        &machine.measured.clone(),
-                        TurnClose::HostAsk,
-                        &machine.attachments.clone(),
-                    )),
+                    Ok(RouteExecution::TellOwner(sentence)) => {
+                        RouteDrive::Done(self.finish_owner_turn(
+                            machine.message.clone(),
+                            &machine.text.clone(),
+                            sentence,
+                            None,
+                            machine.thinking.clone(),
+                            machine.usage.clone(),
+                            &machine.measured.clone(),
+                            TurnClose::HostAsk,
+                            &machine.attachments.clone(),
+                        ))
+                    }
                     Ok(RouteExecution::Continue(effect)) => {
                         if effect.applied.is_some() {
                             machine.applied = effect.applied;
                             machine.last_result.clone_from(&effect.result);
                         }
                         push_tool_exchange(&mut machine.messages, &response, &call, &effect.result);
-                        self.issue_route_request(machine)
+                        self.resume_route(machine, &call, &effect.result)
                     }
                     Err(OrchestratorError::Proposal(_)) => {
                         log_failure_class(RouterFailureClass::schema());
-                        if offer_route_repair(&mut machine.messages, &response, &mut machine.repairs) {
+                        if offer_route_repair(
+                            &mut machine.messages,
+                            &response,
+                            &mut machine.repairs,
+                        ) {
                             return self.issue_route_request(machine);
                         }
                         RouteDrive::Done(self.ask_or_spawn_after_repair(
@@ -3985,17 +4109,19 @@ impl<R: Router> Orchestrator<R> {
                     }
                 }
             }
-            RouterStop::Repair if machine.applied.is_some() => RouteDrive::Done(self.finish_owner_turn(
-                machine.message.clone(),
-                &machine.text.clone(),
-                machine.last_result.clone(),
-                machine.applied.clone(),
-                machine.thinking.clone(),
-                machine.usage.clone(),
-                &machine.measured.clone(),
-                TurnClose::Model,
-                &machine.attachments.clone(),
-            )),
+            RouterStop::Repair if machine.applied.is_some() => {
+                RouteDrive::Done(self.finish_owner_turn(
+                    machine.message.clone(),
+                    &machine.text.clone(),
+                    machine.last_result.clone(),
+                    machine.applied.clone(),
+                    machine.thinking.clone(),
+                    machine.usage.clone(),
+                    &machine.measured.clone(),
+                    TurnClose::Model,
+                    &machine.attachments.clone(),
+                ))
+            }
             RouterStop::Repair => {
                 log_failure_class(RouterFailureClass::schema());
                 if offer_route_repair(&mut machine.messages, &response, &mut machine.repairs) {
@@ -4011,39 +4137,6 @@ impl<R: Router> Orchestrator<R> {
                 ))
             }
         }
-    }
-
-    fn finish_route_budget(&mut self, machine: &RouteMachine) -> MessageOutcome {
-        let sentence = if machine.applied.is_some() {
-            machine.last_result.clone()
-        } else if owner_text_is_new_work(&machine.text) {
-            return self.fallback_spawn(
-                machine.message.clone(),
-                &machine.text,
-                machine.thinking.clone(),
-                machine.usage.clone(),
-                &machine.measured,
-                &machine.attachments,
-            );
-        } else {
-            with_listed_tasks(AMBIGUOUS_ASK, &self.phases)
-        };
-        let close = if machine.applied.is_some() {
-            TurnClose::Model
-        } else {
-            TurnClose::HostAsk
-        };
-        self.finish_owner_turn(
-            machine.message.clone(),
-            &machine.text,
-            sentence,
-            machine.applied.clone(),
-            machine.thinking.clone(),
-            machine.usage.clone(),
-            &machine.measured,
-            close,
-            &machine.attachments,
-        )
     }
 
     fn ask_or_spawn_after_repair(
@@ -4109,6 +4202,7 @@ impl<R: Router> Orchestrator<R> {
         close: TurnClose,
         attachments: &[StagedAttachment],
     ) -> MessageOutcome {
+        let sentence = sanitize_owner_sentence(sentence);
         let (admitted, task, route) = if matches!(close, TurnClose::HostAsk) {
             (
                 AdmittedRoute::AskUser {
@@ -4134,7 +4228,7 @@ impl<R: Router> Orchestrator<R> {
             route,
             reply: sentence,
         };
-        if let Err(error) = self.note_turn(&shown.reply, thinking.as_deref(), route) {
+        if let Err(error) = self.note_turn(&shown.reply, None, route) {
             return self.admitted_failure(message, error);
         }
         if let Err(error) = self.persist_router_turn(
@@ -4539,8 +4633,7 @@ impl<R: Router> Orchestrator<R> {
             .map(|item| item.sentence.clone())
             .collect::<Vec<_>>();
         let label = maia_core::brain::recall_activity_label(packed.items.len(), &titles);
-        self.activity
-            .push(label, task.map(|task| task.0.clone()));
+        self.activity.push(label, task.map(|task| task.0.clone()));
     }
 
     fn persist_router_turn(
@@ -4612,20 +4705,22 @@ impl<R: Router> Orchestrator<R> {
         } else {
             MemoryTaint::Untrusted
         };
+        let (body, hide) = maia_core::dream::episode_record(owner_text, &shown.reply);
         self.store.insert_episode(EpisodeWrite {
             episode_id: format!("episode-{}", message.0),
             thread_id: ROUTER_THREAD.to_owned(),
             turn_id: message.0.clone(),
-            body: format!("Owner: {owner_text}\nMaia: {}", shown.reply),
+            body,
             taint,
-            reasoning: thinking
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-                .map(str::to_owned),
+            reasoning: None,
             participants: "owner".to_owned(),
             created_at: self.ids.now,
             segments,
         })?;
+        if let Some(reason) = hide {
+            let _ = self.store.hide_episode(format!("episode-{}", message.0), reason);
+        }
+        let _ = thinking;
         Ok(())
     }
 
@@ -4900,6 +4995,7 @@ impl<R: Router> Orchestrator<R> {
                 manifest_hash,
                 assistant,
                 tool_call_id,
+                arguments: call.arguments_json.clone(),
             },
         })
     }
@@ -5080,11 +5176,16 @@ impl<R: Router> Orchestrator<R> {
         } else {
             "[]".to_owned()
         });
+        let (goal, todos, handoffs) = self.ensure_plan(task, &prompt);
         let mut messages = Vec::new();
         messages.push(ChatMessage::text(ChatRole::System, contract));
         for turn in self.worker_turns(task, &prompt) {
             messages.push(ChatMessage::text(ChatRole::User, turn));
         }
+        messages.push(ChatMessage::text(
+            ChatRole::User,
+            format!("Working list:\n{}", task_plan::list_lines(&todos)),
+        ));
         let recall = self.recall_for(&prompt);
         self.note_recall(recall.as_ref(), Some(task));
         if let Some(packed) = recall
@@ -5102,6 +5203,15 @@ impl<R: Router> Orchestrator<R> {
             attempts,
             notice,
             pending_tool: None,
+            loops: LoopTracker::with_handoffs(handoffs),
+            compacting: false,
+            compaction_burst: 0,
+            todos,
+            contract: goal,
+            steps_since_review: 0,
+            review_at: std::time::Instant::now(),
+            review_now: false,
+            new_subgoal: false,
         })
     }
 
@@ -5119,21 +5229,29 @@ impl<R: Router> Orchestrator<R> {
     }
 
     fn issue_worker_request(&mut self, machine: &mut WorkerMachine) -> WorkerDrive {
+        if let Some(done) = self.halt_if_stopped(machine) {
+            return done;
+        }
+        if let Some(done) = self.maybe_review(machine) {
+            return done;
+        }
         if worker_gave_up(machine.misses, machine.attempts) {
             return WorkerDrive::Done(self.worker_silent(&machine.task.clone(), machine.notice));
         }
-        if machine.steps >= LOOP_BUDGET {
-            return WorkerDrive::Done(self.park_worker(
-                &machine.task.clone(),
-                &machine.attempt.clone(),
-                BUDGET_WAITING,
-                machine.notice,
-            ));
+        if !machine.compacting
+            && let Some(request) =
+                self.compaction_request(&mut machine.compaction_burst, &machine.messages)
+        {
+            machine.compacting = true;
+            return WorkerDrive::Await(request);
         }
+        machine.compaction_burst = 0;
         let request_id = match self.ids.pop_request() {
             Ok(id) => RequestId(id),
             Err(_) => {
-                return WorkerDrive::Done(self.worker_silent(&machine.task.clone(), machine.notice));
+                return WorkerDrive::Done(
+                    self.worker_silent(&machine.task.clone(), machine.notice),
+                );
             }
         };
         WorkerDrive::Await(parent_work_request(
@@ -5149,6 +5267,12 @@ impl<R: Router> Orchestrator<R> {
         machine: &mut WorkerMachine,
         result: Result<RouterResponse, RouterError>,
     ) -> WorkerDrive {
+        if let Some(done) = self.halt_if_stopped(machine) {
+            return done;
+        }
+        if machine.compacting {
+            return self.finish_worker_compaction(machine, &result);
+        }
         let response = match result {
             Ok(response) => response,
             Err(error) if provider_stall(&error) => {
@@ -5158,7 +5282,9 @@ impl<R: Router> Orchestrator<R> {
                 return self.issue_worker_request(machine);
             }
             Err(_) => {
-                return WorkerDrive::Done(self.worker_silent(&machine.task.clone(), machine.notice));
+                return WorkerDrive::Done(
+                    self.worker_silent(&machine.task.clone(), machine.notice),
+                );
             }
         };
         let task = machine.task.clone();
@@ -5178,51 +5304,70 @@ impl<R: Router> Orchestrator<R> {
             AgentStop::Unfinished(text) => {
                 machine.messages.extend(unfinished_pair(&text));
                 machine.steps = machine.steps.saturating_add(1);
-                self.issue_worker_request(machine)
-            }
-            AgentStop::Work(call) => {
-                machine.steps = machine.steps.saturating_add(1);
                 self.record_activity(
-                    format!(
-                        "Task {}: {}",
-                        task.0,
-                        tool_activity_line(call.name.as_str(), &call.arguments_json)
-                    ),
+                    format!("Task {}: step {}", task.0, machine.steps),
                     Some(&task),
                 );
-                let known = self
-                    .mcp_live
-                    .iter()
-                    .any(|tool| tool.wire_name == call.name.as_str());
-                if !known {
-                    push_tool_exchange(
-                        &mut machine.messages,
-                        &response,
-                        &call,
-                        "That tool is not available.",
-                    );
-                    return self.issue_worker_request(machine);
-                }
-                match self.stage_mcp(&task, &response) {
-                    Err(McpRound::Result { assistant, tool }) => {
-                        machine.messages.push(assistant);
-                        machine.messages.push(tool);
-                        self.issue_worker_request(machine)
-                    }
-                    Err(McpRound::Silent) => {
-                        push_tool_exchange(
-                            &mut machine.messages,
-                            &response,
-                            &call,
-                            "The tool call could not be run.",
-                        );
-                        self.issue_worker_request(machine)
-                    }
-                    Ok(job) => {
-                        machine.pending_tool = Some(job.meta.clone());
-                        WorkerDrive::Tool(job)
-                    }
-                }
+                self.follow_loop(
+                    machine,
+                    StepObservation {
+                        tool: "(reply)".to_owned(),
+                        arguments: String::new(),
+                        output: text,
+                        status: StepStatus::Completed,
+                    },
+                )
+            }
+            AgentStop::Work(call) => self.drive_worker_tool(machine, &task, &response, call),
+        }
+    }
+
+    fn drive_worker_tool(
+        &mut self,
+        machine: &mut WorkerMachine,
+        task: &TaskId,
+        response: &RouterResponse,
+        call: NormalizedToolCall,
+    ) -> WorkerDrive {
+        machine.steps = machine.steps.saturating_add(1);
+        self.record_activity(
+            format!(
+                "Task {}: step {}: {}",
+                task.0,
+                machine.steps,
+                tool_activity_line(call.name.as_str(), &call.arguments_json)
+            ),
+            Some(task),
+        );
+        if let Some(done) = self.host_plan_tool(machine, response, &call) {
+            return done;
+        }
+        let tool_name = call.name.as_str().to_owned();
+        let arguments = call.arguments_json.clone();
+        let known = self
+            .mcp_live
+            .iter()
+            .any(|tool| tool.wire_name == call.name.as_str());
+        if !known {
+            let output = "That tool is not available.".to_owned();
+            push_tool_exchange(&mut machine.messages, response, &call, &output);
+            return self.follow_loop(machine, failed_step(tool_name, arguments, output));
+        }
+        match self.stage_mcp(task, response) {
+            Err(McpRound::Result { assistant, tool }) => {
+                let output = tool.content.clone();
+                machine.messages.push(assistant);
+                machine.messages.push(tool);
+                self.follow_loop(machine, failed_step(tool_name, arguments, output))
+            }
+            Err(McpRound::Silent) => {
+                let output = "The tool call could not be run.".to_owned();
+                push_tool_exchange(&mut machine.messages, response, &call, &output);
+                self.follow_loop(machine, failed_step(tool_name, arguments, output))
+            }
+            Ok(job) => {
+                machine.pending_tool = Some(job.meta.clone());
+                WorkerDrive::Tool(job)
             }
         }
     }
@@ -5236,14 +5381,217 @@ impl<R: Router> Orchestrator<R> {
         machine: &mut WorkerMachine,
         reply: McpToolReply,
     ) -> WorkerDrive {
+        if let Some(done) = self.halt_if_stopped(machine) {
+            return done;
+        }
         let Some(meta) = machine.pending_tool.take() else {
             return self.issue_worker_request(machine);
         };
+        let status = if reply.sent && reply.completed {
+            StepStatus::Completed
+        } else {
+            StepStatus::Failed
+        };
         if let McpRound::Result { assistant, tool } = self.complete_mcp(&meta, reply) {
+            let output = tool.content.clone();
             machine.messages.push(assistant);
             machine.messages.push(tool);
+            return self.follow_loop(
+                machine,
+                StepObservation {
+                    tool: meta.wire,
+                    arguments: meta.arguments,
+                    output,
+                    status,
+                },
+            );
         }
         self.issue_worker_request(machine)
+    }
+
+    fn halt_if_stopped(&mut self, machine: &WorkerMachine) -> Option<WorkerDrive> {
+        let stopped = matches!(
+            self.phases.get(&machine.task),
+            Some(
+                TaskPhase::Stopped { .. }
+                    | TaskPhase::Cancelled { .. }
+                    | TaskPhase::Abandoned { .. }
+            )
+        );
+        if !stopped {
+            return None;
+        }
+        self.release_worker(&machine.task);
+        Some(WorkerDrive::Done(WorkerFinish::Skipped))
+    }
+
+    fn follow_loop(&mut self, machine: &mut WorkerMachine, step: StepObservation) -> WorkerDrive {
+        machine.steps_since_review = machine.steps_since_review.saturating_add(1);
+        match machine.loops.observe(&step) {
+            Some(LoopSignal::Nudge { activity, note, .. }) => {
+                let task = machine.task.clone();
+                machine.review_now = true;
+                self.record_activity(activity, Some(&task));
+                machine
+                    .messages
+                    .push(ChatMessage::text(ChatRole::User, note));
+                self.issue_worker_request(machine)
+            }
+            Some(LoopSignal::Handoff {
+                activity,
+                what,
+                quote,
+                handoff_number,
+                ..
+            }) => {
+                self.record_activity(activity, Some(&machine.task.clone()));
+                self.hand_off(machine, &what, &quote, handoff_number)
+            }
+            Some(LoopSignal::Pause {
+                activity,
+                owner_message,
+                ..
+            }) => {
+                let task = machine.task.clone();
+                self.record_activity(activity, Some(&task));
+                WorkerDrive::Done(self.pause_stuck(machine, &owner_message))
+            }
+            None => self.issue_worker_request(machine),
+        }
+    }
+
+    fn pause_stuck(&mut self, machine: &WorkerMachine, message: &str) -> WorkerFinish {
+        let task = machine.task.clone();
+        let attempt = machine.attempt.clone();
+        let notice = machine.notice;
+        if matches!(notice, OwnerNotice::Hold) {
+            let _ = self.note_router(message);
+        }
+        self.park_worker(&task, &attempt, message, notice)
+    }
+
+    fn finish_worker_compaction(
+        &mut self,
+        machine: &mut WorkerMachine,
+        result: &Result<RouterResponse, RouterError>,
+    ) -> WorkerDrive {
+        machine.compacting = false;
+        let reply = compaction_reply(result);
+        install_summary(&mut machine.messages, &reply);
+        let task = machine.task.clone();
+        self.record_activity("Compacted context", Some(&task));
+        self.issue_worker_request(machine)
+    }
+
+    fn finish_route_compaction(
+        &mut self,
+        machine: &mut RouteMachine,
+        result: &Result<RouterResponse, RouterError>,
+    ) -> RouteDrive {
+        machine.compacting = false;
+        install_summary(&mut machine.messages, &compaction_reply(result));
+        self.record_activity("Compacted context", None);
+        self.issue_route_request(machine)
+    }
+
+    fn resume_route(
+        &mut self,
+        machine: &mut RouteMachine,
+        call: &NormalizedToolCall,
+        result: &str,
+    ) -> RouteDrive {
+        let observation = StepObservation {
+            tool: call.name.as_str().to_owned(),
+            arguments: call.arguments_json.clone(),
+            output: result.to_owned(),
+            status: StepStatus::Completed,
+        };
+        match machine.loops.observe(&observation) {
+            Some(LoopSignal::Nudge { activity, note, .. }) => {
+                self.record_activity(activity, None);
+                machine
+                    .messages
+                    .push(ChatMessage::text(ChatRole::User, note));
+                self.issue_route_request(machine)
+            }
+            Some(LoopSignal::Handoff {
+                activity, what, ..
+            }) => {
+                self.record_activity(activity, None);
+                let close = if machine.applied.is_some() {
+                    TurnClose::Model
+                } else {
+                    TurnClose::HostAsk
+                };
+                let owner_message = maia_core::task_loop::handoff_chat_line(&what);
+                RouteDrive::Done(self.finish_owner_turn(
+                    machine.message.clone(),
+                    &machine.text.clone(),
+                    owner_message,
+                    machine.applied.clone(),
+                    machine.thinking.clone(),
+                    machine.usage,
+                    &machine.measured.clone(),
+                    close,
+                    &machine.attachments.clone(),
+                ))
+            }
+            Some(LoopSignal::Pause {
+                activity,
+                owner_message,
+                ..
+            }) => {
+                self.record_activity(activity, None);
+                let close = if machine.applied.is_some() {
+                    TurnClose::Model
+                } else {
+                    TurnClose::HostAsk
+                };
+                RouteDrive::Done(self.finish_owner_turn(
+                    machine.message.clone(),
+                    &machine.text.clone(),
+                    owner_message,
+                    machine.applied.clone(),
+                    machine.thinking.clone(),
+                    machine.usage,
+                    &machine.measured.clone(),
+                    close,
+                    &machine.attachments.clone(),
+                ))
+            }
+            None => self.issue_route_request(machine),
+        }
+    }
+
+    fn compaction_request(
+        &mut self,
+        burst: &mut u8,
+        messages: &[ChatMessage],
+    ) -> Option<RouterRequest> {
+        if *burst >= 2
+            || !nears_context_budget(transcript_tokens(messages), self.context_token_budget)
+        {
+            return None;
+        }
+        let turns = messages.iter().map(history_turn).collect::<Vec<_>>();
+        let split = split_for_compaction(&turns, COMPACTION_KEEP_TAIL)
+            .or_else(|| split_for_compaction(&turns, 2))?;
+        let request_id = RequestId(self.ids.pop_request().ok()?);
+        *burst = burst.saturating_add(1);
+        let (system, user) = compaction_request_text(&split.goal, &split.excerpt);
+        Some(RouterRequest {
+            request_id,
+            model: self.turn.model.clone(),
+            messages: vec![
+                ChatMessage::text(ChatRole::System, system),
+                ChatMessage::text(ChatRole::User, user),
+            ],
+            tools_json: CanonicalJson("[]".to_owned()),
+            prefix_hash: self.turn.prefix_hash.clone(),
+            recall_hash: None,
+            reasoning_effort: self.turn.reasoning,
+            prior_provider_tool_state: None,
+        })
     }
 
     fn worker_silent(&mut self, task: &TaskId, notice: OwnerNotice) -> WorkerFinish {
@@ -6020,6 +6368,65 @@ fn snapshot_error() -> OrchestratorError {
     OrchestratorError::Store(StoreError::InvalidRequest {
         message: "router turn snapshot could not be stored".to_owned(),
     })
+}
+
+fn failed_step(tool: String, arguments: String, output: String) -> StepObservation {
+    StepObservation {
+        tool,
+        arguments,
+        output,
+        status: StepStatus::Failed,
+    }
+}
+
+fn compaction_reply(result: &Result<RouterResponse, RouterError>) -> String {
+    match result {
+        Ok(response) => response.reply.clone().unwrap_or_default(),
+        Err(_) => String::new(),
+    }
+}
+
+fn install_summary(messages: &mut Vec<ChatMessage>, reply: &str) {
+    let turns = messages.iter().map(history_turn).collect::<Vec<_>>();
+    let Some(split) = split_for_compaction(&turns, COMPACTION_KEEP_TAIL)
+        .or_else(|| split_for_compaction(&turns, 2))
+    else {
+        return;
+    };
+    let note = summary_note(reply, &split.goal);
+    let mut next = Vec::new();
+    next.extend(messages.iter().take(split.head_end).cloned());
+    next.push(ChatMessage::text(ChatRole::User, note));
+    next.extend(messages.iter().skip(split.tail_start).cloned());
+    *messages = next;
+}
+
+fn history_turn(message: &ChatMessage) -> HistoryTurn {
+    HistoryTurn {
+        role: match message.role {
+            ChatRole::System => HistoryRole::System,
+            ChatRole::User => HistoryRole::User,
+            ChatRole::Assistant => HistoryRole::Assistant,
+            ChatRole::Tool => HistoryRole::Tool,
+        },
+        content: message.content.clone(),
+    }
+}
+
+fn transcript_tokens(messages: &[ChatMessage]) -> u32 {
+    let chars = messages.iter().fold(0usize, |total, message| {
+        total
+            .saturating_add(message.content.len())
+            .saturating_add(
+                message
+                    .tool_calls_json
+                    .as_ref()
+                    .map(String::len)
+                    .unwrap_or(0),
+            )
+            .saturating_add(message.tool_call_id.as_ref().map(String::len).unwrap_or(0))
+    });
+    estimate_tokens(chars)
 }
 
 fn parent_work_request(

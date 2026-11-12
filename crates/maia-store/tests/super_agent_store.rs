@@ -849,16 +849,16 @@ fn closed_detail_high_water_survives_restart() {
 
 #[test]
 fn fresh_open_is_schema_version_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 12);
+    assert_eq!(LATEST_SCHEMA_VERSION, 13);
     let db = TestDb::open("version", 1);
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 12);
+    assert_eq!(settings.user_version, 13);
     let rows = must(db.owner().migrations());
-    assert_eq!(rows.len(), 12);
-    assert_eq!(rows.last().map(|row| row.version), Some(12));
+    assert_eq!(rows.len(), 13);
+    assert_eq!(rows.last().map(|row| row.version), Some(13));
     assert_eq!(
         rows.last().map(|row| row.name.as_str()),
-        Some("neuron_fts_porter")
+        Some("brain_memory")
     );
 }
 

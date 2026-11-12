@@ -16,7 +16,8 @@ import type {
 } from '@/api/superAgentTypes'
 import { SuperAgentRequestError } from '@/api/liveSuperAgent'
 import { pinMarkFor } from '@/api/superAgentFormat'
-import { admissionOutcomeText, PROCESSING_PENDING_TEXT } from '@/api/superAgentOutcome'
+import { admissionOutcomeText } from '@/api/superAgentOutcome'
+import { dropOutbox, enqueueOutbox, loadOutbox, type OutboxItem } from '@/state/outbox'
 import {
   createSuperAgentState,
   reduceSuperAgentState,
@@ -35,6 +36,8 @@ const TRANSCRIPT_LOAD_ERROR = 'The conversation could not be loaded.'
 const TRANSCRIPT_REFRESH_ERROR = 'The conversation could not be refreshed.'
 const TRANSCRIPT_REFRESH_NOTICE = 'Message sent. Refresh the conversation to see the latest reply.'
 const SEND_FAILED_TEXT = 'Message failed. Try again.'
+const WAITING_TO_SEND_TEXT = 'Waiting to send. Will retry when connected.'
+const WORKING_ON_MESSAGE_TEXT = 'Working on your message.'
 const SEND_WATCH_MS = 2_000
 const SEND_GIVE_UP_MS = 150_000
 const SEND_TRANSCRIPT_PROBE_MS = 5_000
@@ -366,6 +369,9 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   const closeSendWatch = useRef<(() => void) | null>(null)
   const pendingAttachmentIds = useRef<string[]>([])
   const queuedText = useRef<string | null>(null)
+  const forcedOutbox = useRef<OutboxItem | null>(null)
+  const flushArmed = useRef(true)
+  const [flushTick, setFlushTick] = useState(0)
   const inflightText = useRef(new Map<string, SendOperationToken>())
   const [activity, setActivity] = useState<ActivityLine[]>([])
   const [outgoing, setOutgoing] = useState<OutgoingMessage[]>([])
@@ -754,7 +760,9 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   }, [loadTranscript, session, state.transcript])
 
   const submit = useCallback(async () => {
-    const text = (queuedText.current ?? draft).trim()
+    const forced = forcedOutbox.current
+    forcedOutbox.current = null
+    const text = (queuedText.current ?? forced?.text ?? draft).trim()
     queuedText.current = null
     const activation = activeActivation.current
     if (
@@ -768,13 +776,26 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     }
     const token = activation.try_start_send()
     if (!token) return
+    flushArmed.current = false
     inflightText.current.set(text, token)
     closeSendWatch.current?.()
-    const submission = submissionController.submission_for(
-      text,
-      () => session.client.createOperationId(),
-    )
+    const submission = forced
+      ? { operation_id: forced.operationId as SubmissionOperationId, text: forced.text }
+      : submissionController.submission_for(
+          text,
+          () => session.client.createOperationId(),
+        )
+    if (forced && forced.attachmentIds.length > 0) {
+      pendingAttachmentIds.current = [...forced.attachmentIds]
+    }
     const outgoingId = String(submission.operation_id)
+    const attachmentIds = pendingAttachmentIds.current
+    enqueueOutbox({
+      operationId: outgoingId,
+      text,
+      attachmentIds: [...attachmentIds],
+      at: Date.now(),
+    })
     setOutgoing((current) => [
       ...current.filter((item) => item.text !== text),
       { id: outgoingId, text, state: 'pending' },
@@ -857,6 +878,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         const view = storedOwnerSend(transcript.messages, text)
         lastView = view
         if (view === 'absent') return
+        dropOutbox(outgoingId)
         releaseComposer()
         await showStored(view, transcript.messages)
       } finally {
@@ -877,28 +899,21 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       }
       if (lastView === 'absent') {
         if (!closeWatch() || !ownsSend()) return
-        submissionController.discard(submission.operation_id)
-        setOutgoing((current) =>
-          current.map((item) =>
-            item.id === String(submission.operation_id) ? { ...item, state: 'failed' } : item,
-          ),
-        )
         dispatch({
-          type: 'send_failed',
+          type: 'quiet_notice',
           session: session.id,
           activation: activation.id,
-          token,
-          text: SEND_FAILED_TEXT,
+          text: WAITING_TO_SEND_TEXT,
         })
         activation.finish_send(token)
         return
       }
       closeWatch()
       dispatch({
-        type: 'stored_send_unanswered',
+        type: 'quiet_notice',
         session: session.id,
         activation: activation.id,
-        text: PROCESSING_PENDING_TEXT,
+        text: WORKING_ON_MESSAGE_TEXT,
       })
     }, SEND_GIVE_UP_MS)
     try {
@@ -925,6 +940,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       } else {
         closeWatch()
         if (!composerReleased) {
+          submissionController.discard(submission.operation_id)
           dispatch({
             type: 'send_admitted',
             session: session.id,
@@ -934,6 +950,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
           })
         }
       }
+      dropOutbox(outgoingId)
       const admittedFailure = admissionOutcomeText(admission)
       const refresh = await loadTranscript(
         activation,
@@ -976,29 +993,38 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     } catch (error) {
       closeWatch()
       if (!ownsSend()) return
-      if (
-        submissionErrorDisposition(error) ===
-        SubmissionErrorDisposition.DiscardPreAdmission
-      ) {
+      const proven =
+        submissionErrorDisposition(error) === SubmissionErrorDisposition.DiscardPreAdmission
+      if (proven) {
         submissionController.discard(submission.operation_id)
+        dropOutbox(outgoingId)
       }
       await within(
         loadTranscript(activation, 'refresh', TRANSCRIPT_REFRESH_ERROR),
         SEND_TRANSCRIPT_PROBE_MS,
       )
       if (!ownsSend()) return
-      setOutgoing((current) =>
-        current.map((item) =>
-          item.id === String(submission.operation_id) ? { ...item, state: 'failed' } : item,
-        ),
-      )
-      dispatch({
-        type: 'send_failed',
-        session: session.id,
-        activation: activation.id,
-        token,
-        text: error instanceof SuperAgentRequestError ? error.message : SEND_FAILED_TEXT,
-      })
+      if (proven) {
+        setOutgoing((current) =>
+          current.map((item) =>
+            item.id === String(submission.operation_id) ? { ...item, state: 'failed' } : item,
+          ),
+        )
+        dispatch({
+          type: 'send_failed',
+          session: session.id,
+          activation: activation.id,
+          token,
+          text: error instanceof SuperAgentRequestError ? error.message : SEND_FAILED_TEXT,
+        })
+      } else {
+        dispatch({
+          type: 'quiet_notice',
+          session: session.id,
+          activation: activation.id,
+          text: WAITING_TO_SEND_TEXT,
+        })
+      }
     } finally {
       if (inflightText.current.get(text) === token) inflightText.current.delete(text)
       closeWatch()
@@ -1014,9 +1040,51 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
 
   submitRef.current = submit
 
+  useEffect(() => {
+    const pending = loadOutbox()
+    if (pending.length === 0) return
+    setOutgoing((current) => {
+      const known = new Set(current.map((item) => item.id))
+      const added = pending
+        .filter((item) => !known.has(item.operationId))
+        .map((item) => ({ id: item.operationId, text: item.text, state: 'pending' as const }))
+      return added.length === 0 ? current : [...added, ...current]
+    })
+  }, [flushTick])
+
+  useEffect(() => {
+    if (!flushArmed.current) return
+    if (state.transcript.baseline !== 'ready') return
+    if (state.operation.kind === 'sending') return
+    const next = loadOutbox()[0]
+    if (!next || inflightText.current.has(next.text)) return
+    flushArmed.current = false
+    forcedOutbox.current = next
+    queuedText.current = next.text
+    void submitRef.current()
+  }, [flushTick, state.operation.kind, state.transcript.baseline])
+
+  useEffect(() => {
+    const arm = () => {
+      flushArmed.current = true
+      setFlushTick((value) => value + 1)
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') arm()
+    }
+    window.addEventListener('online', arm)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('online', arm)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [])
+
   const retryOutgoing = useCallback((id: string) => {
     const item = outgoingRef.current.find((entry) => entry.id === id)
-    if (!item || item.state !== 'failed') return
+    if (!item || (item.state !== 'failed' && item.state !== 'pending')) return
+    const stored = loadOutbox().find((entry) => entry.operationId === id)
+    if (stored) forcedOutbox.current = stored
     queuedText.current = item.text
     void submitRef.current()
   }, [])

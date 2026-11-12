@@ -20,7 +20,7 @@ export function admissionOutcomeText(result: MessageAdmissionResult): string | n
     case 'processing_failed':
       return PROCESSING_UNAVAILABLE_TEXT
     case 'processing_pending':
-      return PROCESSING_PENDING_TEXT
+      return null
     case 'unknown_outcome':
       return UNKNOWN_ADMITTED_OUTCOME_TEXT
   }

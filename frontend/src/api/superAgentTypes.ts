@@ -125,11 +125,20 @@ export interface TaskHelperRef {
   title: string
 }
 
+export interface TaskTodo {
+  id: string
+  text: string
+  status: string
+  note: string
+}
+
 export interface TaskDetail {
   task_id: string
   title: string
   original_prompt: string
   acceptance_context: string
+  goal?: string
+  todos?: TaskTodo[]
   transcript: TranscriptLine[]
   tool_events: ToolEventRecord[]
   artifacts: ArtifactRecord[]
@@ -149,6 +158,7 @@ export type ComposerNotice =
   | { kind: 'idle' }
   | { kind: 'pending' }
   | { kind: 'failed'; text: string }
+  | { kind: 'quiet'; text: string }
   | { kind: 'admitted_failure'; text: string }
   | { kind: 'refresh_failed'; text: string }
 

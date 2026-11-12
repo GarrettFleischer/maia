@@ -9,6 +9,10 @@ pub enum PromotionSkipReason {
     ToolNoise,
     /// Pure small talk with no durable fact.
     SmallTalk,
+    /// Router status with no durable fact.
+    Status,
+    /// Scratch reasoning with no recoverable reply.
+    Reasoning,
 }
 
 /// Returns a skip reason when the episode should not be sent to the promoter.
@@ -23,6 +27,19 @@ pub fn should_skip_promotion(body: &str) -> Option<PromotionSkipReason> {
     }
     if is_small_talk(trimmed) {
         return Some(PromotionSkipReason::SmallTalk);
+    }
+    if crate::dream::memory::is_status_text(trimmed)
+        && !trimmed.lines().any(|line| {
+            crate::dream::memory::judge_claim(line) == crate::dream::memory::ClaimJudgment::Keep
+                && !crate::dream::memory::is_status_text(line)
+        })
+    {
+        return Some(PromotionSkipReason::Status);
+    }
+    if crate::dream::memory::looks_like_reasoning(trimmed)
+        && crate::dream::memory::owner_visible_reply(trimmed).is_empty()
+    {
+        return Some(PromotionSkipReason::Reasoning);
     }
     None
 }

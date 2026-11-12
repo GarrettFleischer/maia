@@ -1,13 +1,21 @@
-export type BrainNodeKind = 'fact' | 'claim' | 'episode' | 'lexeme'
+export type BrainNodeKind = 'fact' | 'claim' | 'episode' | 'lexeme' | 'entity'
 
 export interface BrainNode {
   id: string
   kind: BrainNodeKind
   label: string
   sentence: string | null
-  taint: 'trusted' | 'untrusted' | null
+  taint: 'trusted' | 'untrusted' | 'owner' | null
   session_id: string | null
   held: boolean
+  category?: string
+  confidence_millis?: number | null
+  created_at?: number | null
+  source_episode?: string | null
+  status?: string | null
+  hidden_reason?: string | null
+  subject?: string | null
+  entity_kind?: string | null
 }
 
 export interface BrainEdge {
@@ -21,6 +29,14 @@ export interface BrainEdge {
 export interface BrainMap {
   nodes: BrainNode[]
   edges: BrainEdge[]
+  hidden?: BrainNode[]
+}
+
+export interface BrainSearchHit {
+  id: string
+  kind: string
+  sentence: string
+  arms: string[]
 }
 
 export type BrainMapMode = 'explore' | 'edit'
@@ -56,6 +72,10 @@ export interface BrainMapClient {
   deleteFact(id: string): Promise<BrainMap>
   loadIndex?(): Promise<BrainIndex>
   exportMarkdown?(): Promise<BrainIndex>
+  search?(query: string): Promise<BrainSearchHit[]>
+  editClaim?(id: string, sentence: string): Promise<BrainMap>
+  forgetClaim?(id: string): Promise<BrainMap>
+  restoreClaim?(id: string): Promise<BrainMap>
 }
 
 export function brainStatusLine(index: BrainIndex): string {
@@ -66,12 +86,13 @@ export function brainStatusLine(index: BrainIndex): string {
   return `${exported}. Last recall: keyword ${index.keyword_count} · vector ${index.vector_count} · graph ${index.graph_count}.`
 }
 
-const KINDS: readonly BrainNodeKind[] = ['fact', 'claim', 'episode', 'lexeme']
+const KINDS: readonly BrainNodeKind[] = ['fact', 'claim', 'episode', 'lexeme', 'entity']
 const KIND_RANK: Record<BrainNodeKind, number> = {
   episode: 0,
   claim: 1,
   fact: 2,
   lexeme: 3,
+  entity: 4,
 }
 const COLUMN_WIDTH = 220
 const ROW_HEIGHT = 78
@@ -103,10 +124,10 @@ export function parseBrainMap(body: unknown): BrainMap {
   if (!isRecord(body) || !Array.isArray(body.nodes) || !Array.isArray(body.edges)) {
     throw new Error('The brain map could not be read.')
   }
-  return {
-    nodes: body.nodes.map(parseNode),
-    edges: body.edges.map(parseEdge),
-  }
+  const nodes = body.nodes.map(parseNode)
+  const edges = body.edges.map(parseEdge)
+  const hidden = Array.isArray(body.hidden) ? body.hidden.map(parseNode) : []
+  return hidden.length === 0 ? { nodes, edges } : { nodes, edges, hidden }
 }
 
 export function emptyBrainMap(): BrainMap {
@@ -227,6 +248,14 @@ function parseNode(value: unknown): BrainNode {
     taint: optionalTaint(value.taint),
     session_id: optionalText(value.session_id),
     held: value.held,
+    category: typeof value.category === 'string' ? value.category : '',
+    confidence_millis: optionalNumber(value.confidence_millis),
+    created_at: optionalNumber(value.created_at),
+    source_episode: optionalText(value.source_episode),
+    status: optionalText(value.status),
+    hidden_reason: optionalText(value.hidden_reason),
+    subject: optionalText(value.subject),
+    entity_kind: optionalText(value.entity_kind),
   }
 }
 
@@ -251,14 +280,20 @@ function parseEdge(value: unknown): BrainEdge {
 }
 
 function optionalText(value: unknown): string | null {
-  if (value === null) return null
+  if (value === null || value === undefined) return null
   if (typeof value === 'string') return value
   throw new Error('The brain map could not be read.')
 }
 
+function optionalNumber(value: unknown): number | null {
+  if (value === undefined || value === null) return null
+  if (typeof value === 'number') return value
+  throw new Error('The brain map could not be read.')
+}
+
 function optionalTaint(value: unknown): BrainNode['taint'] {
-  if (value === null) return null
-  if (value === 'trusted' || value === 'untrusted') return value
+  if (value === null || value === undefined) return null
+  if (value === 'trusted' || value === 'untrusted' || value === 'owner') return value
   throw new Error('The brain map could not be read.')
 }
 

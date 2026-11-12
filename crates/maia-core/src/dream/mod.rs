@@ -11,6 +11,7 @@ mod plan;
 mod prepass;
 mod project;
 mod related;
+mod memory;
 mod schedule;
 mod seeds;
 mod select;
@@ -45,6 +46,11 @@ pub use related::{
     RelatedChannel, RelatedLink, VECTOR_MIN_MILLIS, select_entity_links, select_related_claims,
 };
 pub use seeds::{ClaimSeed, merge_claim_seeds, promotion_backoff_seconds, promotion_claim_id};
+pub use memory::{
+    categorize, episode_record, extract_entities, is_status_text, judge_claim, looks_like_reasoning,
+    near_duplicate, owner_visible_reply, subject_name, supersedes, ClaimJudgment, FactCategory,
+    NamedEntity,
+};
 pub use skip::{PromotionSkipReason, should_skip_promotion};
 pub use prepass::{
     ContradictionCandidate, DreamCandidates, DreamEpisode, DreamFact, DuplicateCandidate, EntityId,

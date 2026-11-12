@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createFixtureSuperAgentClient } from '@/api/fixtureSuperAgent'
 import type {
   MessageAdmissionResult,
@@ -82,6 +82,10 @@ const detail = (taskId: string): TaskDetail => ({
   decisions: [],
   criteria: [],
   helpers: [],
+})
+
+beforeEach(() => {
+  localStorage.clear()
 })
 
 describe('useSuperAgent resource ordering', () => {
@@ -974,8 +978,8 @@ describe('useSuperAgent submission and transcript state', () => {
       expect(result.current.operation).toEqual({ kind: 'idle' })
       expect(result.current.draft).toBe('')
       expect(result.current.notice).toEqual({
-        kind: 'admitted_failure',
-        text: 'The message was accepted. A final reply is not in the chat yet; the task may still be running.',
+        kind: 'quiet',
+        text: 'Working on your message.',
       })
     } finally {
       vi.useRealTimers()
@@ -1013,8 +1017,8 @@ describe('useSuperAgent submission and transcript state', () => {
 
       expect(result.current.draft).toBe(phoneText)
       expect(result.current.notice).toEqual({
-        kind: 'failed',
-        text: 'Message failed. Try again.',
+        kind: 'quiet',
+        text: 'Waiting to send. Will retry when connected.',
       })
 
       visible = true
@@ -1055,8 +1059,8 @@ describe('useSuperAgent submission and transcript state', () => {
       expect(result.current.operation).toEqual({ kind: 'idle' })
       expect(result.current.draft).toBe('Still on the phone')
       expect(result.current.notice).toEqual({
-        kind: 'failed',
-        text: 'Message failed. Try again.',
+        kind: 'quiet',
+        text: 'Waiting to send. Will retry when connected.',
       })
     } finally {
       vi.useRealTimers()
@@ -1147,11 +1151,17 @@ describe('useSuperAgent submission and transcript state', () => {
 
     act(() => result.current.setDraft('Original draft'))
     await act(async () => result.current.submit())
-    expect(result.current.notice).toEqual({ kind: 'failed', text: 'Message failed. Try again.' })
+    expect(result.current.notice).toEqual({
+      kind: 'quiet',
+      text: 'Waiting to send. Will retry when connected.',
+    })
     expect(result.current.draft).toBe('Original draft')
 
     act(() => result.current.setDraft('Edited draft'))
-    expect(result.current.notice).toEqual({ kind: 'idle' })
+    expect(result.current.notice).toEqual({
+      kind: 'quiet',
+      text: 'Waiting to send. Will retry when connected.',
+    })
   })
 
   it('accepts a new draft and a quote while a deferred send is in flight', async () => {
@@ -1663,6 +1673,27 @@ describe('useSuperAgent shell action failures', () => {
       kind: 'failed',
       text: 'Open the detail before closing it.',
     })
+  })
+
+  it('resends a stored outbox message with the same operation id', async () => {
+    localStorage.setItem(
+      'maia.outbox.v1',
+      JSON.stringify([
+        {
+          operationId: 'op-kept',
+          text: 'Still on the phone',
+          attachmentIds: [],
+          at: 1,
+        },
+      ]),
+    )
+    const send = vi.fn().mockResolvedValue(routed())
+    const client = clientWith({ send, transcript: vi.fn().mockResolvedValue({ messages: [] }) })
+    renderHook(() => useSuperAgent(client))
+    await waitFor(() => expect(send).toHaveBeenCalled())
+    expect(send.mock.calls[0]?.[0]).toBe('op-kept')
+    expect(send.mock.calls[0]?.[1]).toBe('Still on the phone')
+    localStorage.removeItem('maia.outbox.v1')
   })
 
   it('reports a safe host-command failure', async () => {

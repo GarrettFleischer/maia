@@ -561,6 +561,48 @@ enum NormalCommand {
         task_id: String,
         reply: Reply<Option<String>>,
     },
+    PutTaskPlan {
+        task_id: String,
+        goal_json: String,
+        todo_json: String,
+        handoff_count: i64,
+        handoff_of: Option<String>,
+        reply: Reply<Executed<()>>,
+    },
+    TaskPlan {
+        task_id: String,
+        reply: Reply<Option<(String, String, i64, Option<String>)>>,
+    },
+    PendingSubmissions {
+        reply: Reply<Vec<(String, String, String)>>,
+    },
+    EditClaim {
+        claim_id: String,
+        sentence: String,
+        reply: Reply<Executed<BrainMap>>,
+    },
+    ForgetClaim {
+        claim_id: String,
+        reply: Reply<Executed<BrainMap>>,
+    },
+    RestoreClaim {
+        claim_id: String,
+        reply: Reply<Executed<BrainMap>>,
+    },
+    MergeEntities {
+        winner: String,
+        loser: String,
+        reply: Reply<Executed<BrainMap>>,
+    },
+    ClaimOwnerEdited {
+        claim_id: String,
+        reply: Reply<bool>,
+    },
+    HideEpisode {
+        episode_id: String,
+        reason: String,
+        reply: Reply<Executed<()>>,
+    },
     InsertMcpAudit {
         request: McpAuditWrite,
         reply: Reply<Executed<()>>,
@@ -2657,6 +2699,178 @@ impl SqliteOwner {
         Pending { rx }.wait()
     }
 
+    /// Stores the goal contract and working list for one task.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue or SQLite failure.
+    pub fn put_task_plan(
+        &self,
+        task_id: impl Into<String>,
+        goal_json: impl Into<String>,
+        todo_json: impl Into<String>,
+        handoff_count: i64,
+        handoff_of: Option<String>,
+    ) -> Result<Executed<()>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::PutTaskPlan {
+                task_id: task_id.into(),
+                goal_json: goal_json.into(),
+                todo_json: todo_json.into(),
+                handoff_count,
+                handoff_of,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Reads the stored goal and working list.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue or SQLite failure.
+    pub fn task_plan(
+        &self,
+        task_id: impl Into<String>,
+    ) -> Result<Option<(String, String, i64, Option<String>)>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::TaskPlan {
+                task_id: task_id.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Inbox rows accepted but not yet routed, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue or SQLite failure.
+    pub fn pending_submissions(&self) -> Result<Vec<(String, String, String)>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::PendingSubmissions { reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Replaces a claim sentence. The edit is marked as the owner's.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, missing-claim, or SQLite failure.
+    pub fn edit_claim(
+        &self,
+        claim_id: impl Into<String>,
+        sentence: impl Into<String>,
+    ) -> Result<Executed<BrainMap>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::EditClaim {
+                claim_id: claim_id.into(),
+                sentence: sentence.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Hides a claim. The row stays in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, missing-claim, or SQLite failure.
+    pub fn forget_claim(&self, claim_id: impl Into<String>) -> Result<Executed<BrainMap>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::ForgetClaim {
+                claim_id: claim_id.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Shows a hidden claim again.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, missing-claim, or SQLite failure.
+    pub fn restore_claim(&self, claim_id: impl Into<String>) -> Result<Executed<BrainMap>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::RestoreClaim {
+                claim_id: claim_id.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Moves edges from `loser` onto `winner` and removes `loser`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, missing-entity, or SQLite failure.
+    pub fn merge_entities(
+        &self,
+        winner: impl Into<String>,
+        loser: impl Into<String>,
+    ) -> Result<Executed<BrainMap>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::MergeEntities {
+                winner: winner.into(),
+                loser: loser.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Whether the owner edited this claim. Extraction must not replace it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue or SQLite failure.
+    pub fn claim_owner_edited(&self, claim_id: impl Into<String>) -> Result<bool, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::ClaimOwnerEdited {
+                claim_id: claim_id.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Marks an episode hidden without deleting it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue or SQLite failure.
+    pub fn hide_episode(&self, episode_id: impl Into<String>, reason: impl Into<String>) -> Result<Executed<()>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::HideEpisode {
+                episode_id: episode_id.into(),
+                reason: reason.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
     /// Latest advisory guidance for one task.
     ///
     /// # Errors
@@ -3493,6 +3707,79 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
         NormalCommand::TaskGuidance { task_id, reply } => {
             send(reply, mcp_ops::guidance(connection, &task_id));
         }
+        NormalCommand::PutTaskPlan {
+            task_id,
+            goal_json,
+            todo_json,
+            handoff_count,
+            handoff_of,
+            reply,
+        } => executed(
+            reply,
+            sequence,
+            crate::memory_cleanup::put_task_plan(
+                connection,
+                &task_id,
+                &goal_json,
+                &todo_json,
+                handoff_count,
+                handoff_of.as_deref(),
+            ),
+        ),
+        NormalCommand::TaskPlan { task_id, reply } => {
+            send(reply, crate::memory_cleanup::task_plan(connection, &task_id));
+        }
+        NormalCommand::PendingSubmissions { reply } => {
+            send(reply, crate::memory_cleanup::pending_submissions(connection));
+        }
+        NormalCommand::EditClaim {
+            claim_id,
+            sentence,
+            reply,
+        } => executed(
+            reply,
+            sequence,
+            claim_map(connection, |connection| {
+                crate::memory_cleanup::edit_claim(connection, &claim_id, &sentence)
+            }),
+        ),
+        NormalCommand::ForgetClaim { claim_id, reply } => executed(
+            reply,
+            sequence,
+            claim_map(connection, |connection| {
+                crate::memory_cleanup::forget_claim(connection, &claim_id)
+            }),
+        ),
+        NormalCommand::RestoreClaim { claim_id, reply } => executed(
+            reply,
+            sequence,
+            claim_map(connection, |connection| {
+                crate::memory_cleanup::restore_claim(connection, &claim_id)
+            }),
+        ),
+        NormalCommand::MergeEntities {
+            winner,
+            loser,
+            reply,
+        } => executed(
+            reply,
+            sequence,
+            claim_map(connection, |connection| {
+                crate::memory_cleanup::merge_entities(connection, &winner, &loser)
+            }),
+        ),
+        NormalCommand::ClaimOwnerEdited { claim_id, reply } => {
+            send(reply, crate::memory_cleanup::claim_owner_edited(connection, &claim_id));
+        }
+        NormalCommand::HideEpisode {
+            episode_id,
+            reason,
+            reply,
+        } => executed(
+            reply,
+            sequence,
+            crate::memory_cleanup::hide_episode(connection, &episode_id, &reason),
+        ),
         NormalCommand::InsertMcpAudit { request, reply } => {
             executed(reply, sequence, mcp_ops::insert_audit(connection, &request));
         }
@@ -3567,6 +3854,14 @@ fn connection_settings(
 
 fn send<T>(reply: Reply<T>, result: Result<T, StoreError>) {
     let _ = reply.send(result);
+}
+
+fn claim_map(
+    connection: &rusqlite::Connection,
+    change: impl FnOnce(&rusqlite::Connection) -> Result<(), StoreError>,
+) -> Result<BrainMap, StoreError> {
+    change(connection)?;
+    crate::brain_ops::map(connection)
 }
 
 fn executed<T>(reply: Reply<Executed<T>>, sequence: u64, result: Result<T, StoreError>) {

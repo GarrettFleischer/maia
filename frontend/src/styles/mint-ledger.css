@@ -1580,6 +1580,94 @@ details:not([open]) > .maia-task-tree {
   min-height: 0;
 }
 
+.maia-brain-list article,
+.maia-brain-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.maia-muted {
+  color: var(--muted, #5c6b66);
+  font-size: 0.85rem;
+}
+
+.maia-brain .maia-brain-list {
+  max-height: none;
+  overflow: visible;
+}
+
+.maia-brain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.maia-brain-actions .maia-btn {
+  width: auto;
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  text-align: center;
+  padding: 0 14px;
+}
+
+.maia-chip,
+.maia-swatch {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  color: var(--text);
+  font-size: 0.75rem;
+}
+
+.maia-brain-entity {
+  fill: #7d6b9d;
+}
+
+.maia-brain-claim {
+  fill: #2f6f62;
+}
+
+.maia-brain-edge {
+  stroke: var(--border, #b7c9c2);
+  stroke-width: 1.5;
+}
+
+.maia-brain-svg text {
+  fill: #f7fbf9;
+  font-size: 12px;
+}
+
+.maia-brain-sheet {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border, #b7c9c2);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+
+@media (max-width: 727px) {
+  .maia-brain-sheet {
+    position: sticky;
+    bottom: 0;
+  }
+}
+
+@media (max-width: 727px) {
+  .maia-brain .maia-btn,
+  .maia-brain-toolbar input {
+    min-height: 44px;
+  }
+
+  .maia-brain {
+    overflow-x: hidden;
+  }
+}
+
 .maia-brain-toolbar {
   display: flex;
   flex-wrap: wrap;

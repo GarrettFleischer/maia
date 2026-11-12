@@ -166,12 +166,35 @@ impl ScriptedRouter {
     }
 }
 
+fn auxiliary_reply(request: &RouterRequest) -> Option<String> {
+    let text = request.messages.first()?.content.as_str();
+    if text.starts_with("Maia goal contract.") {
+        return Some(
+            r#"{"requirements":["Do the requested work."],"done_criteria":["The requested work is finished."]}"#
+                .to_owned(),
+        );
+    }
+    if text.starts_with("Maia goal check-in.") {
+        return Some(
+            r#"{"on_track":true,"progress_toward_done":60,"scope_creep":[],"stuck":false,"correction":""}"#
+                .to_owned(),
+        );
+    }
+    if text.starts_with("Maia handoff brief.") {
+        return Some("A fresh start is ready.".to_owned());
+    }
+    None
+}
+
 impl Router for ScriptedRouter {
     fn complete(
         &self,
         request: &RouterRequest,
     ) -> impl Future<Output = Result<RouterResponse, RouterError>> + Send {
         let prepared = {
+            if let Some(reply) = auxiliary_reply(request) {
+                Ok(reply_response(request.request_id, reply))
+            } else {
             let mut script = self.inner.lock().expect("router lock");
             script.requests += 1;
             if request
@@ -194,6 +217,7 @@ impl Router for ScriptedRouter {
                         detail: "no scripted proposal".to_owned(),
                     }),
                 }
+            }
             }
         };
         async move { prepared }
@@ -299,9 +323,10 @@ impl Router for SplitHold {
         &self,
         request: &RouterRequest,
     ) -> impl Future<Output = Result<RouterResponse, RouterError>> + Send {
-        let worker = request.messages.first().is_some_and(|message| {
-            message.content.starts_with("Maia task worker")
-        });
+        let worker = request
+            .messages
+            .first()
+            .is_some_and(|message| message.content.starts_with("Maia task worker"));
         let request = request.clone();
         if worker {
             let inner = self.worker.clone();
@@ -1836,8 +1861,9 @@ fn pre_admission_store_failure_stays_retryable() {
 }
 
 #[test]
-fn pending_submission_replay_after_restart_never_routes() {
-    let session = Session::open("pending-restart");
+fn pending_submission_resumes_once_after_restart() {
+    let mut session = Session::open("pending-restart");
+    session.ids.messages.pop_front();
     let operation_id = "77777777-7777-4777-8777-777777777777";
     let owner = SqliteOwner::open(OwnerOpen {
         path: session.database.clone(),
@@ -1867,33 +1893,23 @@ fn pending_submission_replay_after_restart_never_routes() {
         .expect("test runtime")
         .block_on(async move {
             let server = session.spawn();
-            let response = post_json(
-                &server,
-                "/api/super-agent/messages",
-                json!({"operation_id": operation_id, "text": USER_TEXT}),
-            )
-            .await;
-
-            assert_eq!(response.status(), 200);
-            assert_eq!(
-                response.json::<Value>().await.expect("pending body"),
-                json!({
-                    "admission": "admitted",
-                    "message_id": "m-1",
-                    "outcome": {
-                        "kind": "processing_pending",
-                        "reason": "processing_pending",
-                    },
-                })
-            );
-            assert_eq!(router.request_count(), 0);
-            assert_eq!(
-                count(&server.database, "SELECT COUNT(*) FROM router_messages"),
-                1
-            );
+            let started = std::time::Instant::now();
+            while count(&server.database, "SELECT COUNT(*) FROM task_sessions") == 0
+                && started.elapsed() < std::time::Duration::from_secs(2)
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             assert_eq!(
                 count(&server.database, "SELECT COUNT(*) FROM task_sessions"),
-                0
+                1
+            );
+            assert_eq!(router.request_count(), 2);
+            assert_eq!(
+                count(
+                    &server.database,
+                    "SELECT COUNT(*) FROM router_messages WHERE role = 'user'"
+                ),
+                1
             );
         });
 }
@@ -3741,12 +3757,20 @@ async fn revise_and_delete_brain(session: Session) {
         brain_sentence(&revised, "fact-1").as_deref(),
         Some("Notes stay on this computer.")
     );
-    assert!(brain_has_lexeme(&revised, "notes"));
-    assert!(brain_has_lexeme(&revised, "stay"));
-    assert!(brain_has_lexeme(&revised, "computer"));
-    assert!(!brain_has_lexeme(&revised, "on"));
-    assert!(!brain_has_lexeme(&revised, "this"));
-    assert!(!brain_has_lexeme(&revised, "obsidian"));
+    assert!(!revised["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .any(|node| node["kind"] == "lexeme"));
+    let lexemes = get(&server, "/api/brain/map?include=lexemes").await;
+    assert_eq!(lexemes.status(), 200);
+    let lexemes = lexemes.json::<Value>().await.expect("lexeme map");
+    assert!(brain_has_lexeme(&lexemes, "notes"));
+    assert!(brain_has_lexeme(&lexemes, "stay"));
+    assert!(brain_has_lexeme(&lexemes, "computer"));
+    assert!(!brain_has_lexeme(&lexemes, "on"));
+    assert!(!brain_has_lexeme(&lexemes, "this"));
+    assert!(!brain_has_lexeme(&lexemes, "obsidian"));
 
     let deleted = delete_api(&server, "/api/brain/facts/fact-1").await;
     assert_eq!(deleted.status(), 200);
@@ -4014,14 +4038,21 @@ async fn queued_messages_route_in_arrival_order() {
         &server.database,
         "SELECT body FROM router_messages WHERE role = 'user' ORDER BY ordinal, message_id",
     );
-    assert_eq!(owners, vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()]);
+    assert_eq!(
+        owners,
+        vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()]
+    );
     let tasks = texts(
         &server.database,
         "SELECT task_id FROM task_sessions ORDER BY task_id",
     );
     assert_eq!(
         tasks,
-        vec!["task-1".to_owned(), "task-2".to_owned(), "task-3".to_owned()]
+        vec![
+            "task-1".to_owned(),
+            "task-2".to_owned(),
+            "task-3".to_owned()
+        ]
     );
 }
 
@@ -4198,4 +4229,66 @@ async fn a_repeat_of_a_running_folder_does_not_spawn_a_second_task() {
         count(&server.database, "SELECT COUNT(*) FROM task_sessions"),
         1
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_during_a_running_worker_does_not_let_it_finish() {
+    let session = Session::open("stop-mid-run").with_model_work();
+    let route = session.router.clone();
+    let worker = ScriptedRouter::create();
+    route.push_proposal(create_task(900, 200));
+    push_success(&worker, "Should not finish.");
+    let gate = HoldGate::create();
+    let worker_started = Arc::new(AtomicBool::new(false));
+    let router = SplitHold {
+        route,
+        worker,
+        gate: Arc::clone(&gate),
+        worker_started: Arc::clone(&worker_started),
+    };
+    let server = session.spawn_router(router);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    let posted = post_json(
+        &server,
+        "/api/super-agent/messages",
+        json!({"text": USER_TEXT}),
+    )
+    .await;
+    assert_eq!(posted.status(), 200);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !worker_started.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            panic!("worker did not start");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let stopped = post_json(
+        &server,
+        "/api/super-agent/host-command",
+        json!({"command": "stop", "task_id": "task-1"}),
+    )
+    .await;
+    assert_eq!(stopped.status(), 200);
+    assert_eq!(
+        stopped.text().await.expect("stop"),
+        r#"{"phase":"stopped"}"#
+    );
+    gate.release();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let phase = texts(
+        &server.database,
+        "SELECT phase FROM task_sessions WHERE task_id = 'task-1'",
+    );
+    assert_eq!(phase.len(), 1);
+    assert!(
+        phase[0].starts_with("stopped"),
+        "phase stayed stopped: {}",
+        phase[0]
+    );
+    let body = get(&server, "/api/super-agent/transcript")
+        .await
+        .text()
+        .await
+        .expect("transcript");
+    assert!(!body.contains("Should not finish."));
 }

@@ -3,6 +3,7 @@ import {
   type BrainIndex,
   type BrainMap,
   type BrainMapClient,
+  type BrainSearchHit,
 } from '@/components/brain/layoutBrainMap'
 import { withCsrf } from '@/remote/csrf'
 
@@ -40,6 +41,40 @@ export function liveBrainMapClient(origin: string): BrainMapClient {
         }),
       )
     },
+    search(query: string) {
+      return readHits(
+        fetch(`${root}/api/brain/search`, {
+          method: 'POST',
+          headers: withCsrf('POST', { 'content-type': 'application/json' }),
+          body: JSON.stringify({ query }),
+        }),
+      )
+    },
+    editClaim(id: string, sentence: string) {
+      return readMap(
+        fetch(`${root}/api/brain/claims/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: withCsrf('PATCH', { 'content-type': 'application/json' }),
+          body: JSON.stringify({ sentence }),
+        }),
+      )
+    },
+    forgetClaim(id: string) {
+      return readMap(
+        fetch(`${root}/api/brain/claims/${encodeURIComponent(id)}/forget`, {
+          method: 'POST',
+          headers: withCsrf('POST', {}),
+        }),
+      )
+    },
+    restoreClaim(id: string) {
+      return readMap(
+        fetch(`${root}/api/brain/claims/${encodeURIComponent(id)}/restore`, {
+          method: 'POST',
+          headers: withCsrf('POST', {}),
+        }),
+      )
+    },
   }
 }
 
@@ -66,6 +101,16 @@ function isIndex(body: unknown): body is BrainIndex {
     typeof record.vector_count === 'number' &&
     typeof record.graph_count === 'number'
   )
+}
+
+async function readHits(request: Promise<Response>): Promise<BrainSearchHit[]> {
+  const response = await request
+  if (!response.ok) throw new Error('The brain search could not be read.')
+  const body: unknown = await response.json()
+  if (!body || typeof body !== 'object' || !Array.isArray((body as { hits?: unknown }).hits)) {
+    throw new Error('The brain search could not be read.')
+  }
+  return (body as { hits: BrainSearchHit[] }).hits
 }
 
 async function readMap(request: Promise<Response>): Promise<BrainMap> {

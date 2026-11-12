@@ -44,6 +44,8 @@ use maia_core::thread_cache::CompiledPrefix;
 use maia_core::thread_cache::RecallLineage;
 use maia_core::thread_cache::RecallPackPolicy;
 use maia_core::thread_cache::append_recall;
+#[cfg(test)]
+use maia_store::BrainDetail;
 use maia_store::BrainEdge;
 use maia_store::BrainMap;
 use maia_store::BrainNode;
@@ -298,6 +300,7 @@ pub(crate) fn recall_graph(map: &BrainMap) -> (RecallGraph, QuarantineSet) {
                     },
                 );
             }
+            BrainNodeKind::Entity => {}
         }
     }
     for edge in &map.edges {
@@ -831,6 +834,7 @@ mod tests {
                     taint: Some("untrusted".to_owned()),
                     session_id: Some("thread-1".to_owned()),
                     held: false,
+                    detail: BrainDetail::default(),
                 },
                 BrainNode {
                     id: "obsidian".to_owned(),
@@ -840,6 +844,7 @@ mod tests {
                     taint: None,
                     session_id: None,
                     held: false,
+                    detail: BrainDetail::default(),
                 },
             ],
             edges: vec![BrainEdge {

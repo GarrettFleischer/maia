@@ -237,12 +237,6 @@ export function RouterConversation({
                     aria-label={`Message from ${speaker}`}
                   >
                     <p className="maia-speaker">{speaker}</p>
-                    {message.thinking ? (
-                      <details className="maia-fold">
-                        <summary>Thinking</summary>
-                        <MarkdownMessage text={message.thinking} className="maia-fold-body" />
-                      </details>
-                    ) : null}
                     {message.route ? (
                       <details className="maia-fold">
                         <summary>{routeSummary(message.route)}</summary>
@@ -420,6 +414,18 @@ export function RouterConversation({
             >
               {status}
             </p>
+            {notice.kind === 'quiet' ? (
+              <button
+                type="button"
+                className="maia-btn"
+                onClick={() => {
+                  const pending = outgoing.find((item) => item.state === 'pending')
+                  if (pending) onRetryOutgoing?.(pending.id)
+                }}
+              >
+                Retry
+              </button>
+            ) : null}
             {notice.kind === 'refresh_failed' ? (
               <button
                 type="button"

@@ -268,6 +268,8 @@ Respond with one JSON object only: {\"skip\":bool,\"new\":[sentence],\"same\":[c
 Each sentence is one declarative sentence ending in a single period. \
 Use same when a nearest claim already says the fact. Use replaces when a nearest claim is corrected. \
 Use skip true for greetings and chatter with no durable fact. \
+Keep only durable facts about the owner: identity, location, preferences, people, devices, projects, folders, accounts, decisions, and standing instructions. \
+Do not keep status lines, your own actions, or one-off task requests. \
 No extra fields and no tools. A code fence or short preamble around that one JSON object is ignored.";
 
 /// Embedder identity recorded beside claim vectors.
@@ -541,6 +543,20 @@ impl<P: PromoterModel> PromotionRunner<P> {
         {
             return self.queue_retry(&episode.episode_id, now);
         }
+        let mut decision = decision;
+        reconcile_claims(&mut decision, &nearest);
+        decision.replaces.retain(|item| {
+            !self
+                .store
+                .claim_owner_edited(item.old.as_str())
+                .unwrap_or(true)
+        });
+        if decision.new.is_empty() && decision.replaces.is_empty() && decision.same.is_empty() {
+            self.store
+                .mark_promotion_skipped(&episode.episode_id, now, &self.model_name)?;
+            self.clear_defer(&episode.episode_id);
+            return Ok(PromotionAttempt::Skipped);
+        }
         let known = known_claim_ids(&self.store)?;
         let needed = decision.new.len() + decision.replaces.len();
         let new_ids = (0..needed)
@@ -800,6 +816,45 @@ fn cosine_millis(cosine: f64) -> Option<i32> {
     i32::try_from(scaled as i64).ok()
 }
 
+fn reconcile_claims(decision: &mut maia_core::dream::PromotionDecision, nearest: &[NearestClaimRow]) {
+    use maia_core::dream::ClaimJudgment;
+    use maia_core::dream::ReplaceDraft;
+    use maia_core::dream::judge_claim;
+    use maia_core::dream::near_duplicate;
+    use maia_core::dream::supersedes;
+    decision
+        .new
+        .retain(|sentence| judge_claim(sentence) == ClaimJudgment::Keep);
+    decision
+        .replaces
+        .retain(|item| judge_claim(&item.sentence) == ClaimJudgment::Keep);
+    let mut fresh = Vec::new();
+    for sentence in std::mem::take(&mut decision.new) {
+        if let Some(existing) = nearest
+            .iter()
+            .find(|claim| near_duplicate(&sentence, &claim.sentence))
+        {
+            let id = ClaimId::new(existing.claim_id.clone());
+            if !decision.same.iter().any(|item| item == &id) {
+                decision.same.push(id);
+            }
+            continue;
+        }
+        if let Some(existing) = nearest
+            .iter()
+            .find(|claim| supersedes(&claim.sentence, &sentence))
+        {
+            let id = ClaimId::new(existing.claim_id.clone());
+            if !decision.replaces.iter().any(|item| item.old == id) {
+                decision.replaces.push(ReplaceDraft { old: id, sentence });
+            }
+            continue;
+        }
+        fresh.push(sentence);
+    }
+    decision.new = fresh;
+}
+
 fn nearest_for_episode(
     store: &SqliteOwner,
     body: &str,
@@ -1051,6 +1106,21 @@ pub struct RecallArms {
     pub graph: i64,
     /// Ranked lines after fusion and the existing ranker. Empty when nothing packed.
     pub packed: Option<crate::inspector::PackedRecall>,
+    /// Ranked hits with the arms that matched, for the Brain search box.
+    pub hits: Vec<RecallHit>,
+}
+
+/// One fused recall hit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecallHit {
+    /// Stable id.
+    pub id: String,
+    /// `claim`, `fact`, or `episode`.
+    pub kind: String,
+    /// Sentence or title.
+    pub sentence: String,
+    /// Which arms matched: keyword, vector, graph.
+    pub arms: Vec<String>,
 }
 
 /// Builds recall seeds from keyword, vector, and graph arms, then ranks two hops.
@@ -1094,6 +1164,9 @@ pub fn recall_run(
         .iter()
         .map(|hit| format!("{}:{}", hit.kind, hit.id))
         .collect::<Vec<_>>();
+    let keyword_ids = keyword_arm.clone();
+    let vector_ids = vector_arm.clone();
+    let graph_ids = graph_arm_ids.clone();
     let fused = reciprocal_rank_fusion(&[keyword_arm, vector_arm, graph_arm_ids], RRF_K)
         .unwrap_or_default();
     let mut claim_ids = Vec::new();
@@ -1115,6 +1188,36 @@ pub fn recall_run(
     let vector_count = i64::try_from(vector_seeds.len()).unwrap_or(0);
     let graph_count = i64::try_from(graph_hits.len()).unwrap_or(0);
     let _ = store.record_recall_arms(keyword_count, vector_count, graph_count);
+    let mut titles = std::collections::BTreeMap::new();
+    for hit in keyword_hits.iter().chain(graph_hits.iter()) {
+        titles.insert(format!("{}:{}", hit.kind, hit.id), hit.title.clone());
+    }
+    let hits = fused
+        .iter()
+        .take(NEAREST_CLAIM_LIMIT as usize)
+        .filter_map(|rank| {
+            let (kind, id) = rank.id.split_once(':')?;
+            if id.is_empty() {
+                return None;
+            }
+            let mut arms = Vec::new();
+            if keyword_ids.iter().any(|item| item == &rank.id) {
+                arms.push("keyword".to_owned());
+            }
+            if vector_ids.iter().any(|item| item == &rank.id) {
+                arms.push("vector".to_owned());
+            }
+            if graph_ids.iter().any(|item| item == &rank.id) {
+                arms.push("graph".to_owned());
+            }
+            Some(RecallHit {
+                id: id.to_owned(),
+                kind: kind.to_owned(),
+                sentence: titles.get(&rank.id).cloned().unwrap_or_default(),
+                arms,
+            })
+        })
+        .collect::<Vec<_>>();
     let Some(map) = store
         .recall_subgraph_seeded(&claim_ids, &fact_ids, &lexeme_ids, 2)
         .ok()
@@ -1124,6 +1227,7 @@ pub fn recall_run(
             vector: vector_count,
             graph: graph_count,
             packed: None,
+            hits,
         };
     };
     if map.nodes.is_empty() {
@@ -1132,6 +1236,7 @@ pub fn recall_run(
             vector: vector_count,
             graph: graph_count,
             packed: None,
+            hits,
         };
     }
     let (mut graph, quarantine) = crate::inspector::recall_graph(&map);
@@ -1150,6 +1255,7 @@ pub fn recall_run(
         vector: vector_count,
         graph: graph_count,
         packed: packed.ok().flatten(),
+        hits,
     }
 }
 

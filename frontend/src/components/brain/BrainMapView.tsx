@@ -1,35 +1,60 @@
-import { useEffect, useState } from 'react'
-import { NodeChoiceList } from '@/components/brain/NodeChoiceList'
+import { useEffect, useMemo, useState } from 'react'
 import {
   brainStatusLine,
-  layoutBrainMap,
-  validateFactSentence,
-  visibleBrainNodes,
-  type BrainEdge,
   type BrainIndex,
   type BrainMap,
   type BrainMapClient,
-  type BrainMapMode,
   type BrainNode,
-  type BrainNodeKind,
+  type BrainSearchHit,
 } from '@/components/brain/layoutBrainMap'
+import { layoutLabeled } from '@/components/brain/layoutForce'
 
-const ALL_KINDS = new Set<BrainNodeKind>(['fact', 'claim', 'episode', 'lexeme'])
-const LAYOUT = { width: 960, height: 640 }
+type View = 'memory' | 'search' | 'review' | 'timeline' | 'graph'
+
+const GROUPS: { title: string; categories: string[] }[] = [
+  { title: 'About you', categories: ['person', 'other', ''] },
+  { title: 'People', categories: ['person'] },
+  { title: 'Places', categories: ['place'] },
+  { title: 'Projects & folders', categories: ['project', 'path'] },
+  { title: 'Devices', categories: ['device'] },
+  { title: 'Preferences & instructions', categories: ['preference', 'decision'] },
+]
+
+function groupTitle(node: BrainNode): string {
+  const category = node.category ?? ''
+  if (category === 'person' && (node.subject ?? 'Owner') !== 'Owner') return 'People'
+  if (category === 'place') return 'Places'
+  if (category === 'project' || category === 'path') return 'Projects & folders'
+  if (category === 'device') return 'Devices'
+  if (category === 'preference' || category === 'decision') return 'Preferences & instructions'
+  return 'About you'
+}
+
+function facts(map: BrainMap): BrainNode[] {
+  return map.nodes.filter((node) => node.kind === 'claim' || node.kind === 'fact')
+}
+
+function learned(node: BrainNode): string {
+  if (node.created_at == null) return 'Learned from a conversation'
+  return `Learned ${new Date(node.created_at * 1000).toLocaleDateString()}`
+}
 
 export function BrainMapView({ client }: { client: BrainMapClient }) {
   const [map, setMap] = useState<BrainMap | null>(null)
-  const [mode, setMode] = useState<BrainMapMode>('explore')
+  const [view, setView] = useState<View>('memory')
   const [query, setQuery] = useState('')
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [draft, setDraft] = useState('')
-  const [confirmTrim, setConfirmTrim] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [hits, setHits] = useState<BrainSearchHit[] | null>(null)
   const [index, setIndex] = useState<BrainIndex | null>(null)
-  const [zoom, setZoom] = useState(1)
-  const [pan, setPan] = useState({ x: 0, y: 0 })
-  const [drag, setDrag] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string | null>(null)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+  const [undo, setUndo] = useState<string | null>(null)
+
+  const reload = (next: BrainMap) => {
+    setMap(next)
+    setError(null)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -62,96 +87,63 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
     }
   }, [client])
 
-  const selected = map?.nodes.find((node) => node.id === selectedId) ?? null
+  const memory = useMemo(() => {
+    const grouped = new Map<string, BrainNode[]>()
+    for (const title of GROUPS.map((group) => group.title)) grouped.set(title, [])
+    for (const node of facts(map ?? { nodes: [], edges: [] })) {
+      const title = groupTitle(node)
+      grouped.get(title)?.push(node)
+    }
+    return grouped
+  }, [map])
 
-  const selectNode = (id: string) => {
-    if (id === selectedId) return
-    setSelectedId(id)
-    setConfirmTrim(false)
-    const node = map?.nodes.find((item) => item.id === id)
-    setDraft(node?.kind === 'fact' ? (node.sentence ?? '') : '')
-  }
+  if (error && !map) return <p role="alert">{error}</p>
+  if (!map) return <p role="status">Loading the brain.</p>
 
-  if (error && !map) {
-    return <p>{error}</p>
-  }
-  if (!map) {
-    return <p>Loading the brain.</p>
-  }
-  if (map.nodes.length === 0) {
-    return (
-      <section className="maia-brain" aria-label="Brain map">
-        <div className="maia-brain-toolbar">
-          <input
-            type="search"
-            aria-label="Search the brain"
-            placeholder="Search the brain"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </div>
-        <p>Nothing has been promoted yet. Episodes remain searchable.</p>
-        <BrainStatus
-          index={index}
-          onExport={
-            client.exportMarkdown
-              ? () => {
-                  void client.exportMarkdown?.().then(
-                    (next) => setIndex(next),
-                    () => setError('That export was not saved.'),
-                  )
-                }
-              : undefined
-          }
-        />
-      </section>
-    )
-  }
-
-  const visible = visibleBrainNodes(map, { query, kinds: ALL_KINDS, sessionId })
-  const visibleIds = new Set(visible.map((node) => node.id))
-  const visibleEdges = map.edges.filter(
-    (edge) => visibleIds.has(edge.from_id) && visibleIds.has(edge.to_id),
-  )
-  const positions = layoutBrainMap(visible, visibleEdges, LAYOUT)
-  const sessions = [
-    ...new Set(map.nodes.flatMap((node) => (node.session_id === null ? [] : [node.session_id]))),
-  ].sort()
-  const sentenceError = validateFactSentence(draft)
-  const editingFact = mode === 'edit' && selected?.kind === 'fact'
-
-  const save = () => {
-    if (!selected || selected.kind !== 'fact' || sentenceError) {
-      setError(sentenceError)
+  const runSearch = () => {
+    const text = query.trim()
+    if (!client.search || text.length === 0) {
+      setHits([])
       return
     }
-    const stored = draft.trim()
-    void client.reviseFact(selected.id, stored).then(
-      (next) => {
-        setMap(next)
-        setDraft(stored)
-        setError(null)
-      },
-      () => setError('That edit was not saved.'),
+    void client.search(text).then(
+      (found) => setHits(found),
+      () => setError('Search could not be completed.'),
     )
   }
 
-  const remove = () => {
-    if (!selected || selected.kind !== 'fact') return
-    void client.deleteFact(selected.id).then(
-      (next) => {
-        setMap(next)
-        setSelectedId(null)
-        setDraft('')
-        setConfirmTrim(false)
-        setError(null)
-      },
-      () => setError('That fact was not removed.'),
-    )
+  const saveEdit = (node: BrainNode) => {
+    const sentence = draft.trim()
+    if (sentence.length === 0) return
+    const write = node.kind === 'claim' && client.editClaim ? client.editClaim(node.id, sentence) : client.reviseFact(node.id, sentence)
+    void write.then(reload, () => setError('That edit was not saved.'))
+    setEditing(null)
+  }
+
+  const forget = (node: BrainNode) => {
+    const write = node.kind === 'claim' && client.forgetClaim ? client.forgetClaim(node.id) : client.deleteFact(node.id)
+    void write.then((next) => {
+      reload(next)
+      setUndo(node.id)
+    }, () => setError('That fact could not be forgotten.'))
   }
 
   return (
-    <section className="maia-brain" aria-label="Brain map">
+    <section className="maia-brain" aria-label="Memory">
+      <div className="maia-brain-toolbar" role="tablist" aria-label="Brain views">
+        {(['memory', 'search', 'review', 'timeline', 'graph'] as const).map((item) => (
+          <button
+            key={item}
+            type="button"
+            role="tab"
+            aria-selected={view === item}
+            className="maia-btn"
+            onClick={() => setView(item)}
+          >
+            {item[0]!.toUpperCase() + item.slice(1)}
+          </button>
+        ))}
+      </div>
       <div className="maia-brain-toolbar">
         <input
           type="search"
@@ -159,251 +151,339 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           placeholder="Search the brain"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              setView('search')
+              runSearch()
+            }
+          }}
         />
-        <label>
-          Session
-          <select
-            aria-label="Session"
-            value={sessionId ?? ''}
-            onChange={(event) => setSessionId(event.target.value === '' ? null : event.target.value)}
+      </div>
+      {error ? <p role="alert">{error}</p> : null}
+      {view === 'memory' ? (
+        <MemoryList
+          grouped={memory}
+          empty={facts(map).length === 0}
+          editing={editing}
+          draft={draft}
+          onDraft={setDraft}
+          onEdit={(node) => {
+            setEditing(node.id)
+            setDraft(node.sentence ?? node.label)
+          }}
+          onSave={saveEdit}
+          onForget={forget}
+          onSource={setSelected}
+        />
+      ) : null}
+      {view === 'search' ? <SearchResults hits={hits} onSearch={runSearch} /> : null}
+      {view === 'review' ? (
+        <ReviewList
+          nodes={facts(map).filter((node) => (node.confidence_millis ?? 700) < 700)}
+          hidden={map.hidden ?? []}
+          onApprove={(node) => {
+            if (!client.editClaim) return
+            void client.editClaim(node.id, node.sentence ?? node.label).then(reload)
+          }}
+          onReject={forget}
+          onRestore={(id) => {
+            if (!client.restoreClaim) return
+            void client.restoreClaim(id).then(reload)
+          }}
+        />
+      ) : null}
+      {view === 'timeline' ? <Timeline map={map} /> : null}
+      {view === 'graph' ? (
+        <Graph
+          nodes={map.nodes.filter((node) => node.kind === 'entity' || node.kind === 'claim')}
+          edges={map.edges}
+          selected={selected}
+          onSelect={setSelected}
+        />
+      ) : null}
+      {undo ? (
+        <p role="status">
+          Forgotten.{' '}
+          <button
+            type="button"
+            className="maia-btn"
+            onClick={() => {
+              if (client.restoreClaim) void client.restoreClaim(undo).then(reload)
+              setUndo(null)
+            }}
           >
-            <option value="">All sessions</option>
-            {sessions.map((session) => (
-              <option key={session} value={session}>
-                {session}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div role="radiogroup" aria-label="Brain mode">
-          <label>
-            <input
-              type="radio"
-              name="brain-mode"
-              checked={mode === 'explore'}
-              onChange={() => setMode('explore')}
-            />
-            Explore
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="brain-mode"
-              checked={mode === 'edit'}
-              onChange={() => setMode('edit')}
-            />
-            Edit
-          </label>
-        </div>
-        <button type="button" className="maia-btn" onClick={() => setZoom((value) => clampZoom(value * 1.15))}>
-          Zoom in
-        </button>
-        <button type="button" className="maia-btn" onClick={() => setZoom((value) => clampZoom(value / 1.15))}>
-          Zoom out
-        </button>
-        <BrainStatus
-          index={index}
-          onExport={
-            client.exportMarkdown
-              ? () => {
-                  void client.exportMarkdown?.().then(
-                    (next) => setIndex(next),
-                    () => setError('That export was not saved.'),
-                  )
-                }
-              : undefined
-          }
-        />
-      </div>
-      <div className="maia-brain-layout">
-        <svg
-          className="maia-brain-svg"
-          viewBox={`0 0 ${LAYOUT.width} ${LAYOUT.height}`}
-          role="img"
-          aria-label="Brain graph. The list beside it mirrors every visible node."
-          onWheel={(event) => {
-            event.preventDefault()
-            setZoom((value) => clampZoom(value * (event.deltaY < 0 ? 1.08 : 0.92)))
-          }}
-          onPointerDown={(event) => {
-            if (event.target !== event.currentTarget) return
-            setDrag({ x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y })
-          }}
-          onPointerMove={(event) => {
-            if (!drag) return
-            setPan({
-              x: drag.panX + event.clientX - drag.x,
-              y: drag.panY + event.clientY - drag.y,
-            })
-          }}
-          onPointerUp={() => setDrag(null)}
-        >
-          <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
-            {visibleEdges.map((edge) => (
-              <GraphEdge key={edgeKey(edge)} edge={edge} positions={positions} />
-            ))}
-            {visible.map((node) => {
-              const point = positions.get(node.id)
-              if (!point) return null
-              return (
-                <GraphNode
-                  key={node.id}
-                  node={node}
-                  x={point.x}
-                  y={point.y}
-                  selected={node.id === selectedId}
-                  onSelect={() => selectNode(node.id)}
-                />
+            Undo
+          </button>
+        </p>
+      ) : null}
+      <details className="maia-brain-settings">
+        <summary>Settings / Sync</summary>
+        {index ? <p>{brainStatusLine(index)}</p> : <p>No markdown export yet.</p>}
+        {client.exportMarkdown ? (
+          <button
+            type="button"
+            className="maia-btn"
+            onClick={() => {
+              void client.exportMarkdown?.().then(
+                (next) => setIndex(next),
+                () => setError('That export was not saved.'),
               )
-            })}
-          </g>
-        </svg>
-        <div className="maia-brain-side">
-          <NodeChoiceList
-            label="Brain nodes"
-            selectedId={selectedId}
-            onSelect={selectNode}
-            items={visible.map((node) => ({
-              id: node.id,
-              label: node.label,
-              taint: node.taint,
-            }))}
-          />
-          <div className="maia-brain-detail">
-            {selected ? (
-              <>
-                <p className="maia-mono">{selected.id}</p>
-                <p>{selected.sentence ?? selected.label}</p>
-                <p>
-                  {selected.taint ?? 'no taint'} · {selected.session_id ?? 'no session'}
-                  {selected.held ? ' · hold' : ''}
-                </p>
-              </>
-            ) : (
-              <p>Select a fact, claim, episode, or lexeme.</p>
-            )}
-            {editingFact ? (
-              <>
-                <label>
-                  Fact sentence
-                  <input
-                    aria-label="Fact sentence"
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                  />
-                </label>
-                <button type="button" className="maia-btn maia-btn--primary" onClick={save} disabled={sentenceError !== null}>
-                  Save sentence
-                </button>
-                {confirmTrim ? (
-                  <button type="button" className="maia-btn maia-btn--danger" onClick={remove}>
-                    Remove this fact
-                  </button>
-                ) : (
-                  <button type="button" className="maia-btn" onClick={() => setConfirmTrim(true)}>
-                    Trim fact
-                  </button>
-                )}
-              </>
-            ) : null}
-            {error ? <p>{error}</p> : null}
-          </div>
-        </div>
-      </div>
+            }}
+          >
+            Export markdown
+          </button>
+        ) : null}
+      </details>
+      {selected ? <p>Source: {selected}</p> : null}
     </section>
   )
 }
 
-function BrainStatus({ index, onExport }: { index: BrainIndex | null; onExport?: () => void }) {
-  if (!index && !onExport) return null
+function MemoryList({
+  grouped,
+  empty,
+  editing,
+  draft,
+  onDraft,
+  onEdit,
+  onSave,
+  onForget,
+  onSource,
+}: {
+  grouped: Map<string, BrainNode[]>
+  empty: boolean
+  editing: string | null
+  draft: string
+  onDraft: (value: string) => void
+  onEdit: (node: BrainNode) => void
+  onSave: (node: BrainNode) => void
+  onForget: (node: BrainNode) => void
+  onSource: (id: string) => void
+}) {
+  if (empty) {
+    return (
+        <p>Nothing has been promoted yet. Episodes remain searchable.</p>
+    )
+  }
   return (
-    <div className="maia-brain-status">
-      {index ? <p>{brainStatusLine(index)}</p> : null}
-      {onExport ? (
-        <button type="button" className="maia-btn" onClick={onExport}>
-          Export markdown
-        </button>
-      ) : null}
+    <div>
+      {[...grouped.entries()].map(([title, nodes]) =>
+        nodes.length === 0 ? null : (
+          <section key={title} aria-label={title}>
+            <h2>{title}</h2>
+            <ul className="maia-brain-list">
+              {nodes.map((node) => (
+                <li key={node.id}>
+                  <article>
+                    {editing === node.id ? (
+                      <input
+                        aria-label="Fact sentence"
+                        value={draft}
+                        onChange={(event) => onDraft(event.target.value)}
+                      />
+                    ) : (
+                      <p>{node.sentence ?? node.label}</p>
+                    )}
+                    <p className="maia-muted">{learned(node)}</p>
+                    <div className="maia-brain-actions">
+                    <button type="button" className="maia-btn" onClick={() => onEdit(node)}>
+                      Edit
+                    </button>
+                    {editing === node.id ? (
+                      <button type="button" className="maia-btn" onClick={() => onSave(node)}>
+                        Save sentence
+                      </button>
+                    ) : null}
+                    <button type="button" className="maia-btn" onClick={() => onForget(node)}>
+                      Forget
+                    </button>
+                    <button
+                      type="button"
+                      className="maia-btn"
+                      onClick={() => onSource(node.source_episode ?? node.id)}
+                    >
+                      View source
+                    </button>
+                    </div>
+                  </article>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ),
+      )}
     </div>
   )
 }
 
-function GraphEdge({
-  edge,
-  positions,
-}: {
-  edge: BrainEdge
-  positions: ReadonlyMap<string, { x: number; y: number }>
-}) {
-  const from = positions.get(edge.from_id)
-  const to = positions.get(edge.to_id)
-  if (!from || !to) return null
+function SearchResults({ hits, onSearch }: { hits: BrainSearchHit[] | null; onSearch: () => void }) {
   return (
-    <line
-      x1={from.x}
-      y1={from.y}
-      x2={to.x}
-      y2={to.y}
-      stroke="currentColor"
-      strokeOpacity={0.35}
-    />
+    <div>
+      <button type="button" className="maia-btn" onClick={onSearch}>
+        Search
+      </button>
+      {hits === null ? <p>Search uses the same recall Maia uses.</p> : null}
+      {hits?.length === 0 ? <p>Nothing matched.</p> : null}
+      <ul aria-label="Search results">
+        {hits?.map((hit) => (
+          <li key={`${hit.kind}-${hit.id}`}>
+            <p>{hit.sentence || hit.id}</p>
+            {hit.arms.map((arm) => (
+              <span key={arm} className="maia-chip">
+                {arm}
+              </span>
+            ))}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
-function GraphNode({
-  node,
-  x,
-  y,
+function ReviewList({
+  nodes,
+  hidden,
+  onApprove,
+  onReject,
+  onRestore,
+}: {
+  nodes: BrainNode[]
+  hidden: BrainNode[]
+  onApprove: (node: BrainNode) => void
+  onReject: (node: BrainNode) => void
+  onRestore: (id: string) => void
+}) {
+  return (
+    <div>
+      {nodes.length === 0 ? <p>Nothing is waiting for review.</p> : null}
+      <ul aria-label="Review">
+        {nodes.map((node) => (
+          <li key={node.id}>
+            <p>{node.sentence ?? node.label}</p>
+            <button type="button" className="maia-btn" onClick={() => onApprove(node)}>
+              Approve
+            </button>
+            <button type="button" className="maia-btn" onClick={() => onReject(node)}>
+              Reject
+            </button>
+          </li>
+        ))}
+      </ul>
+      <details>
+        <summary>Hidden</summary>
+        <ul>
+          {hidden.map((node) => (
+            <li key={node.id}>
+              <p>{node.sentence ?? node.label}</p>
+              <button type="button" className="maia-btn" onClick={() => onRestore(node.id)}>
+                Restore
+              </button>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </div>
+  )
+}
+
+function Timeline({ map }: { map: BrainMap }) {
+  const episodes = map.nodes
+    .filter((node) => node.kind === 'episode')
+    .slice()
+    .reverse()
+  if (episodes.length === 0) return <p>No conversations have been stored yet.</p>
+  return (
+    <ol aria-label="Timeline">
+      {episodes.map((episode) => {
+        const born = facts(map).filter((fact) => fact.source_episode === episode.id)
+        return (
+          <li key={episode.id}>
+            <p>{episode.sentence ?? episode.label}</p>
+            {born.map((fact) => (
+              <p key={fact.id}>{fact.sentence ?? fact.label}</p>
+            ))}
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+function Graph({
+  nodes,
+  edges,
   selected,
   onSelect,
 }: {
-  node: BrainNode
-  x: number
-  y: number
-  selected: boolean
-  onSelect: () => void
+  nodes: BrainNode[]
+  edges: BrainMap['edges']
+  selected: string | null
+  onSelect: (id: string) => void
 }) {
-  return (
-    <g
-      className={selected ? 'maia-brain-node is-selected' : 'maia-brain-node'}
-      data-testid={`brain-graph-${node.id}`}
-      transform={`translate(${x} ${y})`}
-      onClick={onSelect}
-    >
-      <NodeShape kind={node.kind} />
-      {node.taint === 'untrusted' ? (
-        <text className="maia-brain-mark" x={14} y={-10}>
-          U
-        </text>
-      ) : null}
-      {node.held ? (
-        <text className="maia-brain-mark" x={14} y={4}>
-          hold
-        </text>
-      ) : null}
-      <text y={node.kind === 'lexeme' ? 22 : 28} textAnchor="middle">
-        {shortLabel(node.label)}
-      </text>
-    </g>
-  )
-}
-
-function NodeShape({ kind }: { kind: BrainNodeKind }) {
-  if (kind === 'lexeme') {
-    return <rect x={-7} y={-7} width={14} height={14} transform="rotate(45)" />
+  const boxes = layoutLabeled(nodes.map((node) => ({ id: node.id, label: node.label })))
+  const byId = new Map(boxes.map((box) => [box.id, box]))
+  const neighbours = new Set<string>()
+  if (selected) {
+    neighbours.add(selected)
+    for (const edge of edges) {
+      if (edge.from_id === selected) neighbours.add(edge.to_id)
+      if (edge.to_id === selected) neighbours.add(edge.from_id)
+    }
   }
-  const radius = kind === 'fact' ? 16 : kind === 'claim' ? 10 : 5
-  return <circle r={radius} />
-}
-
-function shortLabel(label: string): string {
-  return label.length > 22 ? `${label.slice(0, 21)}…` : label
-}
-
-function edgeKey(edge: BrainEdge): string {
-  return `${edge.kind}:${edge.from_kind}:${edge.from_id}:${edge.to_kind}:${edge.to_id}`
-}
-
-function clampZoom(value: number): number {
-  return Math.min(2.5, Math.max(0.4, value))
+  const width = Math.max(320, ...boxes.map((box) => box.x + box.w + 24), 320)
+  const height = Math.max(180, ...boxes.map((box) => box.y + box.h + 24), 180)
+  const chosen = nodes.find((node) => node.id === selected)
+  return (
+    <div className="maia-brain-graph">
+      <p className="maia-muted">
+        <span className="maia-swatch maia-swatch--entity">Entity</span>
+        <span className="maia-swatch maia-swatch--claim">Claim</span>
+      </p>
+      <svg className="maia-brain-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Memory graph">
+        {edges.map((edge) => {
+          const from = byId.get(edge.from_id)
+          const to = byId.get(edge.to_id)
+          if (!from || !to) return null
+          return (
+            <line
+              key={`${edge.from_id}-${edge.to_id}-${edge.kind}`}
+              x1={from.x + from.w / 2}
+              y1={from.y + from.h / 2}
+              x2={to.x + to.w / 2}
+              y2={to.y + to.h / 2}
+              className="maia-brain-edge"
+            />
+          )
+        })}
+        {boxes.map((box) => {
+          const node = nodes.find((item) => item.id === box.id)
+          const active = selected === null || neighbours.has(box.id)
+          const label = node?.label ?? box.id
+          return (
+            <g key={box.id} data-testid={`brain-graph-${box.id}`} opacity={active ? 1 : 0.28}>
+              <title>{label}</title>
+              <rect
+                x={box.x}
+                y={box.y}
+                width={box.w}
+                height={box.h}
+                rx={6}
+                className={node?.kind === 'entity' ? 'maia-brain-entity' : 'maia-brain-claim'}
+                onClick={() => onSelect(box.id)}
+              />
+              <text x={box.x + 8} y={box.y + 15} onClick={() => onSelect(box.id)}>
+                {label.slice(0, 18)}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+      {chosen ? (
+        <aside className="maia-brain-sheet" aria-label="Selected memory">
+          <h2>{chosen.label}</h2>
+          <p>{chosen.sentence ?? chosen.label}</p>
+        </aside>
+      ) : null}
+    </div>
+  )
 }

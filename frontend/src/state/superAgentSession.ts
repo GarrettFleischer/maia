@@ -166,6 +166,12 @@ type SessionEvent =
       text: string
     }
   | {
+      type: 'quiet_notice'
+      session: ClientSessionId
+      activation: ClientActivationId
+      text: string
+    }
+  | {
       type: 'send_succeeded'
       session: ClientSessionId
       activation: ClientActivationId
@@ -516,6 +522,12 @@ export function reduceSuperAgentState(
       return {
         ...state,
         notice: { kind: 'admitted_failure', text: event.text },
+      }
+    case 'quiet_notice':
+      return {
+        ...state,
+        operation: { kind: 'idle' },
+        notice: { kind: 'quiet', text: event.text },
       }
     case 'send_succeeded':
       if (!ownsSend(state, event.token)) return state

@@ -22,10 +22,10 @@ pub fn lexemes_for_sentence(sentence: &str, policy: &LexicalPolicy) -> Vec<Lexem
     let mut seen = BTreeSet::new();
     for token in tokenize(sentence) {
         let normalized = normalize_lexeme(&token);
-        if normalized.is_empty() {
+        if normalized.len() < 2 {
             continue;
         }
-        if policy.stopwords.contains(&normalized) {
+        if policy.stopwords.contains(&normalized) || FUNCTION_WORDS.contains(&normalized.as_str()) {
             continue;
         }
         if policy
@@ -41,6 +41,15 @@ pub fn lexemes_for_sentence(sentence: &str, policy: &LexicalPolicy) -> Vec<Lexem
     }
     lexemes
 }
+
+const FUNCTION_WORDS: &[&str] = &[
+    "about", "also", "and", "are", "as", "at", "be", "been", "but", "by", "can", "could", "did",
+    "do", "does", "for", "from", "had", "has", "have", "he", "her", "here", "his", "how", "i",
+    "if", "in", "into", "is", "it", "its", "just", "me", "my", "not", "of", "on", "or", "our",
+    "rather", "she", "so", "than", "that", "the", "their", "them", "then", "there", "they",
+    "this", "to", "too", "was", "wants", "we", "were", "what", "when", "where", "which", "who",
+    "will", "with", "you", "your",
+];
 
 fn tokenize(sentence: &str) -> Vec<String> {
     let mut tokens = Vec::new();

@@ -136,6 +136,7 @@ export function textOrNone(value: string): string {
 
 export function composerStatusText(notice: ComposerNotice, rejection: string | null): string | null {
   if (notice.kind === 'pending') return 'Sending.'
+  if (notice.kind === 'quiet') return notice.text
   if (
     notice.kind === 'failed' ||
     notice.kind === 'admitted_failure' ||

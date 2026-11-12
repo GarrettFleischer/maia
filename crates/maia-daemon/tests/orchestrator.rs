@@ -10,10 +10,10 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
 
@@ -32,7 +32,6 @@ use maia_core::router::RouterUsage;
 use maia_core::router::UsageValue;
 use maia_core::security::SecurityProfile;
 use maia_core::security::Taint;
-use maia_core::super_agent::admit_completion;
 use maia_core::super_agent::AdmittedRoute;
 use maia_core::super_agent::AdvisoryBrief;
 use maia_core::super_agent::AttemptId;
@@ -77,15 +76,8 @@ use maia_core::super_agent::TaskId;
 use maia_core::super_agent::TaskPhase;
 use maia_core::super_agent::UserPromptBytes;
 use maia_core::super_agent::WaitReason;
+use maia_core::super_agent::admit_completion;
 use maia_core::thread_cache::ChatRole;
-use maia_daemon::accepted_routing_policy;
-use maia_daemon::canonical_phase;
-use maia_daemon::encode_route_proposal;
-use maia_daemon::named_tool_response;
-use maia_daemon::open_routing_policy;
-use maia_daemon::parse_canonical_phase;
-use maia_daemon::present_router_body;
-use maia_daemon::route_tool_response;
 use maia_daemon::AdmittedMcpTool;
 use maia_daemon::AdmittedOutcome;
 use maia_daemon::ApprovalKind;
@@ -108,6 +100,14 @@ use maia_daemon::StagedAttachment;
 use maia_daemon::SubmissionAdmission;
 use maia_daemon::ToolHostError;
 use maia_daemon::UNKNOWN_OUTCOME_SUMMARY;
+use maia_daemon::accepted_routing_policy;
+use maia_daemon::canonical_phase;
+use maia_daemon::encode_route_proposal;
+use maia_daemon::named_tool_response;
+use maia_daemon::open_routing_policy;
+use maia_daemon::parse_canonical_phase;
+use maia_daemon::present_router_body;
+use maia_daemon::route_tool_response;
 use maia_store::AppendEvents;
 use maia_store::ApprovalDecision;
 use maia_store::ApprovalSettlement;
@@ -219,12 +219,35 @@ impl ScriptedRouter {
     }
 }
 
+fn auxiliary_reply(request: &RouterRequest) -> Option<String> {
+    let text = request.messages.first()?.content.as_str();
+    if text.starts_with("Maia goal contract.") {
+        return Some(
+            r#"{"requirements":["Do the requested work."],"done_criteria":["The requested work is finished."]}"#
+                .to_owned(),
+        );
+    }
+    if text.starts_with("Maia goal check-in.") {
+        return Some(
+            r#"{"on_track":true,"progress_toward_done":60,"scope_creep":[],"stuck":false,"correction":""}"#
+                .to_owned(),
+        );
+    }
+    if text.starts_with("Maia handoff brief.") {
+        return Some("A fresh start is ready.".to_owned());
+    }
+    None
+}
+
 impl Router for ScriptedRouter {
     fn complete(
         &self,
         request: &RouterRequest,
     ) -> impl Future<Output = Result<RouterResponse, RouterError>> + Send {
         let prepared = {
+            if let Some(reply) = auxiliary_reply(request) {
+                Ok(reply_response(request.request_id, reply))
+            } else {
             let mut script = self.inner.lock().expect("router script lock");
             script.requests.push(request.clone());
             if request
@@ -233,6 +256,15 @@ impl Router for ScriptedRouter {
                 .is_some_and(|message| message.content.starts_with("Maia task-report relay."))
             {
                 Ok(reply_response(request.request_id, "Relayed.".to_owned()))
+            } else if request
+                .messages
+                .first()
+                .is_some_and(|message| message.content.starts_with("Maia context compaction."))
+            {
+                Ok(reply_response(
+                    request.request_id,
+                    "Earlier steps were folded. The original goal stays.".to_owned(),
+                ))
             } else {
                 match script.replies.pop_front() {
                     Some(ScriptedReply::Proposal(proposal)) => {
@@ -267,6 +299,7 @@ impl Router for ScriptedRouter {
                         detail: "no scripted proposal".to_owned(),
                     }),
                 }
+            }
             }
         };
         async move { prepared }
@@ -881,10 +914,12 @@ fn unknown_outcome_records_one_call_and_continue_does_not_replay() {
         }
     );
     assert_eq!(harness.host().tools().call_count(), 1);
-    assert!(harness
-        .host()
-        .tools()
-        .replay_blocked(&CallId("call-1".to_owned())));
+    assert!(
+        harness
+            .host()
+            .tools()
+            .replay_blocked(&CallId("call-1".to_owned()))
+    );
     assert_eq!(stepped.summary, UNKNOWN_OUTCOME_SUMMARY);
     harness.host().tools().push_parent(ScriptedCall::Progress {
         summary: "replay me".to_owned(),
@@ -1414,10 +1449,12 @@ fn parent_and_child_scripts_stay_explicit_and_child_unknown_waits_parent() {
         }
     );
     assert_eq!(harness.host().tools().call_count(), 2);
-    assert!(harness
-        .host()
-        .tools()
-        .replay_blocked(&CallId("call-2".to_owned())));
+    assert!(
+        harness
+            .host()
+            .tools()
+            .replay_blocked(&CallId("call-2".to_owned()))
+    );
     assert_eq!(
         texts(&harness.database, "SELECT child_id FROM child_assignments"),
         vec!["child-1".to_owned()]
@@ -2260,10 +2297,12 @@ fn natural_language_router_reply_creates_no_task() {
             "Hello, Garrett. What should I take on?".to_owned(),
         ]
     );
-    assert!(harness.router.requests()[0]
-        .tools_json
-        .0
-        .contains("spawn_task"));
+    assert!(
+        harness.router.requests()[0]
+            .tools_json
+            .0
+            .contains("spawn_task")
+    );
     let (system, user) = request_pair(&harness);
     assert_eq!(user, "Hello, this is Garrett");
     assert_control_contract(&system);
@@ -2324,9 +2363,11 @@ fn later_turn_remembers_the_conversation_and_records_the_spawn() {
         &harness.database,
         "SELECT body FROM router_messages ORDER BY ordinal",
     );
-    assert!(bodies
-        .iter()
-        .any(|body| present_router_body(body).text == "Dispatched as one new task: Canby OR."));
+    assert!(
+        bodies
+            .iter()
+            .any(|body| present_router_body(body).text == "Dispatched as one new task: Canby OR.")
+    );
 }
 
 #[test]
@@ -2582,12 +2623,14 @@ fn continue_on_a_finished_parent_asks_instead_of_another_worker_turn() {
         harness.host().phase(&task),
         Some(TaskPhase::Completed { .. })
     ));
-    assert!(shown(
-        &harness.database,
-        "SELECT body FROM router_messages ORDER BY ordinal"
-    )
-    .iter()
-    .any(|body| body.contains("already finished")));
+    assert!(
+        shown(
+            &harness.database,
+            "SELECT body FROM router_messages ORDER BY ordinal"
+        )
+        .iter()
+        .any(|body| body.contains("already finished"))
+    );
 }
 
 #[test]
@@ -2659,14 +2702,16 @@ fn model_worker_retries_a_running_parent_that_never_reported() {
             attempt: AttemptId("attempt-1".to_owned()),
         })
     );
-    assert!(texts(
-        &harness.database,
-        "SELECT body FROM router_messages ORDER BY ordinal"
-    )
-    .iter()
-    .any(|body| {
-        present_router_body(body).text == "The task started, but the worker did not answer."
-    }));
+    assert!(
+        texts(
+            &harness.database,
+            "SELECT body FROM router_messages ORDER BY ordinal"
+        )
+        .iter()
+        .any(|body| {
+            present_router_body(body).text == "The task started, but the worker did not answer."
+        })
+    );
     harness
         .router
         .push_tool("success", &success_arguments("It is 54 F in Canby."));
@@ -2675,12 +2720,14 @@ fn model_worker_retries_a_running_parent_that_never_reported() {
         texts(&harness.database, "SELECT summary FROM task_reports"),
         vec!["It is 54 F in Canby.".to_owned()]
     );
-    assert!(texts(
-        &harness.database,
-        "SELECT body FROM router_messages ORDER BY ordinal"
-    )
-    .iter()
-    .any(|body| present_router_body(body).text == "It is 54 F in Canby."));
+    assert!(
+        texts(
+            &harness.database,
+            "SELECT body FROM router_messages ORDER BY ordinal"
+        )
+        .iter()
+        .any(|body| present_router_body(body).text == "It is 54 F in Canby.")
+    );
 }
 
 #[test]
@@ -2771,11 +2818,13 @@ fn reported_cache_percent_is_cached_tokens_over_input_tokens() {
         "SELECT slots_json FROM router_turn_snapshots",
     ))
     .expect("slots");
-    assert!(slots
-        .as_array()
-        .expect("slots")
-        .iter()
-        .all(|slot| slot["residence"] == "unreported"));
+    assert!(
+        slots
+            .as_array()
+            .expect("slots")
+            .iter()
+            .all(|slot| slot["residence"] == "unreported")
+    );
 }
 
 #[test]
@@ -2788,17 +2837,23 @@ fn a_stored_claim_is_packed_into_the_router_request() {
     wait(harness.host().handle_user_message("What about obsidian?")).expect("chat");
     let request = harness.router.requests();
     let router_request = request.first().expect("router request");
-    assert!(router_request.messages[0]
-        .content
-        .starts_with("You are Maia"));
-    assert!(router_request
-        .messages
-        .iter()
-        .any(|message| message.content.contains("Obsidian opens the vault.")));
-    assert!(router_request
-        .messages
-        .iter()
-        .any(|message| message.content.starts_with("## recall\n")));
+    assert!(
+        router_request.messages[0]
+            .content
+            .starts_with("You are Maia")
+    );
+    assert!(
+        router_request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("Obsidian opens the vault."))
+    );
+    assert!(
+        router_request
+            .messages
+            .iter()
+            .any(|message| message.content.starts_with("## recall\n"))
+    );
     let recall: Value = serde_json::from_str(&scalar(
         &harness.database,
         "SELECT recall_json FROM router_turn_snapshots",
@@ -2806,10 +2861,12 @@ fn a_stored_claim_is_packed_into_the_router_request() {
     .expect("recall");
     assert_eq!(recall[0]["id"], "claim-1");
     assert_eq!(recall[0]["kind"], "claim");
-    assert!(recall[0]["sentence"]
-        .as_str()
-        .unwrap_or("")
-        .contains("Obsidian opens the vault."));
+    assert!(
+        recall[0]["sentence"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Obsidian opens the vault.")
+    );
     assert_eq!(count(&harness.database, "SELECT COUNT(*) FROM claims"), 1);
     assert_eq!(
         count(
@@ -2992,12 +3049,16 @@ fn worker_calls_an_admitted_tool_without_changing_the_sealed_prompt() {
     assert!(!requests[0].tools_json.0.contains("web__scrape"));
     let worker = &requests[1];
     assert!(worker.tools_json.0.contains("web__scrape"));
-    assert!(worker.messages[0]
-        .content
-        .contains("sealed owner text wins"));
-    assert!(worker.messages[0]
-        .content
-        .contains("Router guidance (advisory)"));
+    assert!(
+        worker.messages[0]
+            .content
+            .contains("sealed owner text wins")
+    );
+    assert!(
+        worker.messages[0]
+            .content
+            .contains("Router guidance (advisory)")
+    );
     assert!(worker.messages[0].content.contains("Use the scrape tool."));
     assert_eq!(worker.messages[1].content, owner);
     let follow = &requests[2];
@@ -3096,9 +3157,11 @@ fn unknown_tool_result_keeps_the_worker_until_success() {
         .expect("tool result");
     assert!(tool.content.contains(UNKNOWN_OUTCOME_SUMMARY));
     assert!(tool.content.contains("success or failure"));
-    assert!(!texts(&harness.database, "SELECT phase FROM task_sessions")
-        .iter()
-        .any(|phase| phase.starts_with("waiting:")));
+    assert!(
+        !texts(&harness.database, "SELECT phase FROM task_sessions")
+            .iter()
+            .any(|phase| phase.starts_with("waiting:"))
+    );
 }
 
 #[test]
@@ -3608,12 +3671,14 @@ fn an_approval_wait_uses_code_copy_and_approve_returns_the_task_to_the_queue() {
         .expect("approve");
     assert!(matches!(settled, ApprovalSettlement::Approved { .. }));
     assert_eq!(harness.host().phase(&task), Some(&TaskPhase::Queued));
-    assert!(harness
-        .host()
-        .store()
-        .pending_approvals(NOW)
-        .expect("cleared")
-        .is_empty());
+    assert!(
+        harness
+            .host()
+            .store()
+            .pending_approvals(NOW)
+            .expect("cleared")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -3787,10 +3852,12 @@ fn malformed_route_is_repaired_once_then_a_valid_spawn_starts_one_task() {
     );
     let requests = harness.router.requests();
     assert!(requests.len() >= 2);
-    assert!(requests[1]
-        .messages
-        .iter()
-        .any(|message| message.content.contains("not a valid route")));
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|message| message.content.contains("not a valid route"))
+    );
 }
 
 #[test]
@@ -3901,12 +3968,14 @@ fn provider_errors_then_one_spawn_and_the_same_operation_does_not_spawn_again() 
         count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
         1
     );
-    assert!(shown(
-        &harness.database,
-        "SELECT body FROM router_messages ORDER BY ordinal"
-    )
-    .iter()
-    .any(|body| body == "The provider is busy, retrying."));
+    assert!(
+        shown(
+            &harness.database,
+            "SELECT body FROM router_messages ORDER BY ordinal"
+        )
+        .iter()
+        .any(|body| body == "The provider is busy, retrying.")
+    );
     assert!(harness.router.requests().len() >= 3);
 }
 
@@ -3933,10 +4002,12 @@ fn unreadable_provider_body_is_repaired_once_then_spawn_starts_one_task() {
     );
     let requests = harness.router.requests();
     assert!(requests.len() >= 2);
-    assert!(requests[1]
-        .messages
-        .iter()
-        .any(|message| message.content.contains("not a valid route")));
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|message| message.content.contains("not a valid route"))
+    );
     let bodies = shown(
         &harness.database,
         "SELECT body FROM router_messages ORDER BY ordinal",
@@ -3973,4 +4044,298 @@ fn unreadable_provider_body_on_thanks_asks_instead_of_spawning() {
 
 fn scalar(path: &Path, sql: &str) -> String {
     texts(path, sql).into_iter().next().unwrap_or_default()
+}
+
+fn long_supply() -> IdSupply {
+    let mut ids = IdSupply::at(NOW);
+    for index in 1..=240 {
+        ids.messages.push_back(format!("m-{index}"));
+        ids.requests.push_back(index);
+    }
+    for index in 1..=4 {
+        ids.tasks.push_back(format!("task-{index}"));
+        ids.attempts.push_back(format!("attempt-{index}"));
+        ids.envelopes.push_back(format!("env-{index}"));
+        ids.snapshots.push_back(format!("snap-{index}"));
+        ids.criteria.push_back(format!("criterion-{index}"));
+    }
+    for index in 1..=8 {
+        ids.reports.push_back(format!("report-{index}"));
+        ids.calls.push_back(format!("call-{index}"));
+        ids.evidence.push_back(format!("evidence-{index}"));
+        ids.commands
+            .push_back(u64::try_from(index).expect("command id"));
+    }
+    ids
+}
+
+fn install_scrape(harness: &mut Harness) -> Arc<AtomicU64> {
+    let (entries, live) = admitted_scrape();
+    harness.host().install_mcp(entries, live);
+    let calls = Arc::new(AtomicU64::new(0));
+    let seen = Arc::clone(&calls);
+    harness
+        .host()
+        .set_mcp_transport(move |_connection, _wire, call| {
+            seen.fetch_add(1, Ordering::Relaxed);
+            McpToolReply {
+                sent: true,
+                completed: true,
+                text: format!("lines {}", call.arguments_json),
+                image_png_base64: None,
+            }
+        });
+    calls
+}
+
+fn request_text(request: &RouterRequest) -> String {
+    request
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn a_task_finishes_after_more_than_one_hundred_distinct_tool_calls() {
+    let mut harness = Harness::open_model("long-task", long_supply());
+    let calls = install_scrape(&mut harness);
+    harness.router.push_tool("spawn_task", "{}");
+    for index in 1..=100 {
+        harness.router.push_tool(
+            "web__scrape",
+            &format!(r#"{{"url":"https://example.com/file-{index}.txt"}}"#),
+        );
+    }
+    let done = success_arguments("Counted 100 files.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let outcome = wait(harness.host().handle_user_message("Count each file")).expect("run");
+    let task = outcome.task.expect("task");
+    assert_eq!(calls.load(Ordering::Relaxed), 100);
+    assert!(
+        matches!(
+            harness.host().phase(&task),
+            Some(TaskPhase::Completed { .. })
+        ),
+        "{:?}",
+        harness.host().phase(&task)
+    );
+    let labels = harness.host().activity_labels();
+    assert!(labels.iter().any(|label| label.contains("step 100")));
+    assert!(
+        labels
+            .iter()
+            .all(|label| !label.contains("stopped after") && !label.contains("of 32"))
+    );
+}
+
+#[test]
+fn a_repeated_tool_call_nudges_the_next_model_request() {
+    let mut harness = Harness::open_model("loop-nudge", long_supply());
+    let _calls = install_scrape(&mut harness);
+    harness.router.push_tool("spawn_task", "{}");
+    for _ in 0..3 {
+        harness
+            .router
+            .push_tool("web__scrape", r#"{"url":"https://example.com/same"}"#);
+    }
+    let done = success_arguments("Stopped repeating.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let outcome = wait(harness.host().handle_user_message("Read the page")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+    let nudged = harness.router.requests().into_iter().any(|request| {
+        let text = request_text(&request);
+        text.contains("Say in one line what you will try next")
+            && text.contains("https://example.com/same")
+    });
+    assert!(nudged);
+    assert!(
+        harness
+            .host()
+            .activity_labels()
+            .iter()
+            .any(|label| label.contains("Noticed a loop")
+                && label.contains("Asked it to try something else"))
+    );
+}
+
+#[test]
+fn a_persistent_loop_hands_off_to_a_fresh_task() {
+    let mut harness = Harness::open_model("loop-stuck", long_supply());
+    let calls = install_scrape(&mut harness);
+    harness.router.push_tool("spawn_task", "{}");
+    for _ in 0..6 {
+        harness
+            .router
+            .push_tool("web__scrape", r#"{"url":"https://example.com/stuck"}"#);
+    }
+    let done = success_arguments("Finished on a fresh task.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let outcome = wait(harness.host().handle_user_message("Read the page")).expect("handoff");
+    let task = outcome.task.expect("task");
+    assert_eq!(task.0, "task-1");
+    let phase = format!("{:?}", harness.host().phase(&task));
+    let phase_two = format!("{:?}", harness.host().phase(&TaskId("task-2".to_owned())));
+    let labels = harness.host().activity_labels();
+    assert!(
+        phase.contains("Cancelled"),
+        "phase {phase} task2 {phase_two} labels {labels:?}"
+    );
+    assert!(
+        matches!(
+            harness.host().phase(&TaskId("task-2".to_owned())),
+            Some(TaskPhase::Completed { .. })
+        ),
+        "{:?}",
+        harness.host().phase(&TaskId("task-2".to_owned()))
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 6);
+    let prior = texts(
+        &harness.database,
+        "SELECT prior_task_id FROM task_sessions WHERE task_id = 'task-2'",
+    );
+    assert_eq!(prior, vec!["task-1".to_owned()]);
+    let connection = Connection::open(&harness.database).expect("open");
+    let prompt: Vec<u8> = connection
+        .query_row(
+            "SELECT prompt FROM task_envelopes WHERE task_id = 'task-2'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("successor prompt");
+    let brief = String::from_utf8(prompt).expect("brief text");
+    assert!(brief.contains("Read the page"), "{brief}");
+    assert!(brief.contains("Do not repeat"), "{brief}");
+    let bodies = texts(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert!(bodies.iter().any(|body| body.contains("Task got stuck")));
+    assert!(bodies.iter().any(|body| body.contains("fresh task")));
+}
+
+#[test]
+fn alternating_tool_calls_are_detected() {
+    let mut harness = Harness::open_model("loop-oscillate", long_supply());
+    let _calls = install_scrape(&mut harness);
+    harness.router.push_tool("spawn_task", "{}");
+    for _ in 0..2 {
+        harness
+            .router
+            .push_tool("web__scrape", r#"{"url":"https://example.com/a"}"#);
+        harness
+            .router
+            .push_tool("web__scrape", r#"{"url":"https://example.com/b"}"#);
+    }
+    let done = success_arguments("Broke the alternation.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    wait(harness.host().handle_user_message("Compare the pages")).expect("run");
+    assert!(harness.router.requests().into_iter().any(|request| {
+        let text = request_text(&request);
+        text.contains("alternating between")
+            && text.contains("Say in one line what you will try next")
+    }));
+    assert!(harness.host().activity_labels().iter().any(|label| {
+        label.contains("alternated between") && label.contains("Asked it to try something else")
+    }));
+}
+
+#[test]
+fn distinct_tool_calls_do_not_nudge() {
+    let mut harness = Harness::open_model("loop-distinct", long_supply());
+    let calls = install_scrape(&mut harness);
+    harness.router.push_tool("spawn_task", "{}");
+    for index in 1..=8 {
+        harness.router.push_tool(
+            "web__scrape",
+            &format!(r#"{{"url":"https://example.com/distinct-{index}"}}"#),
+        );
+    }
+    let done = success_arguments("Eight different pages.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let outcome = wait(harness.host().handle_user_message("Read eight pages")).expect("run");
+    let task = outcome.task.expect("task");
+    assert_eq!(calls.load(Ordering::Relaxed), 8);
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+    assert!(harness.router.requests().into_iter().all(|request| {
+        !request_text(&request).contains("Say in one line what you will try next")
+    }));
+    assert!(
+        harness
+            .host()
+            .activity_labels()
+            .iter()
+            .all(|label| !label.contains("Noticed a loop"))
+    );
+}
+
+#[test]
+fn compaction_triggers_and_keeps_the_goal() {
+    let mut harness = Harness::open_model("compact-goal", long_supply());
+    harness.host().set_context_token_budget(500);
+    let (entries, live) = admitted_scrape();
+    harness.host().install_mcp(entries, live);
+    harness
+        .host()
+        .set_mcp_transport(move |_connection, _wire, call| {
+            let marker = if call.arguments_json.contains("file-1") {
+                "FIRST-MARKER"
+            } else {
+                "LATER-MARKER"
+            };
+            McpToolReply {
+                sent: true,
+                completed: true,
+                text: format!("{marker} {}", "x".repeat(2000)),
+                image_png_base64: None,
+            }
+        });
+    let goal = "Count the files and keep GOAL-TOKEN-KEEP in mind";
+    harness.router.push_tool("spawn_task", "{}");
+    for index in 1..=4 {
+        harness.router.push_tool(
+            "web__scrape",
+            &format!(r#"{{"url":"https://example.com/file-{index}"}}"#),
+        );
+    }
+    let done = success_arguments("Compacted and finished.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let outcome = wait(harness.host().handle_user_message(goal)).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+    let requests = harness.router.requests();
+    assert!(requests.iter().any(|request| {
+        request
+            .messages
+            .first()
+            .is_some_and(|message| message.content.starts_with("Maia context compaction."))
+    }));
+    assert!(requests.iter().any(|request| {
+        let text = request_text(request);
+        text.contains(goal) && text.contains("Running summary")
+    }));
+    assert!(
+        harness
+            .host()
+            .activity_labels()
+            .iter()
+            .any(|label| label == "Compacted context")
+    );
 }

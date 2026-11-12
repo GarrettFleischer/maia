@@ -247,7 +247,12 @@ pub(crate) fn search_neurons(
            AND NOT (neuron_text.kind = 'claim' AND EXISTS ( \
              SELECT 1 FROM claims \
              WHERE claims.claim_id = neuron_text.neuron_id \
-               AND (claims.status != 'provisional' OR claims.consolidated_by IS NOT NULL))) \
+               AND (claims.status != 'provisional' OR claims.consolidated_by IS NOT NULL \
+                 OR claims.hidden_reason IS NOT NULL))) \
+           AND NOT (neuron_text.kind = 'episode' AND EXISTS ( \
+             SELECT 1 FROM episodes \
+             WHERE episodes.episode_id = neuron_text.neuron_id \
+               AND episodes.hidden_reason IS NOT NULL)) \
          ORDER BY bm25(neuron_fts) ASC, neuron_fts.kind ASC, neuron_fts.neuron_id ASC \
          LIMIT ?2",
     );
@@ -1023,14 +1028,18 @@ fn collect_lexeme(
 }
 
 fn claim_closed(connection: &Connection, id: &str) -> Result<bool, StoreError> {
-    let status: Option<String> = connection
+    let row: Option<(String, Option<String>)> = connection
         .query_row(
-            "SELECT status || COALESCE(consolidated_by, '') FROM claims WHERE claim_id = ?1",
+            "SELECT status || COALESCE(consolidated_by, ''), hidden_reason FROM claims WHERE claim_id = ?1",
             params![id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get::<_, Option<String>>(1)?)),
         )
         .optional()?;
-    Ok(status.is_some_and(|status| !status.starts_with("provisional") || status.len() > "provisional".len()))
+    Ok(row.is_some_and(|(status, hidden)| {
+        hidden.is_some()
+            || !status.starts_with("provisional")
+            || status.len() > "provisional".len()
+    }))
 }
 
 fn read_hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<NeuronHit> {

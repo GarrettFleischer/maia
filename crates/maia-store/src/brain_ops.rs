@@ -43,6 +43,7 @@ pub(crate) fn map(connection: &Connection) -> Result<BrainMap, StoreError> {
     nodes.extend(load_facts(connection, &holds)?);
     nodes.extend(load_claims(connection, &holds)?);
     nodes.extend(load_episodes(connection, &holds)?);
+    nodes.extend(load_entities(connection)?);
     nodes.extend(load_lexemes(connection, &holds)?);
     nodes.sort_by(|left, right| {
         left.id
@@ -337,6 +338,7 @@ fn prose_node(
         taint: Some(known_taint(taint)?),
         session_id,
         held,
+        detail: crate::types::BrainDetail::default(),
     })
 }
 
@@ -375,25 +377,45 @@ fn load_claims(
     holds: &BTreeSet<(String, String)>,
 ) -> Result<Vec<BrainNode>, StoreError> {
     let mut statement = connection.prepare(
-        "SELECT claims.claim_id, claims.sentence, claims.taint, episodes.thread_id \
+        "SELECT claims.claim_id, claims.sentence, claims.taint, episodes.thread_id, \
+         claims.category, claims.confidence_millis, claims.episode_id, claims.status, \
+         claims.hidden_reason, claims.subject, claims.owner_edited, claims.valid_from \
          FROM claims JOIN episodes ON episodes.episode_id = claims.episode_id \
          ORDER BY claims.claim_id",
     )?;
     let mapped = statement.query_map([], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, Option<String>>(8)?,
+            row.get::<_, String>(9)?,
+            row.get::<_, i64>(10)?,
+            row.get::<_, i64>(11)?,
+        ))
     })?;
     let mut nodes = Vec::new();
     for row in mapped {
-        let (id, sentence, taint, session_id): (String, String, String, String) = row?;
+        let (id, sentence, taint, session_id, category, confidence, episode, status, hidden, subject, edited, created) = row?;
         let held = is_held(holds, "claim", &id);
-        nodes.push(prose_node(
-            id,
-            BrainNodeKind::Claim,
-            sentence,
-            taint,
-            Some(session_id),
-            held,
-        )?);
+        let mut node = prose_node(id, BrainNodeKind::Claim, sentence, taint, Some(session_id), held)?;
+        node.detail.category = category;
+        node.detail.confidence_millis = Some(confidence);
+        node.detail.source_episode = Some(episode);
+        node.detail.status = Some(status);
+        node.detail.hidden_reason = hidden;
+        node.detail.subject = Some(subject);
+        node.detail.owner_edited = edited != 0;
+        node.detail.created_at = Some(created);
+        if node.detail.owner_edited {
+            node.taint = Some("owner".to_owned());
+        }
+        nodes.push(node);
     }
     Ok(nodes)
 }
@@ -402,23 +424,55 @@ fn load_episodes(
     connection: &Connection,
     holds: &BTreeSet<(String, String)>,
 ) -> Result<Vec<BrainNode>, StoreError> {
-    let mut statement = connection
-        .prepare("SELECT episode_id, body, taint, thread_id FROM episodes ORDER BY episode_id")?;
+    let mut statement = connection.prepare(
+        "SELECT episode_id, body, taint, thread_id, hidden_reason, created_at FROM episodes ORDER BY episode_id",
+    )?;
     let mapped = statement.query_map([], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, i64>(5)?,
+        ))
     })?;
     let mut nodes = Vec::new();
     for row in mapped {
-        let (id, body, taint, session_id): (String, String, String, String) = row?;
+        let (id, body, taint, session_id, hidden, created) = row?;
         let held = is_held(holds, "episode", &id);
-        nodes.push(prose_node(
+        let mut node = prose_node(id, BrainNodeKind::Episode, body, taint, Some(session_id), held)?;
+        node.detail.hidden_reason = hidden;
+        node.detail.created_at = Some(created);
+        nodes.push(node);
+    }
+    Ok(nodes)
+}
+
+fn load_entities(connection: &Connection) -> Result<Vec<BrainNode>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT entity_id, description, kind FROM entities ORDER BY entity_id",
+    )?;
+    let mapped = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    })?;
+    let mut nodes = Vec::new();
+    for row in mapped {
+        let (id, description, kind) = row?;
+        nodes.push(BrainNode {
             id,
-            BrainNodeKind::Episode,
-            body,
-            taint,
-            Some(session_id),
-            held,
-        )?);
+            kind: BrainNodeKind::Entity,
+            label: description.clone(),
+            sentence: Some(description),
+            taint: None,
+            session_id: None,
+            held: false,
+            detail: crate::types::BrainDetail {
+                entity_kind: Some(kind.clone()),
+                category: kind,
+                ..crate::types::BrainDetail::default()
+            },
+        });
     }
     Ok(nodes)
 }
@@ -440,6 +494,7 @@ fn load_lexemes(
             sentence: None,
             taint: None,
             session_id: None,
+            detail: crate::types::BrainDetail::default(),
         });
     }
     Ok(nodes)
