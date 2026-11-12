@@ -1221,6 +1221,7 @@ struct LiveWorker {
     inflight: Option<std::sync::mpsc::Receiver<Result<RouterResponse, RouterError>>>,
     tool: Option<std::sync::mpsc::Receiver<ToolParcel>>,
     waiting_tool: Option<ToolJob>,
+    pause_until: Option<Instant>,
 }
 
 fn actor_loop<R>(
@@ -1247,21 +1248,11 @@ fn actor_loop<R>(
     actor.host.notify_sidebar(std::sync::Arc::new(move || {
         let _ = publish_database(&database_for_notice, publication_for_notice.as_ref());
     }));
-    // The listener is already bound. Resume here so a parent model call does
-    // not keep Settings unreachable until that call finishes.
-    actor.host.work_queued_parents();
+    // Defer first. A parent left running is queued for the pump, so a model
+    // call does not keep Settings unreachable until that call finishes.
     actor.host.defer_model_work();
-    let mut inbox = VecDeque::new();
-    if let Ok(pending) = actor.host.store().pending_submissions() {
-        for (operation, message, text) in pending {
-            inbox.push_back(QueuedChat {
-                operation: SubmissionId(operation),
-                message: maia_core::super_agent::MessageId(message),
-                text,
-                attachments: Vec::new(),
-            });
-        }
-    }
+    actor.host.work_queued_parents();
+    let mut inbox = restore_pending_inbox(&actor);
     let mut route = None;
     let mut workers = Vec::new();
     loop {
@@ -1301,6 +1292,54 @@ fn actor_loop<R>(
             other => dispatch(&mut actor, other),
         }
     }
+}
+
+fn restore_pending_inbox<R: RouterPort>(actor: &Actor<R>) -> VecDeque<QueuedChat> {
+    let Ok(pending) = actor.host.store().pending_submissions() else {
+        return VecDeque::new();
+    };
+    pending
+        .into_iter()
+        .map(|(operation, message, text)| QueuedChat {
+            operation: SubmissionId(operation),
+            message: maia_core::super_agent::MessageId(message.clone()),
+            text,
+            attachments: staged_for_message(actor, &message),
+        })
+        .collect()
+}
+
+fn staged_for_message<R: RouterPort>(
+    actor: &Actor<R>,
+    message_id: &str,
+) -> Vec<crate::orchestrator::StagedAttachment> {
+    let Ok(rows) = actor
+        .host
+        .store()
+        .attachments_for_message(message_id.to_owned())
+    else {
+        return Vec::new();
+    };
+    let Some(data_dir) = actor.database.parent() else {
+        return Vec::new();
+    };
+    let mut staged = Vec::new();
+    for row in rows {
+        let Some(path) = crate::attachment_prompt::attachment_file(data_dir, &row.relative_path)
+        else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        staged.push(crate::orchestrator::staged_attachment(
+            &row.attachment_id,
+            &row.safe_name,
+            &row.media_type,
+            &bytes,
+        ));
+    }
+    staged
 }
 
 fn pump_wait(route: &Option<LiveRoute>) -> Duration {
@@ -1440,7 +1479,10 @@ where
                 })))
             }
         }
-    } else if live.pause_until.is_some_and(|until| Instant::now() >= until) {
+    } else if live
+        .pause_until
+        .is_some_and(|until| Instant::now() >= until)
+    {
         live.pause_until = None;
         Some(RouteEvent::Resumed)
     } else {
@@ -1475,6 +1517,7 @@ where
             inflight: None,
             tool: None,
             waiting_tool: None,
+            pause_until: None,
         };
         if advance_worker(actor, &mut live, WorkerEvent::Start) {
             workers.push(live);
@@ -1489,7 +1532,13 @@ where
 {
     match actor.host.drive_worker(&mut live.machine, event) {
         crate::orchestrator::WorkerDrive::Await(request) => {
+            live.pause_until = None;
             live.inflight = Some(actor.host.spawn_model_call(request));
+            true
+        }
+        crate::orchestrator::WorkerDrive::Pause(duration) => {
+            live.inflight = None;
+            live.pause_until = Some(Instant::now() + duration);
             true
         }
         crate::orchestrator::WorkerDrive::Tool(job) => launch_tool(actor, live, job),
@@ -1564,6 +1613,12 @@ where
                     })))
                 }
             }
+        } else if workers[index]
+            .pause_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
+            workers[index].pause_until = None;
+            Some(WorkerEvent::Resumed)
         } else {
             None
         };
@@ -1628,11 +1683,10 @@ fn settle_route<R: RouterPort>(
             );
         }
         MessageOutcome::ProcessingFailed { message, .. } => {
-            let _ = actor.host.finish_submission(
-                operation,
-                message,
-                AdmittedOutcome::ProcessingFailed,
-            );
+            let _ =
+                actor
+                    .host
+                    .finish_submission(operation, message, AdmittedOutcome::ProcessingFailed);
         }
     }
 }
@@ -2399,7 +2453,10 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
         .route("/brain/claims/{claim_id}/tags", put(put_claim_tags))
         .route("/brain/claims/{claim_id}", patch(patch_claim))
         .route("/brain/claims/{claim_id}/forget", post(forget_claim_route))
-        .route("/brain/claims/{claim_id}/restore", post(restore_claim_route))
+        .route(
+            "/brain/claims/{claim_id}/restore",
+            post(restore_claim_route),
+        )
         .route("/brain/entities/merge", post(merge_entities_route))
         .route(
             "/brain/facts/{fact_id}",
@@ -2447,10 +2504,7 @@ fn insert_header(response: &mut Response, name: header::HeaderName, value: &'sta
     }
 }
 
-async fn sidebar(
-    State(state): State<AppState>,
-    Query(query): Query<BotScope>,
-) -> Response {
+async fn sidebar(State(state): State<AppState>, Query(query): Query<BotScope>) -> Response {
     let Some(bot) = query.bot else {
         return finish(
             ask(&state, |reply| ActorCall::Read {
@@ -2482,10 +2536,7 @@ async fn inspector(State(state): State<AppState>) -> Response {
     )
 }
 
-async fn transcript(
-    State(state): State<AppState>,
-    Query(query): Query<BotScope>,
-) -> Response {
+async fn transcript(State(state): State<AppState>, Query(query): Query<BotScope>) -> Response {
     // Read the committed transcript off the actor. A model call keeps that
     // thread busy, and the phone still needs to see the stored message.
     let database = state.database.clone();
@@ -3149,7 +3200,13 @@ async fn post_host(State(state): State<AppState>, request: Request) -> Response 
 
 async fn brain_map(State(state): State<AppState>, Query(query): Query<BrainQuery>) -> Response {
     let include_lexemes = query.include.as_deref() == Some("lexemes");
-    finish(ask(&state, |reply| ActorCall::BrainMap { include_lexemes, reply }).await)
+    finish(
+        ask(&state, |reply| ActorCall::BrainMap {
+            include_lexemes,
+            reply,
+        })
+        .await,
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -3183,14 +3240,27 @@ async fn patch_claim(
         Ok(sentence) => sentence,
         Err(error) => return error_response(error),
     };
-    finish(ask(&state, |reply| ActorCall::EditClaim { claim_id, sentence, reply }).await)
+    finish(
+        ask(&state, |reply| ActorCall::EditClaim {
+            claim_id,
+            sentence,
+            reply,
+        })
+        .await,
+    )
 }
 
-async fn forget_claim_route(State(state): State<AppState>, Path(claim_id): Path<String>) -> Response {
+async fn forget_claim_route(
+    State(state): State<AppState>,
+    Path(claim_id): Path<String>,
+) -> Response {
     finish(ask(&state, |reply| ActorCall::ForgetClaim { claim_id, reply }).await)
 }
 
-async fn restore_claim_route(State(state): State<AppState>, Path(claim_id): Path<String>) -> Response {
+async fn restore_claim_route(
+    State(state): State<AppState>,
+    Path(claim_id): Path<String>,
+) -> Response {
     finish(ask(&state, |reply| ActorCall::RestoreClaim { claim_id, reply }).await)
 }
 
@@ -3199,12 +3269,27 @@ async fn merge_entities_route(State(state): State<AppState>, request: Request) -
         Ok(value) => value,
         Err(error) => return error_response(error),
     };
-    let winner = value.get("winner").and_then(|item| item.as_str()).unwrap_or("").to_owned();
-    let loser = value.get("loser").and_then(|item| item.as_str()).unwrap_or("").to_owned();
+    let winner = value
+        .get("winner")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let loser = value
+        .get("loser")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_owned();
     if winner.is_empty() || loser.is_empty() {
         return error_response(ApiError::InvalidFact);
     }
-    finish(ask(&state, |reply| ActorCall::MergeEntities { winner, loser, reply }).await)
+    finish(
+        ask(&state, |reply| ActorCall::MergeEntities {
+            winner,
+            loser,
+            reply,
+        })
+        .await,
+    )
 }
 
 async fn brain_index(State(state): State<AppState>) -> Response {
@@ -3286,10 +3371,13 @@ async fn post_memory_tag(State(state): State<AppState>, request: Request) -> Res
         Ok(name) => name,
         Err(error) => return error_response(error),
     };
-    finish(ask(&state, |reply| ActorCall::MemoryTags {
-        change: maia_store::MemoryTagChange::Create { name },
-        reply,
-    }).await)
+    finish(
+        ask(&state, |reply| ActorCall::MemoryTags {
+            change: maia_store::MemoryTagChange::Create { name },
+            reply,
+        })
+        .await,
+    )
 }
 
 async fn rename_memory_tag(
@@ -3301,10 +3389,13 @@ async fn rename_memory_tag(
         Ok(name) => name,
         Err(error) => return error_response(error),
     };
-    finish(ask(&state, |reply| ActorCall::MemoryTags {
-        change: maia_store::MemoryTagChange::Rename { tag_id, name },
-        reply,
-    }).await)
+    finish(
+        ask(&state, |reply| ActorCall::MemoryTags {
+            change: maia_store::MemoryTagChange::Rename { tag_id, name },
+            reply,
+        })
+        .await,
+    )
 }
 
 async fn merge_memory_tags(State(state): State<AppState>, request: Request) -> Response {
@@ -3312,19 +3403,33 @@ async fn merge_memory_tags(State(state): State<AppState>, request: Request) -> R
         Ok(value) => value,
         Err(error) => return error_response(error),
     };
-    let keep_id = value.get("keep").and_then(|item| item.as_str()).unwrap_or("").to_owned();
-    let drop_id = value.get("drop").and_then(|item| item.as_str()).unwrap_or("").to_owned();
-    finish(ask(&state, |reply| ActorCall::MemoryTags {
-        change: maia_store::MemoryTagChange::Merge { keep_id, drop_id },
-        reply,
-    }).await)
+    let keep_id = value
+        .get("keep")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let drop_id = value
+        .get("drop")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_owned();
+    finish(
+        ask(&state, |reply| ActorCall::MemoryTags {
+            change: maia_store::MemoryTagChange::Merge { keep_id, drop_id },
+            reply,
+        })
+        .await,
+    )
 }
 
 async fn delete_memory_tag(State(state): State<AppState>, Path(tag_id): Path<String>) -> Response {
-    finish(ask(&state, |reply| ActorCall::MemoryTags {
-        change: maia_store::MemoryTagChange::Remove { tag_id },
-        reply,
-    }).await)
+    finish(
+        ask(&state, |reply| ActorCall::MemoryTags {
+            change: maia_store::MemoryTagChange::Remove { tag_id },
+            reply,
+        })
+        .await,
+    )
 }
 
 async fn put_claim_tags(
@@ -3346,18 +3451,29 @@ async fn put_claim_tags(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    finish(ask(&state, |reply| ActorCall::MemoryTags {
-        change: maia_store::MemoryTagChange::Retag { claim_id, names },
-        reply,
-    }).await)
+    finish(
+        ask(&state, |reply| ActorCall::MemoryTags {
+            change: maia_store::MemoryTagChange::Retag { claim_id, names },
+            reply,
+        })
+        .await,
+    )
 }
 
 async fn tag_name(request: Request) -> Result<String, ApiError> {
     let value = read_json(request).await?;
-    Ok(value.get("name").and_then(|item| item.as_str()).unwrap_or("").to_owned())
+    Ok(value
+        .get("name")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_owned())
 }
 
-fn edit_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String, sentence: String) -> Result<Value, ApiError> {
+fn edit_claim<R: RouterPort>(
+    actor: &Actor<R>,
+    claim_id: String,
+    sentence: String,
+) -> Result<Value, ApiError> {
     let edited = actor
         .host
         .store()
@@ -3384,7 +3500,11 @@ fn restore_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String) -> Result<Va
     Ok(brain_map_value(&restored.value, false))
 }
 
-fn merge_entities<R: RouterPort>(actor: &Actor<R>, winner: String, loser: String) -> Result<Value, ApiError> {
+fn merge_entities<R: RouterPort>(
+    actor: &Actor<R>,
+    winner: String,
+    loser: String,
+) -> Result<Value, ApiError> {
     let merged = actor
         .host
         .store()

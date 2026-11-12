@@ -2,8 +2,8 @@ import { useEffect, useId, useRef } from 'react'
 import type { PinMark, TaskDetail as TaskDetailData } from '@/api/superAgentTypes'
 import {
   shownAcceptanceContext,
-  inspectionGroups,
   textOrNone,
+  visibleInspectionGroups,
   type InspectionListItem,
 } from '@/api/superAgentFormat'
 
@@ -101,9 +101,7 @@ export function TaskDetail({
               <p>{acceptance}</p>
             </>
           ) : null}
-          {inspectionGroups(detail)
-            .filter((group) => group.items.length > 0)
-            .map((group) => (
+          {visibleInspectionGroups(detail).map((group) => (
             <RecordList key={group.label} label={group.label} items={group.items} />
           ))}
           <div className="maia-task-actions">

@@ -647,6 +647,22 @@ pub struct StagedAttachment {
     pub png_base64: Option<String>,
 }
 
+/// Rebuilds the untrusted model note from bytes already stored for a message.
+#[must_use]
+pub(crate) fn staged_attachment(
+    id: &str,
+    name: &str,
+    media_type: &str,
+    bytes: &[u8],
+) -> StagedAttachment {
+    let model = crate::attachment_prompt::model_attachment(name, media_type, bytes, false);
+    StagedAttachment {
+        id: id.to_owned(),
+        note: model.note,
+        png_base64: model.png_base64,
+    }
+}
+
 /// Admitted result of one user message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnOutcome {
@@ -1616,7 +1632,11 @@ fn sanitize_owner_sentence(sentence: String) -> String {
     if visible.is_empty() && maia_core::dream::looks_like_reasoning(&sentence) {
         return "Working on that.".to_owned();
     }
-    if visible.is_empty() { sentence } else { visible }
+    if visible.is_empty() {
+        sentence
+    } else {
+        visible
+    }
 }
 
 fn distinct_thinking(response: &RouterResponse) -> Option<String> {
@@ -2420,6 +2440,8 @@ pub(crate) enum ToolParcel {
 pub(crate) enum WorkerDrive {
     /// Send this completion.
     Await(RouterRequest),
+    /// Wait, then resume. The actor may accept other messages during the wait.
+    Pause(Duration),
     /// Run this tool, then resume with [`WorkerEvent::Tool`].
     Tool(ToolJob),
     /// The parent attempt finished.
@@ -2430,6 +2452,8 @@ pub(crate) enum WorkerDrive {
 pub(crate) enum WorkerEvent {
     /// Build the first worker request.
     Start,
+    /// A provider pause elapsed.
+    Resumed,
     /// The model call finished.
     Model(Result<RouterResponse, RouterError>),
     /// A tool call finished.
@@ -3253,7 +3277,10 @@ impl<R: Router> Orchestrator<R> {
     }
 
     /// Uses this closure for goal check-ins instead of the worker model.
-    pub fn set_reviewer(&mut self, reviewer: impl FnMut(&str) -> Result<String, String> + Send + 'static) {
+    pub fn set_reviewer(
+        &mut self,
+        reviewer: impl FnMut(&str) -> Result<String, String> + Send + 'static,
+    ) {
         self.reviewer = Some(Box::new(reviewer));
     }
 
@@ -3594,7 +3621,10 @@ impl<R: Router> Orchestrator<R> {
     }
 
     fn resume_unanswered(&mut self, task: &TaskId) {
-        self.work_parent(task, WorkerAttempts::UntilAnswer, OwnerNotice::Relay);
+        let finish = self.work_parent(task, WorkerAttempts::UntilAnswer, OwnerNotice::Relay);
+        if matches!(finish, WorkerFinish::Skipped) {
+            return;
+        }
         if let Some(TaskPhase::Running { attempt }) = self.phases.get(task).cloned() {
             let _ = self.fail_worker(task, &attempt, UNKNOWN_OUTCOME_SUMMARY, OwnerNotice::Relay);
         }
@@ -3649,22 +3679,31 @@ impl<R: Router> Orchestrator<R> {
         let view = self.store.load_task_view(task_id)?;
         let mut value = project_task_view(&view)?;
         if let Ok(Some((goal_json, todo_json, _, _))) = self.store.task_plan(task_id)
-            && let Some((contract, list, _, _)) = maia_core::task_loop::parse_stored_plan(&goal_json, &todo_json)
+            && let Some((contract, list, _, _)) =
+                maia_core::task_loop::parse_stored_plan(&goal_json, &todo_json)
             && let Some(object) = value.as_object_mut()
         {
             object.insert("goal".to_owned(), serde_json::Value::String(contract.goal));
-            object.insert("todos".to_owned(), serde_json::json!(list.items.iter().map(|item| serde_json::json!({
-                "id": item.id,
-                "text": item.text,
-                "status": match item.status {
-                    maia_core::task_loop::TodoStatus::Pending => "pending",
-                    maia_core::task_loop::TodoStatus::InProgress => "in_progress",
-                    maia_core::task_loop::TodoStatus::Done => "done",
-                    maia_core::task_loop::TodoStatus::Dropped => "dropped",
-                },
-                "note": item.note,
-                "added": item.added,
-            })).collect::<Vec<_>>()));
+            object.insert(
+                "todos".to_owned(),
+                serde_json::json!(
+                    list.items
+                        .iter()
+                        .map(|item| serde_json::json!({
+                            "id": item.id,
+                            "text": item.text,
+                            "status": match item.status {
+                                maia_core::task_loop::TodoStatus::Pending => "pending",
+                                maia_core::task_loop::TodoStatus::InProgress => "in_progress",
+                                maia_core::task_loop::TodoStatus::Done => "done",
+                                maia_core::task_loop::TodoStatus::Dropped => "dropped",
+                            },
+                            "note": item.note,
+                            "added": item.added,
+                        }))
+                        .collect::<Vec<_>>()
+                ),
+            );
         }
         Ok(value)
     }
@@ -3818,6 +3857,13 @@ impl<R: Router> Orchestrator<R> {
                     now: self.ids.now,
                     from_owner: true,
                 });
+                if !attachments.is_empty() {
+                    let ids = attachments
+                        .iter()
+                        .map(|attachment| attachment.id.clone())
+                        .collect::<Vec<_>>();
+                    self.store.bind_attachments(ids, message.0.clone())?;
+                }
                 Ok(FastAdmission::Queued(QueuedChat {
                     operation: operation.clone(),
                     message,
@@ -4813,7 +4859,9 @@ impl<R: Router> Orchestrator<R> {
             segments,
         })?;
         if let Some(reason) = hide {
-            let _ = self.store.hide_episode(format!("episode-{}", message.0), reason);
+            let _ = self
+                .store
+                .hide_episode(format!("episode-{}", message.0), reason);
         }
         let _ = self.store.bots(maia_store::BotRequest::NoteProvenance {
             target_kind: "episode".to_owned(),
@@ -5205,21 +5253,10 @@ impl<R: Router> Orchestrator<R> {
     }
 
     fn maybe_work(&mut self, task: &TaskId, notice: OwnerNotice) -> WorkerFinish {
-        if self.parent_work == ParentWork::ModelTurn {
-            if self.defer_work {
-                if self.background.iter().any(|queued| queued == task)
-                    || self.inflight_workers.contains(task)
-                {
-                    return WorkerFinish::Skipped;
-                }
-                self.background.push(task.clone());
-                self.record_activity(format!("Task {}: queued", task.0), Some(task));
-                return WorkerFinish::Skipped;
-            }
-            self.work_parent(task, WorkerAttempts::UntilAnswer, notice)
-        } else {
-            WorkerFinish::Skipped
+        if self.parent_work != ParentWork::ModelTurn {
+            return WorkerFinish::Skipped;
         }
+        self.work_parent(task, WorkerAttempts::UntilAnswer, notice)
     }
 
     fn matching_live_task(&self, text: &str) -> Option<TaskId> {
@@ -5257,6 +5294,16 @@ impl<R: Router> Orchestrator<R> {
         attempts: WorkerAttempts,
         notice: OwnerNotice,
     ) -> WorkerFinish {
+        if self.defer_work {
+            if self.background.iter().any(|queued| queued == task)
+                || self.inflight_workers.contains(task)
+            {
+                return WorkerFinish::Skipped;
+            }
+            self.background.push(task.clone());
+            self.record_activity("Queued", Some(task));
+            return WorkerFinish::Skipped;
+        }
         let mut machine = match self.open_worker(task, attempts, notice) {
             Ok(machine) => machine,
             Err(finish) => return finish,
@@ -5265,6 +5312,10 @@ impl<R: Router> Orchestrator<R> {
         loop {
             match self.drive_worker(&mut machine, event) {
                 WorkerDrive::Done(finish) => return finish,
+                WorkerDrive::Pause(duration) => {
+                    std::thread::sleep(duration);
+                    event = WorkerEvent::Resumed;
+                }
                 WorkerDrive::Await(request) => {
                     event = WorkerEvent::Model(wait_router(self.router.complete(&request)));
                 }
@@ -5288,7 +5339,7 @@ impl<R: Router> Orchestrator<R> {
             Err(_) => return Err(self.worker_silent(task, notice)),
         };
         self.inflight_workers.insert(task.clone());
-        self.record_activity(format!("Task {}: working", task.0), Some(task));
+        self.record_activity("Working", Some(task));
         let prompt = self
             .prompts
             .get(task)
@@ -5353,7 +5404,7 @@ impl<R: Router> Orchestrator<R> {
     ) -> WorkerDrive {
         self.turn_bot = self.task_bot(&machine.task);
         match event {
-            WorkerEvent::Start => self.issue_worker_request(machine),
+            WorkerEvent::Start | WorkerEvent::Resumed => self.issue_worker_request(machine),
             WorkerEvent::Model(result) => self.apply_worker_model(machine, result),
             WorkerEvent::Tool(reply) => self.absorb_tool_reply(machine, reply),
         }
@@ -5410,7 +5461,7 @@ impl<R: Router> Orchestrator<R> {
                 log_router_failure(&OrchestratorError::Router(error));
                 machine.misses = machine.misses.saturating_add(1);
                 self.record_activity("provider busy, retrying", Some(&machine.task.clone()));
-                return self.issue_worker_request(machine);
+                return WorkerDrive::Pause(provider_backoff(machine.misses));
             }
             Err(_) => {
                 return WorkerDrive::Done(
@@ -5435,10 +5486,7 @@ impl<R: Router> Orchestrator<R> {
             AgentStop::Unfinished(text) => {
                 machine.messages.extend(unfinished_pair(&text));
                 machine.steps = machine.steps.saturating_add(1);
-                self.record_activity(
-                    format!("Task {}: step {}", task.0, machine.steps),
-                    Some(&task),
-                );
+                self.record_activity(format!("Step {}", machine.steps), Some(&task));
                 self.follow_loop(
                     machine,
                     StepObservation {
@@ -5463,8 +5511,7 @@ impl<R: Router> Orchestrator<R> {
         machine.steps = machine.steps.saturating_add(1);
         self.record_activity(
             format!(
-                "Task {}: step {}: {}",
-                task.0,
+                "Step {}: {}",
                 machine.steps,
                 tool_activity_line(call.name.as_str(), &call.arguments_json)
             ),
@@ -5645,9 +5692,7 @@ impl<R: Router> Orchestrator<R> {
                     .push(ChatMessage::text(ChatRole::User, note));
                 self.issue_route_request(machine)
             }
-            Some(LoopSignal::Handoff {
-                activity, what, ..
-            }) => {
+            Some(LoopSignal::Handoff { activity, what, .. }) => {
                 self.record_activity(activity, None);
                 let close = if machine.applied.is_some() {
                     TurnClose::Model
@@ -5728,30 +5773,19 @@ impl<R: Router> Orchestrator<R> {
     fn worker_silent(&mut self, task: &TaskId, notice: OwnerNotice) -> WorkerFinish {
         self.release_worker(task);
         match notice {
-            OwnerNotice::Relay => {
+            OwnerNotice::Relay | OwnerNotice::Chat => {
                 let _ = self.note_router(WORKER_SILENT);
-            }
-            OwnerNotice::Chat => {
-                let _ = self.note_router(&format!("Task {}: {WORKER_SILENT}", task.0));
             }
             OwnerNotice::Hold => {}
         }
         WorkerFinish::Silent
     }
 
-    fn relay_worker(
-        &mut self,
-        task: &TaskId,
-        finish: WorkerFinish,
-        notice: OwnerNotice,
-    ) -> WorkerFinish {
+    fn relay_worker(&mut self, finish: WorkerFinish, notice: OwnerNotice) -> WorkerFinish {
         if let Some(sentence) = finish.sentence() {
             match notice {
-                OwnerNotice::Relay => {
+                OwnerNotice::Relay | OwnerNotice::Chat => {
                     let _ = self.note_router(sentence);
-                }
-                OwnerNotice::Chat => {
-                    let _ = self.note_router(&format!("Task {}: {sentence}", task.0));
                 }
                 OwnerNotice::Hold => {}
             }
@@ -5799,7 +5833,7 @@ impl<R: Router> Orchestrator<R> {
         if completed.is_err() {
             let _ = self.settle(task, &report_id);
         }
-        self.relay_worker(task, WorkerFinish::Success(text.to_owned()), notice)
+        self.relay_worker(WorkerFinish::Success(text.to_owned()), notice)
     }
 
     fn fail_worker(
@@ -5827,7 +5861,7 @@ impl<R: Router> Orchestrator<R> {
         {
             return self.worker_silent(task, notice);
         }
-        self.relay_worker(task, WorkerFinish::Failure(text.to_owned()), notice)
+        self.relay_worker(WorkerFinish::Failure(text.to_owned()), notice)
     }
 
     fn park_worker(
@@ -5855,7 +5889,7 @@ impl<R: Router> Orchestrator<R> {
         {
             return self.worker_silent(task, notice);
         }
-        self.relay_worker(task, WorkerFinish::Waiting(text.to_owned()), notice)
+        self.relay_worker(WorkerFinish::Waiting(text.to_owned()), notice)
     }
 
     fn shift_phase(&mut self, task: &TaskId, event: PhaseEvent) -> Result<(), OrchestratorError> {
@@ -7209,5 +7243,123 @@ mod presented_route_tests {
         let presented = present_router_body(&body);
         assert_eq!(presented.text, "Dispatched as one new task: Pin.");
         assert_eq!(presented.route.as_deref(), Some("spawn_task"));
+    }
+}
+
+#[cfg(test)]
+mod attachment_bind_tests {
+    use std::future::Future;
+
+    use maia_core::credit::PrefixHash;
+    use maia_core::router::ReasoningEffort;
+    use maia_core::router::Router;
+    use maia_core::router::RouterError;
+    use maia_core::router::RouterRequest;
+    use maia_core::router::RouterResponse;
+    use maia_core::security::SecurityProfile;
+    use maia_core::super_agent::SubmissionId;
+    use maia_store::AttachmentWrite;
+    use maia_store::OwnerOpen;
+    use maia_store::SqliteOwner;
+
+    use super::FastAdmission;
+    use super::IdSupply;
+    use super::Orchestrator;
+    use super::OrchestratorConfig;
+    use super::ParentWork;
+    use super::RouterTurn;
+    use super::StagedAttachment;
+    use super::accepted_routing_policy;
+    use crate::scripted_tools::ScriptedToolHost;
+
+    struct IdleRouter;
+
+    impl Router for IdleRouter {
+        fn complete(
+            &self,
+            request: &RouterRequest,
+        ) -> impl Future<Output = Result<RouterResponse, RouterError>> + Send {
+            let request_id = request.request_id.clone();
+            async move {
+                let _ = request_id;
+                Err(RouterError::Protocol {
+                    detail: "unused".to_owned(),
+                })
+            }
+        }
+
+        async fn cancel(
+            &self,
+            _request_id: maia_core::audit::RequestId,
+        ) -> Result<(), RouterError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_file_is_bound_when_the_message_is_stored() {
+        let mut directory = std::env::temp_dir();
+        directory.push(format!("maia-bind-early-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("temp dir");
+        let database = directory.join("maia.sqlite");
+        let owner = SqliteOwner::open(OwnerOpen {
+            path: database,
+            now: 1_735_000_000,
+            normal_capacity: 8,
+            panic_capacity: 2,
+        })
+        .expect("owner");
+        let hash = "ab".repeat(32);
+        owner
+            .insert_attachment(AttachmentWrite {
+                attachment_id: "att-early".to_owned(),
+                content_sha256: hash.clone(),
+                byte_size: 5,
+                media_type: "text/plain".to_owned(),
+                safe_name: "note.txt".to_owned(),
+                relative_path: format!("attachments/{hash}"),
+                created_at: 1_735_000_000,
+            })
+            .expect("attachment row");
+        let mut ids = IdSupply::at(1_735_000_000);
+        ids.messages.push_back("m-early".to_owned());
+        let mut host = Orchestrator::create(
+            IdleRouter,
+            owner,
+            ScriptedToolHost::create(),
+            OrchestratorConfig {
+                policy: accepted_routing_policy(),
+                ids,
+                turn: RouterTurn {
+                    model: "fixture-model".to_owned(),
+                    reasoning: ReasoningEffort::Low,
+                    prefix_hash: PrefixHash::new("fixture-prefix"),
+                },
+                profile: SecurityProfile::Protected,
+                parent_work: ParentWork::Script,
+            },
+        );
+        let admitted = host
+            .admit_fast(
+                &SubmissionId("op-early".to_owned()),
+                "See the attached note",
+                &[StagedAttachment {
+                    id: "att-early".to_owned(),
+                    note: "Untrusted text file note.txt:\nhello".to_owned(),
+                    png_base64: None,
+                }],
+            )
+            .expect("store the message");
+        let FastAdmission::Queued(chat) = admitted else {
+            panic!("expected a queued message before any model call");
+        };
+        let rows = host
+            .store()
+            .attachments_for_message(chat.message.0.clone())
+            .expect("read bindings");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message_id.as_deref(), Some(chat.message.0.as_str()));
+        assert_eq!(chat.message.0, "m-early");
     }
 }

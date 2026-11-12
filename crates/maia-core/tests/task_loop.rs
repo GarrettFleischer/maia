@@ -75,6 +75,78 @@ fn json_key_order_does_not_hide_a_repeated_call() {
 }
 
 #[test]
+fn distinct_unfinished_replies_ask_for_a_different_approach() {
+    let mut tracker = LoopTracker::default();
+    assert!(
+        tracker
+            .observe(&done("(reply)", "", "I will look at the folder."))
+            .is_none()
+    );
+    assert!(
+        tracker
+            .observe(&done("(reply)", "", "Still planning the chat stream."))
+            .is_none()
+    );
+    match tracker.observe(&done("(reply)", "", "I stopped after many replies.")) {
+        Some(LoopSignal::Nudge { activity, note, .. }) => {
+            assert!(activity.contains("try something else"));
+            assert!(activity.contains("did not finish"));
+            assert!(!activity.contains("32"));
+            assert!(note.contains("Call a tool"));
+            assert!(note.contains("success, failure, or waiting"));
+        }
+        other => panic!("expected a nudge, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_real_tool_call_breaks_an_unfinished_reply_streak() {
+    let mut tracker = LoopTracker::default();
+    assert!(tracker.observe(&done("(reply)", "", "one")).is_none());
+    assert!(tracker.observe(&done("(reply)", "", "two")).is_none());
+    assert!(
+        tracker
+            .observe(&done("bash", r#"{"command":"Get-ChildItem"}"#, "files",))
+            .is_none()
+    );
+    assert!(tracker.observe(&done("(reply)", "", "three")).is_none());
+    assert!(tracker.observe(&done("(reply)", "", "four")).is_none());
+    assert!(matches!(
+        tracker.observe(&done("(reply)", "", "five")),
+        Some(LoopSignal::Nudge { .. })
+    ));
+}
+
+#[test]
+fn unfinished_replies_hand_off_without_a_fixed_step_cap() {
+    let mut tracker = LoopTracker::default();
+    let mut nudges = 0;
+    let mut handed = false;
+    let mut steps = 0;
+    for index in 0..32 {
+        steps += 1;
+        let call = done("(reply)", "", &format!("still writing plan {index}"));
+        match tracker.observe(&call) {
+            Some(LoopSignal::Nudge { activity, .. }) => {
+                assert!(activity.contains("try something else"));
+                assert!(!activity.contains("32"));
+                nudges += 1;
+            }
+            Some(LoopSignal::Handoff { handoff_number, .. }) => {
+                assert_eq!(handoff_number, 1);
+                handed = true;
+                break;
+            }
+            Some(LoopSignal::Pause { .. }) => panic!("first stuck start should hand off"),
+            None => {}
+        }
+    }
+    assert!(handed);
+    assert_eq!(nudges, 3);
+    assert!(steps < 32);
+}
+
+#[test]
 fn same_arguments_with_changing_output_do_not_nudge() {
     let mut tracker = LoopTracker::default();
     for index in 0..6 {

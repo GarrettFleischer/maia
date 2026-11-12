@@ -4,8 +4,8 @@
 //! Composition root: configuration, scheduling, and framework hooks.
 
 mod attachment_prompt;
-mod brain_cli;
 mod attribution_wire;
+mod brain_cli;
 mod discovery;
 mod env;
 mod http;
@@ -18,6 +18,7 @@ mod promotion;
 mod remote;
 mod scripted_tools;
 
+pub use brain_cli::{BrainCli, BrainVerb, parse_brain_args};
 pub use discovery::{DiscoveryError, select_model_id};
 pub use env::{EnvError, ModelEnv, ProviderApiKey, read_model_env};
 pub use http::{
@@ -35,15 +36,14 @@ pub use orchestrator::{
     MessageOutcome, Orchestrator, OrchestratorConfig, OrchestratorError, ParentWork,
     PhaseCodecError, ProposalParseError, ReplayGuard, RoutedOutcome, RouterTurn,
     RoutingFailureReason, StagedAttachment, StepOutcome, SubmissionAdmission, TurnOutcome,
-    UNKNOWN_OUTCOME_SUMMARY, accepted_routing_policy, open_routing_policy, canonical_phase, encode_route_proposal,
-    named_tool_response, parse_canonical_phase, present_router_body, route_tool_response,
-    validate_runtime_snapshot,
+    UNKNOWN_OUTCOME_SUMMARY, accepted_routing_policy, canonical_phase, encode_route_proposal,
+    named_tool_response, open_routing_policy, parse_canonical_phase, present_router_body,
+    route_tool_response, validate_runtime_snapshot,
 };
 pub use promoter_env::{
     DEFAULT_PROMOTER_DAILY_CALL_CAP, DEFAULT_PROMOTER_DAILY_TOKEN_CAP, DEFAULT_PROMOTER_MODEL,
     PromoterEnv, read_promoter_env,
 };
-pub use brain_cli::{BrainCli, BrainVerb, parse_brain_args};
 pub use promotion::{
     ClaimEmbedder, ClaimEmbedderIdentity, CoreClaimEmbedder, EmbedFailure, PromoterModel,
     PromotionAttempt, PromotionCaps, PromotionRunner, RecallArms, RouterPromoter, ScriptedPromoter,

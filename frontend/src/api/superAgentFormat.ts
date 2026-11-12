@@ -218,6 +218,32 @@ export function shownAcceptanceContext(value: string): string | null {
   return text
 }
 
+const REPEATED_WAITING_LABELS = ['Transcript', 'Tool events', 'Attempts']
+
+export function visibleInspectionGroups(detail: TaskDetail): InspectionGroup[] {
+  const groups = inspectionGroups(detail).filter((group) => group.items.length > 0)
+  const sentence = repeatedWaitingSentence(detail)
+  if (!sentence) return groups
+  const attempt = detail.attempts[0]
+  if (!attempt) return groups
+  const rest = groups.filter((group) => !REPEATED_WAITING_LABELS.includes(group.label))
+  return [{ label: 'Waiting', items: [{ id: attempt.attempt_id, text: sentence }] }, ...rest]
+}
+
+function repeatedWaitingSentence(detail: TaskDetail): string | null {
+  if (detail.transcript.length !== 1 || detail.tool_events.length !== 1 || detail.attempts.length !== 1) {
+    return null
+  }
+  const attempt = detail.attempts[0]
+  if (!attempt || attempt.phase !== 'waiting_for_user') return null
+  const sentence = attempt.summary.trim()
+  if (sentence.length === 0) return null
+  const transcript = detail.transcript[0]?.text.trim()
+  const tool = detail.tool_events[0]?.summary.trim()
+  if (transcript !== sentence || tool !== sentence) return null
+  return sentence
+}
+
 export function inspectionGroups(detail: TaskDetail): InspectionGroup[] {
   return [
     {

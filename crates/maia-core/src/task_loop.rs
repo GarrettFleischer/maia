@@ -321,10 +321,50 @@ struct Hit {
 }
 
 fn detect(window: &[Finger]) -> Option<Hit> {
-    same_failure(window)
+    unfinished_replies(window)
+        .or_else(|| same_failure(window))
         .or_else(|| same_call(window))
         .or_else(|| oscillation(window))
         .or_else(|| no_progress(window))
+}
+
+fn unfinished_replies(window: &[Finger]) -> Option<Hit> {
+    let latest = window.last()?;
+    if !is_bare_reply(latest) {
+        return None;
+    }
+    let count = window
+        .iter()
+        .rev()
+        .take_while(|step| is_bare_reply(step))
+        .count();
+    if count < SAME_STEP_REPEAT {
+        return None;
+    }
+    let what = "unfinished replies";
+    Some(Hit {
+        signature: "unfinished:(reply)".to_owned(),
+        activity: format!(
+            "Noticed a loop: {count} replies in a row did not finish the task. Asked it to try something else."
+        ),
+        note: unfinished_note(&latest.quote),
+        owner_message: stuck_message(what, &latest.quote),
+        what: what.to_owned(),
+        quote: latest.quote.clone(),
+    })
+}
+
+fn is_bare_reply(step: &Finger) -> bool {
+    step.call_key.starts_with("(reply):")
+}
+
+fn unfinished_note(quote: &str) -> String {
+    format!(
+        "You replied without finishing.\n\
+Quote: \"{quote}\"\n\
+Stop writing another plan. Call a tool, or call success, failure, or waiting.\n\
+Say in one line what you will try next."
+    )
 }
 
 fn same_failure(window: &[Finger]) -> Option<Hit> {

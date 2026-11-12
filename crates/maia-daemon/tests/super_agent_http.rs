@@ -73,6 +73,7 @@ use maia_daemon::select_model_id;
 use maia_daemon::serve_super_agent_with_ids;
 use maia_daemon::ui_bind_addr;
 use maia_store::AppendEvents;
+use maia_store::AttachmentWrite;
 use maia_store::CoUseWrite;
 use maia_store::ConsolidationWrite;
 use maia_store::EntityScope;
@@ -114,6 +115,7 @@ struct ScriptedRouter {
 struct RouterScript {
     replies: std::collections::VecDeque<ScriptedReply>,
     requests: usize,
+    bodies: Vec<String>,
 }
 
 enum ScriptedReply {
@@ -129,6 +131,7 @@ impl ScriptedRouter {
             inner: Arc::new(Mutex::new(RouterScript {
                 replies: std::collections::VecDeque::new(),
                 requests: 0,
+                bodies: Vec::new(),
             })),
         }
     }
@@ -164,6 +167,15 @@ impl ScriptedRouter {
     fn request_count(&self) -> usize {
         self.inner.lock().expect("router lock").requests
     }
+
+    fn saw(&self, needle: &str) -> bool {
+        self.inner
+            .lock()
+            .expect("router lock")
+            .bodies
+            .iter()
+            .any(|body| body.contains(needle))
+    }
 }
 
 fn auxiliary_reply(request: &RouterRequest) -> Option<String> {
@@ -195,29 +207,37 @@ impl Router for ScriptedRouter {
             if let Some(reply) = auxiliary_reply(request) {
                 Ok(reply_response(request.request_id, reply))
             } else {
-            let mut script = self.inner.lock().expect("router lock");
-            script.requests += 1;
-            if request
-                .messages
-                .first()
-                .is_some_and(|message| message.content.starts_with("Maia task-report relay."))
-            {
-                Ok(reply_response(request.request_id, "Relayed.".to_owned()))
-            } else {
-                match script.replies.pop_front() {
-                    Some(ScriptedReply::Proposal(proposal)) => {
-                        Ok(route_tool_response(request.request_id, &proposal))
+                let mut script = self.inner.lock().expect("router lock");
+                script.bodies.push(
+                    request
+                        .messages
+                        .iter()
+                        .map(|message| message.content.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+                script.requests += 1;
+                if request
+                    .messages
+                    .first()
+                    .is_some_and(|message| message.content.starts_with("Maia task-report relay."))
+                {
+                    Ok(reply_response(request.request_id, "Relayed.".to_owned()))
+                } else {
+                    match script.replies.pop_front() {
+                        Some(ScriptedReply::Proposal(proposal)) => {
+                            Ok(route_tool_response(request.request_id, &proposal))
+                        }
+                        Some(ScriptedReply::Tool { name, arguments }) => {
+                            Ok(named_tool_response(request.request_id, &name, &arguments))
+                        }
+                        Some(ScriptedReply::Fail(detail)) => Err(RouterError::Protocol { detail }),
+                        Some(ScriptedReply::Server { code }) => Err(RouterError::Server { code }),
+                        None => Err(RouterError::Protocol {
+                            detail: "no scripted proposal".to_owned(),
+                        }),
                     }
-                    Some(ScriptedReply::Tool { name, arguments }) => {
-                        Ok(named_tool_response(request.request_id, &name, &arguments))
-                    }
-                    Some(ScriptedReply::Fail(detail)) => Err(RouterError::Protocol { detail }),
-                    Some(ScriptedReply::Server { code }) => Err(RouterError::Server { code }),
-                    None => Err(RouterError::Protocol {
-                        detail: "no scripted proposal".to_owned(),
-                    }),
                 }
-            }
             }
         };
         async move { prepared }
@@ -1894,7 +1914,8 @@ fn pending_submission_resumes_once_after_restart() {
         .block_on(async move {
             let server = session.spawn();
             let started = std::time::Instant::now();
-            while count(&server.database, "SELECT COUNT(*) FROM task_sessions") == 0
+            while (count(&server.database, "SELECT COUNT(*) FROM task_sessions") == 0
+                || router.request_count() < 2)
                 && started.elapsed() < std::time::Duration::from_secs(2)
             {
                 std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1904,6 +1925,83 @@ fn pending_submission_resumes_once_after_restart() {
                 1
             );
             assert_eq!(router.request_count(), 2);
+            assert_eq!(
+                count(
+                    &server.database,
+                    "SELECT COUNT(*) FROM router_messages WHERE role = 'user'"
+                ),
+                1
+            );
+        });
+}
+
+#[test]
+fn a_bound_file_is_on_the_turn_after_restart() {
+    let mut session = Session::open("pending-attachment-restart");
+    session.ids.messages.pop_front();
+    let operation_id = "88888888-8888-4888-8888-888888888888";
+    let hash = "e9b1269d8cf6a5ccb3008d647520021761e302ca1e430a8e1fbf3d83a7173886";
+    let bytes = b"hello from the file";
+    let folder = session.directory.join("attachments");
+    std::fs::create_dir_all(&folder).expect("attachments dir");
+    std::fs::write(folder.join(hash), bytes).expect("attachment bytes");
+    let owner = SqliteOwner::open(OwnerOpen {
+        path: session.database.clone(),
+        now: NOW,
+        normal_capacity: 8,
+        panic_capacity: 2,
+    })
+    .expect("seed owner");
+    owner
+        .begin_message_submission(MessageSubmissionWrite {
+            operation_id: operation_id.to_owned(),
+            text: USER_TEXT.to_owned(),
+            message: RouterMessageWrite {
+                message_id: "m-1".to_owned(),
+                role: "user".to_owned(),
+                body: USER_TEXT.to_owned(),
+                created_at: NOW,
+            },
+        })
+        .expect("seed pending admission");
+    owner
+        .insert_attachment(AttachmentWrite {
+            attachment_id: "att-restart".to_owned(),
+            content_sha256: hash.to_owned(),
+            byte_size: i64::try_from(bytes.len()).expect("size"),
+            media_type: "text/plain".to_owned(),
+            safe_name: "note.txt".to_owned(),
+            relative_path: format!("attachments/{hash}"),
+            created_at: NOW,
+        })
+        .expect("attachment row");
+    owner
+        .bind_attachments(vec!["att-restart".to_owned()], "m-1".to_owned())
+        .expect("bind file to the stored message");
+    drop(owner);
+    session.queue_create();
+    let router = session.router.clone();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime")
+        .block_on(async move {
+            let server = session.spawn();
+            let started = std::time::Instant::now();
+            while count(&server.database, "SELECT COUNT(*) FROM task_sessions") == 0
+                && started.elapsed() < std::time::Duration::from_secs(2)
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            assert_eq!(
+                count(&server.database, "SELECT COUNT(*) FROM task_sessions"),
+                1
+            );
+            assert!(
+                router.saw("hello from the file"),
+                "restarted turn did not include the bound file"
+            );
+            assert!(router.saw("Untrusted text file note.txt"));
             assert_eq!(
                 count(
                     &server.database,
@@ -3766,11 +3864,13 @@ async fn revise_and_delete_brain(session: Session) {
         brain_sentence(&revised, "fact-1").as_deref(),
         Some("Notes stay on this computer.")
     );
-    assert!(!revised["nodes"]
-        .as_array()
-        .expect("nodes")
-        .iter()
-        .any(|node| node["kind"] == "lexeme"));
+    assert!(
+        !revised["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .any(|node| node["kind"] == "lexeme")
+    );
     let lexemes = get(&server, "/api/brain/map?include=lexemes").await;
     assert_eq!(lexemes.status(), 200);
     let lexemes = lexemes.json::<Value>().await.expect("lexeme map");
@@ -4211,7 +4311,16 @@ async fn a_running_task_does_not_block_the_next_message() {
     assert_eq!(phase.len(), 1);
     assert!(!phase[0].starts_with("completed"));
     gate.release();
-    wait_text(&server, "Task task-1: Listed the ideas folder.").await;
+    wait_text(&server, "Listed the ideas folder.").await;
+    let transcript = get(&server, "/api/super-agent/transcript")
+        .await
+        .text()
+        .await
+        .expect("transcript");
+    assert!(
+        !transcript.contains("Task task-1:"),
+        "a finished task should read as a sentence, not an id: {transcript}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

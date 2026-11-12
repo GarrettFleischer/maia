@@ -12,6 +12,7 @@ import {
   routeFold,
   shownAcceptanceContext,
   inspectionGroups,
+  visibleInspectionGroups,
 } from '@/api/superAgentFormat'
 import type { SidebarRow, TaskDetail } from '@/api/superAgentTypes'
 
@@ -125,8 +126,47 @@ describe('chat presentation', () => {
       criteria: [],
       helpers: [],
     }
-    expect(inspectionGroups(detail).filter((group) => group.items.length > 0).map((group) => group.label)).toEqual([
+    expect(visibleInspectionGroups(detail).map((group) => group.label)).toEqual(['Transcript'])
+  })
+
+  it('shows one waiting sentence when transcript, tools, and the attempt repeat it', () => {
+    const sentence = 'I stopped after 32 unfinished replies and I am waiting on you.'
+    const detail: TaskDetail = {
+      task_id: 'task-872451',
+      title: 'Investigate the chat',
+      original_prompt: 'Make the chat stream tokens.',
+      acceptance_context: 'advisory',
+      transcript: [{ id: 'line-1', author: 'Parent', text: sentence }],
+      tool_events: [{ call_id: 'call-1', name: 'script', summary: sentence }],
+      artifacts: [],
+      attempts: [{ attempt_id: 'attempt-1', phase: 'waiting_for_user', summary: sentence }],
+      decisions: [],
+      criteria: [{ criterion_id: 'criterion-1', text: 'Make the chat stream tokens.', mark: 'pending' }],
+      helpers: [],
+    }
+    const groups = visibleInspectionGroups(detail)
+    expect(groups.map((group) => group.label)).toEqual(['Waiting', 'Criteria'])
+    expect(groups[0]?.items).toEqual([{ id: 'attempt-1', text: sentence }])
+  })
+
+  it('keeps separate records when the tool event is not the waiting sentence', () => {
+    const detail: TaskDetail = {
+      task_id: 'task-2',
+      title: 'Investigate the chat',
+      original_prompt: 'Make the chat stream tokens.',
+      acceptance_context: '',
+      transcript: [{ id: 'line-1', author: 'Parent', text: 'Waiting on the owner.' }],
+      tool_events: [{ call_id: 'call-1', name: 'bash', summary: 'Listed the folder.' }],
+      artifacts: [],
+      attempts: [{ attempt_id: 'attempt-1', phase: 'waiting_for_user', summary: 'Waiting on the owner.' }],
+      decisions: [],
+      criteria: [],
+      helpers: [],
+    }
+    expect(visibleInspectionGroups(detail).map((group) => group.label)).toEqual([
       'Transcript',
+      'Tool events',
+      'Attempts',
     ])
   })
 })
