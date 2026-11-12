@@ -425,45 +425,57 @@ function TagEditor({
 }) {
   const [name, setName] = useState(tag.name)
   const [keepId, setKeepId] = useState('')
+  const [open, setOpen] = useState(false)
   const others = catalog.filter((item) => item.id !== tag.id)
   return (
-    <details className="maia-tag-edit">
-      <summary>{`Edit ${tag.name}`}</summary>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault()
-          onRename(tag, name.trim())
-        }}
+    <div className={open ? 'maia-tag-edit is-open' : 'maia-tag-edit'}>
+      <button
+        type="button"
+        className="maia-tag-edit-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
       >
-        <input aria-label={`Rename ${tag.name}`} value={name} onChange={(event) => setName(event.target.value)} />
-        <button type="submit" className="maia-btn">
-          Rename
-        </button>
-      </form>
-      {others.length > 0 ? (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (keepId) onMerge(tag, keepId)
-          }}
-        >
-          <select aria-label={`Merge ${tag.name} into`} value={keepId} onChange={(event) => setKeepId(event.target.value)}>
-            <option value="">Merge into…</option>
-            {others.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-          <button type="submit" className="maia-btn">
-            Merge
-          </button>
-        </form>
-      ) : null}
-      <button type="button" className="maia-btn" onClick={() => onRemove(tag)}>
-        {`Remove ${tag.name}`}
+        {`Edit ${tag.name}`}
       </button>
-    </details>
+      {open ? (
+        <>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              onRename(tag, name.trim())
+            }}
+          >
+            <input aria-label={`Rename ${tag.name}`} value={name} onChange={(event) => setName(event.target.value)} />
+            <button type="submit" className="maia-btn">
+              Rename
+            </button>
+          </form>
+          {others.length > 0 ? (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (keepId) onMerge(tag, keepId)
+              }}
+            >
+              <select aria-label={`Merge ${tag.name} into`} value={keepId} onChange={(event) => setKeepId(event.target.value)}>
+                <option value="">Merge into…</option>
+                {others.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              <button type="submit" className="maia-btn">
+                Merge
+              </button>
+            </form>
+          ) : null}
+          <button type="button" className="maia-btn" onClick={() => onRemove(tag)}>
+            {`Remove ${tag.name}`}
+          </button>
+        </>
+      ) : null}
+    </div>
   )
 }
 

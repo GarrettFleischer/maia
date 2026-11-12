@@ -9,8 +9,11 @@ import {
   taskStripLabel,
   shortWorkStatus,
   isNonTerminalPhase,
+  routeFold,
+  shownAcceptanceContext,
+  inspectionGroups,
 } from '@/api/superAgentFormat'
-import type { SidebarRow } from '@/api/superAgentTypes'
+import type { SidebarRow, TaskDetail } from '@/api/superAgentTypes'
 
 function row(overrides: Partial<SidebarRow> & Pick<SidebarRow, 'task_id' | 'section' | 'phase'>): SidebarRow {
   return {
@@ -77,6 +80,54 @@ describe('countActivity', () => {
   it('labels a stopped phase as Stopped and keeps it resumable', () => {
     expect(formatPhase('stopped')).toBe('Stopped')
     expect(isNonTerminalPhase('stopped')).toBe(true)
+  })
+})
+
+describe('chat presentation', () => {
+  it('hides an ordinary admitted route and keeps a relay', () => {
+    expect(routeFold('spawn_task')).toBeNull()
+    expect(routeFold('continue_task')).toBeNull()
+    expect(routeFold('link_task')).toBeNull()
+    expect(routeFold('inspect_task')).toBeNull()
+    expect(routeFold('cancel_task')).toBeNull()
+    expect(routeFold('retry_task')).toBeNull()
+    expect(routeFold('admit')).toBeNull()
+    expect(routeFold('ask_user')).toBeNull()
+    expect(routeFold('relay_report')).toEqual({
+      summary: 'Relay · task report',
+      detail: 'Untrusted task report, relayed as text.',
+    })
+    expect(routeFold('refuse')).toEqual({
+      summary: 'Not done',
+      detail: 'That message was not turned into work.',
+    })
+    expect(routeFold('mystery')).toEqual({
+      summary: 'Route · admitted by host',
+      detail: 'The host admitted the route.',
+    })
+  })
+
+  it('drops the stock advisory line and empty inspection groups', () => {
+    expect(shownAcceptanceContext('advisory')).toBeNull()
+    expect(shownAcceptanceContext('  advisory  ')).toBeNull()
+    expect(shownAcceptanceContext('')).toBeNull()
+    expect(shownAcceptanceContext('It stands up')).toBe('It stands up')
+    const detail: TaskDetail = {
+      task_id: 'task-1',
+      title: 'Pin control',
+      original_prompt: 'Add a pin control',
+      acceptance_context: 'advisory',
+      transcript: [{ id: 'line-1', author: 'Parent', text: 'Editing the control.' }],
+      tool_events: [],
+      artifacts: [],
+      attempts: [],
+      decisions: [],
+      criteria: [],
+      helpers: [],
+    }
+    expect(inspectionGroups(detail).filter((group) => group.items.length > 0).map((group) => group.label)).toEqual([
+      'Transcript',
+    ])
   })
 })
 

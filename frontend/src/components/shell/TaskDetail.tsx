@@ -1,6 +1,11 @@
 import { useEffect, useId, useRef } from 'react'
 import type { PinMark, TaskDetail as TaskDetailData } from '@/api/superAgentTypes'
-import { inspectionGroups, textOrNone, type InspectionListItem } from '@/api/superAgentFormat'
+import {
+  shownAcceptanceContext,
+  inspectionGroups,
+  textOrNone,
+  type InspectionListItem,
+} from '@/api/superAgentFormat'
 
 function RecordList({ label, items }: { label: string; items: readonly InspectionListItem[] }) {
   const headingId = useId()
@@ -60,6 +65,7 @@ export function TaskDetail({
     }
   }, [detail.task_id])
   const closeStyle = { minHeight: 44, minWidth: 44 }
+  const acceptance = shownAcceptanceContext(detail.acceptance_context)
   return (
       <article className="maia-task-detail" aria-label="Task conversation">
         <div className="maia-task-detail-bar">
@@ -89,9 +95,15 @@ export function TaskDetail({
           ) : null}
           <h3>Original prompt</h3>
           <p>{textOrNone(detail.original_prompt)}</p>
-          <h3>Acceptance context</h3>
-          <p>{textOrNone(detail.acceptance_context)}</p>
-          {inspectionGroups(detail).map((group) => (
+          {acceptance ? (
+            <>
+              <h3>Acceptance context</h3>
+              <p>{acceptance}</p>
+            </>
+          ) : null}
+          {inspectionGroups(detail)
+            .filter((group) => group.items.length > 0)
+            .map((group) => (
             <RecordList key={group.label} label={group.label} items={group.items} />
           ))}
           <div className="maia-task-actions">

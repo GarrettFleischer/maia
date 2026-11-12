@@ -306,6 +306,18 @@ describe('BrainMapView', () => {
     expect(Number.parseFloat((svg as SVGElement | null)?.style.minWidth ?? '')).toBeGreaterThanOrEqual(viewWidth)
   })
 
+  it('keeps tag rename controls out of the page until Edit is opened', async () => {
+    const user = userEvent.setup()
+    render(<BrainMapView client={clientFor(sampleMap())} />)
+    expect(await screen.findByRole('heading', { name: 'People' })).toBeVisible()
+    expect(screen.queryByRole('textbox', { name: 'Rename People', hidden: true })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove People', hidden: true })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Edit People' }))
+    const editor = screen.getByRole('button', { name: 'Edit People' }).closest('.maia-tag-edit')
+    expect(editor).toHaveClass('is-open')
+    expect(screen.getByRole('textbox', { name: 'Rename People' })).toBeVisible()
+  })
+
   it('lets the owner add, retag, and remove a tag without dropping the fact', async () => {
     const user = userEvent.setup()
     let current = sampleMap()

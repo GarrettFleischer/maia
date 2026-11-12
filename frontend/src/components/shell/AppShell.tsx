@@ -488,7 +488,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
                 }}
               />
               {dataSource === 'live' ? (
-                <p className="maia-field-help">Preview, not connected yet</p>
+                <p className="maia-field-help">Agent security settings are not on this screen.</p>
               ) : (
                 <SecuritySettingsPage />
               )}

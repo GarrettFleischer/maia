@@ -59,6 +59,8 @@ interface LayoutBox {
       modeLabelHeight: number
   navDisplay: string | null
   phoneNavHeight: number
+  taskTitleHeight: number
+  taskBarHeight: number
   offenders: string[]
 }
 
@@ -101,6 +103,8 @@ async function measure(page: Page, width: number, height: number, body: string):
       modeLabelHeight: document.querySelector('.maia-brain-toolbar label')?.getBoundingClientRect().height ?? 0,
       navDisplay: nav ? getComputedStyle(nav).display : null,
       phoneNavHeight: document.querySelector('.maia-phone-nav button')?.getBoundingClientRect().height ?? 0,
+      taskTitleHeight: document.querySelector('.maia-task-detail h2')?.getBoundingClientRect().height ?? 0,
+      taskBarHeight: document.querySelector('.maia-task-detail-bar')?.getBoundingClientRect().height ?? 0,
       offenders,
     }
   })
@@ -184,6 +188,99 @@ describe('phone layout at 390px', () => {
     expect(box.phoneNavHeight).toBeGreaterThanOrEqual(44)
     expect(box.searchHeight).toBeGreaterThanOrEqual(44)
     expect(box.modeLabelHeight).toBeGreaterThanOrEqual(44)
+  })
+
+  it('keeps a closed tag editor and a two-line task title inside a 412px phone', async () => {
+    const closed = await measure(
+      page,
+      412,
+      915,
+      `<div class="maia-shell maia-shell--phone">
+        <main class="maia-main">
+          <section class="maia-conversation maia-phone-screen" aria-label="Brain">
+            <div class="maia-main-body">
+              <section class="maia-brain">
+                <div class="maia-tag-head">
+                  <h2>People</h2>
+                  <details class="maia-tag-edit">
+                    <summary>Edit People</summary>
+                    <form>
+                      <input aria-label="Rename People" value="People" />
+                      <button class="maia-btn" type="submit">Rename</button>
+                    </form>
+                    <form>
+                      <select aria-label="Merge People into"><option>Places</option></select>
+                      <button class="maia-btn" type="submit">Merge</button>
+                    </form>
+                    <button class="maia-btn" type="button">Remove People</button>
+                  </details>
+                </div>
+              </section>
+            </div>
+          </section>
+        </main>
+      </div>`,
+    )
+    expect(closed.scrollWidth).toBeLessThanOrEqual(closed.clientWidth + 1)
+    expect(closed.offenders).toEqual([])
+
+    const open = await measure(
+      page,
+      412,
+      915,
+      `<div class="maia-shell maia-shell--phone">
+        <main class="maia-main">
+          <section class="maia-conversation maia-phone-screen" aria-label="Brain">
+            <div class="maia-main-body">
+              <section class="maia-brain">
+                <div class="maia-tag-head">
+                  <h2>People</h2>
+                  <div class="maia-tag-edit is-open">
+                    <button type="button" class="maia-tag-edit-toggle" aria-expanded="true">Edit People</button>
+                    <form>
+                      <input aria-label="Rename People" value="People" />
+                      <button class="maia-btn" type="submit">Rename</button>
+                    </form>
+                    <form>
+                      <select aria-label="Merge People into"><option>Places</option></select>
+                      <button class="maia-btn" type="submit">Merge</button>
+                    </form>
+                    <button class="maia-btn" type="button">Remove People</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+        </main>
+      </div>`,
+    )
+    expect(open.scrollWidth).toBeLessThanOrEqual(open.clientWidth + 1)
+    expect(open.offenders).toEqual([])
+
+    const task = await measure(
+      page,
+      412,
+      915,
+      `<div class="maia-shell maia-shell--phone">
+        <main class="maia-main">
+          <section class="maia-conversation maia-phone-screen">
+            <article class="maia-task-detail">
+              <div class="maia-task-detail-bar">
+                <h2>I want you to investigate it and ideally fix the chat on it to be a live chat that streams the tokens to my phone rather than looking like nothing is happening</h2>
+                <div class="maia-task-detail-close">
+                  <button class="maia-btn" type="button">Back to chat</button>
+                  <button class="maia-btn" type="button" aria-label="Close">×</button>
+                </div>
+              </div>
+            </article>
+          </section>
+        </main>
+      </div>`,
+    )
+    expect(task.scrollWidth).toBeLessThanOrEqual(task.clientWidth + 1)
+    expect(task.offenders).toEqual([])
+    expect(task.taskTitleHeight).toBeLessThanOrEqual(40)
+    expect(task.taskBarHeight).toBeLessThanOrEqual(80)
   })
 
   it('keeps a settings table inside the 390px screen', async () => {

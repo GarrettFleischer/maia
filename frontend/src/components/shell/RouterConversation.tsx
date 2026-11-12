@@ -8,7 +8,7 @@ import type {
   RouterMessage,
   TranscriptState,
 } from '@/api/superAgentTypes'
-import { composerStatusText } from '@/api/superAgentFormat'
+import { composerStatusText, routeFold } from '@/api/superAgentFormat'
 import { composerFieldPx } from '@/components/shell/composerField'
 import { useTranscriptPosition } from '@/components/shell/transcriptPosition'
 import {
@@ -24,18 +24,6 @@ function latestActivity(lines: readonly ActivityLine[]): ActivityLine[] {
     if (line.task_id) tasks.set(line.task_id, line)
   }
   return [...router, ...tasks.values()]
-}
-
-function routeSummary(route: string): string {
-  if (route === 'relay_report') return 'Relay · task report'
-  return 'Route · admitted by host'
-}
-
-function routeDetail(route: string): string {
-  if (route === 'spawn_task') return 'The host admitted one parent task.'
-  if (route === 'continue_task') return 'The host handed this message to the task.'
-  if (route === 'relay_report') return 'Untrusted task report, relayed as text.'
-  return 'The host admitted the route.'
 }
 
 export function RouterConversation({
@@ -230,7 +218,8 @@ export function RouterConversation({
         ) : null}
         <ol className="maia-transcript-list" aria-label="Transcript messages">
           {visibleMessages.map((message) => {
-            const speaker = message.role === 'owner' ? 'You' : 'Router'
+            const speaker = message.role === 'owner' ? 'You' : 'Maia'
+            const fold = message.route ? routeFold(message.route) : null
             return (
               <li key={message.message_id}>
                 <div role={message.message_id === admittedStatusMessageId ? 'status' : undefined}>
@@ -239,10 +228,10 @@ export function RouterConversation({
                     aria-label={`Message from ${speaker}`}
                   >
                     <p className="maia-speaker">{speaker}</p>
-                    {message.route ? (
+                    {fold ? (
                       <details className="maia-fold">
-                        <summary>{routeSummary(message.route)}</summary>
-                        <p className="maia-fold-body">{routeDetail(message.route)}</p>
+                        <summary>{fold.summary}</summary>
+                        <p className="maia-fold-body">{fold.detail}</p>
                       </details>
                     ) : null}
                     <MarkdownMessage text={message.text} className="maia-transcript-body" />

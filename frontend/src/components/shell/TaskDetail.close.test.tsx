@@ -61,4 +61,23 @@ describe('TaskDetail close controls', () => {
     fireEvent.popState(window)
     expect(onClose).toHaveBeenCalledOnce()
   })
+
+  it('shows a real acceptance note and skips the stock advisory word', () => {
+    renderDetail()
+    expect(screen.getByRole('heading', { name: 'Acceptance context' })).toBeVisible()
+    expect(screen.getByText('It stands up')).toBeVisible()
+    render(
+      <TaskDetail
+        detail={{ ...detail, acceptance_context: 'advisory', tool_events: [], artifacts: [], attempts: [], decisions: [], criteria: [], helpers: [] }}
+        pin="unpinned"
+        operation={{ kind: 'idle' }}
+        onClose={vi.fn()}
+        onQuote={() => undefined}
+        onPin={() => undefined}
+      />,
+    )
+    expect(screen.getAllByRole('heading', { name: 'Acceptance context' })).toHaveLength(1)
+    expect(screen.queryByText('advisory')).not.toBeInTheDocument()
+    expect(screen.queryByText('None recorded.')).not.toBeInTheDocument()
+  })
 })

@@ -1313,13 +1313,43 @@ textarea {
 }
 .maia-tag-head {
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 .maia-tag-head h2 {
   margin: 12px 0 4px;
 }
-.maia-tag-edit summary {
+.maia-tag-edit {
+  margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.maia-tag-edit.is-open,
+details.maia-tag-edit[open] {
+  flex: 1 0 100%;
+  margin-left: 0;
+}
+details.maia-tag-edit:not([open]) > :not(summary) {
+  display: none;
+}
+.maia-tag-edit summary,
+.maia-tag-edit-toggle {
   min-height: 44px;
   cursor: pointer;
+}
+.maia-tag-edit-toggle {
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+.maia-tag-edit input,
+.maia-tag-edit select {
+  flex: 1 1 8rem;
+  min-width: 0;
+  max-width: 100%;
+}
+.maia-tag-edit form {
+  width: 100%;
 }
 .maia-tag-picker {
   margin-top: 8px;
@@ -1660,8 +1690,14 @@ details:not([open]) > .maia-task-tree {
 
 .maia-task-detail h2 {
   margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 15px;
   line-height: 20px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .maia-task-detail h3 {

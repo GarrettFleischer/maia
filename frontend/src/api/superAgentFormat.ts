@@ -176,6 +176,48 @@ export function composerStatusText(notice: ComposerNotice, rejection: string | n
   return rejection
 }
 
+export interface RouteFold {
+  summary: string
+  detail: string
+}
+
+const QUIET_ROUTES: ReadonlySet<string> = new Set([
+  'admit',
+  'ask_user',
+  'spawn_task',
+  'continue_task',
+  'link_task',
+  'inspect_task',
+  'cancel_task',
+  'retry_task',
+])
+
+export function routeFold(route: string): RouteFold | null {
+  if (route === 'relay_report') {
+    return {
+      summary: 'Relay · task report',
+      detail: 'Untrusted task report, relayed as text.',
+    }
+  }
+  if (route === 'refuse') {
+    return {
+      summary: 'Not done',
+      detail: 'That message was not turned into work.',
+    }
+  }
+  if (QUIET_ROUTES.has(route)) return null
+  return {
+    summary: 'Route · admitted by host',
+    detail: 'The host admitted the route.',
+  }
+}
+
+export function shownAcceptanceContext(value: string): string | null {
+  const text = value.trim()
+  if (text.length === 0 || text === 'advisory') return null
+  return text
+}
+
 export function inspectionGroups(detail: TaskDetail): InspectionGroup[] {
   return [
     {

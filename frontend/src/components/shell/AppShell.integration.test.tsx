@@ -673,7 +673,7 @@ describe('Live phone stop and connection', () => {
     const user = userEvent.setup()
     renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
     await user.click(await screen.findByRole('button', { name: 'Settings' }))
-    expect(screen.getByText('Preview, not connected yet')).toBeVisible()
+    expect(screen.getByText('Agent security settings are not on this screen.')).toBeVisible()
     expect(screen.queryByTestId('security-settings')).not.toBeInTheDocument()
   })
 })

@@ -283,7 +283,7 @@ describe('RouterConversation', () => {
     expect(announcer.querySelector('[data-announcement-sequence="2"]')).not.toBeNull()
   })
 
-  it('shows a visible You or Router label on each message run', () => {
+  it('shows a visible You or Maia label on each message run', () => {
     render(
       <ReviewedRouterConversation
         messages={[
@@ -309,14 +309,14 @@ describe('RouterConversation', () => {
     const items = within(list).getAllByRole('listitem')
     expect(items).toHaveLength(2)
     const owner = within(items[0]!).getByRole('article', { name: 'Message from You' })
-    const router = within(items[1]!).getByRole('article', { name: 'Message from Router' })
+    const router = within(items[1]!).getByRole('article', { name: 'Message from Maia' })
     expect(owner).toHaveTextContent('Owner body')
     expect(router).toHaveTextContent('Router body')
     expect(within(owner).getByText('You')).toBeVisible()
-    expect(within(router).getByText('Router')).toBeVisible()
+    expect(within(router).getByText('Maia')).toBeVisible()
   })
 
-  it('shows thinking and an admitted route inside the router message', () => {
+  it('keeps an ordinary admitted route out of the message', () => {
     render(
       <ReviewedRouterConversation
         messages={[
@@ -344,8 +344,8 @@ describe('RouterConversation', () => {
 
     expect(screen.queryByText('Thinking')).toBeNull()
     expect(screen.queryByText('The owner wants the weather.')).toBeNull()
-    expect(screen.getByText('Route · admitted by host')).toBeVisible()
-    expect(screen.getByText('The host admitted one parent task.')).toBeInTheDocument()
+    expect(screen.queryByText('Route · admitted by host')).not.toBeInTheDocument()
+    expect(screen.queryByText('The host admitted one parent task.')).not.toBeInTheDocument()
     expect(screen.getByText('Dispatched as one new task: Canby OR.')).toBeVisible()
   })
 
