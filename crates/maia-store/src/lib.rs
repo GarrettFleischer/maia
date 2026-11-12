@@ -33,6 +33,7 @@
 
 mod approval_ops;
 mod auto_link;
+mod bot_ops;
 mod brain_md;
 mod attachment_ops;
 mod audit_ops;
@@ -58,6 +59,15 @@ mod types;
 mod vec_register;
 
 pub use error::ResourceLimit;
+pub use bot_ops::BotRecord;
+pub use bot_ops::BotRequest;
+pub use bot_ops::BotResponse;
+pub use bot_ops::BotTranscriptRow;
+pub use bot_ops::ProvenanceRecord;
+pub use bot_ops::WorkNoteRecord;
+pub use bot_ops::load_bots;
+pub use bot_ops::load_selected_bot;
+pub use bot_ops::read_bot_catalog;
 pub use error::StoreError;
 pub use limits::MAX_AUDIT_CANONICAL_BYTES;
 pub use limits::MAX_AUDIT_PAYLOAD_BYTES;

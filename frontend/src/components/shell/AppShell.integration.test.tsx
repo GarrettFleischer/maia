@@ -191,13 +191,12 @@ describe('Live shell integration', () => {
 
     renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
 
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
     expect(await screen.findByText('Live phone transcript')).toBeVisible()
     expect(screen.queryByTestId('phone-stop-bar')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Open tasks drawer' }))
-    const drawer = screen.getByRole('dialog', { name: 'Tasks' })
-    expect(within(drawer).queryByTestId('activity-counts')).not.toBeInTheDocument()
-    expect(within(drawer).getByRole('button', { name: 'Settings' })).toBeVisible()
-    await user.keyboard('{Escape}')
+    expect(screen.queryByTestId('activity-counts')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Back' }))
     await user.click(screen.getByRole('button', { name: 'Inspect' }))
     expect(screen.getByRole('tab', { name: 'Brain' })).toBeVisible()
     expect(screen.getByText('No context usage for this turn.')).toBeVisible()
@@ -418,7 +417,7 @@ describe('single global stop', () => {
     window.innerWidth = 1440
     window.dispatchEvent(new Event('resize'))
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, { initialState: onboarded() })
-    const rail = screen.getByRole('navigation', { name: 'Tasks' })
+    const rail = screen.getByRole('navigation', { name: 'Chats' })
     const stopAll = within(rail).getByRole('button', { name: 'Stop all running threads' })
 
     expect(stopAll).toHaveClass('maia-btn')
@@ -426,18 +425,15 @@ describe('single global stop', () => {
     expect(within(rail).queryByRole('button', { name: 'Panic' })).not.toBeInTheDocument()
   })
 
-  it('keeps the same single Stop all and no Panic control in the phone drawer', async () => {
+  it('keeps the same single Stop all and no Panic control in the phone drawer', () => {
     window.innerWidth = 390
     window.dispatchEvent(new Event('resize'))
-    const user = userEvent.setup()
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, { initialState: onboarded() })
-    await user.click(screen.getByRole('button', { name: 'Open tasks drawer' }))
-    const drawer = screen.getByRole('dialog', { name: 'Tasks' })
-    const stopAll = within(drawer).getByRole('button', { name: 'Stop all running threads' })
+    const stopAll = screen.getByRole('button', { name: 'Stop all running threads' })
 
     expect(stopAll).toHaveClass('maia-btn')
     expect(stopAll).not.toHaveClass('maia-btn--danger')
-    expect(within(drawer).queryByRole('button', { name: 'Panic' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Panic' })).not.toBeInTheDocument()
   })
 })
 
@@ -460,25 +456,24 @@ describe('NeedsHuman integration', () => {
 })
 
 describe('Phone shell controls', () => {
-  it('opens agents drawer with focus trap and restores focus on close', async () => {
+  it('returns from a phone chat to the list on Escape', async () => {
     window.innerWidth = 390
     window.dispatchEvent(new Event('resize'))
     const user = userEvent.setup()
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, { initialState: onboarded() })
-    const agentsButton = screen.getByRole('button', { name: /open tasks drawer/i })
-    agentsButton.focus()
-    await user.click(agentsButton)
-    const drawer = screen.getByRole('dialog', { name: /tasks/i })
-    expect(drawer).toBeVisible()
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeVisible()
     await user.keyboard('{Escape}')
-    expect(screen.queryByRole('dialog', { name: /tasks/i })).not.toBeInTheDocument()
-    expect(agentsButton).toHaveFocus()
+    expect(screen.getByRole('button', { name: (value: string) => value === 'Maia' })).toBeVisible()
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
   })
 
-  it('pins phone stop bar adjacent above composer visually', () => {
+  it('pins phone stop bar adjacent above composer visually', async () => {
     window.innerWidth = 390
     window.dispatchEvent(new Event('resize'))
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, { initialState: onboarded() })
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
     const stopBar = screen.getByTestId('phone-stop-bar')
     const composer = screen.getByTestId('composer')
     const transcript = screen.getByTestId('transcript')
@@ -590,7 +585,9 @@ describe('Live phone stop and connection', () => {
         return jsonResponse({ error: 'unknown_route' }, 404)
       }),
     )
+    const user = userEvent.setup()
     renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
     expect(await screen.findByText('Live running')).toBeVisible()
     expect(screen.getByTestId('phone-stop-bar')).toHaveTextContent('1 running')
     expect(screen.getByRole('button', { name: 'Stop all running threads' })).toBeVisible()
@@ -617,7 +614,9 @@ describe('Live phone stop and connection', () => {
         return jsonResponse({ error: 'unknown_route' }, 404)
       }),
     )
+    const user = userEvent.setup()
     renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
     expect(await screen.findByText('Live waiting')).toBeVisible()
     expect(screen.getByTestId('phone-stop-bar')).toHaveTextContent('1 needs you')
   })

@@ -7,11 +7,15 @@ export interface OutboxItem {
   at: number
 }
 
-const KEY = 'maia.outbox.v1'
+const MAIA_KEY = 'maia.outbox.v1'
 
-export function loadOutbox(): OutboxItem[] {
+export function outboxKey(botId = 'maia'): string {
+  return botId === 'maia' ? MAIA_KEY : `${MAIA_KEY}.${botId}`
+}
+
+export function loadOutbox(botId = 'maia'): OutboxItem[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = localStorage.getItem(outboxKey(botId))
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -21,15 +25,15 @@ export function loadOutbox(): OutboxItem[] {
   }
 }
 
-export function enqueueOutbox(item: OutboxItem): void {
-  const rest = loadOutbox().filter((entry) => entry.operationId !== item.operationId)
+export function enqueueOutbox(item: OutboxItem, botId = 'maia'): void {
+  const rest = loadOutbox(botId).filter((entry) => entry.operationId !== item.operationId)
   rest.push(item)
-  localStorage.setItem(KEY, JSON.stringify(rest.sort((left, right) => left.at - right.at)))
+  localStorage.setItem(outboxKey(botId), JSON.stringify(rest.sort((left, right) => left.at - right.at)))
 }
 
-export function dropOutbox(operationId: string): void {
-  const rest = loadOutbox().filter((entry) => entry.operationId !== operationId)
-  localStorage.setItem(KEY, JSON.stringify(rest))
+export function dropOutbox(operationId: string, botId = 'maia'): void {
+  const rest = loadOutbox(botId).filter((entry) => entry.operationId !== operationId)
+  localStorage.setItem(outboxKey(botId), JSON.stringify(rest))
 }
 
 function isItem(value: unknown): value is OutboxItem {

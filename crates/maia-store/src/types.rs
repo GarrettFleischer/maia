@@ -2090,6 +2090,8 @@ pub struct RuntimeMessage {
     pub role: String,
     /// Exact UTF-8 body.
     pub body: String,
+    /// Bot that owns this row. Untagged rows are Maia.
+    pub bot_id: String,
 }
 
 /// One stored report in a startup snapshot.

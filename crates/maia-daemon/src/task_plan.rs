@@ -328,8 +328,26 @@ impl<R: Router> Orchestrator<R> {
             contract_json(contract),
             plan_json(list, handoff_count, handoff_of.as_deref()),
             i64::from(handoff_count),
-            handoff_of,
+            handoff_of.clone(),
         );
+        let bot_id = self.task_bot(task);
+        let active = list
+            .items
+            .iter()
+            .find(|item| item.status == TodoStatus::InProgress)
+            .or_else(|| {
+                list.items
+                    .iter()
+                    .find(|item| item.status == TodoStatus::Pending)
+            });
+        let activity = maia_core::bots::work_status_line(&contract.goal, active.map(|item| item.text.as_str()));
+        let _ = self.store.bots(maia_store::BotRequest::UpsertWork {
+            bot_id,
+            goal: contract.goal.clone(),
+            todos_json: plan_json(list, handoff_count, handoff_of.as_deref()),
+            activity,
+            now: self.ids.now,
+        });
     }
 
     fn ask_model(&mut self, prompt: &(String, String)) -> Result<String, String> {

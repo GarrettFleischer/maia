@@ -36,6 +36,9 @@ pub mod embedder;
 /// Super Agent router session, task envelope, and lifecycle contracts.
 pub mod super_agent;
 
+/// Several Super Agents with separate chats and one shared brain.
+pub mod bots;
+
 /// Loop detection and transcript compaction for long tasks.
 pub mod task_loop;
 

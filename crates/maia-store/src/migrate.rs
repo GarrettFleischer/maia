@@ -25,9 +25,10 @@ use crate::sql::MIGRATION_V11;
 use crate::sql::MIGRATION_V12;
 use crate::sql::MIGRATION_V13;
 use crate::sql::MIGRATION_V14;
+use crate::sql::MIGRATION_V15;
 
 /// Highest `user_version` this binary can open.
-pub const LATEST_SCHEMA_VERSION: i64 = 14;
+pub const LATEST_SCHEMA_VERSION: i64 = 15;
 
 /// How long a second opener waits for the migration writer. This is SQLite's
 /// lock wait, not a process-global path mutex.
@@ -131,6 +132,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 14,
         name: "brain_polish",
         statements: MIGRATION_V14,
+    },
+    Migration {
+        version: 15,
+        name: "bots",
+        statements: MIGRATION_V15,
     },
 ];
 
@@ -280,7 +286,7 @@ mod tests {
         let connection = ready(Connection::open(&path));
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         let mut statement = ready(
             connection
                 .prepare("SELECT version, applied_at FROM schema_migrations ORDER BY version"),
@@ -306,7 +312,8 @@ mod tests {
                 (11, 40),
                 (12, 40),
                 (13, 40),
-                (14, 40)
+                (14, 40),
+                (15, 40)
             ]
         );
         let _ = fs::remove_dir_all(directory);
@@ -332,7 +339,7 @@ mod tests {
 
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         let legacy: String = ready(connection.query_row(
             "SELECT body FROM router_messages WHERE message_id = 'legacy-message'",
             [],
@@ -448,7 +455,7 @@ mod tests {
         assert_eq!(ordinals, "0,1");
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         drop(connection);
         let _ = fs::remove_dir_all(directory);
     }

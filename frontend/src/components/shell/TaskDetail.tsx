@@ -37,16 +37,41 @@ export function TaskDetail({
 }) {
   const nextPin: PinMark = pin === 'pinned' ? 'unpinned' : 'pinned'
   const backRef = useRef<HTMLButtonElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
   useEffect(() => {
     backRef.current?.focus()
   }, [])
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onCloseRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    window.history.pushState({ maiaOverlay: detail.task_id }, '')
+    const onPop = () => onCloseRef.current()
+    window.addEventListener('popstate', onPop)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('popstate', onPop)
+      const marker = window.history.state as { maiaOverlay?: string } | null
+      if (marker?.maiaOverlay === detail.task_id) window.history.back()
+    }
+  }, [detail.task_id])
+  const closeStyle = { minHeight: 44, minWidth: 44 }
   return (
       <article className="maia-task-detail" aria-label="Task conversation">
         <div className="maia-task-detail-bar">
           <h2 id="task-detail-title">{detail.title}</h2>
-          <button ref={backRef} type="button" className="maia-btn" onClick={onClose}>
-            Back to chat
-          </button>
+          <div className="maia-task-detail-close">
+            <button ref={backRef} type="button" className="maia-btn" style={closeStyle} onClick={onClose}>
+              Back to chat
+            </button>
+            <button type="button" className="maia-btn" style={closeStyle} aria-label="Close" onClick={onClose}>
+              ×
+            </button>
+          </div>
         </div>
         <div className="maia-task-detail-body">
           {detail.todos && detail.todos.length > 0 ? (

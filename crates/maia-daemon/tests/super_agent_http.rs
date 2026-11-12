@@ -4292,3 +4292,26 @@ async fn stop_during_a_running_worker_does_not_let_it_finish() {
         .expect("transcript");
     assert!(!body.contains("Should not finish."));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bot_catalog_lists_maia_and_creates_another() {
+    let server = spawn_with_scripted_router();
+    let listed = get(&server, "/api/bots").await;
+    assert_eq!(listed.status(), 200);
+    let body: Value = listed.json().await.expect("bot list");
+    assert_eq!(body["bots"][0]["bot_id"], "maia");
+    assert_eq!(body["bots"][0]["name"], "Maia");
+    assert_eq!(body["selected"], "maia");
+    let created = post_json(
+        &server,
+        "/api/bots",
+        json!({"name": "Coding", "instructions": "dev"}),
+    )
+    .await;
+    assert_eq!(created.status(), 200);
+    let bot: Value = created.json().await.expect("created bot");
+    assert_eq!(bot["name"], "Coding");
+    let again = get(&server, "/api/bots").await;
+    let catalog: Value = again.json().await.expect("catalog");
+    assert_eq!(catalog["bots"].as_array().expect("bots").len(), 2);
+}

@@ -1,5 +1,6 @@
 import type {
   AdmittedRouteName,
+  BotSummary,
   PinMark,
   RouterMessage,
   SidebarRow,
@@ -147,6 +148,23 @@ export function createFixtureSuperAgentClient(options?: {
     { message_id: 'm-owner-1', role: 'owner', text: 'Can I open this from my phone?' },
     { message_id: 'm-router-1', role: 'router', text: 'Yes. Same UI over Tailscale.' },
   ]
+  const transcripts = new Map<string, RouterMessage[]>([['maia', messages]])
+  const bots: BotSummary[] = [
+    {
+      bot_id: 'maia',
+      name: 'Maia',
+      color: '#6f8f7a',
+      instructions: '',
+      pinned: true,
+      archived: false,
+      preview: 'Yes. Same UI over Tailscale.',
+      last_message_at: 1_700_000_000_000,
+      unread: 0,
+      running: true,
+      status_line: '',
+    },
+  ]
+  let selected = 'maia'
   let messageCount = messages.length
   let operationCount = 0
   let releaseHeld: ((outcome: 'admit' | 'fail') => void) | null = null
@@ -174,11 +192,65 @@ export function createFixtureSuperAgentClient(options?: {
       releaseHeld = null
       resolve?.(outcome)
     },
-    async sidebar() {
+    async sidebar(botId?: string) {
+      if (botId && botId !== 'maia') return { rows: [] }
       return { rows: structuredClone(rows) }
     },
-    async transcript() {
-      return { messages: structuredClone(messages) }
+    async transcript(botId?: string) {
+      const id = botId && botId.length > 0 ? botId : 'maia'
+      return { messages: structuredClone(transcripts.get(id) ?? []) }
+    },
+    async listBots() {
+      return { bots: structuredClone(bots), selected }
+    },
+    async createBot(input) {
+      const bot: BotSummary = {
+        bot_id: `bot-${bots.length + 1}`,
+        name: input.name.trim(),
+        color: ['#d98b5f', '#7aa2c4', '#c47aa2', '#c4b36a'][(bots.length - 1) % 4] ?? '#d98b5f',
+        instructions: input.instructions?.trim() ?? '',
+        pinned: false,
+        archived: false,
+        preview: '',
+        last_message_at: null,
+        unread: 0,
+        running: false,
+        status_line: '',
+      }
+      bots.push(bot)
+      transcripts.set(bot.bot_id, [])
+      selected = bot.bot_id
+      return structuredClone(bot)
+    },
+    async renameBot(botId, name) {
+      const bot = bots.find((item) => item.bot_id === botId)
+      if (!bot) throw new Error('Unknown bot.')
+      bot.name = name.trim()
+      return structuredClone(bot)
+    },
+    async pinBot(botId, pinned) {
+      const bot = bots.find((item) => item.bot_id === botId)
+      if (!bot) throw new Error('Unknown bot.')
+      bot.pinned = pinned
+      return structuredClone(bot)
+    },
+    async archiveBot(botId, archived) {
+      const bot = bots.find((item) => item.bot_id === botId)
+      if (!bot) throw new Error('Unknown bot.')
+      bot.archived = archived
+      if (archived) bot.pinned = false
+      return structuredClone(bot)
+    },
+    async deleteBot(botId) {
+      if (bots.length < 2) throw new Error('Keep at least one bot.')
+      const index = bots.findIndex((item) => item.bot_id === botId)
+      if (index < 0) throw new Error('Unknown bot.')
+      bots.splice(index, 1)
+      transcripts.delete(botId)
+      if (selected === botId) selected = bots[0]?.bot_id ?? 'maia'
+    },
+    async selectBot(botId) {
+      selected = botId
     },
     async task(taskId) {
       const row = findRow(rows, taskId)
@@ -192,7 +264,7 @@ export function createFixtureSuperAgentClient(options?: {
       }
       return structuredClone(detail)
     },
-    async send(_operationId, text) {
+    async send(_operationId, text, _attachmentIds?: readonly string[], botId?: string) {
       if (script === 'fail') throw new Error('Message failed.')
       if (script === 'hold') {
         const outcome = await new Promise<'admit' | 'fail'>((resolve) => {
@@ -201,11 +273,21 @@ export function createFixtureSuperAgentClient(options?: {
         if (outcome === 'fail') throw new Error('Message failed.')
       }
       const admitted = admittedFromScript()
+      const id = botId && botId.length > 0 ? botId : 'maia'
+      const bucket = transcripts.get(id) ?? []
+      transcripts.set(id, bucket)
       messageCount += 1
       const messageId = `m-owner-${messageCount}`
-      messages.push({ message_id: messageId, role: 'owner', text })
+      bucket.push({ message_id: messageId, role: 'owner', text })
       messageCount += 1
-      messages.push({ message_id: `m-router-${messageCount}`, role: 'router', text: replyFor(admitted) })
+      const reply = replyFor(admitted)
+      bucket.push({ message_id: `m-router-${messageCount}`, role: 'router', text: reply })
+      const bot = bots.find((item) => item.bot_id === id)
+      if (bot) {
+        bot.preview = reply
+        bot.last_message_at = Date.now()
+        if (selected !== id) bot.unread += 1
+      }
       return {
         admission: 'admitted',
         message_id: messageId,

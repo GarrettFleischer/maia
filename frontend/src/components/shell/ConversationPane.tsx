@@ -4,10 +4,11 @@ import { NeedsHumanBanner } from '@/components/conversation/NeedsHumanBanner'
 import { LiveApprovalNotice, openLiveApproval } from '@/components/conversation/LiveApprovalNotice'
 import { RouterConversation } from '@/components/shell/RouterConversation'
 import { StopAllButton } from '@/components/shell/StopAllButton'
+import { TaskRail } from '@/components/shell/TaskRail'
 import { TaskDetail } from '@/components/shell/TaskDetail'
 import { useMaiaState } from '@/hooks/useMaiaState'
 import type { RouterBindings } from '@/hooks/useSuperAgent'
-import type { SuperAgentDataSource } from '@/api/superAgentTypes'
+import type { SidebarRow, SuperAgentDataSource } from '@/api/superAgentTypes'
 
 export type ConversationLayout = 'desktop' | 'tablet' | 'phone'
 
@@ -21,6 +22,10 @@ export function ConversationPane({
   headerAction = null,
   factsUsed,
   onInspectFacts,
+  title = 'Router',
+  onBack,
+  tasks = [],
+  onOpenTask,
 }: {
   dataSource: SuperAgentDataSource
   layout: ConversationLayout
@@ -31,6 +36,10 @@ export function ConversationPane({
   headerAction?: ReactNode
   factsUsed?: ReadonlyMap<string, readonly string[]>
   onInspectFacts?: (messageId: string, ids: readonly string[]) => void
+  title?: string
+  onBack?: () => void
+  tasks?: readonly SidebarRow[]
+  onOpenTask?: (taskId: string) => void
 }) {
   const { state, dispatch } = useMaiaState()
   const [approvalOpen, setApprovalOpen] = useState(false)
@@ -70,13 +79,26 @@ export function ConversationPane({
         />
       ) : (
         <>
-          <header className={headerAction ? 'maia-conv-head maia-conv-head--split' : 'maia-conv-head'}>
+          <header className={headerAction || onBack ? 'maia-conv-head maia-conv-head--split' : 'maia-conv-head'}>
+            {onBack ? (
+              <button
+                type="button"
+                className="maia-btn"
+                style={{ minHeight: 44, minWidth: 44 }}
+                onClick={onBack}
+              >
+                Back
+              </button>
+            ) : null}
             <div>
-              <h1>Router</h1>
+              <h1>{title}</h1>
               <p>One conversation · {activityLabel}</p>
             </div>
             {headerAction}
           </header>
+          {tasks.length > 0 && onOpenTask ? (
+            <TaskRail rows={tasks} onOpen={onOpenTask} onPin={(taskId, mark) => void router.pin(taskId, mark)} />
+          ) : null}
 
           {dataSource === 'fixture' ? (
             <NeedsHumanBanner onApprove={() => setApprovalOpen(true)} onDeny={denyPending} />

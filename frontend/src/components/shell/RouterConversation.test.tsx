@@ -691,6 +691,21 @@ describe('RouterConversation', () => {
     expect(screen.getAllByRole('textbox')).toHaveLength(1)
   })
 
+  it('returns to a usable chat when closing the detail fails', async () => {
+    const user = userEvent.setup()
+    const client = createFixtureSuperAgentClient()
+    vi.spyOn(client, 'closeDetail').mockRejectedValue(new Error('offline'))
+    render(<RouterHarness client={client} />)
+    await user.click(await screen.findByRole('button', { name: 'Open Pin control' }))
+    expect(screen.getByRole('article', { name: 'Task conversation' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Back to chat' }))
+    const box = screen.getByRole('textbox', { name: 'Message' })
+    expect(box).toBeVisible()
+    await user.type(box, 'still here')
+    expect(box).toHaveValue('still here')
+    expect(screen.queryByRole('article', { name: 'Task conversation' })).not.toBeInTheDocument()
+  })
+
   it('quotes into an empty composer as a task reference', async () => {
     const user = userEvent.setup()
     const client = createFixtureSuperAgentClient()
@@ -807,7 +822,7 @@ describe('RouterConversation', () => {
 
     expect(screen.getByText('Loading conversation.')).toBeVisible()
     resolveTranscript({ messages: [] })
-    expect(await screen.findByText('This is the owner chat. Say what you want done; work shows under Tasks.')).toBeVisible()
+    expect(await screen.findByText('This chat is empty. Say what you want done.')).toBeVisible()
   })
 
   it('offers a safe transcript retry after the initial load fails', async () => {
@@ -822,7 +837,7 @@ describe('RouterConversation', () => {
     expect(document.body).not.toHaveTextContent('private.invalid')
     expect(document.body).not.toHaveTextContent('sk-SECRET')
     await user.click(screen.getByRole('button', { name: 'Retry conversation' }))
-    expect(await screen.findByText('This is the owner chat. Say what you want done; work shows under Tasks.')).toBeVisible()
+    expect(await screen.findByText('This chat is empty. Say what you want done.')).toBeVisible()
   })
 
   it('speaks ask and refuse results from the fixture', async () => {
@@ -896,6 +911,7 @@ describe('router shell', () => {
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />)
     await user.click(await screen.findByRole('button', { name: 'Brain' }))
     expect(screen.getByRole('heading', { name: 'Brain', level: 1 })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Brain' }))
 
     await user.click(screen.getByRole('button', { name: 'Open Pin control' }))
 
@@ -908,7 +924,7 @@ describe('router shell', () => {
 
     await user.click(screen.getByRole('button', { name: 'Back to chat' }))
 
-    expect(screen.getByRole('heading', { name: 'Router', level: 1 })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Maia', level: 1 })).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeVisible()
     expect(screen.queryByRole('article', { name: 'Task conversation' })).not.toBeInTheDocument()
   })
@@ -939,8 +955,9 @@ describe('router shell', () => {
     const user = userEvent.setup()
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />)
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(document.documentElement.clientWidth + 1)
-    await user.click(screen.getByRole('button', { name: /open tasks drawer/i }))
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
     expect(await screen.findByRole('button', { name: 'Open Pin control' })).toBeInTheDocument()
-    expect(screen.getAllByRole('textbox', { hidden: true })).toHaveLength(1)
+    expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
   })
 })

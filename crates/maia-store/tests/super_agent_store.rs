@@ -8,7 +8,17 @@ use std::sync::atomic::Ordering;
 
 use rusqlite::Connection;
 
+use maia_store::AppendEvents;
+use maia_store::BotRequest;
+use maia_store::BotResponse;
 use maia_store::ChildAssignmentWrite;
+use maia_store::EpisodeWrite;
+use maia_store::MemoryTaint;
+use maia_store::PromotionClaimWrite;
+use maia_store::PromotionWrite;
+use maia_store::SegmentWrite;
+use maia_store::TextSearch;
+use maia_store::ThreadEventWrite;
 use maia_store::LATEST_SCHEMA_VERSION;
 use maia_store::MAX_PROSE_BYTES;
 use maia_store::MAX_THREAD_EVENT_BODY_BYTES;
@@ -71,6 +81,12 @@ impl TestDb {
 
     fn file(&self) -> &PathBuf {
         &self.file
+    }
+
+    fn close(&mut self) {
+        if let Some(owner) = self.owner.take() {
+            let _ = owner.shutdown();
+        }
     }
 
     fn reopen(&mut self, now: i64) {
@@ -849,17 +865,14 @@ fn closed_detail_high_water_survives_restart() {
 
 #[test]
 fn fresh_open_is_schema_version_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 14);
+    assert_eq!(LATEST_SCHEMA_VERSION, 15);
     let db = TestDb::open("version", 1);
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 14);
+    assert_eq!(settings.user_version, 15);
     let rows = must(db.owner().migrations());
-    assert_eq!(rows.len(), 14);
-    assert_eq!(rows.last().map(|row| row.version), Some(14));
-    assert_eq!(
-        rows.last().map(|row| row.name.as_str()),
-        Some("brain_polish")
-    );
+    assert_eq!(rows.len(), 15);
+    assert_eq!(rows.last().map(|row| row.version), Some(15));
+    assert_eq!(rows.last().map(|row| row.name.as_str()), Some("bots"));
 }
 
 #[test]
@@ -1799,4 +1812,203 @@ fn child_phase_batch_rolls_back_when_any_id_is_missing() {
 fn prompt_debug_does_not_leak_bytes() {
     let rendered = format!("{:?}", sample_envelope("task-1", b"secret-bytes"));
     assert!(!rendered.contains("secret-bytes"));
+}
+
+fn transcript_bodies(db: &TestDb, bot_id: &str) -> Vec<String> {
+    match must(db.owner().bots(BotRequest::Transcript {
+        bot_id: bot_id.to_owned(),
+    })) {
+        BotResponse::Transcript(rows) => rows.into_iter().map(|row| row.body).collect(),
+        other => panic!("transcript {other:?}"),
+    }
+}
+
+#[test]
+fn listed_preview_is_the_turn_sentence_and_a_running_task_sets_status() {
+    let mut db = TestDb::open("bot-row", 10);
+    must(db.owner().insert_task(sample_task("task-chat", 12)));
+    let path = db.file().clone();
+    db.close();
+    let connection = ready(Connection::open(&path));
+    let body = "\u{1}maia-turn\u{1}{\"route\":\"inspect_task\",\"text\":\"The chat is stuck on the investigation.\"}";
+    ready(connection.execute(
+        "UPDATE bots SET preview = ?1 WHERE bot_id = 'maia'",
+        [body],
+    ));
+    drop(connection);
+    db.reopen(13);
+    match must(db.owner().bots(BotRequest::List)) {
+        BotResponse::List(bots) => {
+            assert_eq!(bots[0].preview, "The chat is stuck on the investigation.");
+            assert!(bots[0].running);
+            assert_eq!(bots[0].status_line, "Working on Pin control");
+        }
+        other => panic!("list {other:?}"),
+    }
+}
+
+#[test]
+fn bots_keep_separate_histories_and_share_one_brain() {
+    let db = TestDb::open("bots", 10);
+    match must(db.owner().bots(BotRequest::List)) {
+        BotResponse::List(bots) => {
+            assert_eq!(bots[0].bot_id, "maia");
+            assert_eq!(bots[0].name, "Maia");
+            assert!(bots[0].pinned);
+        }
+        other => panic!("list {other:?}"),
+    }
+    must(db.owner().insert_router_message(RouterMessageWrite {
+        message_id: "m-maia".to_owned(),
+        role: "user".to_owned(),
+        body: "hello from maia".to_owned(),
+        created_at: 11,
+    }));
+    let coding = match must(db.owner().bots(BotRequest::Create {
+        name: "Coding".to_owned(),
+        instructions: "This one is for Maia development".to_owned(),
+        now: 12,
+    })) {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("create {other:?}"),
+    };
+    must(db.owner().insert_router_message(RouterMessageWrite {
+        message_id: "m-code".to_owned(),
+        role: "user".to_owned(),
+        body: "hello from coding".to_owned(),
+        created_at: 13,
+    }));
+    must(db.owner().bots(BotRequest::BindMessage {
+        message_id: "m-code".to_owned(),
+        bot_id: coding.bot_id.clone(),
+        preview: "hello from coding".to_owned(),
+        now: 13,
+        from_owner: true,
+    }));
+
+    let maia_lines = transcript_bodies(&db, "maia");
+    let coding_lines = transcript_bodies(&db, &coding.bot_id);
+    assert_eq!(maia_lines, vec!["hello from maia".to_owned()]);
+    assert_eq!(coding_lines, vec!["hello from coding".to_owned()]);
+
+    must(db.owner().bots(BotRequest::UpsertWork {
+        bot_id: coding.bot_id.clone(),
+        goal: "dog-house list".to_owned(),
+        todos_json: "[]".to_owned(),
+        activity: "Working on dog-house list".to_owned(),
+        now: 14,
+    }));
+    let notes = match must(db.owner().bots(BotRequest::WorkNotes)) {
+        BotResponse::Notes(notes) => notes,
+        other => panic!("notes {other:?}"),
+    };
+    let lines = maia_core::bots::also_happening(
+        "what is the coding agent working on?",
+        "maia",
+        &notes
+            .iter()
+            .map(|note| maia_core::bots::WorkNote {
+                bot_id: note.bot_id.clone(),
+                name: note.name.clone(),
+                goal: note.goal.clone(),
+                activity: note.activity.clone(),
+            })
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        lines,
+        vec!["Also happening: Coding — Working on dog-house list.".to_owned()]
+    );
+
+    must(db.owner().append(AppendEvents {
+        thread_id: "thread-bots".to_owned(),
+        expected_version: 0,
+        participants: "owner".to_owned(),
+        occurred_at: 15,
+        events: vec![ThreadEventWrite {
+            event_id: "event-bots".to_owned(),
+            kind: "user".to_owned(),
+            body: "learned a place".to_owned(),
+        }],
+    }));
+    must(db.owner().insert_episode(EpisodeWrite {
+        episode_id: "episode-canby".to_owned(),
+        thread_id: "thread-bots".to_owned(),
+        turn_id: "m-code".to_owned(),
+        body: "Garrett lives in Canby.".to_owned(),
+        taint: MemoryTaint::Trusted,
+        reasoning: None,
+        participants: "owner".to_owned(),
+        created_at: 16,
+        segments: vec![SegmentWrite {
+            text: "Garrett lives in Canby.".to_owned(),
+            taint: MemoryTaint::Trusted,
+            sources: format!("bot:{}", coding.bot_id),
+        }],
+    }));
+    must(db.owner().apply_promotion(PromotionWrite {
+        episode_id: "episode-canby".to_owned(),
+        model: "model-a".to_owned(),
+        now: 17,
+        claims: vec![PromotionClaimWrite {
+            claim_id: "claim-canby".to_owned(),
+            sentence: "Garrett lives in Canby.".to_owned(),
+            taint: MemoryTaint::Trusted,
+            valid_from: 16,
+            lexemes: vec!["garrett".to_owned(), "canby".to_owned()],
+        }],
+        same_claim_ids: Vec::new(),
+        replacements: Vec::new(),
+        links: Vec::new(),
+    }));
+    must(db.owner().bots(BotRequest::NoteProvenance {
+        target_kind: "claim".to_owned(),
+        target_id: "claim-canby".to_owned(),
+        bot_id: coding.bot_id.clone(),
+        session_id: "m-code".to_owned(),
+        noted_at: 17,
+    }));
+    assert_eq!(
+        must(db.owner().search(TextSearch::Claim, "Canby")),
+        vec!["claim-canby".to_owned()]
+    );
+    match must(db.owner().bots(BotRequest::Provenance {
+        target_kind: "claim".to_owned(),
+        target_id: "claim-canby".to_owned(),
+    })) {
+        BotResponse::Provenance(Some(row)) => {
+            assert_eq!(row.bot_id, coding.bot_id);
+            assert_eq!(row.session_id, "m-code");
+        }
+        other => panic!("provenance {other:?}"),
+    }
+}
+
+#[test]
+fn deleting_the_last_bot_is_refused_and_archive_hides_nothing_from_memory() {
+    let db = TestDb::open("bots-delete", 20);
+    assert!(matches!(
+        db.owner().bots(BotRequest::Delete {
+            bot_id: "maia".to_owned(),
+        }),
+        Err(StoreError::InvalidRequest { .. })
+    ));
+    let coding = match must(db.owner().bots(BotRequest::Create {
+        name: "Coding".to_owned(),
+        instructions: String::new(),
+        now: 21,
+    })) {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("create {other:?}"),
+    };
+    let archived = match must(db.owner().bots(BotRequest::Archive {
+        bot_id: coding.bot_id.clone(),
+        archived: true,
+        now: 22,
+    })) {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("archive {other:?}"),
+    };
+    assert!(archived.archived);
+    assert!(!archived.pinned);
 }

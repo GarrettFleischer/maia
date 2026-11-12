@@ -361,6 +361,8 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   activity: ActivityLine[]
 } {
   const session = useMemo(() => createClientSession(client), [client])
+  const outboxBot = useRef(client.botId ?? 'maia')
+  outboxBot.current = client.botId ?? 'maia'
   const submissionController = useMemo(
     () => createSubmissionController(client.backendScope),
     [client.backendScope],
@@ -555,35 +557,28 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     const activation = activeActivation.current
     const detail = state.detail.value
     if (!activation || activation.session !== session || !detail) return
-    const token = activation.try_start_shell_action(
-      shellActionKey({ kind: 'close_detail', task_id: detail.task_id }),
-    )
-    if (!token) return
+    const taskId = detail.task_id
+    activation.select_task(null)
+    dispatch({
+      type: 'detail_closed',
+      session: session.id,
+      activation: activation.id,
+      task_id: taskId,
+    })
     dispatch({
       type: 'notice_cleared',
       session: session.id,
       activation: activation.id,
     })
+    const token = activation.try_start_shell_action(
+      shellActionKey({ kind: 'close_detail', task_id: taskId }),
+    )
+    if (!token) return
     try {
-      await session.client.closeDetail(detail.task_id)
-      if (
-        !isActiveActivation(activation) ||
-        activation.selected_task() !== detail.task_id
-      ) {
-        return
-      }
-      activation.select_task(null)
-      dispatch({
-        type: 'detail_closed',
-        session: session.id,
-        activation: activation.id,
-        task_id: detail.task_id,
-      })
-      await refreshSidebar(activation)
-    } catch (error) {
-      if (isActiveActivation(activation)) {
-        dispatch(shellActionFailureEvent(activation, error, 'The detail could not be closed. Try again.'))
-      }
+      await session.client.closeDetail(taskId)
+      if (isActiveActivation(activation)) await refreshSidebar(activation)
+    } catch {
+      // Closing is local. Bookkeeping may fail and the panel stays closed.
     } finally {
       activation.finish_shell_action(token)
     }
@@ -790,12 +785,15 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     }
     const outgoingId = String(submission.operation_id)
     const attachmentIds = pendingAttachmentIds.current
-    enqueueOutbox({
-      operationId: outgoingId,
-      text,
-      attachmentIds: [...attachmentIds],
-      at: Date.now(),
-    })
+    enqueueOutbox(
+      {
+        operationId: outgoingId,
+        text,
+        attachmentIds: [...attachmentIds],
+        at: Date.now(),
+      },
+      outboxBot.current,
+    )
     setOutgoing((current) => [
       ...current.filter((item) => item.text !== text),
       { id: outgoingId, text, state: 'pending' },
@@ -878,7 +876,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         const view = storedOwnerSend(transcript.messages, text)
         lastView = view
         if (view === 'absent') return
-        dropOutbox(outgoingId)
+        dropOutbox(outgoingId, outboxBot.current)
         releaseComposer()
         await showStored(view, transcript.messages)
       } finally {
@@ -950,7 +948,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
           })
         }
       }
-      dropOutbox(outgoingId)
+      dropOutbox(outgoingId, outboxBot.current)
       const admittedFailure = admissionOutcomeText(admission)
       const refresh = await loadTranscript(
         activation,
@@ -997,7 +995,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         submissionErrorDisposition(error) === SubmissionErrorDisposition.DiscardPreAdmission
       if (proven) {
         submissionController.discard(submission.operation_id)
-        dropOutbox(outgoingId)
+        dropOutbox(outgoingId, outboxBot.current)
       }
       await within(
         loadTranscript(activation, 'refresh', TRANSCRIPT_REFRESH_ERROR),
@@ -1041,7 +1039,12 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   submitRef.current = submit
 
   useEffect(() => {
-    const pending = loadOutbox()
+    setOutgoing([])
+    setActivity([])
+  }, [client.backendScope])
+
+  useEffect(() => {
+    const pending = loadOutbox(outboxBot.current)
     if (pending.length === 0) return
     setOutgoing((current) => {
       const known = new Set(current.map((item) => item.id))
@@ -1050,13 +1053,13 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         .map((item) => ({ id: item.operationId, text: item.text, state: 'pending' as const }))
       return added.length === 0 ? current : [...added, ...current]
     })
-  }, [flushTick])
+  }, [flushTick, client.backendScope])
 
   useEffect(() => {
     if (!flushArmed.current) return
     if (state.transcript.baseline !== 'ready') return
     if (state.operation.kind === 'sending') return
-    const next = loadOutbox()[0]
+    const next = loadOutbox(outboxBot.current)[0]
     if (!next || inflightText.current.has(next.text)) return
     flushArmed.current = false
     forcedOutbox.current = next
@@ -1083,7 +1086,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   const retryOutgoing = useCallback((id: string) => {
     const item = outgoingRef.current.find((entry) => entry.id === id)
     if (!item || (item.state !== 'failed' && item.state !== 'pending')) return
-    const stored = loadOutbox().find((entry) => entry.operationId === id)
+    const stored = loadOutbox(outboxBot.current).find((entry) => entry.operationId === id)
     if (stored) forcedOutbox.current = stored
     queuedText.current = item.text
     void submitRef.current()

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { countActivity, phoneStopLabel } from '@/api/superAgentFormat'
-import type { ConnectionSnapshot, InspectorTurn, SuperAgentClient } from '@/api/superAgentTypes'
+import { scopeSuperAgentClient } from '@/api/scopeSuperAgent'
+import type { BotSummary, ConnectionSnapshot, InspectorTurn, SuperAgentClient } from '@/api/superAgentTypes'
 import { liveBrainMapClient } from '@/api/liveBrainMap'
 import { memoryBrainMapClient } from '@/api/memoryBrainMap'
 import { emptyBrainMap, type BrainMap } from '@/components/brain/layoutBrainMap'
@@ -8,9 +9,9 @@ import { BrainMapView } from '@/components/brain/BrainMapView'
 import { OnboardingView } from '@/components/onboarding/OnboardingView'
 import { InspectorPanel } from '@/components/inspector/InspectorPanel'
 import { UnrestrictedBanner } from '@/components/security/UnrestrictedBanner'
-import { AgentPhoneDrawer } from '@/components/shell/AgentPhoneDrawer'
-import { AgentRail } from '@/components/shell/AgentRail'
+import { BotList } from '@/components/shell/BotList'
 import { ConversationPane, type ConversationLayout } from '@/components/shell/ConversationPane'
+import { StopAllButton } from '@/components/shell/StopAllButton'
 import { McpServersSection } from '@/components/settings/McpServersSection'
 import { ModelConnectionSection } from '@/components/settings/ModelConnectionSection'
 import { PhoneAccessSection } from '@/components/settings/PhoneAccessSection'
@@ -98,8 +99,66 @@ function InspectToggle({ open, onToggle }: { open: boolean; onToggle: () => void
   )
 }
 
+const FALLBACK_BOT: BotSummary = {
+  bot_id: 'maia',
+  name: 'Maia',
+  color: '#6f8f7a',
+  instructions: '',
+  pinned: true,
+  archived: false,
+  preview: '',
+  last_message_at: null,
+  unread: 0,
+  running: false,
+  status_line: '',
+}
+
+function readStoredBot(): string {
+  try {
+    return localStorage.getItem('maia.selected-bot') || 'maia'
+  } catch {
+    return 'maia'
+  }
+}
+
 export function AppShell({ client }: { client: SuperAgentClient }) {
-  const agent = useSuperAgent(client)
+  const [bots, setBots] = useState<BotSummary[]>([FALLBACK_BOT])
+  const [selectedId, setSelectedId] = useState(readStoredBot)
+  const picked = useRef(false)
+  const storedBot = useRef(readStoredBot())
+  useEffect(() => {
+    let cancelled = false
+    const load = client.listBots
+    if (!load) return
+    void load()
+      .then((catalog) => {
+        if (cancelled || catalog.bots.length === 0) return
+        setBots(catalog.bots)
+        if (picked.current) return
+        const known = catalog.bots.some((bot) => bot.bot_id === storedBot.current)
+        setSelectedId(known ? storedBot.current : catalog.selected || 'maia')
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [client])
+  const scoped = useMemo(() => scopeSuperAgentClient(client, selectedId), [client, selectedId])
+  const agent = useSuperAgent(scoped)
+  const selected = bots.find((bot) => bot.bot_id === selectedId) ?? bots[0] ?? FALLBACK_BOT
+  const remember = (id: string) => {
+    picked.current = true
+    setSelectedId(id)
+    try {
+      localStorage.setItem('maia.selected-bot', id)
+    } catch {
+      /* the list still switches */
+    }
+  }
+  const choose = (id: string) => {
+    remember(id)
+    void client.selectBot?.(id)?.catch(() => undefined)
+  }
   const dataSource = client.dataSource
   const connection = useLiveConnection(client)
   const install = useInstallOffer()
@@ -108,6 +167,67 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
   const { state } = useMaiaState()
   const viewport = useViewportClass()
   const [centerView, setCenterView] = useState<CenterView>('conversation')
+  const [phoneChat, setPhoneChat] = useState(false)
+  const returnToChat = useRef(false)
+  const closePhoneChat = () => setPhoneChat(false)
+  const closePhoneChatRef = useRef(closePhoneChat)
+  closePhoneChatRef.current = closePhoneChat
+  useEffect(() => {
+    if (viewport !== 'phone' || !phoneChat) return
+    window.history.pushState({ maiaChat: true }, '')
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      closePhoneChatRef.current()
+    }
+    const onPop = () => closePhoneChatRef.current()
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('popstate', onPop)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('popstate', onPop)
+      const marker = window.history.state as { maiaChat?: boolean } | null
+      if (marker?.maiaChat) window.history.back()
+    }
+  }, [phoneChat, viewport])
+  const openBot = (id: string) => {
+    choose(id)
+    if (viewport === 'phone') setPhoneChat(true)
+  }
+  const createBot = (input: { name: string; instructions: string }) => {
+    const localId = `local-${bots.length + 1}`
+    const optimistic: BotSummary = {
+      ...FALLBACK_BOT,
+      bot_id: localId,
+      name: input.name,
+      color: '#d98b5f',
+      instructions: input.instructions,
+      pinned: false,
+      last_message_at: Date.now(),
+    }
+    setBots((current) => [...current, optimistic])
+    remember(localId)
+    if (viewport === 'phone') setPhoneChat(true)
+    const save = client.createBot
+    if (!save) return
+    void save(input)
+      .then((saved) => {
+        setBots((current) => current.map((bot) => (bot.bot_id === localId ? saved : bot)))
+        setSelectedId((current) => (current === localId ? saved.bot_id : current))
+        try {
+          localStorage.setItem('maia.selected-bot', saved.bot_id)
+        } catch {
+          /* selection already moved */
+        }
+        void client.selectBot?.(saved.bot_id)?.catch(() => undefined)
+      })
+      .catch(() => {
+        setBots((current) => current.filter((bot) => bot.bot_id !== localId))
+      })
+  }
+  const replaceBot = (saved: BotSummary) => {
+    setBots((current) => current.map((bot) => (bot.bot_id === saved.bot_id ? saved : bot)))
+  }
   const brainClient = useMemo(
     () =>
       dataSource === 'fixture'
@@ -117,7 +237,6 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
   )
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [factFocus, setFactFocus] = useState<readonly string[]>([])
-  const [agentsDrawerOpen, setAgentsDrawerOpen] = useState(false)
   const [inspectorTurns, setInspectorTurns] = useState<readonly InspectorTurn[]>([])
   const [inspectorBrain, setInspectorBrain] = useState<BrainMap>(emptyBrainMap)
   const messageKey = agent.messages.map((message) => message.message_id).join('\n')
@@ -168,9 +287,36 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
   }
   const openTask = (taskId: string) => {
     setCenterView('conversation')
-    setAgentsDrawerOpen(false)
+    if (viewport === 'phone') setPhoneChat(true)
     void agent.openTask(taskId)
   }
+  const showCounts = dataSource === 'fixture' || agent.rows.length > 0
+  const phoneList = viewport === 'phone' && centerView === 'conversation' && !phoneChat
+  const botList = (
+    <BotList
+      bots={bots}
+      selectedId={selected.bot_id}
+      onSelect={openBot}
+      onCreate={createBot}
+      onRename={(id, name) => {
+        void client.renameBot?.(id, name).then(replaceBot).catch(() => undefined)
+      }}
+      onPin={(id, pinned) => {
+        void client.pinBot?.(id, pinned).then(replaceBot).catch(() => undefined)
+      }}
+      onArchive={(id, archived) => {
+        void client.archiveBot?.(id, archived).then(replaceBot).catch(() => undefined)
+      }}
+      onDelete={(id) => {
+        void client.deleteBot?.(id)
+          .then(() => {
+            setBots((current) => current.filter((bot) => bot.bot_id !== id))
+            if (selectedId === id) choose(bots.find((bot) => bot.bot_id !== id)?.bot_id ?? 'maia')
+          })
+          .catch(() => undefined)
+      }}
+    />
+  )
 
   if (dataSource === 'fixture' && !state.onboarding_complete) {
     return <OnboardingView />
@@ -206,21 +352,36 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
       </header>
       {dataSource === 'fixture' ? <UnrestrictedBanner /> : null}
       {showDesktopRail ? (
-        <AgentRail
-          dataSource={dataSource}
-          onOpenBrain={() => setCenterView((view) => toggleCenterView(view, 'brain'))}
-          brainActive={centerView === 'brain'}
-          onOpenSettings={() => setCenterView((view) => toggleCenterView(view, 'settings'))}
-          settingsActive={centerView === 'settings'}
-          onStopAll={stopAll}
-          rows={agent.rows}
-          openTaskId={agent.detail?.task_id ?? null}
-          onOpen={openTask}
-          onPin={agent.pin}
-        />
+        <nav className="maia-nav" aria-label="Chats">
+          <div className="maia-nav-scroll">{botList}</div>
+          <div className="maia-nav-footer">
+            {showCounts ? (
+              <p className="maia-rail-count" data-testid="activity-counts">
+                {activity.running} running · {activity.needsYou} needs you
+              </p>
+            ) : null}
+            <StopAllButton onStop={stopAll} />
+            <button
+              type="button"
+              className="maia-foot-link"
+              onClick={() => setCenterView((view) => toggleCenterView(view, 'brain'))}
+              aria-current={centerView === 'brain' ? 'page' : undefined}
+            >
+              Brain
+            </button>
+            <button
+              type="button"
+              className="maia-foot-link"
+              onClick={() => setCenterView((view) => toggleCenterView(view, 'settings'))}
+              aria-current={centerView === 'settings' ? 'page' : undefined}
+            >
+              Settings
+            </button>
+          </div>
+        </nav>
       ) : (
         <header className="maia-phone-header">
-          <strong>{phoneTitle(centerView)}</strong>
+          <strong>{phoneTitle(centerView, phoneChat, selected.name)}</strong>
           <button type="button" className="maia-btn" onClick={() => setInspectorOpen(true)}>
             Inspect
           </button>
@@ -268,7 +429,15 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
               }
             >
               {viewport === 'phone' ? (
-                <button type="button" className="maia-btn" onClick={() => setCenterView('conversation')}>
+                <button
+                  type="button"
+                  className="maia-btn"
+                  style={{ minHeight: 44, minWidth: 44 }}
+                  onClick={() => {
+                    setCenterView('conversation')
+                    setPhoneChat(returnToChat.current)
+                  }}
+                >
                   Back to chat
                 </button>
               ) : null}
@@ -301,6 +470,16 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
               )}
             </div>
           </section>
+        ) : phoneList ? (
+          <section className="maia-conversation maia-phone-screen" aria-label="Chats">
+            {botList}
+            {phoneStop ? (
+              <div className="maia-phone-stop" data-testid="phone-stop-bar">
+                <span>{phoneStop}</span>
+                <StopAllButton onStop={stopAll} />
+              </div>
+            ) : null}
+          </section>
         ) : (
           <ConversationPane
             dataSource={dataSource}
@@ -310,6 +489,10 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
             phoneStop={phoneStop}
             headerAction={inspectToggle}
             router={agent}
+            title={selected.name}
+            onBack={viewport === 'phone' ? closePhoneChat : undefined}
+            tasks={agent.rows}
+            onOpenTask={openTask}
             factsUsed={factsUsed}
             onInspectFacts={(_messageId, ids) => {
               setFactFocus(ids)
@@ -336,47 +519,35 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
         />
       )}
       {showDesktopRail ? null : (
-        <AgentPhoneDrawer
-          dataSource={dataSource}
-          open={agentsDrawerOpen}
-          onClose={() => setAgentsDrawerOpen(false)}
-          onOpenBrain={() => setCenterView('brain')}
-          onOpenSettings={() => setCenterView('settings')}
-          onStopAll={stopAll}
-          rows={agent.rows}
-          openTaskId={agent.detail?.task_id ?? null}
-          onOpen={openTask}
-          onPin={agent.pin}
-        />
-      )}
-      {showDesktopRail ? null : (
         <nav className="maia-phone-nav" aria-label="Sections">
           <button
             type="button"
-            aria-current={centerView === 'conversation' ? 'page' : undefined}
-            onClick={() => setCenterView('conversation')}
+            aria-current={centerView === 'conversation' && !phoneChat ? 'page' : undefined}
+            onClick={() => {
+              returnToChat.current = false
+              setPhoneChat(false)
+              setCenterView('conversation')
+            }}
           >
-            Chat
-          </button>
-          <button
-            type="button"
-            aria-label="Open tasks drawer"
-            aria-expanded={agentsDrawerOpen}
-            onClick={() => setAgentsDrawerOpen(true)}
-          >
-            Tasks
+            Chats
           </button>
           <button
             type="button"
             aria-current={centerView === 'brain' ? 'page' : undefined}
-            onClick={() => setCenterView((view) => toggleCenterView(view, 'brain'))}
+            onClick={() => {
+              returnToChat.current = phoneChat
+              setCenterView((view) => toggleCenterView(view, 'brain'))
+            }}
           >
             Brain
           </button>
           <button
             type="button"
             aria-current={centerView === 'settings' ? 'page' : undefined}
-            onClick={() => setCenterView((view) => toggleCenterView(view, 'settings'))}
+            onClick={() => {
+              returnToChat.current = phoneChat
+              setCenterView((view) => toggleCenterView(view, 'settings'))
+            }}
           >
             Settings
           </button>
@@ -386,8 +557,8 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
   )
 }
 
-function phoneTitle(view: CenterView): string {
+function phoneTitle(view: CenterView, chat: boolean, name: string): string {
   if (view === 'brain') return 'Brain'
   if (view === 'settings') return 'Settings'
-  return 'Router'
+  return chat ? name : 'Chats'
 }

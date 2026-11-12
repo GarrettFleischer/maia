@@ -7,6 +7,7 @@ import {
 import type {
   ActivityLine,
   AdmittedRouteName,
+  BotSummary,
   MessageAdmissionResult,
   PinMark,
   InspectorSnapshot,
@@ -180,7 +181,8 @@ export function liveSuperAgentClient(
     dataSource: 'live',
     backendScope: `live:${root}` as SuperAgentBackendScope,
     createOperationId: generateOperationId,
-    sidebar: () => readJson(root, '/api/super-agent/sidebar', undefined, readSidebar),
+    sidebar: (botId?: string) =>
+      readJson(root, withBot('/api/super-agent/sidebar', botId), undefined, readSidebar),
     decideApproval: (approvalId, decision) =>
       readJson(
         root,
@@ -188,24 +190,59 @@ export function liveSuperAgentClient(
         { method: 'POST', body: JSON.stringify({ decision }) },
         readApprovalResult,
       ).then(() => undefined),
-    transcript: () => readJson(root, '/api/super-agent/transcript', undefined, readTranscript),
+    transcript: (botId?: string) =>
+      readJson(root, withBot('/api/super-agent/transcript', botId), undefined, readTranscript),
     inspector: () => readJson(root, '/api/super-agent/inspector', undefined, readInspector),
     task: (taskId) =>
       readJson(root, `/api/super-agent/tasks/${encodeURIComponent(taskId)}`, undefined, readDetail),
-    send: (operationId, text, attachmentIds) =>
+    send: (operationId, text, attachmentIds, botId) =>
       readJson(
         root,
         '/api/super-agent/messages',
         {
           method: 'POST',
-          body: JSON.stringify(
-            attachmentIds && attachmentIds.length > 0
-              ? { operation_id: operationId, text, attachment_ids: attachmentIds }
-              : { operation_id: operationId, text },
-          ),
+          body: JSON.stringify(messageBody(operationId, text, attachmentIds, botId)),
         },
         readMessageAdmission,
       ),
+    listBots: () => readJson(root, '/api/bots', undefined, readBotCatalog),
+    createBot: (input) =>
+      readJson(root, '/api/bots', { method: 'POST', body: JSON.stringify(input) }, readBot),
+    renameBot: (botId, name) =>
+      readJson(
+        root,
+        `/api/bots/${encodeURIComponent(botId)}/rename`,
+        { method: 'POST', body: JSON.stringify({ name }) },
+        readBot,
+      ),
+    pinBot: (botId, pinned) =>
+      readJson(
+        root,
+        `/api/bots/${encodeURIComponent(botId)}/pin`,
+        { method: 'POST', body: JSON.stringify({ pinned }) },
+        readBot,
+      ),
+    archiveBot: (botId, archived) =>
+      readJson(
+        root,
+        `/api/bots/${encodeURIComponent(botId)}/archive`,
+        { method: 'POST', body: JSON.stringify({ archived }) },
+        readBot,
+      ),
+    deleteBot: (botId) =>
+      readJson(
+        root,
+        `/api/bots/${encodeURIComponent(botId)}/delete`,
+        { method: 'POST', body: JSON.stringify({}) },
+        readStored,
+      ).then(() => undefined),
+    selectBot: (botId) =>
+      readJson(
+        root,
+        '/api/bots/select',
+        { method: 'POST', body: JSON.stringify({ bot_id: botId }) },
+        readStored,
+      ).then(() => undefined),
     uploadAttachment: (file) =>
       readJson(
         root,
@@ -295,6 +332,23 @@ function browserOperationId(): SubmissionOperationId {
 
 function trimOrigin(origin: string): string {
   return origin.endsWith('/') ? origin.slice(0, -1) : origin
+}
+
+function withBot(path: string, botId?: string): string {
+  if (!botId) return path
+  return `${path}?bot=${encodeURIComponent(botId)}`
+}
+
+function messageBody(
+  operationId: string,
+  text: string,
+  attachmentIds: readonly string[] | undefined,
+  botId: string | undefined,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { operation_id: operationId, text }
+  if (attachmentIds && attachmentIds.length > 0) body.attachment_ids = [...attachmentIds]
+  if (botId) body.bot_id = botId
+  return body
 }
 
 function websocketUrl(origin: string): string {
@@ -451,6 +505,42 @@ function readTranscript(value: unknown): { messages: RouterMessage[] } | null {
   }
   const activity = readActivity(value.activity)
   return { messages, ...(activity.length > 0 ? { activity } : {}) }
+}
+
+function readBot(value: unknown): BotSummary | null {
+  if (!isRecord(value)) return null
+  if (typeof value.bot_id !== 'string' || typeof value.name !== 'string') return null
+  if (typeof value.color !== 'string') return null
+  return {
+    bot_id: value.bot_id,
+    name: value.name,
+    color: value.color,
+    instructions: typeof value.instructions === 'string' ? value.instructions : '',
+    pinned: value.pinned === true,
+    archived: value.archived === true,
+    preview: typeof value.preview === 'string' ? value.preview : '',
+    last_message_at: typeof value.last_message_at === 'number' ? value.last_message_at : null,
+    unread: typeof value.unread === 'number' ? value.unread : 0,
+    running: value.running === true,
+    status_line: typeof value.status_line === 'string' ? value.status_line : '',
+  }
+}
+
+function readBotCatalog(value: unknown): { bots: BotSummary[]; selected: string } | null {
+  if (!isRecord(value) || !Array.isArray(value.bots)) return null
+  const bots: BotSummary[] = []
+  for (const item of value.bots) {
+    const bot = readBot(item)
+    if (!bot) return null
+    bots.push(bot)
+  }
+  const selected = typeof value.selected === 'string' && value.selected.length > 0 ? value.selected : 'maia'
+  return { bots, selected }
+}
+
+function readStored(value: unknown): { status: string } | null {
+  if (!isRecord(value)) return null
+  return { status: 'stored' }
 }
 
 function readActivity(value: unknown): ActivityLine[] {

@@ -125,6 +125,20 @@ textarea {
 
 .maia-shell--phone > .maia-main {
   grid-row: 2;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.maia-shell--phone .maia-phone-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.maia-shell--phone .maia-phone-screen > .maia-bot-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .maia-shell--phone > .maia-phone-nav {
@@ -1100,9 +1114,13 @@ textarea {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
     padding: 8px 12px;
     border-top: 1px solid var(--border);
     background: var(--surface);
+  }
+  .maia-phone-stop span {
+    white-space: nowrap;
   }
 }
 
@@ -1539,8 +1557,24 @@ details:not([open]) > .maia-task-tree {
   justify-content: space-between;
   gap: 12px;
   flex: none;
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.maia-task-detail-close {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.maia-task-detail-bar .maia-btn {
+  min-height: 44px;
+  min-width: 44px;
 }
 
 .maia-task-detail-body {
@@ -1829,6 +1863,136 @@ details:not([open]) > .maia-task-tree {
     align-items: center;
     min-width: 44px;
   }
+}
+
+.maia-bot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.maia-bot-tools {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.maia-bot-tools input,
+.maia-bot-create input,
+.maia-bot-create textarea {
+  width: 100%;
+  min-height: 44px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.maia-bot-tools input {
+  flex: 1;
+}
+.maia-bot-rows,
+.maia-bot-archived ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.maia-bot-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: start;
+  position: relative;
+}
+.maia-bot-open {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+}
+.maia-bot-row--selected .maia-bot-open {
+  background: #1c2420;
+}
+.maia-bot-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #0c0e10;
+  font-weight: 650;
+}
+.maia-bot-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.maia-bot-name {
+  font-weight: 650;
+}
+.maia-bot-preview,
+.maia-bot-status {
+  color: var(--muted, #9aa39c);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.maia-bot-status {
+  color: #7dcea0;
+  font-size: 12px;
+}
+.maia-bot-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  color: var(--muted, #9aa39c);
+  font-size: 12px;
+}
+.maia-bot-unread {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #d98b5f;
+  color: #0c0e10;
+  text-align: center;
+}
+.maia-bot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7dcea0;
+}
+.maia-bot-menu {
+  position: absolute;
+  right: 0;
+  top: 44px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+}
+.maia-bot-menu button,
+.maia-bot-archived summary {
+  min-height: 44px;
+  text-align: left;
+}
+.maia-phone-screen .maia-bot-list {
+  padding: 8px 12px 12px;
 }
 
 @media (prefers-reduced-motion: reduce) {

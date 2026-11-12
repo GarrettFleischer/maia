@@ -211,7 +211,7 @@ export function RouterConversation({
           </p>
         ) : null}
         {transcriptState.kind === 'empty' ? (
-          <p>This is the owner chat. Say what you want done; work shows under Tasks.</p>
+          <p>This chat is empty. Say what you want done.</p>
         ) : null}
         {transcriptState.kind === 'error' ? (
           <div role={notice.kind === 'admitted_failure' ? undefined : 'status'}>

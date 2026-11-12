@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createFixtureSuperAgentClient } from '@/api/fixtureSuperAgent'
 import { AppShell } from '@/components/shell/AppShell'
@@ -22,8 +22,8 @@ describe('AppShell layout', () => {
       initialState: { ...defaultFixtureState(), onboarding_complete: true },
     })
     expect(screen.getByRole('banner', { name: 'Maia' })).toBeVisible()
-    expect(screen.getByRole('navigation', { name: 'Tasks' })).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'Router' })).toBeVisible()
+    expect(screen.getByRole('navigation', { name: 'Chats' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Maia' })).toBeVisible()
     expect(screen.getByText(/One conversation/)).toBeVisible()
     expect(screen.getByRole('button', { name: 'Stop all running threads' })).toHaveTextContent(
       'Stop all running threads',
@@ -76,8 +76,9 @@ describe('AppShell layout', () => {
     await user.click(screen.getByRole('button', { name: 'Brain' }))
     expect(screen.getByRole('region', { name: 'Brain' })).toHaveClass('maia-phone-screen')
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Chat' }))
-    expect(screen.getByRole('textbox', { name: 'Message' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Chats' }))
+    expect(screen.getByRole('button', { name: (value: string) => value === 'Maia' })).toBeVisible()
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Brain' })).not.toBeInTheDocument()
   })
 
@@ -106,7 +107,7 @@ describe('AppShell layout', () => {
         initialState: { ...defaultFixtureState(), onboarding_complete: true },
       })
       expect(screen.getByTestId('app-shell')).toHaveAttribute('data-viewport', 'phone')
-      expect(screen.getByRole('button', { name: 'Open tasks drawer' })).toBeVisible()
+      expect(screen.getByRole('textbox', { name: 'Search chats' })).toBeVisible()
     } finally {
       if (previous) Object.defineProperty(window, 'matchMedia', previous)
       else Reflect.deleteProperty(window, 'matchMedia')
@@ -167,7 +168,28 @@ describe('AppShell layout', () => {
     expect(document.querySelector('a, button, input, textarea, select')).toBe(skip)
     await user.click(screen.getByRole('button', { name: 'Settings' }))
     await user.click(screen.getByRole('button', { name: 'Back to chat' }))
-    expect(screen.getByRole('textbox', { name: 'Message' })).toBeVisible()
+    expect(screen.getByRole('button', { name: (value: string) => value === 'Maia' })).toBeVisible()
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+  })
+
+  it('switches bots immediately and keeps their histories apart', async () => {
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
+      initialState: { ...defaultFixtureState(), onboarding_complete: true },
+    })
+    expect(await screen.findByText('Can I open this from my phone?')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'New bot' }))
+    await user.type(screen.getByRole('textbox', { name: 'Bot name' }), 'Coding')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => {
+      expect(screen.queryByText('Can I open this from my phone?')).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole('heading', { name: 'Coding' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
+    expect(await screen.findByText('Can I open this from my phone?')).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Coding' })).not.toBeInTheDocument()
   })
 
   it('stores a light theme from Settings and can follow the system', async () => {

@@ -644,6 +644,10 @@ enum NormalCommand {
     RelinkNeurons {
         reply: Reply<AutoLinkReport>,
     },
+    Bots {
+        request: crate::bot_ops::BotRequest,
+        reply: Reply<crate::bot_ops::BotResponse>,
+    },
 }
 
 enum PanicCommand {
@@ -1942,6 +1946,20 @@ impl SqliteOwner {
     pub fn probe_vector_write(&self) -> Result<(), StoreError> {
         let (reply, rx) = oneshot::channel();
         self.send_normal(NormalCommand::ProbeVectors { reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Applies one Super Agent catalog command.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, validation, missing-bot, or SQLite failure.
+    pub fn bots(
+        &self,
+        request: crate::bot_ops::BotRequest,
+    ) -> Result<crate::bot_ops::BotResponse, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::Bots { request, reply }, Submit::Wait)?;
         Pending { rx }.wait()
     }
 
@@ -3832,6 +3850,9 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
         ),
         NormalCommand::RelinkNeurons { reply } => {
             send(reply, crate::auto_link::relink_all(connection))
+        }
+        NormalCommand::Bots { request, reply } => {
+            send(reply, crate::bot_ops::apply(connection, &request));
         }
     }
 }

@@ -10,6 +10,7 @@ index|idx_dream_queue_open|dream_queue|CREATE INDEX idx_dream_queue_open ON drea
 index|idx_edges_to|edges|CREATE INDEX idx_edges_to ON edges (edge_kind, to_kind, to_id)
 index|idx_facts_entity|facts|CREATE INDEX idx_facts_entity ON facts (entity_id)
 index|idx_legacy_threads_marked|legacy_threads|CREATE INDEX idx_legacy_threads_marked ON legacy_threads (marked_at, thread_id)
+index|idx_message_bots_bot|message_bots|CREATE INDEX idx_message_bots_bot ON message_bots (bot_id)
 index|idx_message_submissions_message|message_submissions|CREATE INDEX idx_message_submissions_message ON message_submissions (message_id)
 index|idx_negative_marks_target|negative_marks|CREATE INDEX idx_negative_marks_target ON negative_marks (target_kind, target_id)
 index|idx_pending_approvals_open|pending_approvals|CREATE INDEX idx_pending_approvals_open ON pending_approvals (status, expires_at)
@@ -17,6 +18,7 @@ index|idx_presentations_ledger|presentations|CREATE INDEX idx_presentations_ledg
 index|idx_projections_progress|projections|CREATE INDEX idx_projections_progress ON projections (progress)
 index|idx_snapshots_observed|platform_capability_snapshots|CREATE INDEX idx_snapshots_observed ON platform_capability_snapshots (observed_at, snapshot_id)
 index|idx_task_attempts_task|task_attempts|CREATE INDEX idx_task_attempts_task ON task_attempts (task_id)
+index|idx_task_bots_bot|task_bots|CREATE INDEX idx_task_bots_bot ON task_bots (bot_id)
 index|idx_task_criteria_ordinal|task_criteria|CREATE UNIQUE INDEX idx_task_criteria_ordinal ON task_criteria (task_id, ordinal)
 index|idx_task_criteria_task|task_criteria|CREATE INDEX idx_task_criteria_task ON task_criteria (task_id)
 index|idx_task_evidence_task|task_evidence|CREATE INDEX idx_task_evidence_task ON task_evidence (task_id)
@@ -27,6 +29,8 @@ index|sqlite_autoindex_allowlist_entries_1|allowlist_entries|
 index|sqlite_autoindex_attachments_1|attachments|
 index|sqlite_autoindex_audit_blobs_1|audit_blobs|
 index|sqlite_autoindex_audit_events_1|audit_events|
+index|sqlite_autoindex_bot_work_1|bot_work|
+index|sqlite_autoindex_bots_1|bots|
 index|sqlite_autoindex_brain_md_member_1|brain_md_member|
 index|sqlite_autoindex_child_assignments_1|child_assignments|
 index|sqlite_autoindex_claim_vec_info_1|claim_vec_info|
@@ -60,6 +64,8 @@ index|sqlite_autoindex_legacy_threads_1|legacy_threads|
 index|sqlite_autoindex_lexemes_1|lexemes|
 index|sqlite_autoindex_mcp_connections_1|mcp_connections|
 index|sqlite_autoindex_mcp_secret_slots_1|mcp_secret_slots|
+index|sqlite_autoindex_memory_provenance_1|memory_provenance|
+index|sqlite_autoindex_message_bots_1|message_bots|
 index|sqlite_autoindex_message_submissions_1|message_submissions|
 index|sqlite_autoindex_message_submissions_2|message_submissions|
 index|sqlite_autoindex_negative_marks_1|negative_marks|
@@ -80,6 +86,7 @@ index|sqlite_autoindex_router_turn_snapshots_1|router_turn_snapshots|
 index|sqlite_autoindex_runtime_id_high_water_1|runtime_id_high_water|
 index|sqlite_autoindex_slot_heat_1|slot_heat|
 index|sqlite_autoindex_task_attempts_1|task_attempts|
+index|sqlite_autoindex_task_bots_1|task_bots|
 index|sqlite_autoindex_task_criteria_1|task_criteria|
 index|sqlite_autoindex_task_envelopes_1|task_envelopes|
 index|sqlite_autoindex_task_evidence_1|task_evidence|
@@ -95,6 +102,9 @@ table|attachments|attachments|CREATE TABLE attachments (attachment_id TEXT PRIMA
 table|audit_blobs|audit_blobs|CREATE TABLE audit_blobs (payload_hash TEXT PRIMARY KEY, body BLOB NOT NULL)
 table|audit_checkpoints|audit_checkpoints|CREATE TABLE audit_checkpoints (sequence INTEGER PRIMARY KEY, event_hash TEXT NOT NULL, policy_version INTEGER NOT NULL, occurred_at INTEGER NOT NULL)
 table|audit_events|audit_events|CREATE TABLE audit_events (sequence INTEGER PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, thread_id TEXT, actor_kind TEXT NOT NULL, actor_id TEXT, kind TEXT NOT NULL, cause_event_id TEXT, request_id TEXT, occurred_at INTEGER NOT NULL, payload_hash TEXT NOT NULL, previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL, canonical BLOB NOT NULL, profile TEXT NOT NULL, allowlist_entry_id TEXT)
+table|bot_selection|bot_selection|CREATE TABLE bot_selection (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), bot_id TEXT NOT NULL, FOREIGN KEY (bot_id) REFERENCES bots (bot_id))
+table|bot_work|bot_work|CREATE TABLE bot_work (bot_id TEXT PRIMARY KEY, goal TEXT NOT NULL DEFAULT '', todos_json TEXT NOT NULL DEFAULT '[]', activity TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, FOREIGN KEY (bot_id) REFERENCES bots (bot_id))
+table|bots|bots|CREATE TABLE bots (bot_id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL, instructions TEXT NOT NULL DEFAULT '', pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)), archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_message_at INTEGER, preview TEXT NOT NULL DEFAULT '', unread INTEGER NOT NULL DEFAULT 0)
 table|brain_md_member|brain_md_member|CREATE TABLE brain_md_member (kind TEXT NOT NULL, neuron_id TEXT NOT NULL, updated_at INTEGER NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY (kind, neuron_id))
 table|brain_md_state|brain_md_state|CREATE TABLE brain_md_state (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), exported_at INTEGER, directory TEXT NOT NULL DEFAULT '', neuron_count INTEGER NOT NULL DEFAULT 0, edge_count INTEGER NOT NULL DEFAULT 0, keyword_count INTEGER NOT NULL DEFAULT 0, vector_count INTEGER NOT NULL DEFAULT 0, graph_count INTEGER NOT NULL DEFAULT 0)
 table|child_assignments|child_assignments|CREATE TABLE child_assignments (child_id TEXT PRIMARY KEY, parent_task_id TEXT NOT NULL, depth INTEGER NOT NULL, subgoal BLOB NOT NULL, budget_tokens INTEGER NOT NULL, budget_turns INTEGER NOT NULL, phase TEXT NOT NULL DEFAULT 'queued')
@@ -150,6 +160,8 @@ table|lexemes|lexemes|CREATE TABLE lexemes (lexeme_id TEXT PRIMARY KEY)
 table|mcp_call_audit|mcp_call_audit|CREATE TABLE mcp_call_audit (row_id INTEGER PRIMARY KEY, connection_id TEXT NOT NULL, wire_name TEXT NOT NULL, manifest_hash TEXT NOT NULL, exchange_class TEXT NOT NULL, result_sha256 TEXT NOT NULL)
 table|mcp_connections|mcp_connections|CREATE TABLE mcp_connections (connection_id TEXT PRIMARY KEY, label TEXT NOT NULL, transport_kind TEXT NOT NULL CHECK (transport_kind IN ('http', 'stdio')), url TEXT, command TEXT, args_json TEXT NOT NULL DEFAULT '[]', admitted_hash TEXT, listed_canonical TEXT, listed_hash TEXT, refresh_error TEXT)
 table|mcp_secret_slots|mcp_secret_slots|CREATE TABLE mcp_secret_slots (connection_id TEXT NOT NULL, ordinal INTEGER NOT NULL, slot_kind TEXT NOT NULL CHECK (slot_kind IN ('header', 'env')), name TEXT NOT NULL, secret_ref TEXT NOT NULL, PRIMARY KEY (connection_id, ordinal), FOREIGN KEY (connection_id) REFERENCES mcp_connections (connection_id) ON DELETE CASCADE)
+table|memory_provenance|memory_provenance|CREATE TABLE memory_provenance (target_kind TEXT NOT NULL, target_id TEXT NOT NULL, bot_id TEXT NOT NULL, session_id TEXT NOT NULL, noted_at INTEGER NOT NULL, PRIMARY KEY (target_kind, target_id), FOREIGN KEY (bot_id) REFERENCES bots (bot_id))
+table|message_bots|message_bots|CREATE TABLE message_bots (message_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, FOREIGN KEY (message_id) REFERENCES router_messages (message_id), FOREIGN KEY (bot_id) REFERENCES bots (bot_id))
 table|message_submissions|message_submissions|CREATE TABLE message_submissions (operation_id TEXT PRIMARY KEY, text TEXT NOT NULL, message_id TEXT NOT NULL UNIQUE, state TEXT NOT NULL CHECK (state IN ('pending', 'terminal')), outcome_kind TEXT, outcome_detail TEXT, created_at INTEGER NOT NULL, FOREIGN KEY (message_id) REFERENCES router_messages (message_id), CHECK ((state = 'pending' AND outcome_kind IS NULL AND outcome_detail IS NULL) OR (state = 'terminal' AND outcome_kind IS NOT NULL)))
 table|model_connection|model_connection|CREATE TABLE model_connection (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), base_url TEXT NOT NULL, model_id TEXT NOT NULL, reasoning TEXT NOT NULL CHECK (reasoning IN ('low', 'medium', 'high')))
 table|negative_marks|negative_marks|CREATE TABLE negative_marks (mark_id TEXT PRIMARY KEY, ledger_id TEXT NOT NULL, target_kind TEXT NOT NULL, target_id TEXT NOT NULL, presentation_id TEXT NOT NULL, thread_id TEXT NOT NULL, message_id TEXT NOT NULL, evidence_span_start INTEGER NOT NULL, evidence_span_end INTEGER NOT NULL, occurred_at INTEGER NOT NULL, dream_queue_id TEXT NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id), FOREIGN KEY (presentation_id) REFERENCES presentations (presentation_id), FOREIGN KEY (dream_queue_id) REFERENCES dream_queue (dream_queue_id))
@@ -179,6 +191,7 @@ table|security_settings|security_settings|CREATE TABLE security_settings (single
 table|slot_heat|slot_heat|CREATE TABLE slot_heat (thread_id TEXT NOT NULL, slot_id TEXT NOT NULL, heat REAL NOT NULL, PRIMARY KEY (thread_id, slot_id))
 table|sqlite_sequence|sqlite_sequence|CREATE TABLE sqlite_sequence(name,seq)
 table|task_attempts|task_attempts|CREATE TABLE task_attempts (task_id TEXT NOT NULL, attempt_id TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (task_id, attempt_id), FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))
+table|task_bots|task_bots|CREATE TABLE task_bots (task_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id), FOREIGN KEY (bot_id) REFERENCES bots (bot_id))
 table|task_criteria|task_criteria|CREATE TABLE task_criteria (criterion_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, source_kind TEXT NOT NULL, source_ref TEXT NOT NULL, span_start INTEGER, span_end INTEGER, text TEXT NOT NULL, ordinal INTEGER NOT NULL DEFAULT 0, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))
 table|task_envelopes|task_envelopes|CREATE TABLE task_envelopes (task_id TEXT PRIMARY KEY, prompt BLOB NOT NULL, brief TEXT NOT NULL, routing_reason TEXT NOT NULL, snapshot_id TEXT NOT NULL, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))
 table|task_evidence|task_evidence|CREATE TABLE task_evidence (evidence_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, attempt_id TEXT NOT NULL, body TEXT NOT NULL, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))

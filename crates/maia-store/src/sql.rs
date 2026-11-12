@@ -179,6 +179,24 @@ pub(crate) const MIGRATION_V13: &[&str] = &[
 /// city place, and a repeated name claim is marked duplicate. Nothing is deleted.
 pub(crate) const MIGRATION_V14: &[&str] = &[];
 
+/// Migration 15 gives the owner many Super Agents on one shared brain.
+///
+/// The existing router transcript stays with the first bot, named Maia.
+/// Messages and tasks that are not tagged still belong to that bot.
+pub(crate) const MIGRATION_V15: &[&str] = &[
+    "CREATE TABLE bots (bot_id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL, instructions TEXT NOT NULL DEFAULT '', pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)), archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_message_at INTEGER, preview TEXT NOT NULL DEFAULT '', unread INTEGER NOT NULL DEFAULT 0)",
+    "INSERT INTO bots (bot_id, name, color, instructions, pinned, archived, created_at, updated_at) VALUES ('maia', 'Maia', '#6f8f7a', '', 1, 0, 0, 0)",
+    "UPDATE bots SET preview = COALESCE((SELECT body FROM router_messages ORDER BY ordinal DESC LIMIT 1), ''), last_message_at = (SELECT created_at FROM router_messages ORDER BY ordinal DESC LIMIT 1) WHERE bot_id = 'maia'",
+    "CREATE TABLE bot_selection (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), bot_id TEXT NOT NULL, FOREIGN KEY (bot_id) REFERENCES bots (bot_id))",
+    "INSERT INTO bot_selection (singleton, bot_id) VALUES (1, 'maia')",
+    "CREATE TABLE message_bots (message_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, FOREIGN KEY (message_id) REFERENCES router_messages (message_id), FOREIGN KEY (bot_id) REFERENCES bots (bot_id))",
+    "CREATE INDEX idx_message_bots_bot ON message_bots (bot_id)",
+    "CREATE TABLE task_bots (task_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, FOREIGN KEY (task_id) REFERENCES task_sessions (task_id), FOREIGN KEY (bot_id) REFERENCES bots (bot_id))",
+    "CREATE INDEX idx_task_bots_bot ON task_bots (bot_id)",
+    "CREATE TABLE bot_work (bot_id TEXT PRIMARY KEY, goal TEXT NOT NULL DEFAULT '', todos_json TEXT NOT NULL DEFAULT '[]', activity TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, FOREIGN KEY (bot_id) REFERENCES bots (bot_id))",
+    "CREATE TABLE memory_provenance (target_kind TEXT NOT NULL, target_id TEXT NOT NULL, bot_id TEXT NOT NULL, session_id TEXT NOT NULL, noted_at INTEGER NOT NULL, PRIMARY KEY (target_kind, target_id), FOREIGN KEY (bot_id) REFERENCES bots (bot_id))",
+];
+
 /// Migration 10 stores approval waits, ledger reversals, and untrusted attachments.
 pub(crate) const MIGRATION_V10: &[&str] = &[
     "CREATE TABLE ledger_reversals (ledger_id TEXT PRIMARY KEY, reversed_at INTEGER NOT NULL, FOREIGN KEY (ledger_id) REFERENCES ledgers (ledger_id))",

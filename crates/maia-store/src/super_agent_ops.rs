@@ -515,12 +515,18 @@ pub(crate) fn runtime_snapshot(connection: &Connection) -> Result<RuntimeSnapsho
 
 fn load_runtime_messages(connection: &Connection) -> Result<Vec<RuntimeMessage>, StoreError> {
     let mut statement = connection
-        .prepare("SELECT message_id, role, body FROM router_messages ORDER BY ordinal")?;
+        .prepare(
+            "SELECT m.message_id, m.role, m.body, COALESCE(b.bot_id, 'maia') \
+             FROM router_messages m \
+             LEFT JOIN message_bots b ON b.message_id = m.message_id \
+             ORDER BY m.ordinal",
+        )?;
     let mapped = statement.query_map([], |row| {
         Ok(RuntimeMessage {
             message_id: row.get(0)?,
             role: row.get(1)?,
             body: row.get(2)?,
+            bot_id: row.get(3)?,
         })
     })?;
     let mut messages = Vec::new();

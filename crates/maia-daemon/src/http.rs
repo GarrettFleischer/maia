@@ -1076,7 +1076,12 @@ enum ActorCall {
     Message {
         operation: SubmissionId,
         text: String,
+        bot_id: String,
         attachments: Vec<crate::orchestrator::StagedAttachment>,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    Bot {
+        request: maia_store::BotRequest,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
     SaveAttachment {
@@ -1277,6 +1282,7 @@ fn actor_loop<R>(
             ActorCall::Message {
                 operation,
                 text,
+                bot_id,
                 attachments,
                 reply,
             } => accept_message(
@@ -1284,6 +1290,7 @@ fn actor_loop<R>(
                 &mut inbox,
                 operation,
                 &text,
+                &bot_id,
                 &attachments,
                 reply,
             ),
@@ -1310,10 +1317,12 @@ fn accept_message<R: RouterPort>(
     inbox: &mut VecDeque<QueuedChat>,
     operation: SubmissionId,
     text: &str,
+    bot_id: &str,
     attachments: &[crate::orchestrator::StagedAttachment],
     reply: oneshot::Sender<Result<Value, ApiError>>,
 ) {
     install_from_store(&mut actor.host, &actor.mcp_secrets);
+    actor.host.set_next_bot(bot_id);
     let accepted = match actor.host.admit_fast(&operation, text, attachments) {
         Ok(FastAdmission::Immediate(admission)) => Ok(submission_value(admission)),
         Ok(FastAdmission::Queued(queued)) => {
@@ -1629,10 +1638,20 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
         ActorCall::Message {
             operation,
             text,
+            bot_id,
             attachments,
             reply,
         } => {
-            let _ = reply.send(message(actor, &operation, &text, &attachments));
+            let _ = reply.send(message(actor, &operation, &text, &bot_id, &attachments));
+        }
+        ActorCall::Bot { request, reply } => {
+            let saved = actor
+                .host
+                .store()
+                .bots(request)
+                .map(bot_response_json)
+                .map_err(map_bot);
+            let _ = reply.send(saved);
         }
         ActorCall::SaveAttachment { write, reply } => {
             let saved = actor
@@ -1905,9 +1924,11 @@ fn message<R: RouterPort>(
     actor: &mut Actor<R>,
     operation: &SubmissionId,
     text: &str,
+    bot_id: &str,
     attachments: &[crate::orchestrator::StagedAttachment],
 ) -> Result<Value, ApiError> {
     install_from_store(&mut actor.host, &actor.mcp_secrets);
+    actor.host.set_next_bot(bot_id);
     let admission = drive(
         actor
             .host
@@ -2019,7 +2040,7 @@ fn read<R: RouterPort>(actor: &Actor<R>, kind: ReadKind) -> Result<Value, ApiErr
                 .read_inspection(&task_id)
                 .map_err(map_orchestrator)
         }
-        ReadKind::Sidebar => sidebar_value(&open_read(&actor.database)?),
+        ReadKind::Sidebar => sidebar_value(&open_read(&actor.database)?, None),
         ReadKind::Inspector => inspector_value(&open_read(&actor.database)?),
     }
 }
@@ -2220,7 +2241,7 @@ fn publish_database(
     publication: &dyn SidebarPublication,
 ) -> Result<(), ApiError> {
     let connection = open_read(database)?;
-    let value = sidebar_value(&connection)?;
+    let value = sidebar_value(&connection, None)?;
     let text = serde_json::to_string(&value).map_err(|_| ApiError::Session)?;
     publication.publish(&text).map_err(|_| ApiError::Session)
 }
@@ -2322,6 +2343,13 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
     let api = Router::new()
         .route("/super-agent/sidebar", get(sidebar))
         .route("/super-agent/transcript", get(transcript))
+        .route("/bots", get(get_bots).post(post_bot))
+        .route("/bots/select", post(post_bot_select))
+        .route("/bots/{bot_id}/rename", post(post_bot_rename))
+        .route("/bots/{bot_id}/instructions", post(post_bot_instructions))
+        .route("/bots/{bot_id}/pin", post(post_bot_pin))
+        .route("/bots/{bot_id}/archive", post(post_bot_archive))
+        .route("/bots/{bot_id}/delete", post(post_bot_delete))
         .route("/super-agent/inspector", get(inspector))
         .route("/super-agent/messages", post(post_message))
         .route("/super-agent/tasks/{task_id}", get(task))
@@ -2405,14 +2433,29 @@ fn insert_header(response: &mut Response, name: header::HeaderName, value: &'sta
     }
 }
 
-async fn sidebar(State(state): State<AppState>) -> Response {
-    finish(
-        ask(&state, |reply| ActorCall::Read {
-            kind: ReadKind::Sidebar,
-            reply,
-        })
-        .await,
-    )
+async fn sidebar(
+    State(state): State<AppState>,
+    Query(query): Query<BotScope>,
+) -> Response {
+    let Some(bot) = query.bot else {
+        return finish(
+            ask(&state, |reply| ActorCall::Read {
+                kind: ReadKind::Sidebar,
+                reply,
+            })
+            .await,
+        );
+    };
+    let database = state.database.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        let connection = open_read(&database)?;
+        sidebar_value(&connection, Some(bot.as_str()))
+    })
+    .await;
+    match read {
+        Ok(value) => finish(value),
+        Err(_) => error_response(ApiError::Session),
+    }
 }
 
 async fn inspector(State(state): State<AppState>) -> Response {
@@ -2425,14 +2468,18 @@ async fn inspector(State(state): State<AppState>) -> Response {
     )
 }
 
-async fn transcript(State(state): State<AppState>) -> Response {
+async fn transcript(
+    State(state): State<AppState>,
+    Query(query): Query<BotScope>,
+) -> Response {
     // Read the committed transcript off the actor. A model call keeps that
     // thread busy, and the phone still needs to see the stored message.
     let database = state.database.clone();
     let activity = state.activity.snapshot();
+    let bot = query.bot;
     let read = tokio::task::spawn_blocking(move || {
         let connection = open_read(&database)?;
-        let mut value = transcript_value(&connection)?;
+        let mut value = transcript_value(&connection, bot.as_deref())?;
         value["activity"] = serde_json::to_value(&activity).unwrap_or(Value::Array(Vec::new()));
         Ok(value)
     })
@@ -2440,6 +2487,193 @@ async fn transcript(State(state): State<AppState>) -> Response {
     match read {
         Ok(value) => finish(value),
         Err(_) => error_response(ApiError::Session),
+    }
+}
+
+async fn get_bots(State(state): State<AppState>) -> Response {
+    let database = state.database.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        let (bots, selected) =
+            maia_store::read_bot_catalog(&database).map_err(|_| ApiError::Store)?;
+        Ok(serde_json::json!({
+            "bots": bots.iter().map(bot_json).collect::<Vec<_>>(),
+            "selected": selected,
+        }))
+    })
+    .await;
+    match read {
+        Ok(value) => finish(value),
+        Err(_) => error_response(ApiError::Session),
+    }
+}
+
+async fn post_bot(State(state): State<AppState>, request: Request) -> Response {
+    let body = match read_bot_body::<WireBotCreate>(request).await {
+        Ok(body) => body,
+        Err(error) => return error_response(error),
+    };
+    finish(
+        ask(&state, |reply| ActorCall::Bot {
+            request: maia_store::BotRequest::Create {
+                name: body.name,
+                instructions: body.instructions,
+                now: unix_now(),
+            },
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn post_bot_select(State(state): State<AppState>, request: Request) -> Response {
+    let body = match read_bot_body::<WireBotSelect>(request).await {
+        Ok(body) => body,
+        Err(error) => return error_response(error),
+    };
+    finish(
+        ask(&state, |reply| ActorCall::Bot {
+            request: maia_store::BotRequest::Select {
+                bot_id: body.bot_id,
+            },
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn post_bot_rename(
+    State(state): State<AppState>,
+    Path(bot_id): Path<String>,
+    request: Request,
+) -> Response {
+    let body = match read_bot_body::<WireBotName>(request).await {
+        Ok(body) => body,
+        Err(error) => return error_response(error),
+    };
+    finish(
+        ask(&state, move |reply| ActorCall::Bot {
+            request: maia_store::BotRequest::Rename {
+                bot_id,
+                name: body.name,
+                now: unix_now(),
+            },
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn post_bot_instructions(
+    State(state): State<AppState>,
+    Path(bot_id): Path<String>,
+    request: Request,
+) -> Response {
+    let body = match read_bot_body::<WireBotInstructions>(request).await {
+        Ok(body) => body,
+        Err(error) => return error_response(error),
+    };
+    finish(
+        ask(&state, move |reply| ActorCall::Bot {
+            request: maia_store::BotRequest::Instructions {
+                bot_id,
+                instructions: body.instructions,
+                now: unix_now(),
+            },
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn post_bot_pin(
+    State(state): State<AppState>,
+    Path(bot_id): Path<String>,
+    request: Request,
+) -> Response {
+    let body = match read_bot_body::<WireBotPin>(request).await {
+        Ok(body) => body,
+        Err(error) => return error_response(error),
+    };
+    finish(
+        ask(&state, move |reply| ActorCall::Bot {
+            request: maia_store::BotRequest::Pin {
+                bot_id,
+                pinned: body.pinned,
+                now: unix_now(),
+            },
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn post_bot_archive(
+    State(state): State<AppState>,
+    Path(bot_id): Path<String>,
+    request: Request,
+) -> Response {
+    let body = match read_bot_body::<WireBotArchive>(request).await {
+        Ok(body) => body,
+        Err(error) => return error_response(error),
+    };
+    finish(
+        ask(&state, move |reply| ActorCall::Bot {
+            request: maia_store::BotRequest::Archive {
+                bot_id,
+                archived: body.archived,
+                now: unix_now(),
+            },
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn post_bot_delete(State(state): State<AppState>, Path(bot_id): Path<String>) -> Response {
+    finish(
+        ask(&state, |reply| ActorCall::Bot {
+            request: maia_store::BotRequest::Delete { bot_id },
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn read_bot_body<T>(request: Request) -> Result<T, ApiError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let value = read_json(request).await?;
+    serde_json::from_value(value).map_err(|_| ApiError::InvalidJson)
+}
+
+fn bot_json(bot: &maia_store::BotRecord) -> Value {
+    serde_json::json!({
+        "bot_id": bot.bot_id,
+        "name": bot.name,
+        "color": bot.color,
+        "instructions": bot.instructions,
+        "pinned": bot.pinned,
+        "archived": bot.archived,
+        "preview": bot.preview,
+        "last_message_at": bot.last_message_at,
+        "unread": bot.unread,
+        "running": bot.running,
+        "status_line": bot.status_line,
+    })
+}
+
+fn bot_response_json(response: maia_store::BotResponse) -> Value {
+    match response {
+        maia_store::BotResponse::Bot(bot) => bot_json(&bot),
+        maia_store::BotResponse::List(bots) => serde_json::json!({
+            "bots": bots.iter().map(bot_json).collect::<Vec<_>>(),
+        }),
+        maia_store::BotResponse::Text(value) => serde_json::json!({ "selected": value }),
+        maia_store::BotResponse::Empty => serde_json::json!({ "status": "stored" }),
+        maia_store::BotResponse::Notes(_)
+        | maia_store::BotResponse::Provenance(_)
+        | maia_store::BotResponse::Transcript(_) => serde_json::json!({ "status": "stored" }),
     }
 }
 
@@ -2454,7 +2688,7 @@ async fn task(State(state): State<AppState>, Path(task_id): Path<String>) -> Res
 }
 
 async fn post_message(State(state): State<AppState>, request: Request) -> Response {
-    let (operation, text, attachment_ids) = match read_message(request).await {
+    let (operation, text, bot_id, attachment_ids) = match read_message(request).await {
         Ok(message) => message,
         Err(error) => return error_response(error),
     };
@@ -2466,6 +2700,7 @@ async fn post_message(State(state): State<AppState>, request: Request) -> Respon
         ask(&state, |reply| ActorCall::Message {
             operation,
             text,
+            bot_id,
             attachments,
             reply,
         })
@@ -3281,7 +3516,9 @@ fn finish(result: Result<Value, ApiError>) -> Response {
     }
 }
 
-async fn read_message(request: Request) -> Result<(SubmissionId, String, Vec<String>), ApiError> {
+async fn read_message(
+    request: Request,
+) -> Result<(SubmissionId, String, String, Vec<String>), ApiError> {
     let value = read_json(request).await?;
     let message: WireMessage =
         serde_json::from_value(value).map_err(|_| ApiError::InvalidMessage)?;
@@ -3298,7 +3535,12 @@ async fn read_message(request: Request) -> Result<(SubmissionId, String, Vec<Str
     if message.attachment_ids.len() > MAX_ATTACHMENTS_PER_MESSAGE {
         return Err(ApiError::PayloadTooLarge);
     }
-    Ok((operation, message.text, message.attachment_ids))
+    let bot_id = if message.bot_id.trim().is_empty() {
+        "maia".to_owned()
+    } else {
+        message.bot_id
+    };
+    Ok((operation, message.text, bot_id, message.attachment_ids))
 }
 
 async fn read_upload(request: Request) -> Result<(String, String, Vec<u8>), ApiError> {
@@ -3518,6 +3760,53 @@ struct WireMessage {
     text: String,
     #[serde(default)]
     attachment_ids: Vec<String>,
+    /// Empty means the migrated Maia bot.
+    #[serde(default)]
+    bot_id: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BotScope {
+    bot: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireBotCreate {
+    name: String,
+    #[serde(default)]
+    instructions: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireBotName {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireBotInstructions {
+    #[serde(default)]
+    instructions: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireBotPin {
+    pinned: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireBotArchive {
+    archived: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireBotSelect {
+    bot_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3683,6 +3972,15 @@ fn map_store(error: StoreError) -> ApiError {
     }
 }
 
+fn map_bot(error: StoreError) -> ApiError {
+    match error {
+        StoreError::NotFound { .. } => ApiError::UnknownTask,
+        StoreError::InvalidRequest { .. } => ApiError::InvalidMessage,
+        StoreError::ResourceLimit(_) => ApiError::PayloadTooLarge,
+        _ => ApiError::Store,
+    }
+}
+
 fn map_view_open(error: CompletionViewError) -> ApiError {
     match error {
         CompletionViewError::InvalidTransition => ApiError::CommandRejected,
@@ -3709,8 +4007,8 @@ fn open_read(path: &FsPath) -> Result<Connection, ApiError> {
     Ok(connection)
 }
 
-fn sidebar_value(connection: &Connection) -> Result<Value, ApiError> {
-    let tasks = load_tasks(connection)?;
+fn sidebar_value(connection: &Connection, bot: Option<&str>) -> Result<Value, ApiError> {
+    let tasks = load_tasks(connection, bot)?;
     let children = load_children(connection)?;
     let rows = nest_rows(&tasks, &children)?;
     let approvals = approval_values(connection)?;
@@ -3801,12 +4099,17 @@ fn presented_by_message(connection: &Connection) -> BTreeMap<String, Vec<String>
     used
 }
 
-fn transcript_value(connection: &Connection) -> Result<Value, ApiError> {
+fn transcript_value(connection: &Connection, bot: Option<&str>) -> Result<Value, ApiError> {
     let mut statement = connection
-        .prepare("SELECT message_id, role, body FROM router_messages ORDER BY ordinal, message_id")
+        .prepare(
+            "SELECT m.message_id, m.role, m.body FROM router_messages m \
+             LEFT JOIN message_bots b ON b.message_id = m.message_id \
+             WHERE (?1 IS NULL OR COALESCE(b.bot_id, 'maia') = ?1) \
+             ORDER BY m.ordinal, m.message_id",
+        )
         .map_err(|_| ApiError::Store)?;
     let mapped = statement
-        .query_map([], |row| {
+        .query_map(params![bot], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -3888,15 +4191,17 @@ struct ChildRecord {
     title: String,
 }
 
-fn load_tasks(connection: &Connection) -> Result<Vec<TaskRecord>, ApiError> {
+fn load_tasks(connection: &Connection, bot: Option<&str>) -> Result<Vec<TaskRecord>, ApiError> {
     let mut statement = connection
         .prepare(
-            "SELECT task_id, title, phase, pinned, completion_view FROM task_sessions \
-             ORDER BY created_at, task_id",
+            "SELECT t.task_id, t.title, t.phase, t.pinned, t.completion_view FROM task_sessions t \
+             LEFT JOIN task_bots b ON b.task_id = t.task_id \
+             WHERE (?1 IS NULL OR COALESCE(b.bot_id, 'maia') = ?1) \
+             ORDER BY t.created_at, t.task_id",
         )
         .map_err(|_| ApiError::Store)?;
     let mapped = statement
-        .query_map([], |row| {
+        .query_map(params![bot], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,

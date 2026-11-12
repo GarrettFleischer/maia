@@ -1657,7 +1657,32 @@ describe('useSuperAgent shell action failures', () => {
     })
   })
 
-  it('reports a safe close failure and keeps the detail open', async () => {
+  it('closes the detail before a hanging close request finishes and leaves the chat usable', async () => {
+    const pending = deferred<{ view: 'closed_once' }>()
+    const client = clientWith({
+      task: vi.fn().mockResolvedValue(detail('task-a')),
+      openDetail: vi.fn().mockResolvedValue({ view: 'open' }),
+      closeDetail: vi.fn().mockReturnValue(pending.promise),
+    })
+    const { result } = renderHook(() => useSuperAgent(client))
+    await act(async () => result.current.openTask('task-a'))
+
+    let closing!: Promise<void>
+    act(() => {
+      closing = result.current.closeDetail()
+    })
+
+    expect(result.current.detail).toBeNull()
+    act(() => result.current.setDraft('still here'))
+    expect(result.current.draft).toBe('still here')
+
+    pending.resolve({ view: 'closed_once' })
+    await act(async () => closing)
+    expect(result.current.detail).toBeNull()
+    expect(result.current.draft).toBe('still here')
+  })
+
+  it('keeps the detail closed when the close request fails', async () => {
     const client = clientWith({
       task: vi.fn().mockResolvedValue(detail('task-a')),
       openDetail: vi.fn().mockResolvedValue({ view: 'open' }),
@@ -1668,11 +1693,38 @@ describe('useSuperAgent shell action failures', () => {
 
     await act(async () => result.current.closeDetail())
 
-    expect(result.current.detail?.task_id).toBe('task-a')
-    expect(result.current.notice).toEqual({
-      kind: 'failed',
-      text: 'Open the detail before closing it.',
+    expect(result.current.detail).toBeNull()
+    expect(result.current.notice).toEqual({ kind: 'idle' })
+    act(() => result.current.setDraft('back in the chat'))
+    expect(result.current.draft).toBe('back in the chat')
+  })
+
+  it('closes the detail when a shell token is already held', async () => {
+    const pending = deferred<{ view: 'closed_once' }>()
+    const client = clientWith({
+      task: vi.fn().mockResolvedValue(detail('task-a')),
+      openDetail: vi.fn().mockResolvedValue({ view: 'open' }),
+      closeDetail: vi.fn().mockReturnValue(pending.promise),
     })
+    const { result } = renderHook(() => useSuperAgent(client))
+    await act(async () => result.current.openTask('task-a'))
+
+    let first!: Promise<void>
+    act(() => {
+      first = result.current.closeDetail()
+    })
+    expect(result.current.detail).toBeNull()
+
+    await act(async () => result.current.openTask('task-a'))
+    expect(result.current.detail?.task_id).toBe('task-a')
+
+    await act(async () => result.current.closeDetail())
+    expect(result.current.detail).toBeNull()
+    expect(client.closeDetail).toHaveBeenCalledOnce()
+
+    pending.resolve({ view: 'closed_once' })
+    await act(async () => first)
+    expect(result.current.detail).toBeNull()
   })
 
   it('resends a stored outbox message with the same operation id', async () => {

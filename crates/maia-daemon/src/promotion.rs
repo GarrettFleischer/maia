@@ -633,6 +633,22 @@ impl<P: PromoterModel> PromotionRunner<P> {
                     let _ =
                         write_claim_vectors(&self.store, embedder.as_ref(), &commit.claims, now);
                 }
+                if let Ok(maia_store::BotResponse::Provenance(Some(source))) =
+                    self.store.bots(maia_store::BotRequest::Provenance {
+                        target_kind: "episode".to_owned(),
+                        target_id: episode.episode_id.clone(),
+                    })
+                {
+                    for claim in &commit.claims {
+                        let _ = self.store.bots(maia_store::BotRequest::NoteProvenance {
+                            target_kind: "claim".to_owned(),
+                            target_id: claim.id.as_str().to_owned(),
+                            bot_id: source.bot_id.clone(),
+                            session_id: source.session_id.clone(),
+                            noted_at: now,
+                        });
+                    }
+                }
                 self.clear_defer(&episode.episode_id);
                 Ok(PromotionAttempt::Applied {
                     claim_ids: commit

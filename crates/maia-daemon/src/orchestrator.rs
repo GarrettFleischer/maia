@@ -1436,6 +1436,34 @@ fn stored_router_body(text: &str, thinking: Option<&str>, route: Option<&str>) -
     format!("{TURN_MARK}{}", serde_json::Value::Object(payload))
 }
 
+fn history_for_bot(messages: &[RuntimeMessage], bot_id: &str) -> Vec<RuntimeMessage> {
+    messages
+        .iter()
+        .filter(|message| message.bot_id == bot_id)
+        .cloned()
+        .collect()
+}
+
+fn append_also_happening(packed: Option<PackedRecall>, lines: &[String]) -> Option<PackedRecall> {
+    if lines.is_empty() {
+        return packed;
+    }
+    let extra = lines.join("\n");
+    Some(match packed {
+        Some(mut packed) => {
+            if !packed.bytes.is_empty() {
+                packed.bytes.push('\n');
+            }
+            packed.bytes.push_str(&extra);
+            packed
+        }
+        None => PackedRecall {
+            bytes: extra,
+            items: Vec::new(),
+        },
+    })
+}
+
 fn conversation_before_latest(messages: &[RuntimeMessage], latest: &str) -> Vec<ChatMessage> {
     let prior = match messages.last() {
         Some(last) if last.role == USER_ROLE && last.body == latest => {
@@ -2296,6 +2324,7 @@ pub(crate) struct RouteMachine {
     loops: LoopTracker,
     compacting: bool,
     compaction_burst: u8,
+    bot_id: String,
 }
 
 /// What the route pump should do next.
@@ -2452,6 +2481,10 @@ pub struct Orchestrator<R> {
     context_token_budget: u32,
     /// Independent check-in. When empty, the worker's model endpoint is used with a fresh prompt.
     reviewer: Option<Box<dyn FnMut(&str) -> Result<String, String> + Send>>,
+    /// Bot for the next owner message. Admission consumes it so a later turn cannot steal it.
+    next_bot: String,
+    /// Bot whose transcript and work notes the current turn may use.
+    turn_bot: String,
 }
 
 /// One admitted tool plus the connection and hash that pin it.
@@ -3204,7 +3237,19 @@ impl<R: Router> Orchestrator<R> {
             activity: ActivityLog::new(),
             context_token_budget: DEFAULT_CONTEXT_TOKEN_BUDGET,
             reviewer: None,
+            next_bot: "maia".to_owned(),
+            turn_bot: "maia".to_owned(),
         }
+    }
+
+    /// Chooses which bot receives the next owner message.
+    pub(crate) fn set_next_bot(&mut self, bot_id: &str) {
+        let trimmed = bot_id.trim();
+        self.next_bot = if trimmed.is_empty() {
+            "maia".to_owned()
+        } else {
+            trimmed.to_owned()
+        };
     }
 
     /// Uses this closure for goal check-ins instead of the worker model.
@@ -3751,6 +3796,7 @@ impl<R: Router> Orchestrator<R> {
             }
         }
         let message = MessageId(self.ids.pop_message()?);
+        let bot_id = std::mem::replace(&mut self.next_bot, "maia".to_owned());
         let state = self
             .store
             .begin_message_submission(MessageSubmissionWrite {
@@ -3764,12 +3810,21 @@ impl<R: Router> Orchestrator<R> {
                 },
             })?;
         match state.value {
-            MessageSubmissionState::New { .. } => Ok(FastAdmission::Queued(QueuedChat {
-                operation: operation.clone(),
-                message,
-                text: text.to_owned(),
-                attachments: attachments.to_vec(),
-            })),
+            MessageSubmissionState::New { .. } => {
+                let _ = self.store.bots(maia_store::BotRequest::BindMessage {
+                    message_id: message.0.clone(),
+                    bot_id,
+                    preview: text.to_owned(),
+                    now: self.ids.now,
+                    from_owner: true,
+                });
+                Ok(FastAdmission::Queued(QueuedChat {
+                    operation: operation.clone(),
+                    message,
+                    text: text.to_owned(),
+                    attachments: attachments.to_vec(),
+                }))
+            }
             MessageSubmissionState::Pending { message_id } => {
                 Ok(FastAdmission::Immediate(SubmissionAdmission::Pending {
                     message: MessageId(message_id),
@@ -3886,6 +3941,26 @@ impl<R: Router> Orchestrator<R> {
         );
         let mut messages = built.request.messages.clone();
         push_untrusted(&mut messages, attachments);
+        self.turn_bot = self.message_bot(&message.0);
+        if let Ok(maia_store::BotResponse::Bot(bot)) =
+            self.store.bots(maia_store::BotRequest::Get {
+                bot_id: self.turn_bot.clone(),
+            })
+            && !bot.instructions.trim().is_empty()
+        {
+            messages.insert(
+                1,
+                ChatMessage::text(
+                    ChatRole::System,
+                    format!(
+                        "Standing instructions for {}: {}",
+                        bot.name,
+                        bot.instructions.trim()
+                    ),
+                ),
+            );
+        }
+        let bot_id = self.turn_bot.clone();
         Ok(RouteMachine {
             message,
             text: text.to_owned(),
@@ -3912,6 +3987,7 @@ impl<R: Router> Orchestrator<R> {
             loops: LoopTracker::default(),
             compacting: false,
             compaction_burst: 0,
+            bot_id,
         })
     }
 
@@ -3921,6 +3997,7 @@ impl<R: Router> Orchestrator<R> {
         machine: &mut RouteMachine,
         event: RouteEvent,
     ) -> RouteDrive {
+        self.turn_bot = machine.bot_id.clone();
         match event {
             RouteEvent::Start | RouteEvent::Resumed => self.issue_route_request(machine),
             RouteEvent::Model(result) => self.apply_route_model(machine, result),
@@ -4612,12 +4689,30 @@ impl<R: Router> Orchestrator<R> {
     }
 
     fn recall_for(&self, text: &str) -> Option<PackedRecall> {
-        crate::promotion::bounded_recall(
+        let packed = crate::promotion::bounded_recall(
             self.store(),
             text,
             Timestamp(self.ids.now),
             self.recall_embedder.as_deref(),
-        )
+        );
+        let notes = match self.store.bots(maia_store::BotRequest::WorkNotes) {
+            Ok(maia_store::BotResponse::Notes(notes)) => notes,
+            _ => Vec::new(),
+        };
+        let lines = maia_core::bots::also_happening(
+            text,
+            &self.turn_bot,
+            &notes
+                .iter()
+                .map(|note| maia_core::bots::WorkNote {
+                    bot_id: note.bot_id.clone(),
+                    name: note.name.clone(),
+                    goal: note.goal.clone(),
+                    activity: note.activity.clone(),
+                })
+                .collect::<Vec<_>>(),
+        );
+        append_also_happening(packed, &lines)
     }
 
     fn note_recall(&mut self, recall: Option<&PackedRecall>, task: Option<&TaskId>) {
@@ -4720,8 +4815,33 @@ impl<R: Router> Orchestrator<R> {
         if let Some(reason) = hide {
             let _ = self.store.hide_episode(format!("episode-{}", message.0), reason);
         }
+        let _ = self.store.bots(maia_store::BotRequest::NoteProvenance {
+            target_kind: "episode".to_owned(),
+            target_id: format!("episode-{}", message.0),
+            bot_id: self.turn_bot.clone(),
+            session_id: message.0.clone(),
+            noted_at: self.ids.now,
+        });
         let _ = thinking;
         Ok(())
+    }
+
+    fn message_bot(&self, message_id: &str) -> String {
+        match self.store.bots(maia_store::BotRequest::MessageBot {
+            message_id: message_id.to_owned(),
+        }) {
+            Ok(maia_store::BotResponse::Text(bot)) => bot,
+            _ => "maia".to_owned(),
+        }
+    }
+
+    fn task_bot(&self, task: &TaskId) -> String {
+        match self.store.bots(maia_store::BotRequest::TaskBot {
+            task_id: task.0.clone(),
+        }) {
+            Ok(maia_store::BotResponse::Text(bot)) => bot,
+            _ => self.turn_bot.clone(),
+        }
     }
 
     fn ensure_router_thread(&self) -> Result<(), OrchestratorError> {
@@ -4747,10 +4867,8 @@ impl<R: Router> Orchestrator<R> {
 
     fn conversation_before(&self, latest: &str) -> Result<Vec<ChatMessage>, OrchestratorError> {
         let snapshot = self.store.runtime_snapshot()?;
-        Ok(conversation_before_latest(
-            &snapshot.router_messages,
-            latest,
-        ))
+        let messages = history_for_bot(&snapshot.router_messages, &self.turn_bot);
+        Ok(conversation_before_latest(&messages, latest))
     }
 
     fn execute_route_tool(
@@ -5066,6 +5184,18 @@ impl<R: Router> Orchestrator<R> {
     ) -> Result<TaskId, OrchestratorError> {
         let plan = build_parent_plan(message, text, prior, reason, &mut self.ids, &self.memories)?;
         self.store.insert_task_aggregate(plan.aggregate)?;
+        let _ = self.store.bots(maia_store::BotRequest::BindTask {
+            task_id: plan.task.0.clone(),
+            bot_id: self.turn_bot.clone(),
+        });
+        let activity = maia_core::bots::work_status_line(text, None);
+        let _ = self.store.bots(maia_store::BotRequest::UpsertWork {
+            bot_id: self.turn_bot.clone(),
+            goal: text.to_owned(),
+            todos_json: "[]".to_owned(),
+            activity,
+            now: self.ids.now,
+        });
         self.phases.insert(plan.task.clone(), TaskPhase::Queued);
         self.attempts.insert(plan.task.clone(), plan.attempt);
         self.criteria.insert(plan.task.clone(), plan.criteria);
@@ -5221,6 +5351,7 @@ impl<R: Router> Orchestrator<R> {
         machine: &mut WorkerMachine,
         event: WorkerEvent,
     ) -> WorkerDrive {
+        self.turn_bot = self.task_bot(&machine.task);
         match event {
             WorkerEvent::Start => self.issue_worker_request(machine),
             WorkerEvent::Model(result) => self.apply_worker_model(machine, result),
@@ -6148,12 +6279,20 @@ impl<R: Router> Orchestrator<R> {
     fn note_router(&mut self, body: &str) -> Result<(), OrchestratorError> {
         let message_id = self.ids.pop_message()?;
         let write = RouterMessageWrite {
-            message_id,
+            message_id: message_id.clone(),
             role: ASSISTANT_ROLE.to_owned(),
             body: body.to_owned(),
             created_at: self.ids.now,
         };
         self.store.insert_router_message(write)?;
+        let preview = present_router_body(body).text;
+        let _ = self.store.bots(maia_store::BotRequest::BindMessage {
+            message_id,
+            bot_id: self.turn_bot.clone(),
+            preview,
+            now: self.ids.now,
+            from_owner: false,
+        });
         Ok(())
     }
 
@@ -7020,6 +7159,33 @@ fn required_text(id: String) -> Result<String, ProposalParseError> {
         Err(ProposalParseError::Target)
     } else {
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod bot_history_tests {
+    use super::history_for_bot;
+    use maia_store::RuntimeMessage;
+
+    #[test]
+    fn history_for_bot_keeps_only_that_bots_rows() {
+        let messages = vec![
+            RuntimeMessage {
+                message_id: "m1".to_owned(),
+                role: "user".to_owned(),
+                body: "maia line".to_owned(),
+                bot_id: "maia".to_owned(),
+            },
+            RuntimeMessage {
+                message_id: "m2".to_owned(),
+                role: "user".to_owned(),
+                body: "coding line".to_owned(),
+                bot_id: "bot-2".to_owned(),
+            },
+        ];
+        let kept = history_for_bot(&messages, "bot-2");
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].body, "coding line");
     }
 }
 

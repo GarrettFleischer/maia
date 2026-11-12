@@ -186,19 +186,42 @@ export interface LiveApproval {
   expires_at: number
 }
 
+export interface BotSummary {
+  bot_id: string
+  name: string
+  color: string
+  instructions: string
+  pinned: boolean
+  archived: boolean
+  preview: string
+  last_message_at: number | null
+  unread: number
+  running: boolean
+  status_line: string
+}
+
 export interface SuperAgentClient {
   readonly dataSource: SuperAgentDataSource
   readonly backendScope: SuperAgentBackendScope
+  readonly botId?: string
   createOperationId(): SubmissionOperationId
-  sidebar(): Promise<{ rows: SidebarRow[]; approvals?: LiveApproval[] }>
+  sidebar(botId?: string): Promise<{ rows: SidebarRow[]; approvals?: LiveApproval[] }>
   decideApproval?(approvalId: string, decision: 'approve' | 'deny'): Promise<void>
-  transcript(): Promise<{ messages: RouterMessage[]; activity?: ActivityLine[] }>
+  transcript(botId?: string): Promise<{ messages: RouterMessage[]; activity?: ActivityLine[] }>
   task(taskId: string): Promise<TaskDetail>
   send(
     operationId: SubmissionOperationId,
     text: string,
     attachmentIds?: readonly string[],
+    botId?: string,
   ): Promise<MessageAdmissionResult>
+  listBots?(): Promise<{ bots: BotSummary[]; selected: string }>
+  createBot?(input: { name: string; instructions?: string }): Promise<BotSummary>
+  renameBot?(botId: string, name: string): Promise<BotSummary>
+  pinBot?(botId: string, pinned: boolean): Promise<BotSummary>
+  archiveBot?(botId: string, archived: boolean): Promise<BotSummary>
+  deleteBot?(botId: string): Promise<void>
+  selectBot?(botId: string): Promise<void>
   uploadAttachment?(file: {
     name: string
     mediaType: string
