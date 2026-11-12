@@ -19,6 +19,7 @@ use std::task::Wake;
 use std::task::Waker;
 use std::time::Duration;
 
+use crate::live_reply::LiveReplyBoard;
 use maia_core::audit::RequestId;
 use maia_core::audit::Timestamp;
 use maia_core::credit::PrefixHash;
@@ -2509,6 +2510,8 @@ pub struct Orchestrator<R> {
     next_bot: String,
     /// Bot whose transcript and work notes the current turn may use.
     turn_bot: String,
+    /// Partial reply shown while a model call is open. Absent in tests that do not stream.
+    live: Option<LiveReplyBoard>,
 }
 
 /// One admitted tool plus the connection and hash that pin it.
@@ -3263,7 +3266,18 @@ impl<R: Router> Orchestrator<R> {
             reviewer: None,
             next_bot: "maia".to_owned(),
             turn_bot: "maia".to_owned(),
+            live: None,
         }
+    }
+
+    /// Shares the in-memory partial with the HTTP transcript and websocket.
+    pub fn set_live_reply(&mut self, board: LiveReplyBoard) {
+        self.live = Some(board);
+    }
+
+    /// The partial board, when the composition root installed one.
+    pub fn live_board(&self) -> Option<LiveReplyBoard> {
+        self.live.clone()
     }
 
     /// Chooses which bot receives the next owner message.
@@ -3282,6 +3296,20 @@ impl<R: Router> Orchestrator<R> {
         reviewer: impl FnMut(&str) -> Result<String, String> + Send + 'static,
     ) {
         self.reviewer = Some(Box::new(reviewer));
+    }
+
+    /// Arms the live partial for one owner-facing model call.
+    pub(crate) fn arm_live_reply(&self, bot_id: &str, request_id: &str) {
+        if let Some(live) = &self.live {
+            live.watch(bot_id, request_id);
+        }
+    }
+
+    /// Drops the partial after a durable assistant message is stored.
+    pub(crate) fn settle_live_reply(&self, bot_id: &str) {
+        if let Some(live) = &self.live {
+            live.settle(bot_id);
+        }
     }
 
     /// Shares the activity log with the HTTP transcript.
@@ -4070,7 +4098,7 @@ impl<R: Router> Orchestrator<R> {
             }
         };
         machine.step = machine.step.saturating_add(1);
-        RouteDrive::Await(RouterRequest {
+        let request = RouterRequest {
             request_id,
             model: machine.model.clone(),
             messages: machine.messages.clone(),
@@ -4079,7 +4107,9 @@ impl<R: Router> Orchestrator<R> {
             recall_hash: machine.recall_hash.clone(),
             reasoning_effort: machine.reasoning,
             prior_provider_tool_state: None,
-        })
+        };
+        self.arm_live_reply(&machine.bot_id, &request.request_id.0.to_string());
+        RouteDrive::Await(request)
     }
 
     fn apply_route_model(
@@ -6319,6 +6349,8 @@ impl<R: Router> Orchestrator<R> {
             created_at: self.ids.now,
         };
         self.store.insert_router_message(write)?;
+        let bot_id = self.turn_bot.clone();
+        self.settle_live_reply(&bot_id);
         let preview = present_router_body(body).text;
         let _ = self.store.bots(maia_store::BotRequest::BindMessage {
             message_id,

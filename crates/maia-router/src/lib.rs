@@ -14,7 +14,7 @@ mod contract_tests;
 #[cfg(test)]
 mod test_loopback_http;
 
-pub use adapter::{RouterAuth, RouterHttp, error_redacts_secret};
+pub use adapter::{ReplyProgress, RouterAuth, RouterHttp, error_redacts_secret};
 pub use client::{
     build_router_client, build_router_client_with_loopback, chat_completions_url, map_http_status,
     map_transport_error, models_url, retry_after_delay,

@@ -422,6 +422,48 @@ describe('liveSuperAgentClient', () => {
     stop?.()
   })
 
+  it('delivers live reply frames and a clear without mixing them into the sidebar', () => {
+    vi.stubGlobal('WebSocket', FakeSocket)
+    FakeSocket.instances = []
+    const client = liveSuperAgentClient('http://127.0.0.1:9')
+    const rows: unknown[] = []
+    const frames: unknown[] = []
+    const stopRows = client.subscribeSidebar?.((next) => {
+      rows.push(next)
+    })
+    const stopLive = client.subscribeLive?.((frame) => {
+      frames.push(frame)
+    })
+    FakeSocket.instances[0]?.emit(
+      JSON.stringify({
+        kind: 'live',
+        bot_id: 'maia',
+        stream_id: '4',
+        revision: 2,
+        text: 'The pin is',
+        phase: 'streaming',
+      }),
+    )
+    FakeSocket.instances[0]?.emit(JSON.stringify({ kind: 'live', cleared: true, bot_id: 'maia' }))
+    FakeSocket.instances[0]?.emit(JSON.stringify({ rows: [ROW] }))
+    expect(rows).toEqual([[ROW]])
+    expect(frames).toEqual([
+      {
+        kind: 'reply',
+        reply: {
+          bot_id: 'maia',
+          stream_id: '4',
+          revision: 2,
+          text: 'The pin is',
+          phase: 'streaming',
+        },
+      },
+      { kind: 'cleared', bot_id: 'maia' },
+    ])
+    stopLive?.()
+    stopRows?.()
+  })
+
   it('reports reconnecting after the sidebar socket closes and connected when it opens', () => {
     const harness = socketHarness()
     const factory = liveSuperAgentClient as ReviewedLiveFactory

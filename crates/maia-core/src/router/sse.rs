@@ -67,6 +67,11 @@ impl RouterSseAssembler {
         }
     }
 
+    /// Visible reply text accumulated so far. Tool arguments are not included.
+    pub fn visible_reply(&self) -> &str {
+        &self.content
+    }
+
     /// Appends one chunk that may contain partial SSE lines.
     pub fn push_line(&mut self, chunk: &str) -> Result<(), RouterError> {
         ensure_within_limit(

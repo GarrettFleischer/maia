@@ -57,6 +57,7 @@ export function ConversationPane({
   factsUsed,
   onInspectFacts,
   title = 'Router',
+  botId = 'maia',
   onBack,
   tasks = [],
   onOpenTask,
@@ -71,6 +72,7 @@ export function ConversationPane({
   factsUsed?: ReadonlyMap<string, readonly string[]>
   onInspectFacts?: (messageId: string, ids: readonly string[]) => void
   title?: string
+  botId?: string
   onBack?: () => void
   tasks?: readonly SidebarRow[]
   onOpenTask?: (taskId: string) => void
@@ -186,6 +188,8 @@ export function ConversationPane({
               void router.hostCommand({ command: 'stop', task_id: taskId })
             }}
             placeholder={`Message ${title}`}
+            liveReply={router.liveReply}
+            botId={botId}
             accessory={
               phoneStop ? (
                 <div className="maia-phone-stop" data-testid="phone-stop-bar">

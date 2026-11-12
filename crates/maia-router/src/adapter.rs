@@ -99,6 +99,17 @@ fn tool_choice_for(tools: &serde_json::Value) -> Option<&'static str> {
         .then_some("auto")
 }
 
+/// Receives visible reply text while one completion is still open.
+///
+/// Tool arguments are not reported. A caller that stores a message does that
+/// only after [`Router::complete`] returns.
+pub trait ReplyProgress: Send + Sync {
+    /// Full visible reply so far for this request id.
+    fn on_visible_reply(&self, request_id: &str, text: &str);
+    /// The stream stopped before the completion finished.
+    fn on_reply_interrupted(&self, request_id: &str);
+}
+
 /// HTTP adapter implementing [`Router`].
 pub struct RouterHttp {
     config: RouterConfig,
@@ -109,6 +120,7 @@ pub struct RouterHttp {
     auth: RouterAuth,
     completions_url: String,
     cancellations: Arc<CancelRegistry>,
+    progress: Option<Arc<dyn ReplyProgress>>,
 }
 
 impl RouterHttp {
@@ -131,7 +143,19 @@ impl RouterHttp {
             auth,
             completions_url,
             cancellations: Arc::new(CancelRegistry::new()),
+            progress: None,
         })
+    }
+
+    /// Reports visible reply text while a streamed completion is open.
+    pub fn with_reply_progress(mut self, progress: Arc<dyn ReplyProgress>) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    /// Whether chat completions are requested as a token stream.
+    pub fn streams_replies(&self) -> bool {
+        matches!(self.config.stream_mode, RouterStreamMode::ServerSentEvents)
     }
 
     fn build_body(&self, request: &RouterRequest) -> Result<serde_json::Value, RouterError> {
@@ -162,20 +186,6 @@ impl RouterHttp {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         self.auth.apply(&mut headers)?;
         Ok(headers)
-    }
-
-    fn push_sse_lines(
-        cancel: &RequestCancelGuard,
-        assembler: &mut RouterSseAssembler,
-        lines: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<(), RouterError> {
-        for line in lines {
-            if cancel.is_cancelled() {
-                return Err(RouterError::Cancelled);
-            }
-            assembler.push_line(line.as_ref())?;
-        }
-        Ok(())
     }
 
     fn finish_sse_assembly(
@@ -254,6 +264,9 @@ impl RouterHttp {
                 let mut assembler =
                     RouterSseAssembler::new(request.request_id, self.capabilities.clone());
                 let mut budget = ResponseByteBudget::new();
+                let mut notified = 0usize;
+                let request_id = request.request_id.0.to_string();
+                let progress = self.progress.clone();
                 let mut stream = response.bytes_stream();
                 loop {
                     let next = stream.next();
@@ -261,26 +274,51 @@ impl RouterHttp {
                     let cancel_wait = cancel.wait_for();
                     pin_mut!(cancel_wait);
                     match select(cancel_wait, next).await {
-                        Either::Left(((), _)) => return Err(RouterError::Cancelled),
+                        Either::Left(((), _)) => {
+                            note_interrupted(&progress, &request_id, &assembler);
+                            return Err(RouterError::Cancelled);
+                        }
                         Either::Right((None, _)) => break,
                         Either::Right((Some(Ok(chunk)), _)) => {
-                            budget.account(chunk.len())?;
-                            let text =
-                                std::str::from_utf8(&chunk).map_err(|_| RouterError::Protocol {
-                                    detail: "invalid utf-8 in sse chunk".to_owned(),
-                                })?;
-                            Self::push_sse_lines(
+                            if let Err(error) = budget.account(chunk.len()) {
+                                note_interrupted(&progress, &request_id, &assembler);
+                                return Err(error);
+                            }
+                            let text = match std::str::from_utf8(&chunk) {
+                                Ok(text) => text,
+                                Err(_) => {
+                                    note_interrupted(&progress, &request_id, &assembler);
+                                    return Err(RouterError::Protocol {
+                                        detail: "invalid utf-8 in sse chunk".to_owned(),
+                                    });
+                                }
+                            };
+                            if let Err(error) = push_visible_lines(
+                                &progress,
+                                &request_id,
                                 &cancel,
                                 &mut assembler,
                                 text.split_inclusive('\n'),
-                            )?;
+                                &mut notified,
+                            ) {
+                                note_interrupted(&progress, &request_id, &assembler);
+                                return Err(error);
+                            }
                         }
                         Either::Right((Some(Err(error)), _)) => {
+                            note_interrupted(&progress, &request_id, &assembler);
                             return Err(map_transport_error(error));
                         }
                     }
                 }
-                Self::finish_sse_assembly(&cancel, request, assembler)
+                let had_text = !assembler.visible_reply().is_empty();
+                match Self::finish_sse_assembly(&cancel, request, assembler) {
+                    Ok(response) => Ok(response),
+                    Err(error) => {
+                        note_interrupted_id(&progress, &request_id, had_text);
+                        Err(error)
+                    }
+                }
             }
         }
     }
@@ -326,6 +364,62 @@ impl RouterHttp {
             &self.capabilities,
             &request.tools_json.0,
         )
+    }
+}
+
+fn push_visible_lines(
+    progress: &Option<Arc<dyn ReplyProgress>>,
+    request_id: &str,
+    cancel: &RequestCancelGuard,
+    assembler: &mut RouterSseAssembler,
+    lines: impl IntoIterator<Item = impl AsRef<str>>,
+    notified: &mut usize,
+) -> Result<(), RouterError> {
+    for line in lines {
+        if cancel.is_cancelled() {
+            return Err(RouterError::Cancelled);
+        }
+        assembler.push_line(line.as_ref())?;
+        note_visible(progress, request_id, assembler, notified);
+    }
+    Ok(())
+}
+
+fn note_visible(
+    progress: &Option<Arc<dyn ReplyProgress>>,
+    request_id: &str,
+    assembler: &RouterSseAssembler,
+    notified: &mut usize,
+) {
+    let Some(progress) = progress else {
+        return;
+    };
+    let text = assembler.visible_reply();
+    if text.is_empty() || text.len() == *notified {
+        return;
+    }
+    *notified = text.len();
+    progress.on_visible_reply(request_id, text);
+}
+
+fn note_interrupted(
+    progress: &Option<Arc<dyn ReplyProgress>>,
+    request_id: &str,
+    assembler: &RouterSseAssembler,
+) {
+    note_interrupted_id(progress, request_id, !assembler.visible_reply().is_empty());
+}
+
+fn note_interrupted_id(
+    progress: &Option<Arc<dyn ReplyProgress>>,
+    request_id: &str,
+    had_text: bool,
+) {
+    if !had_text {
+        return;
+    }
+    if let Some(progress) = progress {
+        progress.on_reply_interrupted(request_id);
     }
 }
 
@@ -391,6 +485,9 @@ impl RouterHttp {
             RouterStreamMode::ServerSentEvents => {
                 let mut assembler =
                     RouterSseAssembler::new(request.request_id, self.capabilities.clone());
+                let mut notified = 0usize;
+                let request_id = request.request_id.0.to_string();
+                let progress = self.progress.clone();
                 let status = post_json_sync_stream_body(
                     &self.completions_url,
                     &headers,
@@ -400,7 +497,14 @@ impl RouterHttp {
                             std::str::from_utf8(chunk).map_err(|_| RouterError::Protocol {
                                 detail: "invalid utf-8 in sse chunk".to_owned(),
                             })?;
-                        Self::push_sse_lines(&cancel, &mut assembler, text.split_inclusive('\n'))
+                        push_visible_lines(
+                            &progress,
+                            &request_id,
+                            &cancel,
+                            &mut assembler,
+                            text.split_inclusive('\n'),
+                            &mut notified,
+                        )
                     },
                     || {
                         if cancel.is_cancelled() {
@@ -409,9 +513,26 @@ impl RouterHttp {
                             Ok(())
                         }
                     },
-                )?;
-                Self::reject_non_success_status(status)?;
-                Self::finish_sse_assembly(&cancel, request, assembler)
+                );
+                let had_text = !assembler.visible_reply().is_empty();
+                let status = match status {
+                    Ok(status) => status,
+                    Err(error) => {
+                        note_interrupted_id(&progress, &request_id, had_text);
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = Self::reject_non_success_status(status) {
+                    note_interrupted_id(&progress, &request_id, had_text);
+                    return Err(error);
+                }
+                match Self::finish_sse_assembly(&cancel, request, assembler) {
+                    Ok(response) => Ok(response),
+                    Err(error) => {
+                        note_interrupted_id(&progress, &request_id, had_text);
+                        Err(error)
+                    }
+                }
             }
         }
     }

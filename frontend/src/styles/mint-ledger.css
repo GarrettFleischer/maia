@@ -1178,7 +1178,83 @@ textarea {
 
 .maia-latest {
   align-self: center;
-  margin: 0 0 8px;
+  margin: 0;
+}
+
+.maia-jump-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+
+.maia-jump-new {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.maia-new-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  list-style: none;
+}
+
+.maia-new-line::before,
+.maia-new-line::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.maia-live-copy .maia-transcript-body p:last-child {
+  display: inline;
+}
+
+.maia-stream-dots {
+  display: inline-flex;
+  gap: 1px;
+  margin-left: 2px;
+  font-weight: 700;
+}
+
+.maia-stream-dots span {
+  animation: maia-dot 1.2s infinite;
+  opacity: 0.25;
+}
+
+.maia-stream-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.maia-stream-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes maia-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .maia-stream-dots span {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 .maia-choice {

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type UIEventHandler } from 'react'
 import { AttachmentChips, attachmentAllowed } from '@/components/shell/AttachmentChips'
 import { MarkdownMessage } from '@/components/shell/MarkdownMessage'
 import type {
@@ -11,6 +11,7 @@ import type {
 import { composerStatusText, routeFold } from '@/api/superAgentFormat'
 import { composerFieldPx } from '@/components/shell/composerField'
 import { useTranscriptPosition } from '@/components/shell/transcriptPosition'
+import { cursorAfterView, readSeenCursor, writeSeenCursor } from '@/components/shell/unseenMarker'
 import {
   dedupeRouterMessages,
   type AdmissionState,
@@ -51,6 +52,8 @@ export function RouterConversation({
   activity = [],
   onStopTask,
   placeholder = 'Message',
+  liveReply = null,
+  botId = 'maia',
 }: {
   messages: readonly RouterMessage[]
   transcriptState: TranscriptState
@@ -76,6 +79,8 @@ export function RouterConversation({
   activity?: readonly ActivityLine[]
   onStopTask?: (taskId: string) => void
   placeholder?: string
+  liveReply?: { text: string; dots: boolean } | null
+  botId?: string
 }) {
   const [rejection, setRejection] = useState<string | null>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
@@ -107,11 +112,28 @@ export function RouterConversation({
   }, [activity.length])
   const activityCards = latestActivity(activity)
   const visibleMessages = dedupeRouterMessages(messages)
-  const messageKey = JSON.stringify(visibleMessages.map((message) => message.message_id))
-  const { transcriptRef, onScroll, latestOffer, jumpToLatest } = useTranscriptPosition(
+  const messageIds = visibleMessages.map((message) => message.message_id)
+  const messageKey = JSON.stringify(messageIds)
+  const [seenId, setSeenId] = useState<string | null>(() => readCursor(botId))
+  const [pageVisible, setPageVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState === 'visible',
+  )
+  const [engaged, setEngaged] = useState(false)
+  const newLineRef = useRef<HTMLLIElement>(null)
+  const programmaticScroll = useRef(false)
+  const gapOnArrival = useRef<boolean | null>(null)
+  if (gapOnArrival.current === null && messageIds.length > 0) {
+    gapOnArrival.current = cursorAfterView(messageIds, seenId, false).unseenIndex !== null
+  }
+  const unseen = cursorAfterView(messageIds, seenId, false)
+  const { transcriptRef, onScroll, latestOffer, jumpToLatest, pinned } = useTranscriptPosition(
     messageKey,
     transcriptState,
+    unseen.unseenIndex !== null && !engaged,
   )
+  const viewingLatest =
+    pinned && pageVisible && (engaged || gapOnArrival.current === false)
+  const placed = cursorAfterView(messageIds, seenId, viewingLatest)
   const fitField = (field: HTMLTextAreaElement) => {
     field.style.height = 'auto'
     field.style.height = `${composerFieldPx(field.scrollHeight)}px`
@@ -125,6 +147,51 @@ export function RouterConversation({
     }
     fitField(field)
   }, [draft])
+
+  useEffect(() => {
+    const onVisibility = () => setPageVisible(document.visibilityState === 'visible')
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [])
+
+  useEffect(() => {
+    setSeenId(readCursor(botId))
+    setEngaged(false)
+    gapOnArrival.current = null
+  }, [botId])
+
+  useEffect(() => {
+    if (placed.seenId === seenId) return
+    setSeenId(placed.seenId)
+    if (placed.seenId) writeCursor(botId, placed.seenId)
+  }, [botId, placed.seenId, seenId])
+
+  useLayoutEffect(() => {
+    if (placed.unseenIndex === null || engaged) return
+    programmaticScroll.current = true
+    newLineRef.current?.scrollIntoView({ block: 'center' })
+  }, [engaged, messageKey, placed.unseenIndex])
+
+  useLayoutEffect(() => {
+    if (!pinned || (placed.unseenIndex !== null && !engaged)) return
+    const transcript = transcriptRef.current
+    if (!transcript) return
+    transcript.scrollTop = transcript.scrollHeight
+  }, [engaged, liveReply?.dots, liveReply?.text, pinned, placed.unseenIndex, transcriptRef])
+
+  const onTranscriptScroll: UIEventHandler<HTMLDivElement> = (event) => {
+    onScroll(event)
+    if (programmaticScroll.current) {
+      programmaticScroll.current = false
+      return
+    }
+    setEngaged(true)
+  }
+
+  const jumpToNew = () => {
+    programmaticScroll.current = true
+    newLineRef.current?.scrollIntoView({ block: 'center' })
+  }
 
   useEffect(() => {
     if (!announcement) return
@@ -193,7 +260,7 @@ export function RouterConversation({
         aria-live="off"
         aria-relevant="additions text"
         aria-busy={transcriptState.kind === 'loading'}
-        onScroll={onScroll}
+        onScroll={onTranscriptScroll}
       >
         {transcriptState.kind === 'loading' ? (
           <p role="status">
@@ -217,11 +284,17 @@ export function RouterConversation({
           </div>
         ) : null}
         <ol className="maia-transcript-list" aria-label="Transcript messages">
-          {visibleMessages.map((message) => {
+          {visibleMessages.map((message, index) => {
             const speaker = message.role === 'owner' ? 'You' : 'Maia'
             const fold = message.route ? routeFold(message.route) : null
             return (
-              <li key={message.message_id}>
+              <Fragment key={message.message_id}>
+              {placed.unseenIndex === index ? (
+                <li ref={newLineRef} className="maia-new-line" data-testid="unseen-divider">
+                  New
+                </li>
+              ) : null}
+              <li>
                 <div role={message.message_id === admittedStatusMessageId ? 'status' : undefined}>
                   <article
                     className={message.role === 'owner' ? 'maia-run maia-run--you' : 'maia-run'}
@@ -248,6 +321,7 @@ export function RouterConversation({
                   </article>
                 </div>
               </li>
+              </Fragment>
             )
           })}
           {outgoing.map((item) => (
@@ -264,6 +338,29 @@ export function RouterConversation({
               </article>
             </li>
           ))}
+          {liveReply ? (
+            <li>
+              <article
+                className="maia-run"
+                data-testid="live-reply"
+                data-final="false"
+                aria-busy="true"
+                aria-label={liveReply.dots ? 'Maia is still writing' : 'Maia is writing'}
+              >
+                <p className="maia-speaker">Maia</p>
+                <div className="maia-live-copy">
+                  <MarkdownMessage text={liveReply.text} className="maia-transcript-body" />
+                  {liveReply.dots ? (
+                    <span className="maia-stream-dots" data-testid="stream-dots" aria-hidden="true">
+                      <span>.</span>
+                      <span>.</span>
+                      <span>.</span>
+                    </span>
+                  ) : null}
+                </div>
+              </article>
+            </li>
+          ) : null}
         </ol>
       </div>
       {activityCards.length > 0 ? (
@@ -295,10 +392,24 @@ export function RouterConversation({
           })}
         </ul>
       ) : null}
-      {latestOffer ? (
-        <button type="button" className="maia-btn maia-latest" onClick={jumpToLatest}>
-          New messages
-        </button>
+      {placed.unseenIndex !== null || latestOffer ? (
+        <div className="maia-jump-row">
+          {placed.unseenIndex !== null ? (
+            <button
+              type="button"
+              className="maia-btn maia-jump-new"
+              data-testid="jump-new"
+              onClick={jumpToNew}
+            >
+              New
+            </button>
+          ) : null}
+          {latestOffer ? (
+            <button type="button" className="maia-btn maia-latest" onClick={jumpToLatest}>
+              New messages
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {accessory}
       <form
@@ -432,6 +543,22 @@ export function RouterConversation({
       </form>
     </>
   )
+}
+
+function readCursor(botId: string): string | null {
+  try {
+    return readSeenCursor(window.localStorage, botId)
+  } catch {
+    return null
+  }
+}
+
+function writeCursor(botId: string, messageId: string) {
+  try {
+    writeSeenCursor(window.localStorage, botId, messageId)
+  } catch {
+    // Private mode keeps the line for this visit only.
+  }
 }
 
 function FactsUsed({ ids, onOpen }: { ids: readonly string[]; onOpen: () => void }) {

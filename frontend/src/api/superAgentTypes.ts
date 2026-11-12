@@ -80,6 +80,18 @@ export interface ActivityLine {
   task_id?: string
 }
 
+export interface LiveReply {
+  bot_id: string
+  stream_id: string
+  revision: number
+  text: string
+  phase: 'streaming' | 'interrupted'
+}
+
+export type LiveFrame =
+  | { kind: 'cleared'; bot_id: string }
+  | { kind: 'reply'; reply: LiveReply }
+
 export interface OutgoingMessage {
   id: string
   text: string
@@ -207,7 +219,11 @@ export interface SuperAgentClient {
   createOperationId(): SubmissionOperationId
   sidebar(botId?: string): Promise<{ rows: SidebarRow[]; approvals?: LiveApproval[] }>
   decideApproval?(approvalId: string, decision: 'approve' | 'deny'): Promise<void>
-  transcript(botId?: string): Promise<{ messages: RouterMessage[]; activity?: ActivityLine[] }>
+  transcript(botId?: string): Promise<{
+    messages: RouterMessage[]
+    activity?: ActivityLine[]
+    live?: LiveReply
+  }>
   task(taskId: string): Promise<TaskDetail>
   send(
     operationId: SubmissionOperationId,
@@ -234,6 +250,7 @@ export interface SuperAgentClient {
   hostCommand(command: HostCommand): Promise<{ phase: TaskPhaseName }>
   subscribeSidebar?(onRows: (rows: SidebarRow[], approvals?: LiveApproval[]) => void): () => void
   subscribeConnection?(onChange: (snapshot: ConnectionSnapshot) => void): () => void
+  subscribeLive?(onFrame: (frame: LiveFrame) => void): () => void
   dispose?(): void
   inspector?(): Promise<InspectorSnapshot>
 }

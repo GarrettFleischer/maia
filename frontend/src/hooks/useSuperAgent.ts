@@ -17,6 +17,7 @@ import type {
 import { SuperAgentRequestError } from '@/api/liveSuperAgent'
 import { pinMarkFor } from '@/api/superAgentFormat'
 import { admissionOutcomeText } from '@/api/superAgentOutcome'
+import { useHeldReply } from '@/hooks/useHeldReply'
 import { dropOutbox, enqueueOutbox, loadOutbox, type OutboxItem } from '@/state/outbox'
 import {
   createSuperAgentState,
@@ -351,6 +352,7 @@ export interface RouterBindings {
   outgoing: readonly OutgoingMessage[]
   retryOutgoing: (id: string) => void
   activity: readonly ActivityLine[]
+  liveReply: { text: string; dots: boolean } | null
 }
 
 export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
@@ -375,6 +377,8 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   const flushArmed = useRef(true)
   const [flushTick, setFlushTick] = useState(0)
   const inflightText = useRef(new Map<string, SendOperationToken>())
+  const refreshOnConnect = useRef<() => void>(() => undefined)
+  const { held: liveReply, applyLive } = useHeldReply(client, () => refreshOnConnect.current())
   const [activity, setActivity] = useState<ActivityLine[]>([])
   const [outgoing, setOutgoing] = useState<OutgoingMessage[]>([])
   const outgoingRef = useRef(outgoing)
@@ -446,6 +450,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       try {
         const transcript = await activation.session.client.transcript()
         setActivity(transcript.activity ?? [])
+        applyLive(transcript.live ?? null)
         if (!isActiveActivation(activation)) return { kind: 'stale' }
         dispatch({
           type: 'transcript_loaded',
@@ -471,8 +476,14 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
         return { kind: 'failed' }
       }
     },
-    [],
+    [applyLive],
   )
+
+  refreshOnConnect.current = () => {
+    const activation = activeActivation.current
+    if (!activation || activation.session !== session) return
+    void loadTranscript(activation, 'refresh', TRANSCRIPT_REFRESH_ERROR, 'silent')
+  }
 
   useEffect(() => {
     const activation = createClientActivation(session)
@@ -1117,6 +1128,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       void activation.session.client.transcript().then((body) => {
         if (stopped || !isActiveActivation(activation)) return
         setActivity(body.activity ?? [])
+        applyLive(body.live ?? null)
         const nextIds = body.messages.map((message) => message.message_id).join('\n')
         if (nextIds !== messageIds.current) {
           void loadTranscript(activation, 'refresh', TRANSCRIPT_REFRESH_ERROR, 'silent')
@@ -1127,7 +1139,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       stopped = true
       window.clearInterval(timer)
     }
-  }, [activity.length, client.dataSource, loadTranscript, outgoing.length, session])
+  }, [activity.length, applyLive, client.dataSource, loadTranscript, outgoing.length, session])
 
   const acknowledgeAnnouncement = useCallback(
     (sequence: number) => {
@@ -1209,5 +1221,6 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     outgoing,
     retryOutgoing,
     activity,
+    liveReply: liveReply ? { text: liveReply.text, dots: liveReply.dots } : null,
   }
 }

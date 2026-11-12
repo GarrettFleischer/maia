@@ -15,6 +15,7 @@ use maia_core::router::ReasoningEffort;
 use maia_core::security::SecurityProfile;
 use maia_daemon::HttpIdSupply;
 use maia_daemon::IdSupply;
+use maia_daemon::LiveReplyBoard;
 use maia_daemon::ModelPorts;
 use maia_daemon::Orchestrator;
 use maia_daemon::OrchestratorConfig;
@@ -36,7 +37,9 @@ use maia_daemon::read_model_env;
 use maia_daemon::read_promoter_env;
 use maia_daemon::router_from_connection;
 use maia_daemon::serve_super_agent_with_model;
+use maia_daemon::streaming_router_from_connection;
 use maia_daemon::validate_runtime_snapshot;
+use maia_router::ReplyProgress;
 use maia_store::OwnerOpen;
 use maia_store::RuntimeHttpIdReservation;
 use maia_store::RuntimeIdSeeds;
@@ -222,8 +225,11 @@ fn boot() -> Result<(), BootError> {
         },
         _ => connection_from_env(&runtime)?,
     };
-    let router = router_from_connection(&chosen.base_url, &chosen.api_key, &chosen.model)
-        .map_err(|_| BootError::Router)?;
+    let live_replies = LiveReplyBoard::new();
+    let progress: Arc<dyn ReplyProgress> = Arc::new(live_replies.clone());
+    let router = streaming_router_from_connection(&chosen.base_url, &chosen.api_key, &chosen.model)
+        .map_err(|_| BootError::Router)?
+        .with_reply_progress(Arc::clone(&progress));
     let (proxy, install) = RuntimeRouter::spawn_with_install(runtime.handle().clone(), router);
     let (snapshot, supplies) = prepare_runtime(&store, now)?;
     let mut orchestrator = Orchestrator::restore(
@@ -244,6 +250,7 @@ fn boot() -> Result<(), BootError> {
         snapshot,
     )
     .map_err(|_| BootError::Store)?;
+    orchestrator.set_live_reply(live_replies);
     if let Some(embedder) = embedder {
         orchestrator.set_recall_embedder(embedder);
     }
@@ -281,6 +288,7 @@ fn boot() -> Result<(), BootError> {
             list_models: live_model_lister(),
             fallback,
             mcp_secrets: std::sync::Arc::new(maia_daemon::NativeMcpSecretStore),
+            reply_progress: Some(progress),
         },
     )
     .map_err(|_| BootError::Server)?;

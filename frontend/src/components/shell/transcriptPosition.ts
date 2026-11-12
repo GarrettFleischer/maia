@@ -6,15 +6,22 @@ export type TranscriptChange = 'hydrate' | 'append'
 export function shouldFollowTranscript(
   change: TranscriptChange,
   wasPinned: boolean,
+  holdUnseen = false,
 ): boolean {
+  if (holdUnseen && change === 'hydrate') return false
   return change === 'hydrate' || wasPinned
 }
 
-export function useTranscriptPosition(messageKey: string, state: TranscriptState) {
+export function useTranscriptPosition(
+  messageKey: string,
+  state: TranscriptState,
+  holdUnseen = false,
+) {
   const transcriptRef = useRef<HTMLDivElement>(null)
   const hydratedRef = useRef(false)
   const previousMessageKeyRef = useRef('')
   const pinnedRef = useRef(true)
+  const [pinned, setPinned] = useState(true)
   const [latestOffer, setLatestOffer] = useState(false)
 
   useLayoutEffect(() => {
@@ -25,6 +32,7 @@ export function useTranscriptPosition(messageKey: string, state: TranscriptState
       hydratedRef.current = false
       previousMessageKeyRef.current = ''
       pinnedRef.current = true
+      setPinned(true)
       return
     }
     if (state.kind !== 'ready' && state.kind !== 'empty') return
@@ -34,7 +42,7 @@ export function useTranscriptPosition(messageKey: string, state: TranscriptState
       : messageKey !== previousMessageKeyRef.current
         ? 'append'
         : null
-    if (change && shouldFollowTranscript(change, pinnedRef.current)) {
+    if (change && shouldFollowTranscript(change, pinnedRef.current, holdUnseen)) {
       transcript.scrollTop = transcript.scrollHeight
       setLatestOffer(false)
     } else if (change === 'append') {
@@ -42,9 +50,11 @@ export function useTranscriptPosition(messageKey: string, state: TranscriptState
     }
     hydratedRef.current = true
     previousMessageKeyRef.current = messageKey
-    pinnedRef.current =
+    const nextPinned =
       transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop <= 2
-  }, [messageKey, state.kind])
+    pinnedRef.current = nextPinned
+    setPinned(nextPinned)
+  }, [holdUnseen, messageKey, state.kind])
 
   useEffect(() => {
     const viewport = window.visualViewport
@@ -78,15 +88,17 @@ export function useTranscriptPosition(messageKey: string, state: TranscriptState
     const pinned =
       transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop <= 2
     pinnedRef.current = pinned
+    setPinned(pinned)
     if (pinned) setLatestOffer(false)
   }
 
   const jumpToLatest = () => {
     const transcript = transcriptRef.current
     pinnedRef.current = true
+    setPinned(true)
     setLatestOffer(false)
     if (transcript) transcript.scrollTop = transcript.scrollHeight
   }
 
-  return { transcriptRef, onScroll, latestOffer, jumpToLatest }
+  return { transcriptRef, onScroll, latestOffer, jumpToLatest, pinned }
 }

@@ -10,6 +10,7 @@ mod discovery;
 mod env;
 mod http;
 pub mod inspector;
+mod live_reply;
 mod mcp_settings;
 mod model_connection;
 mod orchestrator;
@@ -29,8 +30,12 @@ pub use http::{
     serve_super_agent_with_model, ui_bind_addr,
 };
 pub use inspector::{PackedRecall, RecallKind, RecallLine};
+pub use live_reply::{LiveReplyBoard, attach_live_reply};
 pub use mcp_settings::{MemoryMcpSecretStore, NativeMcpSecretStore};
-pub use model_connection::{PublicModelConnection, parse_reasoning_effort, router_from_connection};
+pub use model_connection::{
+    PublicModelConnection, parse_reasoning_effort, router_from_connection,
+    streaming_router_from_connection,
+};
 pub use orchestrator::{
     AdmittedMcpTool, AdmittedOutcome, ChildNarrowing, HostIntent, IdSupply, McpToolReply,
     MessageOutcome, Orchestrator, OrchestratorConfig, OrchestratorError, ParentWork,

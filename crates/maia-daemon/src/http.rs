@@ -67,6 +67,7 @@ use maia_core::super_agent::TaskId;
 use maia_core::super_agent::TaskPhase;
 use maia_core::super_agent::place_sidebar;
 use maia_core::super_agent::reduce_completion_view;
+use maia_router::ReplyProgress;
 use maia_router::RouterHttp;
 use maia_router::models_url;
 use maia_store::BrainEdge;
@@ -87,6 +88,8 @@ use tokio::net::TcpListener;
 
 use crate::inspector::StoredTurnRow;
 use crate::inspector::inspector_document;
+use crate::live_reply::LiveReplyBoard;
+use crate::live_reply::attach_live_reply;
 use crate::mcp_settings::McpApiError;
 use crate::mcp_settings::McpSecretStore;
 use crate::mcp_settings::MemoryMcpSecretStore;
@@ -108,7 +111,7 @@ use crate::model_connection::parse_model_write;
 use crate::model_connection::parse_reasoning_effort;
 use crate::model_connection::reasoning_name;
 use crate::model_connection::resolve_key;
-use crate::model_connection::router_from_connection;
+use crate::model_connection::streaming_router_from_connection;
 use crate::orchestrator::ActivityLog;
 use crate::orchestrator::FastAdmission;
 use crate::orchestrator::McpToolReply;
@@ -760,6 +763,8 @@ pub struct ModelPorts {
     pub fallback: PublicModelConnection,
     /// MCP header and environment values. They are not written to SQLite.
     pub mcp_secrets: Arc<dyn McpSecretStore>,
+    /// Visible tokens for the chat router. Promotion does not use this.
+    pub reply_progress: Option<Arc<dyn ReplyProgress>>,
 }
 
 #[derive(Clone)]
@@ -773,6 +778,7 @@ struct ModelHubInner {
     install: Option<mpsc::Sender<RouterHttp>>,
     fallback: PublicModelConnection,
     models: Mutex<Vec<String>>,
+    reply_progress: Option<Arc<dyn ReplyProgress>>,
 }
 
 impl ModelHub {
@@ -784,8 +790,13 @@ impl ModelHub {
                 install: ports.install,
                 fallback: ports.fallback,
                 models: Mutex::new(Vec::new()),
+                reply_progress: ports.reply_progress,
             }),
         }
+    }
+
+    fn reply_progress(&self) -> Option<Arc<dyn ReplyProgress>> {
+        self.inner.reply_progress.clone()
     }
 
     fn remember(&self, models: &[String]) {
@@ -816,6 +827,7 @@ fn default_model_ports() -> ModelPorts {
             reasoning: ReasoningEffort::Medium,
         },
         mcp_secrets: Arc::new(MemoryMcpSecretStore::new()),
+        reply_progress: None,
     }
 }
 
@@ -964,6 +976,7 @@ fn server_thread<R>(
     let activity = ActivityLog::new();
     let mut orchestrator = orchestrator;
     orchestrator.set_activity_log(activity.clone());
+    let live = orchestrator.live_board();
     let (commands_tx, commands_rx) = mpsc::channel(32);
     let (updates_tx, updates_rx) = watch::channel(String::new());
     drop(updates_rx);
@@ -1012,6 +1025,7 @@ fn server_thread<R>(
             database: config.database.clone(),
             mcp_secrets,
             activity,
+            live,
         },
         config.dist,
     );
@@ -1059,6 +1073,7 @@ struct AppState {
     database: PathBuf,
     mcp_secrets: Arc<dyn McpSecretStore>,
     activity: ActivityLog,
+    live: Option<LiveReplyBoard>,
 }
 
 struct WatchPublication {
@@ -1933,12 +1948,16 @@ fn save_model<R: RouterPort>(
     }
     actor.host.set_router_model(model.clone(), reasoning);
     if let Some(install) = &actor.model.inner.install {
-        let router = match router_from_connection(&base_url, &api_key, &model) {
+        let router = match streaming_router_from_connection(&base_url, &api_key, &model) {
             Ok(router) => router,
             Err(_) => {
                 wipe(&mut api_key);
                 return Err(ApiError::InvalidModelConnection);
             }
+        };
+        let router = match actor.model.reply_progress() {
+            Some(progress) => router.with_reply_progress(progress),
+            None => router,
         };
         if install.blocking_send(router).is_err() {
             wipe(&mut api_key);
@@ -2542,10 +2561,14 @@ async fn transcript(State(state): State<AppState>, Query(query): Query<BotScope>
     let database = state.database.clone();
     let activity = state.activity.snapshot();
     let bot = query.bot;
+    let live_view = bot
+        .as_deref()
+        .and_then(|bot_id| state.live.as_ref().and_then(|board| board.snapshot(bot_id)));
     let read = tokio::task::spawn_blocking(move || {
         let connection = open_read(&database)?;
         let mut value = transcript_value(&connection, bot.as_deref())?;
         value["activity"] = serde_json::to_value(&activity).unwrap_or(Value::Array(Vec::new()));
+        attach_live_reply(&mut value, live_view.as_ref());
         Ok(value)
     })
     .await;
@@ -3693,14 +3716,26 @@ async fn unknown_api() -> Response {
 }
 
 async fn websocket(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(move |socket| socket_loop(socket, state.updates))
+    let live = state.live.as_ref().map(LiveReplyBoard::subscribe);
+    upgrade.on_upgrade(move |socket| socket_loop(socket, state.updates, live))
 }
 
-async fn socket_loop(mut socket: WebSocket, updates: watch::Sender<String>) {
+async fn socket_loop(
+    mut socket: WebSocket,
+    updates: watch::Sender<String>,
+    mut live: Option<watch::Receiver<String>>,
+) {
     let mut receiver = updates.subscribe();
     let current = receiver.borrow().clone();
     if coalesce_sidebar(std::slice::from_ref(&current)).is_some()
         && socket.send(Message::Text(current.into())).await.is_err()
+    {
+        return;
+    }
+    if let Some(frame) = live
+        .as_ref()
+        .and_then(|updates| nonempty(updates.borrow().clone()))
+        && socket.send(Message::Text(frame.into())).await.is_err()
     {
         return;
     }
@@ -3712,6 +3747,17 @@ async fn socket_loop(mut socket: WebSocket, updates: watch::Sender<String>) {
                 }
                 let frame = receiver.borrow().clone();
                 if coalesce_sidebar(std::slice::from_ref(&frame)).is_none() {
+                    continue;
+                }
+                if socket.send(Message::Text(frame.into())).await.is_err() {
+                    break;
+                }
+            }
+            frame = next_live_frame(&mut live) => {
+                let Some(frame) = frame else {
+                    break;
+                };
+                if frame.is_empty() {
                     continue;
                 }
                 if socket.send(Message::Text(frame.into())).await.is_err() {
@@ -3731,6 +3777,21 @@ async fn socket_loop(mut socket: WebSocket, updates: watch::Sender<String>) {
             }
         }
     }
+}
+
+fn nonempty(frame: String) -> Option<String> {
+    if frame.is_empty() { None } else { Some(frame) }
+}
+
+async fn next_live_frame(live: &mut Option<watch::Receiver<String>>) -> Option<String> {
+    let Some(receiver) = live.as_mut() else {
+        std::future::pending::<()>().await;
+        return None;
+    };
+    if receiver.changed().await.is_err() {
+        return None;
+    }
+    Some(receiver.borrow().clone())
 }
 
 async fn ask<F>(state: &AppState, make: F) -> Result<Value, ApiError>

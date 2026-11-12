@@ -185,11 +185,33 @@ pub fn router_from_connection(
     api_key: &str,
     model: &str,
 ) -> Result<RouterHttp, ModelConnectionError> {
+    router_with_stream(base_url, api_key, model, RouterStreamMode::Json)
+}
+
+/// Same adapter as [`router_from_connection`], asking the provider for tokens.
+///
+/// # Errors
+///
+/// Returns [`ModelConnectionError::Invalid`] when the adapter rejects the endpoint.
+pub fn streaming_router_from_connection(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<RouterHttp, ModelConnectionError> {
+    router_with_stream(base_url, api_key, model, RouterStreamMode::ServerSentEvents)
+}
+
+fn router_with_stream(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    stream_mode: RouterStreamMode,
+) -> Result<RouterHttp, ModelConnectionError> {
     let config = RouterConfig {
         base_url: base_url.to_owned(),
         model: model.to_owned(),
         request_timeout: LIVE_ROUTER_REQUEST_TIMEOUT,
-        stream_mode: RouterStreamMode::Json,
+        stream_mode,
         trailing_instruction_placement: TrailingInstructionPlacement::TrailingSystem,
     };
     let capabilities = RouterCapabilities {
@@ -265,6 +287,14 @@ mod tests {
         let router =
             router_from_connection("http://127.0.0.1:9/v1", "test-key", "auto").expect("router");
         assert!(router.request_timeout() >= Duration::from_secs(180));
+        assert!(!router.streams_replies());
+    }
+
+    #[test]
+    fn the_chat_router_asks_for_tokens_as_they_arrive() {
+        let router = streaming_router_from_connection("http://127.0.0.1:9/v1", "test-key", "auto")
+            .expect("router");
+        assert!(router.streams_replies());
     }
 
     #[test]

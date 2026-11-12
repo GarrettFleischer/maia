@@ -20,6 +20,8 @@ import type {
   AttachmentChip,
   ConnectionPhase,
   ConnectionSnapshot,
+  LiveFrame,
+  LiveReply,
   SubmissionOperationId,
   SuperAgentBackendScope,
   SuperAgentClient,
@@ -96,6 +98,7 @@ export function liveSuperAgentClient(
 ): SuperAgentClient {
   const root = trimOrigin(origin)
   const listeners = new Set<(rows: SidebarRow[], approvals?: LiveApproval[]) => void>()
+  const liveListeners = new Set<(frame: LiveFrame) => void>()
   const linkListeners = new Set<(snapshot: ConnectionSnapshot) => void>()
   let socket: WebSocket | null = null
   let reconnectHandle: unknown | null = null
@@ -110,8 +113,12 @@ export function liveSuperAgentClient(
     for (const listener of linkListeners) listener(snapshot)
   }
 
+  function socketWanted() {
+    return listeners.size > 0 || liveListeners.size > 0
+  }
+
   function ensureSocket() {
-    if (disposed || listeners.size === 0 || socket || reconnectHandle !== null) return
+    if (disposed || !socketWanted() || socket || reconnectHandle !== null) return
     let next: WebSocket
     try {
       next = socketPorts.connect(websocketUrl(root))
@@ -128,6 +135,11 @@ export function liveSuperAgentClient(
     next.onmessage = (event) => {
       if (socket !== next) return
       if (typeof event.data !== 'string') return
+      const live = readLiveFrame(event.data)
+      if (live) {
+        for (const listener of liveListeners) listener(live)
+        return
+      }
       const sidebar = readSocket(event.data)
       if (!sidebar) return
       for (const listener of listeners) listener(sidebar.rows, sidebar.approvals)
@@ -147,12 +159,7 @@ export function liveSuperAgentClient(
   }
 
   function scheduleReconnect() {
-    if (
-      disposed ||
-      listeners.size === 0 ||
-      socket !== null ||
-      reconnectHandle !== null
-    ) {
+    if (disposed || !socketWanted() || socket !== null || reconnectHandle !== null) {
       return
     }
     publishPhase('reconnecting')
@@ -298,7 +305,16 @@ export function liveSuperAgentClient(
       ensureSocket()
       return () => {
         listeners.delete(onRows)
-        if (listeners.size === 0) stopSocket()
+        if (!socketWanted()) stopSocket()
+      }
+    },
+    subscribeLive(onFrame) {
+      if (disposed) return () => undefined
+      liveListeners.add(onFrame)
+      ensureSocket()
+      return () => {
+        liveListeners.delete(onFrame)
+        if (!socketWanted()) stopSocket()
       }
     },
     subscribeConnection(onChange) {
@@ -311,6 +327,7 @@ export function liveSuperAgentClient(
     dispose() {
       disposed = true
       listeners.clear()
+      liveListeners.clear()
       linkListeners.clear()
       stopSocket()
     },
@@ -484,7 +501,42 @@ function readRow(value: unknown): SidebarRow | null {
   }
 }
 
-function readTranscript(value: unknown): { messages: RouterMessage[] } | null {
+export function readLiveFrame(data: string): LiveFrame | null {
+  try {
+    return liveFrame(JSON.parse(data) as unknown)
+  } catch {
+    return null
+  }
+}
+
+function liveFrame(value: unknown): LiveFrame | null {
+  if (!isRecord(value) || value.kind !== 'live') return null
+  if (value.cleared === true) {
+    return { kind: 'cleared', bot_id: typeof value.bot_id === 'string' ? value.bot_id : '' }
+  }
+  const reply = readLiveReply(value)
+  return reply ? { kind: 'reply', reply } : null
+}
+
+function readLiveReply(value: unknown): LiveReply | null {
+  if (!isRecord(value)) return null
+  if (typeof value.stream_id !== 'string' || value.stream_id.length === 0) return null
+  if (typeof value.text !== 'string' || value.text.length === 0) return null
+  if (typeof value.revision !== 'number' || !Number.isFinite(value.revision)) return null
+  if (value.phase !== 'streaming' && value.phase !== 'interrupted') return null
+  const bot_id = typeof value.bot_id === 'string' && value.bot_id.length > 0 ? value.bot_id : 'maia'
+  return {
+    bot_id,
+    stream_id: value.stream_id,
+    revision: value.revision,
+    text: value.text,
+    phase: value.phase,
+  }
+}
+
+function readTranscript(
+  value: unknown,
+): { messages: RouterMessage[]; activity?: ActivityLine[]; live?: LiveReply } | null {
   if (!isRecord(value) || !Array.isArray(value.messages)) return null
   const messages: RouterMessage[] = []
   for (const message of value.messages) {
@@ -504,7 +556,8 @@ function readTranscript(value: unknown): { messages: RouterMessage[] } | null {
     })
   }
   const activity = readActivity(value.activity)
-  return { messages, ...(activity.length > 0 ? { activity } : {}) }
+  const live = readLiveReply(value.live)
+  return { messages, ...(activity.length > 0 ? { activity } : {}), ...(live ? { live } : {}) }
 }
 
 function readBot(value: unknown): BotSummary | null {

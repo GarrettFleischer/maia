@@ -521,6 +521,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
             }
             router={agent}
             title={selected.name}
+            botId={selected.bot_id}
             onBack={viewport === 'phone' ? closePhoneChat : undefined}
             tasks={agent.rows}
             onOpenTask={openTask}

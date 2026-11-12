@@ -18,7 +18,7 @@ use maia_core::router::{
 use maia_core::thread_cache::{ChatMessage, ChatRole};
 
 use crate::test_loopback_http::write_http_response;
-use crate::{RouterAuth, RouterHttp, error_redacts_secret};
+use crate::{ReplyProgress, RouterAuth, RouterHttp, error_redacts_secret};
 
 fn capabilities() -> RouterCapabilities {
     RouterCapabilities {
@@ -111,6 +111,81 @@ fn router_http_complete_sse_normalizes_stream() {
         .complete_via_loopback_test_transport(&sample_request(RequestId(2)))
         .expect("complete");
     assert_eq!(response.reply.as_deref(), Some("hi"));
+}
+
+struct RecordedProgress {
+    texts: Mutex<Vec<String>>,
+    interrupted: Mutex<Vec<String>>,
+}
+
+impl ReplyProgress for RecordedProgress {
+    fn on_visible_reply(&self, _request_id: &str, text: &str) {
+        self.texts.lock().expect("texts").push(text.to_owned());
+    }
+
+    fn on_reply_interrupted(&self, request_id: &str) {
+        self.interrupted
+            .lock()
+            .expect("interrupted")
+            .push(request_id.to_owned());
+    }
+}
+
+#[test]
+fn streamed_tokens_are_visible_before_the_completion_is_final() {
+    let port = spawn_loopback_server(move |mut stream| {
+        let _request = RouterHttp::read_loopback_request(&mut stream).expect("read request");
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        write_http_response(&mut stream, "200 OK", body.as_bytes()).expect("write");
+    });
+    let progress = Arc::new(RecordedProgress {
+        texts: Mutex::new(Vec::new()),
+        interrupted: Mutex::new(Vec::new()),
+    });
+    let sink: Arc<dyn ReplyProgress> = progress.clone();
+    let router = loopback_router(port, RouterStreamMode::ServerSentEvents)
+        .expect("router")
+        .with_reply_progress(sink);
+    let response = router
+        .complete_via_loopback_test_transport(&sample_request(RequestId(21)))
+        .expect("complete");
+    assert_eq!(response.reply.as_deref(), Some("Hello"));
+    assert_eq!(
+        progress.texts.lock().expect("texts").as_slice(),
+        ["Hel", "Hello"]
+    );
+    assert!(progress.interrupted.lock().expect("interrupted").is_empty());
+}
+
+#[test]
+fn an_unfinished_stream_is_not_returned_as_the_answer() {
+    let port = spawn_loopback_server(move |mut stream| {
+        let _request = RouterHttp::read_loopback_request(&mut stream).expect("read request");
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n";
+        write_http_response(&mut stream, "200 OK", body.as_bytes()).expect("write");
+    });
+    let progress = Arc::new(RecordedProgress {
+        texts: Mutex::new(Vec::new()),
+        interrupted: Mutex::new(Vec::new()),
+    });
+    let sink: Arc<dyn ReplyProgress> = progress.clone();
+    let router = loopback_router(port, RouterStreamMode::ServerSentEvents)
+        .expect("router")
+        .with_reply_progress(sink);
+    let error = router
+        .complete_via_loopback_test_transport(&sample_request(RequestId(22)))
+        .expect_err("incomplete");
+    assert!(matches!(error, RouterError::IncompleteStream));
+    assert_eq!(progress.texts.lock().expect("texts").as_slice(), ["Hel"]);
+    assert_eq!(
+        progress.interrupted.lock().expect("interrupted").as_slice(),
+        ["22"]
+    );
 }
 
 #[test]
