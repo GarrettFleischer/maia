@@ -59,6 +59,14 @@ export function liveBrainMapClient(origin: string): BrainMapClient {
         }),
       )
     },
+    confirmClaim(id: string) {
+      return readMap(
+        fetch(`${root}/api/brain/claims/${encodeURIComponent(id)}/confirm`, {
+          method: 'POST',
+          headers: withCsrf('POST', {}),
+        }),
+      )
+    },
     forgetClaim(id: string) {
       return readMap(
         fetch(`${root}/api/brain/claims/${encodeURIComponent(id)}/forget`, {

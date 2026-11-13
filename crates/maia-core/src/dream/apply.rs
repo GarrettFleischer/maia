@@ -289,18 +289,18 @@ pub fn describe_promotion_decision(
     let mut mentions = Vec::new();
     let mut replacements = Vec::new();
     let mut id_index = 0usize;
-    for sentence in &decision.new {
+    for draft in &decision.new {
         let id = new_ids[id_index].clone();
         id_index += 1;
         claims.push(CommittedClaim {
             id: id.clone(),
-            sentence: sentence.clone(),
+            sentence: draft.sentence.clone(),
             episode_id: episode.id.clone(),
             taint,
             sources: sources.clone(),
             valid_from: episode.at,
             status: ClaimStatus::Provisional,
-            lexemes: lexemes_for_sentence(sentence, lexical),
+            lexemes: lexemes_for_sentence(&draft.sentence, lexical),
         });
         mentions.push(MentionEdge {
             claim_id: id,

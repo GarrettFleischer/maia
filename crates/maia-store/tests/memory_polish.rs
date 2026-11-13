@@ -98,6 +98,7 @@ fn remember(owner: &SqliteOwner, episode_id: &str, claim_id: &str, sentence: &st
             taint: MemoryTaint::Trusted,
             valid_from: at,
             lexemes: vec![],
+            ..Default::default()
         }],
         same_claim_ids: vec![],
         replacements: vec![],

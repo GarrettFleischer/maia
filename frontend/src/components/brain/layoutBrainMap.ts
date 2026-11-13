@@ -76,6 +76,7 @@ export interface BrainMapClient {
   exportMarkdown?(): Promise<BrainIndex>
   search?(query: string): Promise<BrainSearchHit[]>
   editClaim?(id: string, sentence: string): Promise<BrainMap>
+  confirmClaim?(id: string): Promise<BrainMap>
   forgetClaim?(id: string): Promise<BrainMap>
   restoreClaim?(id: string): Promise<BrainMap>
   createTag?(name: string): Promise<BrainMap>

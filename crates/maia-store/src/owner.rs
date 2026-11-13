@@ -581,6 +581,10 @@ enum NormalCommand {
         sentence: String,
         reply: Reply<Executed<BrainMap>>,
     },
+    ConfirmClaim {
+        claim_id: String,
+        reply: Reply<Executed<BrainMap>>,
+    },
     MemoryTags {
         change: crate::memory_tags::MemoryTagChange,
         reply: Reply<Executed<BrainMap>>,
@@ -2802,6 +2806,26 @@ impl SqliteOwner {
         Pending { rx }.wait()
     }
 
+    /// Confirms wording without locking the claim against later replaces.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, missing-claim, or SQLite failure.
+    pub fn confirm_claim(
+        &self,
+        claim_id: impl Into<String>,
+    ) -> Result<Executed<BrainMap>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::ConfirmClaim {
+                claim_id: claim_id.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
     /// Adds, renames, merges, or removes a tag, or retags one claim.
     ///
     /// # Errors
@@ -3777,6 +3801,13 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
             sequence,
             claim_map(connection, |connection| {
                 crate::memory_cleanup::edit_claim(connection, &claim_id, &sentence)
+            }),
+        ),
+        NormalCommand::ConfirmClaim { claim_id, reply } => executed(
+            reply,
+            sequence,
+            claim_map(connection, |connection| {
+                crate::memory_cleanup::confirm_claim(connection, &claim_id)
             }),
         ),
         NormalCommand::MemoryTags { change, reply } => executed(

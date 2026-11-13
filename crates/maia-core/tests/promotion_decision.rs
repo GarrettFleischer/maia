@@ -2,7 +2,8 @@
 
 use maia_core::brain::ClaimId;
 use maia_core::dream::{
-    PromotionDecision, PromotionError, ReplaceDraft, SentenceIssue, parse_promotion_decision,
+    ClaimKind, NewClaimDraft, PromotionDecision, PromotionError, ReplaceDraft, SentenceIssue,
+    parse_promotion_decision,
 };
 
 #[test]
@@ -18,13 +19,34 @@ fn accepts_new_same_replaces_and_skip() {
         decision,
         PromotionDecision {
             skip: false,
-            new: vec!["The project is named Bob's Best Burgers.".to_owned()],
+            new: vec![NewClaimDraft {
+                sentence: "The project is named Bob's Best Burgers.".to_owned(),
+                kind: ClaimKind::Explicit,
+            }],
             same: vec![ClaimId::new("claim_existing")],
             replaces: vec![ReplaceDraft {
                 old: ClaimId::new("claim_old"),
                 sentence: "The project is named Bob's Better Burgers.".to_owned(),
             }],
         }
+    );
+}
+
+#[test]
+fn accepts_a_deduction_object_inside_new() {
+    let raw = r#"{
+      "skip": false,
+      "new": [{"sentence":"The owner lives in Canby.","kind":"deduction"}],
+      "same": [],
+      "replaces": []
+    }"#;
+    let decision = parse_promotion_decision(raw).expect("deduction");
+    assert_eq!(
+        decision.new,
+        vec![NewClaimDraft {
+            sentence: "The owner lives in Canby.".to_owned(),
+            kind: ClaimKind::Deduction,
+        }]
     );
 }
 
@@ -81,7 +103,10 @@ fn accepts_json_wrapped_in_a_code_fence_and_preamble() {
     let decision = parse_promotion_decision(raw).expect("wrapped json");
     assert_eq!(
         decision.new,
-        vec!["The project is named Bob's Best Burgers.".to_owned()]
+        vec![NewClaimDraft {
+            sentence: "The project is named Bob's Best Burgers.".to_owned(),
+            kind: ClaimKind::Explicit,
+        }]
     );
 }
 

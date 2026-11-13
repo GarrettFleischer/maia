@@ -211,8 +211,8 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           nodes={facts(map).filter((node) => (node.confidence_millis ?? 700) < 700)}
           hidden={map.hidden ?? []}
           onApprove={(node) => {
-            if (!client.editClaim) return
-            void client.editClaim(node.id, node.sentence ?? node.label).then(reload)
+            if (!client.confirmClaim) return
+            void client.confirmClaim(node.id).then(reload)
           }}
           onReject={forget}
           onRestore={(id) => {

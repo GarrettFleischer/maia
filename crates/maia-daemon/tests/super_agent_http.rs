@@ -3687,7 +3687,8 @@ fn seed_http_brain(path: &Path) {
                 taint: MemoryTaint::Untrusted,
                 valid_from: 40,
                 lexemes: vec!["obsidian".to_owned(), "vault".to_owned()],
-            }],
+            ..Default::default()
+        }],
             same_claim_ids: Vec::new(),
             replacements: Vec::new(),
             links: Vec::new(),

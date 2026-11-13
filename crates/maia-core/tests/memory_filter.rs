@@ -84,6 +84,28 @@ fn a_moved_city_supersedes_the_old_one_and_duplicates_collapse() {
 }
 
 #[test]
+fn a_changed_preference_supersedes_the_old_one_and_a_neighbor_fact_survives() {
+    let older = "The owner prefers tea.";
+    let newer = "The owner prefers coffee.";
+    let neighbor = "The owner lives in Canby, Oregon.";
+    assert!(supersedes(older, newer));
+    assert!(!supersedes(older, neighbor));
+    assert!(!supersedes(neighbor, newer));
+    assert!(supersedes(
+        "The user likes green tea.",
+        "The user likes coffee."
+    ));
+    assert!(supersedes(
+        "Garrett's phone is a Pixel.",
+        "Garrett's phone is an iPhone."
+    ));
+    assert!(supersedes(
+        "The owner always saves work before quitting.",
+        "The owner never saves work before quitting."
+    ));
+}
+
+#[test]
 fn city_and_state_is_a_place_named_for_the_city() {
     for sentence in [
         "The user lives in Canby, Oregon.",

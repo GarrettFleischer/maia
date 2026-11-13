@@ -36,7 +36,8 @@ pub use consolidate::{
     render_consolidation_model_input,
 };
 pub use decision::{
-    MAX_CLAIM_SENTENCE_CHARS, PromotionDecision, ReplaceDraft, parse_promotion_decision,
+    ClaimKind, MAX_CLAIM_SENTENCE_CHARS, NewClaimDraft, PromotionDecision, ReplaceDraft,
+    parse_promotion_decision,
 };
 pub use error::{
     ConsolidationPhase, DreamError, ModelFailure, PromotionError, PromotionPhase, SentenceIssue,

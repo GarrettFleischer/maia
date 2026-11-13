@@ -116,6 +116,7 @@ fn claim(id: &str, sentence: &str, taint: MemoryTaint, lexemes: &[&str]) -> Prom
         taint,
         valid_from: 20,
         lexemes: lexemes.iter().map(|lexeme| (*lexeme).to_owned()).collect(),
+        ..Default::default()
     }
 }
 
@@ -164,7 +165,7 @@ fn consolidate(owner: &SqliteOwner, sentence: &str) {
 
 #[test]
 fn schema_version_is_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 17);
+    assert_eq!(LATEST_SCHEMA_VERSION, 18);
 }
 
 #[test]

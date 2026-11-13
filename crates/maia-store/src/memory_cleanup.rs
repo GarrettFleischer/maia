@@ -305,19 +305,44 @@ pub(crate) fn annotate_new_claim(
     connection: &Connection,
     claim_id: &str,
     sentence: &str,
+    memory_kind: &str,
+    flagged_beside_lock: bool,
 ) -> Result<(), StoreError> {
     if judge_claim(sentence) != ClaimJudgment::Keep {
         return Ok(());
     }
     let category = categorize(sentence);
+    let subject = subject_name(sentence);
+    let confidence = if flagged_beside_lock {
+        400
+    } else if memory_kind == "explicit" || memory_kind == "deduction" {
+        800
+    } else {
+        550
+    };
     connection.execute(
-        "UPDATE claims SET category = ?1, subject = ?2, confidence_millis = 550 \
-         WHERE claim_id = ?3 AND owner_edited = 0",
-        params![category.as_str(), subject_name(sentence), claim_id],
+        "UPDATE claims SET category = ?1, subject = ?2, subject_peer_id = ?2, confidence_millis = ?3 \
+         WHERE claim_id = ?4 AND owner_edited = 0",
+        params![category.as_str(), subject, confidence, claim_id],
     )?;
     crate::memory_tags::fill_claim(connection, claim_id, sentence, category.as_str())?;
     link_sentence(connection, claim_id, sentence)?;
     collapse_duplicate(connection, claim_id, sentence)
+}
+
+/// Raises confidence without locking the sentence against later replaces.
+pub(crate) fn confirm_claim(connection: &Connection, claim_id: &str) -> Result<(), StoreError> {
+    let updated = connection.execute(
+        "UPDATE claims SET confidence_millis = 1000, hidden_reason = NULL WHERE claim_id = ?1",
+        params![claim_id],
+    )?;
+    if updated != 1 {
+        return Err(StoreError::NotFound {
+            entity: "claim",
+            id: claim_id.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn link_sentence(

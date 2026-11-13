@@ -217,7 +217,8 @@ fn promotion_link_is_committed_with_the_claim_and_a_missing_target_rolls_back() 
                 taint: MemoryTaint::Untrusted,
                 valid_from: 20,
                 lexemes: vec!["northwind".to_owned(), "pantry".to_owned()],
-            }],
+            ..Default::default()
+        }],
             same_claim_ids: Vec::new(),
             replacements: Vec::new(),
             links: Vec::new(),
@@ -234,6 +235,7 @@ fn promotion_link_is_committed_with_the_claim_and_a_missing_target_rolls_back() 
             taint: MemoryTaint::Untrusted,
             valid_from: 20,
             lexemes: vec!["northwind".to_owned(), "pantry".to_owned()],
+            ..Default::default()
         }],
         same_claim_ids: Vec::new(),
         replacements: Vec::new(),
@@ -265,7 +267,8 @@ fn promotion_link_is_committed_with_the_claim_and_a_missing_target_rolls_back() 
                 taint: MemoryTaint::Untrusted,
                 valid_from: 20,
                 lexemes: vec!["northwind".to_owned(), "pantry".to_owned()],
-            }],
+            ..Default::default()
+        }],
             same_claim_ids: Vec::new(),
             replacements: Vec::new(),
             links: vec![PromotionLinkWrite {

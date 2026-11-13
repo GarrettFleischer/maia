@@ -363,14 +363,16 @@ fn live_chat_thickens_a_co_use_path() {
                     taint: MemoryTaint::Trusted,
                     valid_from: now,
                     lexemes: vec!["kitchen".to_owned(), "portland".to_owned()],
-                },
+            ..Default::default()
+        },
                 PromotionClaimWrite {
                     claim_id: "claim-zephyr".to_owned(),
                     sentence: ZEPHYR.to_owned(),
                     taint: MemoryTaint::Trusted,
                     valid_from: now,
                     lexemes: vec!["zephyr".to_owned(), "indigo".to_owned(), "token".to_owned()],
-                },
+            ..Default::default()
+        },
             ],
             same_claim_ids: Vec::new(),
             replacements: Vec::new(),

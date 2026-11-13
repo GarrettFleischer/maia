@@ -112,6 +112,15 @@ function clientFor(initial: BrainMap, hits: BrainSearchHit[] = []) {
       }
       return map
     },
+    async confirmClaim(id) {
+      map = {
+        ...map,
+        nodes: map.nodes.map((node) =>
+          node.id === id ? { ...node, confidence_millis: 1000 } : node,
+        ),
+      }
+      return map
+    },
     async forgetClaim(id) {
       const node = map.nodes.find((item) => item.id === id)
       map = {

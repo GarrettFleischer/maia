@@ -826,6 +826,296 @@ fn a_negative_cosine_does_not_hide_a_lexical_claim() {
 }
 
 #[test]
+fn replaced_preference_is_gone_from_recall_and_the_new_sentence_is_present() {
+    let path = temp_db("prefer-replace");
+    let store = open_store(&path);
+    seed_thread(&store, "thread-a");
+    seed_thread(&store, "thread-b");
+    insert_episode(
+        &store,
+        "episode-tea",
+        "thread-a",
+        "Owner: I prefer tea.\nMaia: Noted.",
+    );
+    insert_episode(
+        &store,
+        "episode-canby",
+        "thread-a",
+        "Owner: I live in Canby, Oregon.\nMaia: Noted.",
+    );
+    insert_episode_at(
+        &store,
+        "episode-coffee",
+        "thread-a",
+        "Owner: I prefer coffee now.\nMaia: Noted.",
+        NOW + 1,
+        MemoryTaint::Untrusted,
+        MemoryTaint::Untrusted,
+    );
+    let mut promoter = ScriptedPromoter::create();
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner prefers tea."],"same":[],"replaces":[]}"#,
+    );
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner lives in Canby, Oregon."],"same":[],"replaces":[]}"#,
+    );
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner prefers coffee."],"same":[],"replaces":[]}"#,
+    );
+    let runner = PromotionRunner::new(
+        store,
+        promoter,
+        "fake-promoter",
+        PromotionCaps::default(),
+        Arc::new(|| NOW),
+    );
+    runner.promote_one().expect("tea");
+    runner.promote_one().expect("canby");
+    runner.promote_one().expect("coffee");
+
+    let recall = bounded_recall(runner.store(), "prefer", Timestamp(NOW), None).expect("recall");
+    assert!(
+        recall
+            .items
+            .iter()
+            .any(|item| item.sentence.contains("coffee")),
+        "expected coffee in recall, got {:?}",
+        recall.items
+    );
+    assert!(
+        recall
+            .items
+            .iter()
+            .all(|item| !item.sentence.to_lowercase().contains("tea")),
+        "tea should be closed, got {:?}",
+        recall.items
+    );
+    let place = bounded_recall(runner.store(), "canby", Timestamp(NOW), None).expect("place");
+    assert!(
+        place
+            .items
+            .iter()
+            .any(|item| item.sentence.contains("Canby")),
+        "neighbor place fact must survive, got {:?}",
+        place.items
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn owner_edited_preference_stays_and_the_new_sentence_is_stored_beside_it() {
+    let path = temp_db("prefer-locked");
+    let store = open_store(&path);
+    seed_thread(&store, "thread-a");
+    insert_episode(
+        &store,
+        "episode-tea",
+        "thread-a",
+        "Owner: I prefer tea.\nMaia: Noted.",
+    );
+    insert_episode_at(
+        &store,
+        "episode-coffee",
+        "thread-a",
+        "Owner: I prefer coffee now.\nMaia: Noted.",
+        NOW + 1,
+        MemoryTaint::Untrusted,
+        MemoryTaint::Untrusted,
+    );
+    let mut promoter = ScriptedPromoter::create();
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner prefers tea."],"same":[],"replaces":[]}"#,
+    );
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner prefers coffee."],"same":[],"replaces":[]}"#,
+    );
+    let runner = PromotionRunner::new(
+        store,
+        promoter,
+        "fake-promoter",
+        PromotionCaps::default(),
+        Arc::new(|| NOW),
+    );
+    runner.promote_one().expect("tea");
+    runner
+        .store()
+        .edit_claim("claim-episode-tea-0", "The owner prefers tea.")
+        .expect("lock tea");
+    runner.promote_one().expect("coffee");
+
+    let map = runner.store().brain_map().expect("map");
+    let tea = map
+        .nodes
+        .iter()
+        .find(|node| node.id == "claim-episode-tea-0")
+        .expect("tea node");
+    assert_eq!(tea.detail.status.as_deref(), Some("provisional"));
+    assert!(tea.detail.owner_edited);
+    let coffee = map
+        .nodes
+        .iter()
+        .find(|node| {
+            node.kind == maia_store::BrainNodeKind::Claim
+                && node
+                    .sentence
+                    .as_deref()
+                    .is_some_and(|sentence| sentence.contains("coffee"))
+        })
+        .expect("coffee stored");
+    assert_eq!(coffee.detail.status.as_deref(), Some("provisional"));
+    assert!(
+        (coffee.detail.confidence_millis.unwrap_or(1000)) < 700,
+        "coffee should stay on Review when it could not replace a locked claim"
+    );
+    let recall = bounded_recall(runner.store(), "prefer", Timestamp(NOW), None).expect("recall");
+    assert!(
+        recall
+            .items
+            .iter()
+            .any(|item| item.sentence.contains("tea")),
+        "locked tea must remain recallable, got {:?}",
+        recall.items
+    );
+    assert!(
+        recall
+            .items
+            .iter()
+            .any(|item| item.sentence.contains("coffee")),
+        "coffee must still be stored and recallable, got {:?}",
+        recall.items
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_deduction_claim_is_recalled_before_any_dream_runs() {
+    let path = temp_db("deduction");
+    let store = open_store(&path);
+    seed_thread(&store, "thread-a");
+    insert_episode(
+        &store,
+        "episode-deduce",
+        "thread-a",
+        "Owner: I moved to Canby last year.\nMaia: Noted.",
+    );
+    let mut promoter = ScriptedPromoter::create();
+    promoter.push_ok(
+        r#"{"skip":false,"new":[{"sentence":"The owner lives in Canby.","kind":"deduction"}],"same":[],"replaces":[]}"#,
+    );
+    let runner = PromotionRunner::new(
+        store,
+        promoter,
+        "fake-promoter",
+        PromotionCaps::default(),
+        Arc::new(|| NOW),
+    );
+    let attempt = runner.promote_one().expect("promote");
+    assert_eq!(
+        attempt,
+        PromotionAttempt::Applied {
+            claim_ids: vec!["claim-episode-deduce-0".to_owned()]
+        }
+    );
+    let recall = bounded_recall(runner.store(), "lives", Timestamp(NOW), None).expect("recall");
+    assert!(
+        recall
+            .items
+            .iter()
+            .any(|item| item.sentence.contains("lives in Canby")),
+        "deduction must be recallable with no dream, got {:?}",
+        recall.items
+    );
+    let connection = rusqlite::Connection::open(&path).expect("db");
+    let kind: String = connection
+        .query_row(
+            "SELECT memory_kind FROM claims WHERE claim_id = 'claim-episode-deduce-0'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("kind column");
+    assert_eq!(kind, "deduction");
+    let scope: String = connection
+        .query_row(
+            "SELECT memory_scope FROM claims WHERE claim_id = 'claim-episode-deduce-0'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("scope column");
+    assert_eq!(scope, "agent");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn approving_a_claim_does_not_lock_it_against_later_replaces() {
+    let path = temp_db("approve-unlock");
+    let store = open_store(&path);
+    seed_thread(&store, "thread-a");
+    insert_episode(
+        &store,
+        "episode-tea",
+        "thread-a",
+        "Owner: I prefer tea.\nMaia: Noted.",
+    );
+    insert_episode_at(
+        &store,
+        "episode-coffee",
+        "thread-a",
+        "Owner: I prefer coffee now.\nMaia: Noted.",
+        NOW + 1,
+        MemoryTaint::Untrusted,
+        MemoryTaint::Untrusted,
+    );
+    let mut promoter = ScriptedPromoter::create();
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner prefers tea."],"same":[],"replaces":[]}"#,
+    );
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner prefers coffee."],"same":[],"replaces":[]}"#,
+    );
+    let runner = PromotionRunner::new(
+        store,
+        promoter,
+        "fake-promoter",
+        PromotionCaps::default(),
+        Arc::new(|| NOW),
+    );
+    runner.promote_one().expect("tea");
+    runner
+        .store()
+        .confirm_claim("claim-episode-tea-0")
+        .expect("approve without lock");
+    let tea = runner
+        .store()
+        .brain_map()
+        .expect("map")
+        .nodes
+        .into_iter()
+        .find(|node| node.id == "claim-episode-tea-0")
+        .expect("tea");
+    assert!(!tea.detail.owner_edited);
+    assert!(tea.detail.confidence_millis.unwrap_or(0) >= 700);
+    runner.promote_one().expect("coffee");
+    let recall = bounded_recall(runner.store(), "prefer", Timestamp(NOW), None).expect("recall");
+    assert!(
+        recall
+            .items
+            .iter()
+            .any(|item| item.sentence.contains("coffee")),
+        "approved-but-unlocked tea should yield to coffee, got {:?}",
+        recall.items
+    );
+    assert!(
+        recall
+            .items
+            .iter()
+            .all(|item| !item.sentence.to_lowercase().contains("tea")),
+        "tea should be superseded after approve-without-lock, got {:?}",
+        recall.items
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn promotion_writes_a_relatedness_edge_and_an_entity_edge() {
     let path = temp_db("related");
     let store = open_store(&path);

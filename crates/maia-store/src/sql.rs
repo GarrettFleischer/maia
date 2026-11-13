@@ -191,6 +191,25 @@ pub(crate) const MIGRATION_V16: &[&str] = &[
     "CREATE INDEX idx_claim_tags_tag ON claim_tags (tag_id)",
 ];
 
+/// Migration 18 records conclusion kind and private-by-default scope on claims.
+///
+/// Existing rows stay current and are backfilled as world-scoped so today's
+/// shared-brain facts remain visible. New writes default to agent (private).
+pub(crate) const MIGRATION_V18: &[&str] = &[
+    "ALTER TABLE claims ADD COLUMN memory_kind TEXT NOT NULL DEFAULT 'explicit'",
+    "ALTER TABLE claims ADD COLUMN memory_scope TEXT NOT NULL DEFAULT 'agent'",
+    "ALTER TABLE claims ADD COLUMN observer_bot_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE claims ADD COLUMN subject_peer_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE claims ADD COLUMN learned_session_id TEXT NOT NULL DEFAULT ''",
+    "UPDATE claims SET memory_scope = 'world'",
+    "UPDATE claims SET subject_peer_id = subject WHERE subject != '' AND subject_peer_id = ''",
+    "UPDATE claims SET observer_bot_id = COALESCE((\
+        SELECT memory_provenance.bot_id FROM memory_provenance \
+        WHERE memory_provenance.target_kind = 'claim' \
+          AND memory_provenance.target_id = claims.claim_id\
+     ), '') WHERE observer_bot_id = ''",
+];
+
 /// Migration 17 drops tasks whose owner-message source was already deleted.
 ///
 /// A deleted bot used to remove chat rows while leaving the task. Restore then

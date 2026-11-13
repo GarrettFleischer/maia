@@ -297,6 +297,7 @@ fn promotion_request() -> PromotionWrite {
             taint: MemoryTaint::Untrusted,
             valid_from: 40,
             lexemes: vec!["obsidian".to_owned(), "vault".to_owned()],
+            ..Default::default()
         }],
         same_claim_ids: Vec::new(),
         replacements: Vec::new(),
@@ -407,7 +408,7 @@ fn owner_thread_is_named_maia_sqlite_and_shutdown_reopens() {
     db.reopen(11);
     assert_eq!(must(db.owner().thread_name()), "maia-sqlite");
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 17);
+    assert_eq!(settings.user_version, 18);
 }
 
 #[test]
@@ -463,16 +464,16 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
         db.file(),
         "SELECT CAST(version AS TEXT), name, CAST(applied_at AS TEXT) \
          FROM schema_migrations ORDER BY version",
-        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100\n11|brain_markdown|100\n12|neuron_fts_porter|100\n13|brain_memory|100\n14|brain_polish|100\n15|bots|100\n16|memory_tags|100",
+        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100\n11|brain_markdown|100\n12|neuron_fts_porter|100\n13|brain_memory|100\n14|brain_polish|100\n15|bots|100\n16|memory_tags|100\n17|purge_orphan_bot_tasks|100\n18|claim_kind_and_scope|100",
     );
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 17);
+    assert_eq!(settings.user_version, 18);
     db.reopen(250);
     assert_dump(
         db.file(),
         "SELECT CAST(version AS TEXT), name, CAST(applied_at AS TEXT) \
          FROM schema_migrations ORDER BY version",
-        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100\n11|brain_markdown|100\n12|neuron_fts_porter|100\n13|brain_memory|100\n14|brain_polish|100\n15|bots|100\n16|memory_tags|100",
+        "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100\n11|brain_markdown|100\n12|neuron_fts_porter|100\n13|brain_memory|100\n14|brain_polish|100\n15|bots|100\n16|memory_tags|100\n17|purge_orphan_bot_tasks|100\n18|claim_kind_and_scope|100",
     );
     db.shutdown();
 
@@ -502,12 +503,12 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
         &upgrade_file,
         "SELECT CAST(version AS TEXT), name, CAST(applied_at AS TEXT) \
          FROM schema_migrations ORDER BY version",
-        "1|schema_migrations|111\n2|durable_schema|222\n3|super_agent_schema|222\n4|message_submission_idempotency|222\n5|runtime_id_high_water|222\n6|model_connection|222\n7|router_turn_snapshots|222\n8|mcp_connections|222\n9|promotion_brain|222\n10|approvals_attachments|222\n11|brain_markdown|222\n12|neuron_fts_porter|222\n13|brain_memory|222\n14|brain_polish|222\n15|bots|222\n16|memory_tags|222",
+        "1|schema_migrations|111\n2|durable_schema|222\n3|super_agent_schema|222\n4|message_submission_idempotency|222\n5|runtime_id_high_water|222\n6|model_connection|222\n7|router_turn_snapshots|222\n8|mcp_connections|222\n9|promotion_brain|222\n10|approvals_attachments|222\n11|brain_markdown|222\n12|neuron_fts_porter|222\n13|brain_memory|222\n14|brain_polish|222\n15|bots|222\n16|memory_tags|222\n17|purge_orphan_bot_tasks|222\n18|claim_kind_and_scope|222",
     );
 
     let future = db.directory.join("future.sqlite");
     let connection = ready(Connection::open(&future));
-    ready(connection.pragma_update(None, "user_version", 17_i64));
+    ready(connection.pragma_update(None, "user_version", 19_i64));
     drop(connection);
     let opened = SqliteOwner::open(OwnerOpen {
         path: future.clone(),
@@ -518,13 +519,13 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
     assert_eq!(
         opened.err(),
         Some(StoreError::DatabaseTooNew {
-            found: 17,
-            supported: 16,
+            found: 19,
+            supported: 18,
         })
     );
     let connection = ready(Connection::open(&future));
     let version: i64 = ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-    assert_eq!(version, 17);
+    assert_eq!(version, 19);
     assert_dump(
         &future,
         "SELECT name FROM sqlite_master WHERE name = 'schema_migrations'",
@@ -538,7 +539,7 @@ fn initial_schema_matches_the_locked_catalog() {
     let settings = must(db.owner().connection_settings());
     assert_eq!(settings.journal_mode, "wal");
     assert_eq!(settings.foreign_keys, 1);
-    assert_eq!(settings.user_version, 17);
+    assert_eq!(settings.user_version, 18);
     db.shutdown();
     let actual = master_dump(db.file());
     let expected = include_str!("expected_schema.txt")
@@ -954,14 +955,16 @@ fn apply_promotion_same_and_replaces_is_atomic() {
                 taint: MemoryTaint::Untrusted,
                 valid_from: 40,
                 lexemes: vec!["vault".to_owned()],
-            },
+            ..Default::default()
+        },
             PromotionClaimWrite {
                 claim_id: "claim-old".to_owned(),
                 sentence: "Bob uses Obsidian.".to_owned(),
                 taint: MemoryTaint::Untrusted,
                 valid_from: 40,
                 lexemes: vec!["bob".to_owned()],
-            },
+            ..Default::default()
+        },
         ],
         same_claim_ids: Vec::new(),
         replacements: Vec::new(),
@@ -985,6 +988,7 @@ fn apply_promotion_same_and_replaces_is_atomic() {
             taint: MemoryTaint::Untrusted,
             valid_from: 50,
             lexemes: vec!["bob".to_owned(), "neovim".to_owned()],
+            ..Default::default()
         }],
         same_claim_ids: vec!["claim-same".to_owned()],
         replacements: vec![PromotionReplaceWrite {
@@ -1030,6 +1034,7 @@ fn apply_promotion_with_invalid_replacement_rolls_back_completely() {
             taint: MemoryTaint::Untrusted,
             valid_from: 40,
             lexemes: vec!["replacement".to_owned()],
+            ..Default::default()
         }],
         same_claim_ids: Vec::new(),
         replacements: vec![PromotionReplaceWrite {
@@ -1161,14 +1166,16 @@ fn nearest_claims_returns_bob_for_query_bob() {
                 taint: MemoryTaint::Untrusted,
                 valid_from: 40,
                 lexemes: vec!["alice".to_owned()],
-            },
+            ..Default::default()
+        },
             PromotionClaimWrite {
                 claim_id: "claim-bob".to_owned(),
                 sentence: "Bob opens the vault.".to_owned(),
                 taint: MemoryTaint::Untrusted,
                 valid_from: 40,
                 lexemes: vec!["bob".to_owned()],
-            },
+            ..Default::default()
+        },
         ],
         same_claim_ids: Vec::new(),
         replacements: Vec::new(),
@@ -1960,7 +1967,7 @@ fn concurrent_opens_of_one_path_share_one_migration_journal() {
             "SELECT CAST(version AS TEXT), CAST(applied_at AS TEXT) FROM schema_migrations ORDER BY version",
         );
         let lines: Vec<&str> = journal.lines().collect();
-        assert_eq!(lines.len(), 16, "journal for round {round}: {journal}");
+        assert_eq!(lines.len(), 18, "journal for round {round}: {journal}");
         for (index, line) in lines.iter().enumerate() {
             assert!(
                 line.starts_with(&format!("{}|", index + 1)),
@@ -1992,7 +1999,8 @@ fn seed_owner_brain(db: &TestDb) {
         taint: MemoryTaint::Untrusted,
         valid_from: 40,
         lexemes: vec!["router".to_owned()],
-    });
+            ..Default::default()
+        });
     must(db.owner().apply_promotion(promotion));
     must(
         db.owner()
@@ -2281,6 +2289,7 @@ fn nearest_claims_and_recall_omit_superseded_claims() {
             taint: MemoryTaint::Untrusted,
             valid_from: 40,
             lexemes: vec!["bob".to_owned(), "obsidian".to_owned()],
+            ..Default::default()
         }],
         same_claim_ids: Vec::new(),
         replacements: Vec::new(),
@@ -2303,6 +2312,7 @@ fn nearest_claims_and_recall_omit_superseded_claims() {
             taint: MemoryTaint::Untrusted,
             valid_from: 50,
             lexemes: vec!["bob".to_owned(), "neovim".to_owned()],
+            ..Default::default()
         }],
         same_claim_ids: Vec::new(),
         replacements: vec![PromotionReplaceWrite {
@@ -2353,21 +2363,24 @@ fn nearest_claim_vectors_keep_the_same_model_and_the_nearer_claim() {
                 taint: MemoryTaint::Trusted,
                 valid_from: 40,
                 lexemes: vec!["near".to_owned()],
-            },
+            ..Default::default()
+        },
             PromotionClaimWrite {
                 claim_id: "claim-far".to_owned(),
                 sentence: "The far claim.".to_owned(),
                 taint: MemoryTaint::Trusted,
                 valid_from: 40,
                 lexemes: vec!["far".to_owned()],
-            },
+            ..Default::default()
+        },
             PromotionClaimWrite {
                 claim_id: "claim-other".to_owned(),
                 sentence: "The other model claim.".to_owned(),
                 taint: MemoryTaint::Trusted,
                 valid_from: 40,
                 lexemes: vec!["other".to_owned()],
-            },
+            ..Default::default()
+        },
         ],
         same_claim_ids: Vec::new(),
         replacements: Vec::new(),

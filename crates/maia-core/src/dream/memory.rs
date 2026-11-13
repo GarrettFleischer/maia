@@ -215,15 +215,52 @@ pub fn near_duplicate(left: &str, right: &str) -> bool {
             .all(|(left_token, right_token)| same_keyword_term(left_token, right_token))
 }
 
-/// True when `newer` replaces `older`, such as a new home city.
+/// True when `newer` replaces `older` about the same subject and slot.
+///
+/// Place, preference, device, and decision sentences supersede when they share
+/// a frame (same subject and overlapping relation words) and differ in value.
+/// A neighbor fact about the same person in another category does not match.
 #[must_use]
 pub fn supersedes(older: &str, newer: &str) -> bool {
     if near_duplicate(older, newer) {
         return false;
     }
-    categorize(older) == FactCategory::Place
-        && categorize(newer) == FactCategory::Place
-        && subject_name(older) == subject_name(newer)
+    let category = categorize(older);
+    if category != categorize(newer) || subject_name(older) != subject_name(newer) {
+        return false;
+    }
+    match category {
+        FactCategory::Place
+        | FactCategory::Preference
+        | FactCategory::Device
+        | FactCategory::Decision => same_update_frame(older, newer),
+        FactCategory::Person
+        | FactCategory::Project
+        | FactCategory::Path
+        | FactCategory::Other => false,
+    }
+}
+
+/// Shared relation words with at least one differing value token on each side.
+fn same_update_frame(older: &str, newer: &str) -> bool {
+    let older_tokens = fact_tokens(older);
+    let newer_tokens = fact_tokens(newer);
+    if older_tokens.is_empty() || newer_tokens.is_empty() {
+        return false;
+    }
+    let shared = older_tokens
+        .iter()
+        .filter(|token| newer_tokens.iter().any(|other| other == *token))
+        .count();
+    let older_only = older_tokens
+        .iter()
+        .filter(|token| newer_tokens.iter().all(|other| other != *token))
+        .count();
+    let newer_only = newer_tokens
+        .iter()
+        .filter(|token| older_tokens.iter().all(|other| other != *token))
+        .count();
+    shared > 0 && older_only > 0 && newer_only > 0
 }
 
 /// Final visible reply. Scratch paragraphs are dropped. Empty when nothing remains.

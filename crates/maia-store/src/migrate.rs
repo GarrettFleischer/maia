@@ -28,9 +28,10 @@ use crate::sql::MIGRATION_V14;
 use crate::sql::MIGRATION_V15;
 use crate::sql::MIGRATION_V16;
 use crate::sql::MIGRATION_V17;
+use crate::sql::MIGRATION_V18;
 
 /// Highest `user_version` this binary can open.
-pub const LATEST_SCHEMA_VERSION: i64 = 17;
+pub const LATEST_SCHEMA_VERSION: i64 = 18;
 
 /// How long a second opener waits for the migration writer. This is SQLite's
 /// lock wait, not a process-global path mutex.
@@ -149,6 +150,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 17,
         name: "purge_orphan_bot_tasks",
         statements: MIGRATION_V17,
+    },
+    Migration {
+        version: 18,
+        name: "claim_kind_and_scope",
+        statements: MIGRATION_V18,
     },
 ];
 
@@ -301,7 +307,7 @@ mod tests {
         let connection = ready(Connection::open(&path));
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 16);
+        assert_eq!(version, 18);
         let mut statement = ready(
             connection
                 .prepare("SELECT version, applied_at FROM schema_migrations ORDER BY version"),
@@ -329,7 +335,9 @@ mod tests {
                 (13, 40),
                 (14, 40),
                 (15, 40),
-                (16, 40)
+                (16, 40),
+                (17, 40),
+                (18, 40)
             ]
         );
         let _ = fs::remove_dir_all(directory);
@@ -355,7 +363,7 @@ mod tests {
 
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 16);
+        assert_eq!(version, 18);
         let legacy: String = ready(connection.query_row(
             "SELECT body FROM router_messages WHERE message_id = 'legacy-message'",
             [],
@@ -386,6 +394,7 @@ mod tests {
         ready(connection.execute_batch(&format!(
             "PRAGMA foreign_keys = OFF;
              INSERT INTO router_messages VALUES ('m-{m1}', 1, 'user', 'legacy', 1);
+             INSERT INTO router_messages VALUES ('m-{m2}', 2, 'user', 'legacy-2', 2);
              INSERT INTO task_sessions VALUES
                ('task-{task}', 'abandoned:decision-{decision}', 'legacy', 'unpinned',
                 'closed_once', NULL, 1);
@@ -471,7 +480,7 @@ mod tests {
         assert_eq!(ordinals, "0,1");
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 16);
+        assert_eq!(version, 18);
         drop(connection);
         let _ = fs::remove_dir_all(directory);
     }

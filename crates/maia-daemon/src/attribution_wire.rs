@@ -323,14 +323,16 @@ mod tests {
                         taint: MemoryTaint::Trusted,
                         valid_from: 100,
                         lexemes: vec!["portland".to_owned(), "kitchen".to_owned()],
-                    },
+            ..Default::default()
+        },
                     PromotionClaimWrite {
                         claim_id: "claim-far".to_owned(),
                         sentence: "Zephyr holds the indigo token.".to_owned(),
                         taint: MemoryTaint::Trusted,
                         valid_from: 100,
                         lexemes: vec!["zephyr".to_owned(), "indigo".to_owned(), "token".to_owned()],
-                    },
+            ..Default::default()
+        },
                 ],
                 same_claim_ids: Vec::new(),
                 replacements: Vec::new(),

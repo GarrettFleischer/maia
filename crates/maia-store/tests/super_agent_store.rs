@@ -865,16 +865,16 @@ fn closed_detail_high_water_survives_restart() {
 
 #[test]
 fn fresh_open_is_schema_version_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 17);
+    assert_eq!(LATEST_SCHEMA_VERSION, 18);
     let db = TestDb::open("version", 1);
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 17);
+    assert_eq!(settings.user_version, 18);
     let rows = must(db.owner().migrations());
-    assert_eq!(rows.len(), 17);
-    assert_eq!(rows.last().map(|row| row.version), Some(17));
+    assert_eq!(rows.len(), 18);
+    assert_eq!(rows.last().map(|row| row.version), Some(18));
     assert_eq!(
         rows.last().map(|row| row.name.as_str()),
-        Some("purge_orphan_bot_tasks")
+        Some("claim_kind_and_scope")
     );
 }
 
@@ -1956,6 +1956,7 @@ fn bots_keep_separate_histories_and_share_one_brain() {
             taint: MemoryTaint::Trusted,
             valid_from: 16,
             lexemes: vec!["garrett".to_owned(), "canby".to_owned()],
+            ..Default::default()
         }],
         same_claim_ids: Vec::new(),
         replacements: Vec::new(),

@@ -1155,6 +1155,10 @@ enum ActorCall {
         sentence: String,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
+    ConfirmClaim {
+        claim_id: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
     MemoryTags {
         change: maia_store::MemoryTagChange,
         reply: oneshot::Sender<Result<Value, ApiError>>,
@@ -1809,6 +1813,9 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
             reply,
         } => {
             let _ = reply.send(edit_claim(actor, claim_id, sentence));
+        }
+        ActorCall::ConfirmClaim { claim_id, reply } => {
+            let _ = reply.send(confirm_claim(actor, claim_id));
         }
         ActorCall::MemoryTags { change, reply } => {
             let _ = reply.send(change_memory_tags(actor, change));
@@ -2509,6 +2516,10 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
         )
         .route("/brain/claims/{claim_id}/tags", put(put_claim_tags))
         .route("/brain/claims/{claim_id}", patch(patch_claim))
+        .route(
+            "/brain/claims/{claim_id}/confirm",
+            post(confirm_claim_route),
+        )
         .route("/brain/claims/{claim_id}/forget", post(forget_claim_route))
         .route(
             "/brain/claims/{claim_id}/restore",
@@ -3311,6 +3322,13 @@ async fn patch_claim(
     )
 }
 
+async fn confirm_claim_route(
+    State(state): State<AppState>,
+    Path(claim_id): Path<String>,
+) -> Response {
+    finish(ask(&state, |reply| ActorCall::ConfirmClaim { claim_id, reply }).await)
+}
+
 async fn forget_claim_route(
     State(state): State<AppState>,
     Path(claim_id): Path<String>,
@@ -3541,6 +3559,15 @@ fn edit_claim<R: RouterPort>(
         .edit_claim(claim_id, sentence)
         .map_err(map_brain_store)?;
     Ok(brain_map_value(&edited.value, false))
+}
+
+fn confirm_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String) -> Result<Value, ApiError> {
+    let confirmed = actor
+        .host
+        .store()
+        .confirm_claim(claim_id)
+        .map_err(map_brain_store)?;
+    Ok(brain_map_value(&confirmed.value, false))
 }
 
 fn forget_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String) -> Result<Value, ApiError> {

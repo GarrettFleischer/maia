@@ -127,15 +127,21 @@ pub(crate) fn apply_promotion(
         });
     }
     for claim in &request.claims {
+        let memory_kind = normalize_memory_kind(&claim.memory_kind);
+        let memory_scope = normalize_memory_scope(&claim.memory_scope);
         transaction.execute(
-            "INSERT INTO claims (claim_id, sentence, episode_id, taint, status, valid_from, consolidated_by) \
-             VALUES (?1, ?2, ?3, ?4, 'provisional', ?5, NULL)",
+            "INSERT INTO claims (claim_id, sentence, episode_id, taint, status, valid_from, consolidated_by, \
+             memory_kind, memory_scope, observer_bot_id, subject_peer_id, learned_session_id) \
+             VALUES (?1, ?2, ?3, ?4, 'provisional', ?5, NULL, ?6, ?7, ?8, '', '')",
             params![
                 claim.claim_id,
                 claim.sentence,
                 request.episode_id,
                 claim.taint.as_str(),
-                claim.valid_from
+                claim.valid_from,
+                memory_kind,
+                memory_scope,
+                claim.observer_bot_id
             ],
         )?;
         transaction.execute(
@@ -162,7 +168,13 @@ pub(crate) fn apply_promotion(
                 params![claim.claim_id, lexeme],
             )?;
         }
-        crate::memory_cleanup::annotate_new_claim(&transaction, &claim.claim_id, &claim.sentence)?;
+        crate::memory_cleanup::annotate_new_claim(
+            &transaction,
+            &claim.claim_id,
+            &claim.sentence,
+            memory_kind,
+            claim.flagged_beside_lock,
+        )?;
     }
     for claim_id in &request.same_claim_ids {
         let found: Option<i64> = transaction
@@ -1055,4 +1067,20 @@ pub(crate) fn entity_slugs(connection: &Connection) -> Result<Vec<EntitySlugRow>
         rows.push(row?);
     }
     Ok(rows)
+}
+
+fn normalize_memory_kind(kind: &str) -> &str {
+    match kind {
+        "deduction" => "deduction",
+        "induced" => "induced",
+        _ => "explicit",
+    }
+}
+
+fn normalize_memory_scope(scope: &str) -> &str {
+    match scope {
+        "world" => "world",
+        "session" => "session",
+        _ => "agent",
+    }
 }

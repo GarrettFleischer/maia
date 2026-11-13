@@ -230,6 +230,14 @@ pub struct PromotionClaimWrite {
     pub valid_from: i64,
     /// Lexeme ids derived by the caller.
     pub lexemes: Vec<String>,
+    /// `explicit`, `deduction`, or `induced`.
+    pub memory_kind: String,
+    /// `world`, `agent`, or `session`. New writes default to `agent` (private).
+    pub memory_scope: String,
+    /// Super Agent that learned this claim, when known.
+    pub observer_bot_id: String,
+    /// True when this sentence was stored beside an owner-locked claim it could not replace.
+    pub flagged_beside_lock: bool,
 }
 
 /// Claim replacement applied inside one promotion transaction.
@@ -2334,6 +2342,22 @@ impl fmt::Debug for EpisodeWrite {
     }
 }
 
+impl Default for PromotionClaimWrite {
+    fn default() -> Self {
+        Self {
+            claim_id: String::new(),
+            sentence: String::new(),
+            taint: MemoryTaint::Untrusted,
+            valid_from: 0,
+            lexemes: Vec::new(),
+            memory_kind: "explicit".to_owned(),
+            memory_scope: "agent".to_owned(),
+            observer_bot_id: String::new(),
+            flagged_beside_lock: false,
+        }
+    }
+}
+
 impl fmt::Debug for PromotionClaimWrite {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2342,6 +2366,10 @@ impl fmt::Debug for PromotionClaimWrite {
             .field("taint", &self.taint)
             .field("valid_from", &self.valid_from)
             .field("lexemes", &self.lexemes)
+            .field("memory_kind", &self.memory_kind)
+            .field("memory_scope", &self.memory_scope)
+            .field("observer_bot_id", &self.observer_bot_id)
+            .field("flagged_beside_lock", &self.flagged_beside_lock)
             .field(
                 "sentence",
                 &Redacted {

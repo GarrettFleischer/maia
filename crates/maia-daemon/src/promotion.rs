@@ -545,12 +545,25 @@ impl<P: PromoterModel> PromotionRunner<P> {
         }
         let mut decision = decision;
         reconcile_claims(&mut decision, &nearest);
+        let mut blocked_new = Vec::new();
+        let mut flagged_sentences = BTreeSet::new();
         decision.replaces.retain(|item| {
-            !self
+            let locked = self
                 .store
                 .claim_owner_edited(item.old.as_str())
-                .unwrap_or(true)
+                .unwrap_or(true);
+            if locked {
+                flagged_sentences.insert(item.sentence.clone());
+                blocked_new.push(maia_core::dream::NewClaimDraft {
+                    sentence: item.sentence.clone(),
+                    kind: maia_core::dream::ClaimKind::Explicit,
+                });
+                false
+            } else {
+                true
+            }
         });
+        decision.new.extend(blocked_new);
         if decision.new.is_empty() && decision.replaces.is_empty() && decision.same.is_empty() {
             self.store
                 .mark_promotion_skipped(&episode.episode_id, now, &self.model_name)?;
@@ -591,19 +604,40 @@ impl<P: PromoterModel> PromotionRunner<P> {
             Err(_) => return self.queue_retry(&episode.episode_id, now),
         };
         let taint = episode_memory_taint(&episode);
+        let mut kind_by_sentence = std::collections::BTreeMap::new();
+        for draft in &decision.new {
+            kind_by_sentence.insert(draft.sentence.clone(), draft.kind);
+        }
+        let observer_bot_id = match self.store.bots(maia_store::BotRequest::Provenance {
+            target_kind: "episode".to_owned(),
+            target_id: episode.episode_id.clone(),
+        }) {
+            Ok(maia_store::BotResponse::Provenance(Some(source))) => source.bot_id,
+            _ => String::new(),
+        };
         let claims: Vec<PromotionClaimWrite> = commit
             .claims
             .iter()
-            .map(|claim| PromotionClaimWrite {
-                claim_id: claim.id.as_str().to_owned(),
-                sentence: claim.sentence.clone(),
-                taint,
-                valid_from: claim.valid_from.0,
-                lexemes: claim
-                    .lexemes
-                    .iter()
-                    .map(|lexeme| lexeme.as_str().to_owned())
-                    .collect(),
+            .map(|claim| {
+                let kind = kind_by_sentence
+                    .get(&claim.sentence)
+                    .copied()
+                    .unwrap_or(maia_core::dream::ClaimKind::Explicit);
+                PromotionClaimWrite {
+                    claim_id: claim.id.as_str().to_owned(),
+                    sentence: claim.sentence.clone(),
+                    taint,
+                    valid_from: claim.valid_from.0,
+                    lexemes: claim
+                        .lexemes
+                        .iter()
+                        .map(|lexeme| lexeme.as_str().to_owned())
+                        .collect(),
+                    memory_kind: kind.as_str().to_owned(),
+                    memory_scope: "agent".to_owned(),
+                    observer_bot_id: observer_bot_id.clone(),
+                    flagged_beside_lock: flagged_sentences.contains(&claim.sentence),
+                }
             })
             .collect();
         let links = promotion_links(&self.store, &claims, &nearest, self.embedder.as_deref())?;
@@ -843,15 +877,15 @@ fn reconcile_claims(
     use maia_core::dream::supersedes;
     decision
         .new
-        .retain(|sentence| judge_claim(sentence) == ClaimJudgment::Keep);
+        .retain(|draft| judge_claim(&draft.sentence) == ClaimJudgment::Keep);
     decision
         .replaces
         .retain(|item| judge_claim(&item.sentence) == ClaimJudgment::Keep);
     let mut fresh = Vec::new();
-    for sentence in std::mem::take(&mut decision.new) {
+    for draft in std::mem::take(&mut decision.new) {
         if let Some(existing) = nearest
             .iter()
-            .find(|claim| near_duplicate(&sentence, &claim.sentence))
+            .find(|claim| near_duplicate(&draft.sentence, &claim.sentence))
         {
             let id = ClaimId::new(existing.claim_id.clone());
             if !decision.same.iter().any(|item| item == &id) {
@@ -861,15 +895,18 @@ fn reconcile_claims(
         }
         if let Some(existing) = nearest
             .iter()
-            .find(|claim| supersedes(&claim.sentence, &sentence))
+            .find(|claim| supersedes(&claim.sentence, &draft.sentence))
         {
             let id = ClaimId::new(existing.claim_id.clone());
             if !decision.replaces.iter().any(|item| item.old == id) {
-                decision.replaces.push(ReplaceDraft { old: id, sentence });
+                decision.replaces.push(ReplaceDraft {
+                    old: id,
+                    sentence: draft.sentence,
+                });
             }
             continue;
         }
-        fresh.push(sentence);
+        fresh.push(draft);
     }
     decision.new = fresh;
 }

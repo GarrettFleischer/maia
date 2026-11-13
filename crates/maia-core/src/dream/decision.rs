@@ -12,6 +12,47 @@ use crate::dream::sentence::validate_sentence;
 /// Maximum characters allowed in one promoted sentence.
 pub const MAX_CLAIM_SENTENCE_CHARS: usize = 280;
 
+/// How a conclusion was formed. Induced rows are dream-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimKind {
+    /// Said or restated by the owner or the reply.
+    Explicit,
+    /// Direct deduction from the episode.
+    Deduction,
+    /// Pattern induction from a dream. Not written online.
+    Induced,
+}
+
+impl ClaimKind {
+    /// Stable wire and column value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::Deduction => "deduction",
+            Self::Induced => "induced",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "explicit" => Some(Self::Explicit),
+            "deduction" => Some(Self::Deduction),
+            "induced" => Some(Self::Induced),
+            _ => None,
+        }
+    }
+}
+
+/// One new conclusion draft. Strings in JSON default to [`ClaimKind::Explicit`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewClaimDraft {
+    /// One-sentence claim text.
+    pub sentence: String,
+    /// Explicit or deduction. Induced is rejected online.
+    pub kind: ClaimKind,
+}
+
 /// One replace draft: close an existing claim and insert a successor sentence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceDraft {
@@ -27,7 +68,7 @@ pub struct PromotionDecision {
     /// Model asks to write nothing.
     pub skip: bool,
     /// New one-sentence claims.
-    pub new: Vec<String>,
+    pub new: Vec<NewClaimDraft>,
     /// Existing claim ids that are merely repeated.
     pub same: Vec<ClaimId>,
     /// Existing claims to close with a successor sentence.
@@ -38,6 +79,7 @@ pub struct PromotionDecision {
 ///
 /// A code fence or short preamble may wrap the object. The object itself is
 /// still rejected for unknown fields, missing fields, and tool channels.
+/// Items in `new` may be a sentence string or `{"sentence","kind"}`.
 pub fn parse_promotion_decision(response: &str) -> Result<PromotionDecision, PromotionError> {
     let text = json_object_text(response).ok_or(PromotionError::Malformed)?;
     let value = parse_json(text).ok_or(PromotionError::Malformed)?;
@@ -56,10 +98,7 @@ pub fn parse_promotion_decision(response: &str) -> Result<PromotionDecision, Pro
         Some(Json::Bool(value)) => *value,
         Some(_) => return Err(PromotionError::InvalidType),
     };
-    let new = string_array(map.get("new").ok_or(PromotionError::MissingField)?)?;
-    for sentence in &new {
-        validate_decision_sentence(sentence)?;
-    }
+    let new = new_claim_array(map.get("new").ok_or(PromotionError::MissingField)?)?;
     let same = id_array(map.get("same").ok_or(PromotionError::MissingField)?)?;
     let replaces = replace_array(map.get("replaces").ok_or(PromotionError::MissingField)?)?;
     Ok(PromotionDecision {
@@ -124,18 +163,49 @@ fn validate_decision_sentence(sentence: &str) -> Result<(), PromotionError> {
     Ok(())
 }
 
-fn string_array(value: &Json) -> Result<Vec<String>, PromotionError> {
+fn new_claim_array(value: &Json) -> Result<Vec<NewClaimDraft>, PromotionError> {
     let Json::Array(items) = value else {
         return Err(PromotionError::InvalidType);
     };
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        let Json::String(text) = item else {
-            return Err(PromotionError::InvalidType);
-        };
-        out.push(text.clone());
+        out.push(parse_new_claim(item)?);
     }
     Ok(out)
+}
+
+fn parse_new_claim(value: &Json) -> Result<NewClaimDraft, PromotionError> {
+    match value {
+        Json::String(text) => {
+            validate_decision_sentence(text)?;
+            Ok(NewClaimDraft {
+                sentence: text.clone(),
+                kind: ClaimKind::Explicit,
+            })
+        }
+        Json::Object(map) => {
+            const ALLOWED: [&str; 2] = ["sentence", "kind"];
+            if map.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+                return Err(PromotionError::UnknownField);
+            }
+            let sentence = match map.get("sentence") {
+                None => return Err(PromotionError::MissingField),
+                Some(Json::String(text)) => text.clone(),
+                Some(_) => return Err(PromotionError::InvalidType),
+            };
+            validate_decision_sentence(&sentence)?;
+            let kind = match map.get("kind") {
+                None => ClaimKind::Explicit,
+                Some(Json::String(text)) => match ClaimKind::parse(text) {
+                    Some(ClaimKind::Induced) | None => return Err(PromotionError::InvalidType),
+                    Some(kind) => kind,
+                },
+                Some(_) => return Err(PromotionError::InvalidType),
+            };
+            Ok(NewClaimDraft { sentence, kind })
+        }
+        _ => Err(PromotionError::InvalidType),
+    }
 }
 
 fn id_array(value: &Json) -> Result<Vec<ClaimId>, PromotionError> {

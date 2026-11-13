@@ -153,6 +153,7 @@ fn live_recall_export_and_autolink_on_a_temp_database() {
             },
             valid_from: NOW,
             lexemes: note_lexemes(sentence),
+            ..Default::default()
         })
         .collect::<Vec<_>>();
     store
