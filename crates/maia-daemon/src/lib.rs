@@ -26,8 +26,8 @@ pub use http::{
     HttpIdSupply, HttpIdSupplyError, ModelKeyError, ModelListError, ModelLister, ModelPorts,
     RouterKeyStore, RuntimeRouter, ServeFailure, ServerShutdown, SuperAgentServer,
     coalesce_sidebar, discover_model_id, discover_model_id_bounded, live_model_lister,
-    native_router_key_store, parse_model_ids, serve_super_agent_with_ids,
-    serve_super_agent_with_model, ui_bind_addr,
+    native_router_key_store, parse_model_ids, serve_super_agent_with_caps,
+    serve_super_agent_with_ids, serve_super_agent_with_model, ui_bind_addr,
 };
 pub use inspector::{PackedRecall, RecallKind, RecallLine};
 pub use live_reply::{LiveReplyBoard, attach_live_reply};
@@ -52,7 +52,8 @@ pub use promoter_env::{
 pub use promotion::{
     ClaimEmbedder, ClaimEmbedderIdentity, CoreClaimEmbedder, EmbedFailure, PromoterModel,
     PromotionAttempt, PromotionCaps, PromotionRunner, RecallArms, RouterPromoter, ScriptedPromoter,
-    bounded_recall, open_candle_claim_embedder, recall_run,
+    bounded_recall, extraction_paused_for_day, open_candle_claim_embedder, promotion_day_key,
+    recall_run,
 };
 pub use scripted_tools::{
     ApprovalKind, CompletionEvidence, ScriptedCall, ScriptedToolHost, ToolHostError,

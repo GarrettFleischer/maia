@@ -196,7 +196,7 @@ impl<R: Router> Orchestrator<R> {
                 return WorkerDrive::Done(self.pause_stuck(machine, &brief));
             }
         };
-        if let Err(error) = self.insert_user_message(&message, &brief) {
+        if let Err(error) = self.insert_user_message(&message, &brief, &[]) {
             self.record_activity(format!("Handoff could not start: {error:?}"), Some(&task));
             return WorkerDrive::Done(self.pause_stuck(machine, &brief));
         }

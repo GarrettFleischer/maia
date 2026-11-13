@@ -1147,6 +1147,31 @@ fn pending_promotions_exclude_promoted_and_quarantined_and_failures_stay_searcha
 }
 
 #[test]
+fn extraction_lag_counts_waiting_and_quarantined_without_dropping_work() {
+    let db = TestDb::open("extraction-lag", 60);
+    must(db.owner().append(append_request(
+        0,
+        61,
+        vec![thread_event("event-1", "user", "hi")],
+    )));
+    must(db.owner().insert_episode(episode_request()));
+    let mut episode_two = episode_request();
+    episode_two.episode_id = "episode-2".to_owned();
+    episode_two.turn_id = "turn-2".to_owned();
+    episode_two.body = "Second episode body".to_owned();
+    episode_two.created_at = 45;
+    episode_two.segments[0].text = "Second episode body".to_owned();
+    must(db.owner().insert_episode(episode_two));
+    must(db.owner().note_promotion_failure("episode-2", 1));
+
+    let lag = must(db.owner().extraction_lag());
+    assert_eq!(lag.waiting, 1);
+    assert_eq!(lag.quarantined, 1);
+    assert_eq!(lag.oldest_waiting_at, Some(40));
+    assert_eq!(lag.quarantined_episode_ids, vec!["episode-2".to_owned()]);
+}
+
+#[test]
 fn nearest_claims_returns_bob_for_query_bob() {
     let db = TestDb::open("promo-nearest", 60);
     must(db.owner().append(append_request(

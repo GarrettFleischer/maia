@@ -36,7 +36,7 @@ use maia_daemon::parse_reasoning_effort;
 use maia_daemon::read_model_env;
 use maia_daemon::read_promoter_env;
 use maia_daemon::router_from_connection;
-use maia_daemon::serve_super_agent_with_model;
+use maia_daemon::serve_super_agent_with_caps;
 use maia_daemon::streaming_router_from_connection;
 use maia_daemon::validate_runtime_snapshot;
 use maia_router::ReplyProgress;
@@ -172,6 +172,11 @@ fn boot() -> Result<(), BootError> {
     .map_err(|_| BootError::Store)?;
     probe_vector_tables(&store)?;
     let promoter = load_promoter_env()?;
+    let promotion_caps = PromotionCaps {
+        daily_call_cap: promoter.daily_call_cap(),
+        daily_token_cap: promoter.daily_token_cap(),
+        failure_limit: 3,
+    };
     let promo_store = SqliteOwner::open(OwnerOpen {
         path: database.clone(),
         now,
@@ -190,11 +195,7 @@ fn boot() -> Result<(), BootError> {
         promo_store,
         RouterPromoter::new(promo_router, promoter.model()),
         promoter.model(),
-        PromotionCaps {
-            daily_call_cap: promoter.daily_call_cap(),
-            daily_token_cap: promoter.daily_token_cap(),
-            failure_limit: 3,
-        },
+        promotion_caps,
         Arc::new(unix_seconds),
     );
     if let Some(embedder) = embedder.clone() {
@@ -275,7 +276,7 @@ fn boot() -> Result<(), BootError> {
     } else {
         Some(chosen.api_key)
     };
-    let server = serve_super_agent_with_model(
+    let server = serve_super_agent_with_caps(
         orchestrator,
         database,
         PathBuf::from("frontend").join("dist"),
@@ -290,6 +291,7 @@ fn boot() -> Result<(), BootError> {
             mcp_secrets: std::sync::Arc::new(maia_daemon::NativeMcpSecretStore),
             reply_progress: Some(progress),
         },
+        promotion_caps,
     )
     .map_err(|_| BootError::Server)?;
     server.wait();

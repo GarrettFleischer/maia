@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   brainStatusLine,
+  memoryBehindLine,
   type BrainIndex,
   type BrainMap,
   type BrainMapClient,
@@ -92,6 +93,8 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
   if (error && !map) return <p role="alert">{error}</p>
   if (!map) return <p role="status">Loading the brain.</p>
 
+  const behind = memoryBehindLine(map.extraction)
+
   const runSearch = () => {
     const text = query.trim()
     if (!client.search || text.length === 0) {
@@ -151,6 +154,11 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           }}
         />
       </div>
+      {behind ? (
+        <p role="status" className="maia-brain-behind" data-testid="memory-behind">
+          {behind}
+        </p>
+      ) : null}
       {error ? <p role="alert">{error}</p> : null}
       {view === 'memory' ? (
         <MemoryList

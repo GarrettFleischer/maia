@@ -2889,10 +2889,20 @@ fn a_router_turn_stores_the_sent_slots_and_an_unreported_cache() {
         ),
         0
     );
-    assert_eq!(count(&harness.database, "SELECT COUNT(*) FROM episodes"), 1);
     assert_eq!(
-        scalar(&harness.database, "SELECT thread_id FROM episodes"),
-        "router"
+        count(
+            &harness.database,
+            "SELECT COUNT(*) FROM episodes WHERE thread_id = 'router'"
+        ),
+        1,
+        "completed chat turn must enqueue exactly one episode"
+    );
+    assert_eq!(
+        scalar(
+            &harness.database,
+            "SELECT body FROM episodes WHERE thread_id = 'router'"
+        ),
+        "Owner: Hello\nMaia: Hello from Maia."
     );
     harness.host.take();
     assert_eq!(
@@ -2972,12 +2982,90 @@ fn a_stored_claim_is_packed_into_the_router_request() {
             .contains("Obsidian opens the vault.")
     );
     assert_eq!(count(&harness.database, "SELECT COUNT(*) FROM claims"), 1);
+    let router_episodes = count(
+        &harness.database,
+        "SELECT COUNT(*) FROM episodes WHERE thread_id = 'router'",
+    );
+    assert_eq!(
+        router_episodes, 1,
+        "completed chat turn must enqueue exactly one episode after the reply is stored"
+    );
+}
+
+#[test]
+fn a_running_task_handoff_does_not_enqueue_extraction() {
+    let mut harness = Harness::open("no-extract-while-running", prompt_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    let outcome = wait(harness.host().handle_user_message(
+        "For slice2 while-running I prefer oat milk. Please start a task.",
+    ))
+    .expect("spawn");
+    let task = outcome.task.expect("task");
+    assert!(
+        matches!(
+            harness.host().phase(&task),
+            Some(TaskPhase::Queued | TaskPhase::Running { .. })
+        ),
+        "task should still be open: {:?}",
+        harness.host().phase(&task)
+    );
     assert_eq!(
         count(
             &harness.database,
             "SELECT COUNT(*) FROM episodes WHERE thread_id = 'router'"
         ),
-        1
+        0,
+        "nothing must be extracted from a running task's intermediate steps"
+    );
+}
+
+#[test]
+fn a_finished_task_enqueues_one_completion_episode() {
+    let mut harness = Harness::open("extract-on-task-finish", prompt_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    let outcome = wait(
+        harness
+            .host()
+            .handle_user_message("For slice2 task finish I prefer oat milk."),
+    )
+    .expect("spawn");
+    let task = outcome.task.expect("task");
+    assert_eq!(
+        count(
+            &harness.database,
+            "SELECT COUNT(*) FROM episodes WHERE thread_id = 'router'"
+        ),
+        0,
+        "spawn must not extract while the task is still open"
+    );
+    harness
+        .host()
+        .tools()
+        .push_parent(ScriptedCall::Completion {
+            summary: "The owner prefers oat milk for slice2 task finish.".to_owned(),
+            evidence: CompletionEvidence::Stored,
+        });
+    let done = harness.host().step_parent(&task).expect("complete");
+    assert!(
+        matches!(done.phase, TaskPhase::Completed { .. }),
+        "task should finish: {:?}",
+        done.phase
+    );
+    let episodes = count(
+        &harness.database,
+        "SELECT COUNT(*) FROM episodes WHERE thread_id = 'router'",
+    );
+    assert_eq!(
+        episodes, 1,
+        "finished task must enqueue exactly one completion episode"
+    );
+    let body = scalar(
+        &harness.database,
+        "SELECT body FROM episodes WHERE thread_id = 'router'",
+    );
+    assert!(
+        body.contains("oat milk"),
+        "completion episode must cover the owner fact: {body}"
     );
 }
 
@@ -3853,7 +3941,10 @@ fn an_attachment_is_a_separate_untrusted_message_and_episode_segment() {
             created_at: NOW,
         })
         .expect("attachment row");
-    harness.router.push_proposal(create_task(900, 200, &[]));
+    harness.router.push_tool(
+        "success",
+        &success_arguments("I read the attached note."),
+    );
     wait(harness.host().handle_user_message_with_attachments(
         USER_TEXT,
         &[StagedAttachment {

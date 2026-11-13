@@ -2069,6 +2069,16 @@ fn is_terminal(phase: &TaskPhase) -> bool {
     )
 }
 
+fn memory_unit_finished(phase: &TaskPhase) -> bool {
+    matches!(
+        phase,
+        TaskPhase::Completed { .. }
+            | TaskPhase::Failed { .. }
+            | TaskPhase::Cancelled { .. }
+            | TaskPhase::Abandoned { .. }
+    )
+}
+
 fn log_failure_class(class: RouterFailureClass) {
     eprintln!("{}", class.redacted_log());
     let _ = std::io::Write::flush(&mut std::io::stderr());
@@ -3796,7 +3806,7 @@ impl<R: Router> Orchestrator<R> {
         attachments: &[StagedAttachment],
     ) -> Result<MessageOutcome, OrchestratorError> {
         let message = MessageId(self.ids.pop_message()?);
-        self.insert_user_message(&message, text)?;
+        self.insert_user_message(&message, text, attachments)?;
         Ok(self
             .process_admitted_message(message, text, attachments)
             .await)
@@ -3880,7 +3890,7 @@ impl<R: Router> Orchestrator<R> {
             MessageSubmissionState::New { .. } => {
                 let _ = self.store.bots(maia_store::BotRequest::BindMessage {
                     message_id: message.0.clone(),
-                    bot_id,
+                    bot_id: bot_id.clone(),
                     preview: text.to_owned(),
                     now: self.ids.now,
                     from_owner: true,
@@ -4391,6 +4401,7 @@ impl<R: Router> Orchestrator<R> {
             measured,
             &usage,
             &shown,
+            task.as_ref(),
         ) {
             return self.admitted_failure(message, error);
         }
@@ -4700,6 +4711,8 @@ impl<R: Router> Orchestrator<R> {
             }],
             children,
         })?;
+        let outcome = self.task_outcome_text(task, &next);
+        self.enqueue_task_memory_if_finished(task, &current, &next, &outcome);
         self.phases.insert(task.clone(), next.clone());
         Ok(next)
     }
@@ -4741,7 +4754,9 @@ impl<R: Router> Orchestrator<R> {
             children,
         })?;
         let mut applied = None;
-        for (task, _, next) in planned {
+        for (task, current, next) in planned {
+            let outcome = self.task_outcome_text(&task, &next);
+            self.enqueue_task_memory_if_finished(&task, &current, &next, &outcome);
             self.phases.insert(task.clone(), next.clone());
             applied = Some(next);
         }
@@ -4815,8 +4830,19 @@ impl<R: Router> Orchestrator<R> {
         measured: &MeasuredPrompt,
         usage: &RouterUsage,
         shown: &ShownRouterTurn<'_>,
+        task: Option<&TaskId>,
     ) -> Result<(), OrchestratorError> {
-        self.store_router_episode(message, owner_text, shown, thinking)?;
+        // Task units extract only when the task finishes. Chat turns extract here.
+        if task.is_none() {
+            self.store_completed_unit_episode(
+                &format!("episode-{}", message.0),
+                &message.0,
+                owner_text,
+                &shown.reply,
+                shown.attachments,
+                &self.turn_bot,
+            )?;
+        }
         let slots = prompt_slots(measured, cache_residence(usage));
         let slots_json = serde_json::to_string(&slots).map_err(|_| snapshot_error())?;
         let usage_json = usage_json(usage).map_err(|_| snapshot_error())?;
@@ -4844,43 +4870,49 @@ impl<R: Router> Orchestrator<R> {
         Ok(())
     }
 
-    fn store_router_episode(
+    /// Single completion hook for extraction (slice 4 can add session summary here).
+    fn store_completed_unit_episode(
         &self,
-        message: &MessageId,
+        episode_id: &str,
+        turn_id: &str,
         owner_text: &str,
-        shown: &ShownRouterTurn<'_>,
-        thinking: Option<&str>,
+        final_text: &str,
+        attachments: &[StagedAttachment],
+        bot_id: &str,
     ) -> Result<(), OrchestratorError> {
         self.ensure_router_thread()?;
+        let (body, hide) = maia_core::dream::episode_record(owner_text, final_text);
+        if body.is_empty() {
+            return Ok(());
+        }
         let mut segments = vec![SegmentWrite {
             text: owner_text.to_owned(),
             taint: MemoryTaint::Trusted,
             sources: "owner".to_owned(),
         }];
-        for attachment in shown.attachments {
+        for attachment in attachments {
             segments.push(SegmentWrite {
                 text: attachment.note.clone(),
                 taint: MemoryTaint::Untrusted,
                 sources: "attachment".to_owned(),
             });
         }
-        if !shown.reply.is_empty() {
+        if !final_text.trim().is_empty() {
             segments.push(SegmentWrite {
-                text: shown.reply.clone(),
+                text: final_text.to_owned(),
                 taint: MemoryTaint::Trusted,
                 sources: "router".to_owned(),
             });
         }
-        let taint = if shown.attachments.is_empty() {
+        let taint = if attachments.is_empty() {
             MemoryTaint::Trusted
         } else {
             MemoryTaint::Untrusted
         };
-        let (body, hide) = maia_core::dream::episode_record(owner_text, &shown.reply);
         self.store.insert_episode(EpisodeWrite {
-            episode_id: format!("episode-{}", message.0),
+            episode_id: episode_id.to_owned(),
             thread_id: ROUTER_THREAD.to_owned(),
-            turn_id: message.0.clone(),
+            turn_id: turn_id.to_owned(),
             body,
             taint,
             reasoning: None,
@@ -4889,19 +4921,93 @@ impl<R: Router> Orchestrator<R> {
             segments,
         })?;
         if let Some(reason) = hide {
-            let _ = self
-                .store
-                .hide_episode(format!("episode-{}", message.0), reason);
+            let _ = self.store.hide_episode(episode_id.to_owned(), reason);
         }
         let _ = self.store.bots(maia_store::BotRequest::NoteProvenance {
             target_kind: "episode".to_owned(),
-            target_id: format!("episode-{}", message.0),
-            bot_id: self.turn_bot.clone(),
-            session_id: message.0.clone(),
+            target_id: episode_id.to_owned(),
+            bot_id: bot_id.to_owned(),
+            session_id: turn_id.to_owned(),
             noted_at: self.ids.now,
         });
-        let _ = thinking;
         Ok(())
+    }
+
+    fn enqueue_task_memory_if_finished(
+        &self,
+        task: &TaskId,
+        previous: &TaskPhase,
+        next: &TaskPhase,
+        outcome: &str,
+    ) {
+        if !memory_unit_finished(next) || memory_unit_finished(previous) {
+            return;
+        }
+        if !maia_core::dream::should_enqueue_extraction(
+            maia_core::dream::ExtractionTiming::TaskFinished,
+        ) {
+            return;
+        }
+        let owner = self.task_owner_text(task);
+        let bot_id = self.task_bot(task);
+        let _ = self.store_completed_unit_episode(
+            &format!("episode-task-{}", task.0),
+            &task.0,
+            &owner,
+            outcome,
+            &[],
+            &bot_id,
+        );
+    }
+
+    fn task_owner_text(&self, task: &TaskId) -> String {
+        let mut parts = Vec::new();
+        if let Some(prompt) = self.prompts.get(task) {
+            let text = String::from_utf8_lossy(prompt);
+            if !text.trim().is_empty() {
+                parts.push(text.into_owned());
+            }
+        } else if let Ok(view) = self.store.load_task_view(&task.0) {
+            let text = String::from_utf8_lossy(&view.prompt);
+            if !text.trim().is_empty() {
+                parts.push(text.into_owned());
+            }
+        }
+        if let Ok(snapshot) = self.store.runtime_snapshot() {
+            if let Some(row) = snapshot.tasks.into_iter().find(|row| row.task_id == task.0) {
+                for input in row.inputs {
+                    let text = String::from_utf8_lossy(&input.prompt);
+                    if !text.trim().is_empty() {
+                        parts.push(text.into_owned());
+                    }
+                }
+            }
+        }
+        let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+        maia_core::dream::join_owner_messages(&refs)
+    }
+
+    fn task_outcome_text(&self, task: &TaskId, phase: &TaskPhase) -> String {
+        match phase {
+            TaskPhase::Cancelled { .. } => {
+                "Cancelled that task. It will not continue.".to_owned()
+            }
+            TaskPhase::Abandoned { .. } => "Abandoned that task.".to_owned(),
+            TaskPhase::Failed { .. } => self
+                .latest_task_summary(task)
+                .unwrap_or_else(|| "The task failed.".to_owned()),
+            TaskPhase::Completed { .. } => self
+                .latest_task_summary(task)
+                .unwrap_or_else(|| "The task completed.".to_owned()),
+            _ => String::new(),
+        }
+    }
+
+    fn latest_task_summary(&self, task: &TaskId) -> Option<String> {
+        self.store
+            .load_task_view(&task.0)
+            .ok()
+            .and_then(|view| view.reports.last().map(|report| report.summary.clone()))
     }
 
     fn message_bot(&self, message_id: &str) -> String {
@@ -5930,6 +6036,8 @@ impl<R: Router> Orchestrator<R> {
             .ok_or(OrchestratorError::UnknownTask)?;
         let next = self.reduce(&current, &event)?;
         self.persist_phase(task, &next)?;
+        let outcome = self.task_outcome_text(task, &next);
+        self.enqueue_task_memory_if_finished(task, &current, &next, &outcome);
         self.phases.insert(task.clone(), next);
         self.notice_sidebar();
         Ok(())
@@ -6207,6 +6315,7 @@ impl<R: Router> Orchestrator<R> {
             },
         )?;
         self.persist_phase(task, &next)?;
+        self.enqueue_task_memory_if_finished(task, running, &next, summary);
         self.phases.insert(task.clone(), next.clone());
         let _ = self.store_report(task, attempt, "failure", summary, call_id, delivery)?;
         Ok(StepOutcome {
@@ -6300,6 +6409,7 @@ impl<R: Router> Orchestrator<R> {
             },
         )?;
         self.persist_phase(task, &next)?;
+        self.enqueue_task_memory_if_finished(task, running, &next, summary);
         self.evidence.insert(task.clone(), completion.stored);
         self.phases.insert(task.clone(), next.clone());
         let _ = self.store_report(
@@ -6320,6 +6430,7 @@ impl<R: Router> Orchestrator<R> {
         &mut self,
         message: &MessageId,
         text: &str,
+        _attachments: &[StagedAttachment],
     ) -> Result<(), OrchestratorError> {
         let write = RouterMessageWrite {
             message_id: message.0.clone(),
@@ -6505,6 +6616,7 @@ impl<R: Router> Orchestrator<R> {
         self.store.insert_task_evidence(evidence_write)?;
         let next = self.reduce(running, &PhaseEvent::Complete { evidence: set_id })?;
         self.persist_phase(task, &next)?;
+        self.enqueue_task_memory_if_finished(task, running, &next, summary);
         self.evidence.insert(task.clone(), stored);
         self.phases.insert(task.clone(), next);
         self.store
@@ -6537,6 +6649,8 @@ impl<R: Router> Orchestrator<R> {
             .map_err(|_| OrchestratorError::DecisionNotApplied)?;
         let next = self.reduce(running, &PhaseEvent::Complete { evidence: set_id })?;
         self.persist_phase(task, &next)?;
+        let outcome = self.task_outcome_text(task, &next);
+        self.enqueue_task_memory_if_finished(task, running, &next, &outcome);
         self.phases.insert(task.clone(), next);
         self.store
             .set_completion_view(&task.0, VIEW_UNOPENED)

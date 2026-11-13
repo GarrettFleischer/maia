@@ -112,6 +112,7 @@ use crate::model_connection::parse_reasoning_effort;
 use crate::model_connection::reasoning_name;
 use crate::model_connection::resolve_key;
 use crate::model_connection::streaming_router_from_connection;
+use crate::promotion::PromotionCaps;
 use crate::orchestrator::ActivityLog;
 use crate::orchestrator::FastAdmission;
 use crate::orchestrator::McpToolReply;
@@ -872,7 +873,39 @@ pub fn serve_super_agent_with_model<R>(
 where
     R: RouterPort + Clone + Send + 'static,
 {
-    serve_super_agent_with_source(orchestrator, database, dist, bind, ids, ports)
+    serve_super_agent_with_caps(
+        orchestrator,
+        database,
+        dist,
+        bind,
+        ids,
+        ports,
+        PromotionCaps::default(),
+    )
+}
+
+/// Binds the server with promoter daily caps for the brain lag pause flag.
+pub fn serve_super_agent_with_caps<R>(
+    orchestrator: Orchestrator<R>,
+    database: PathBuf,
+    dist: PathBuf,
+    bind: SocketAddr,
+    ids: HttpIdSupply,
+    ports: ModelPorts,
+    promotion_caps: PromotionCaps,
+) -> Result<SuperAgentServer, ServeFailure>
+where
+    R: RouterPort + Clone + Send + 'static,
+{
+    serve_super_agent_with_source(
+        orchestrator,
+        database,
+        dist,
+        bind,
+        ids,
+        ports,
+        promotion_caps,
+    )
 }
 
 struct ServerThreadConfig {
@@ -881,6 +914,7 @@ struct ServerThreadConfig {
     bind: SocketAddr,
     ids: HttpIdSupply,
     ports: ModelPorts,
+    promotion_caps: PromotionCaps,
 }
 
 fn serve_super_agent_with_source<R>(
@@ -890,6 +924,7 @@ fn serve_super_agent_with_source<R>(
     bind: SocketAddr,
     ids: HttpIdSupply,
     ports: ModelPorts,
+    promotion_caps: PromotionCaps,
 ) -> Result<SuperAgentServer, ServeFailure>
 where
     R: RouterPort + Clone + Send + 'static,
@@ -910,6 +945,7 @@ where
                     bind,
                     ids,
                     ports,
+                    promotion_caps,
                 },
                 ready_tx,
                 shutdown_rx,
@@ -1026,6 +1062,7 @@ fn server_thread<R>(
             mcp_secrets,
             activity,
             live,
+            promotion_caps: config.promotion_caps,
         },
         config.dist,
     );
@@ -1074,6 +1111,7 @@ struct AppState {
     mcp_secrets: Arc<dyn McpSecretStore>,
     activity: ActivityLog,
     live: Option<LiveReplyBoard>,
+    promotion_caps: PromotionCaps,
 }
 
 struct WatchPublication {
@@ -1144,6 +1182,7 @@ enum ActorCall {
     },
     BrainMap {
         include_lexemes: bool,
+        promotion_caps: PromotionCaps,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
     BrainSearch {
@@ -1800,9 +1839,10 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
         }
         ActorCall::BrainMap {
             include_lexemes,
+            promotion_caps,
             reply,
         } => {
-            let _ = reply.send(read_brain(actor, include_lexemes));
+            let _ = reply.send(read_brain(actor, include_lexemes, &promotion_caps));
         }
         ActorCall::BrainSearch { query, reply } => {
             let _ = reply.send(search_brain(actor, &query));
@@ -3272,9 +3312,11 @@ async fn post_host(State(state): State<AppState>, request: Request) -> Response 
 
 async fn brain_map(State(state): State<AppState>, Query(query): Query<BrainQuery>) -> Response {
     let include_lexemes = query.include.as_deref() == Some("lexemes");
+    let promotion_caps = state.promotion_caps;
     finish(
         ask(&state, |reply| ActorCall::BrainMap {
             include_lexemes,
+            promotion_caps,
             reply,
         })
         .await,
@@ -3402,13 +3444,30 @@ async fn delete_fact(State(state): State<AppState>, Path(fact_id): Path<String>)
     finish(ask(&state, |reply| ActorCall::DeleteFact { fact_id, reply }).await)
 }
 
-fn read_brain<R: RouterPort>(actor: &Actor<R>, include_lexemes: bool) -> Result<Value, ApiError> {
-    actor
-        .host
-        .store()
-        .brain_map()
-        .map(|map| brain_map_value(&map, include_lexemes))
-        .map_err(map_brain_store)
+fn read_brain<R: RouterPort>(
+    actor: &Actor<R>,
+    include_lexemes: bool,
+    caps: &PromotionCaps,
+) -> Result<Value, ApiError> {
+    let store = actor.host.store();
+    let map = store.brain_map().map_err(map_brain_store)?;
+    let mut value = brain_map_value(&map, include_lexemes);
+    let lag = store.extraction_lag().map_err(map_brain_store)?;
+    let day = crate::promotion::promotion_day_key(unix_now());
+    let (calls, tokens) = store.promotion_day_stats(&day).map_err(map_brain_store)?;
+    let paused = crate::promotion::extraction_paused_for_day(calls, tokens, caps);
+    value["extraction"] = extraction_lag_value(&lag, paused);
+    Ok(value)
+}
+
+fn extraction_lag_value(lag: &maia_store::ExtractionLag, paused_for_day: bool) -> Value {
+    serde_json::json!({
+        "waiting": lag.waiting,
+        "quarantined": lag.quarantined,
+        "oldest_waiting_at": lag.oldest_waiting_at,
+        "paused_for_day": paused_for_day,
+        "quarantined_episodes": lag.quarantined_episode_ids,
+    })
 }
 
 fn search_brain<R: RouterPort>(actor: &Actor<R>, query: &str) -> Result<Value, ApiError> {

@@ -180,6 +180,24 @@ describe('BrainMapView', () => {
     expect(screen.getByRole('searchbox', { name: 'Search the brain' })).toBeVisible()
   })
 
+  it('shows memory is behind when the daily cap holds extraction', async () => {
+    const client = clientFor({
+      nodes: [],
+      edges: [],
+      extraction: {
+        waiting: 4,
+        quarantined: 0,
+        oldest_waiting_at: null,
+        paused_for_day: true,
+        quarantined_episodes: [],
+      },
+    })
+    render(<BrainMapView client={client} />)
+    expect(await screen.findByTestId('memory-behind')).toHaveTextContent(
+      'Memory is behind: 4 messages waiting to be remembered. Memory paused until tomorrow.',
+    )
+  })
+
   it('searches with recall arms', async () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap(), [

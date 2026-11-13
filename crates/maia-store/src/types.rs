@@ -430,6 +430,19 @@ pub struct PendingPromotionRow {
     pub promotion_failures: i64,
 }
 
+/// How far extraction lags the chat: queued work, not silent drops.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExtractionLag {
+    /// Unpromoted episodes still eligible (not quarantined).
+    pub waiting: i64,
+    /// Episodes held after repeated failures.
+    pub quarantined: i64,
+    /// Oldest waiting episode creation time, when any.
+    pub oldest_waiting_at: Option<i64>,
+    /// Quarantined episode ids, oldest first, capped for the UI.
+    pub quarantined_episode_ids: Vec<String>,
+}
+
 /// Result of recording one promotion failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromotionFailureNote {

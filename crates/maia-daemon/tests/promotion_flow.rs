@@ -1170,3 +1170,130 @@ fn promotion_writes_a_relatedness_edge_and_an_entity_edge() {
     }));
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn extraction_paused_for_day_when_the_call_cap_is_spent() {
+    assert!(maia_daemon::extraction_paused_for_day(
+        1,
+        0,
+        &PromotionCaps {
+            daily_call_cap: 1,
+            ..PromotionCaps::default()
+        }
+    ));
+    assert!(!maia_daemon::extraction_paused_for_day(
+        0,
+        0,
+        &PromotionCaps {
+            daily_call_cap: 1,
+            ..PromotionCaps::default()
+        }
+    ));
+    let env_override = PromotionCaps {
+        daily_call_cap: 12,
+        daily_token_cap: 1_000,
+        failure_limit: 3,
+    };
+    assert!(
+        maia_daemon::extraction_paused_for_day(12, 0, &env_override),
+        "paused_for_day must honor env overrides below the built-in defaults"
+    );
+    assert!(!maia_daemon::extraction_paused_for_day(
+        11,
+        0,
+        &env_override
+    ));
+}
+
+#[test]
+fn completed_chat_unit_is_recallable_after_one_extraction() {
+    let path = temp_db("completed-unit");
+    let store = open_store(&path);
+    seed_thread(&store, "thread-a");
+    seed_thread(&store, "thread-b");
+    insert_episode(
+        &store,
+        "episode-msg-1",
+        "thread-a",
+        "Owner: For slice2 I prefer oat milk.\nMaia: Got it — oat milk for slice2.",
+    );
+    let mut promoter = ScriptedPromoter::create();
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner prefers oat milk for slice2."],"same":[],"replaces":[]}"#,
+    );
+    let runner = PromotionRunner::new(
+        store,
+        promoter,
+        "fake-promoter",
+        PromotionCaps::default(),
+        Arc::new(|| NOW),
+    );
+    assert_eq!(
+        runner.promote_one().expect("promote"),
+        PromotionAttempt::Applied {
+            claim_ids: vec!["claim-episode-msg-1-0".to_owned()]
+        }
+    );
+    let recall = bounded_recall(runner.store(), "oat milk", Timestamp(NOW), None).expect("recall");
+    assert!(
+        recall
+            .items
+            .iter()
+            .any(|item| item.sentence.contains("oat milk")),
+        "completed unit must be recallable after one extraction, got {:?}",
+        recall.items
+    );
+    assert_eq!(
+        runner.store().pending_promotions().expect("pending").len(),
+        0
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn one_completed_unit_yields_one_extraction_without_duplicate_claims() {
+    let path = temp_db("one-unit");
+    let store = open_store(&path);
+    seed_thread(&store, "thread-a");
+    insert_episode(
+        &store,
+        "episode-msg-2",
+        "thread-a",
+        "Owner: For slice2 I prefer oat milk.\nMaia: Got it — you prefer oat milk for slice2.",
+    );
+    let mut promoter = ScriptedPromoter::create();
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner prefers oat milk for slice2."],"same":[],"replaces":[]}"#,
+    );
+    let runner = PromotionRunner::new(
+        store,
+        promoter,
+        "fake-promoter",
+        PromotionCaps::default(),
+        Arc::new(|| NOW),
+    );
+    assert_eq!(
+        runner.promote_one().expect("unit"),
+        PromotionAttempt::Applied {
+            claim_ids: vec!["claim-episode-msg-2-0".to_owned()]
+        }
+    );
+    assert_eq!(
+        runner.promote_one().expect("empty"),
+        PromotionAttempt::Idle
+    );
+    let map = runner.store().brain_map().expect("map");
+    let oat = map
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == maia_store::BrainNodeKind::Claim
+                && node
+                    .sentence
+                    .as_deref()
+                    .is_some_and(|sentence| sentence.contains("oat milk"))
+        })
+        .count();
+    assert_eq!(oat, 1, "one completed unit must not duplicate the claim");
+    let _ = std::fs::remove_file(&path);
+}

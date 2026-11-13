@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   layoutBrainMap,
+  memoryBehindLine,
   parseBrainMap,
   validateFactSentence,
   visibleBrainNodes,
@@ -108,5 +109,57 @@ describe('parseBrainMap', () => {
   it('reads a map and rejects a body that is not a graph', () => {
     expect(parseBrainMap({ nodes: [], edges: [] })).toEqual({ nodes: [], edges: [], tags: [] })
     expect(() => parseBrainMap({ nodes: [] })).toThrow(/could not be read/)
+  })
+
+  it('keeps extraction lag on the map', () => {
+    const parsed = parseBrainMap({
+      nodes: [],
+      edges: [],
+      extraction: {
+        waiting: 2,
+        quarantined: 1,
+        oldest_waiting_at: 100,
+        paused_for_day: true,
+        quarantined_episodes: ['episode-a'],
+      },
+    })
+    expect(parsed.extraction).toEqual({
+      waiting: 2,
+      quarantined: 1,
+      oldest_waiting_at: 100,
+      paused_for_day: true,
+      quarantined_episodes: ['episode-a'],
+    })
+  })
+})
+
+describe('memoryBehindLine', () => {
+  it('names the lag when the daily cap holds extraction', () => {
+    expect(
+      memoryBehindLine(
+        {
+          waiting: 3,
+          quarantined: 0,
+          oldest_waiting_at: 1_000,
+          paused_for_day: true,
+          quarantined_episodes: [],
+        },
+        1_130,
+      ),
+    ).toBe(
+      'Memory is behind: 3 messages waiting to be remembered. Memory paused until tomorrow. Oldest wait 2m.',
+    )
+  })
+
+  it('stays quiet when nothing is waiting', () => {
+    expect(
+      memoryBehindLine({
+        waiting: 0,
+        quarantined: 0,
+        oldest_waiting_at: null,
+        paused_for_day: false,
+        quarantined_episodes: [],
+      }),
+    ).toBeNull()
   })
 })

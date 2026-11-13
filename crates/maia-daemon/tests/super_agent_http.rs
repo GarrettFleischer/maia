@@ -3795,7 +3795,14 @@ async fn brain_map_is_empty_and_rejects_a_missing_fact() {
                 {"id": "tag-places", "name": "Places", "role": "places"},
                 {"id": "tag-things", "name": "Things", "role": "things"},
                 {"id": "tag-ideas", "name": "Ideas", "role": "ideas"}
-            ]
+            ],
+            "extraction": {
+                "waiting": 0,
+                "quarantined": 0,
+                "oldest_waiting_at": null,
+                "paused_for_day": false,
+                "quarantined_episodes": []
+            }
         })
     );
     let missing = patch_json(

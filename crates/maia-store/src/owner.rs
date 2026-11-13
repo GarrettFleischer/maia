@@ -79,6 +79,7 @@ use crate::types::OwnerOpen;
 use crate::types::PanicLatch;
 use crate::types::NearestClaimRow;
 use crate::types::PendingProjection;
+use crate::types::ExtractionLag;
 use crate::types::PendingPromotionRow;
 use crate::types::PromotionEpisodeRow;
 use crate::types::PromotionFailureNote;
@@ -150,6 +151,9 @@ enum NormalCommand {
     },
     PendingPromotions {
         reply: Reply<Vec<PendingPromotionRow>>,
+    },
+    ExtractionLag {
+        reply: Reply<ExtractionLag>,
     },
     PromotionEpisode {
         episode_id: String,
@@ -946,6 +950,17 @@ impl SqliteOwner {
     pub fn pending_promotions(&self) -> Result<Vec<PendingPromotionRow>, StoreError> {
         let (reply, rx) = oneshot::channel();
         self.send_normal(NormalCommand::PendingPromotions { reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Queued and quarantined extraction work for the memory-behind indicator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn extraction_lag(&self) -> Result<ExtractionLag, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::ExtractionLag { reply }, Submit::Wait)?;
         Pending { rx }.wait()
     }
 
@@ -3189,6 +3204,9 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
         }
         NormalCommand::PendingPromotions { reply } => {
             send(reply, dream_ops::pending_promotions(connection))
+        }
+        NormalCommand::ExtractionLag { reply } => {
+            send(reply, dream_ops::extraction_lag(connection))
         }
         NormalCommand::PromotionEpisode { episode_id, reply } => {
             send(reply, dream_ops::promotion_episode(connection, &episode_id))

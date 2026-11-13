@@ -43,9 +43,10 @@ pub use error::{
     ConsolidationPhase, DreamError, ModelFailure, PromotionError, PromotionPhase, SentenceIssue,
 };
 pub use memory::{
-    ClaimJudgment, FactCategory, NamedEntity, categorize, episode_record, extract_entities,
-    is_status_text, judge_claim, looks_like_reasoning, near_duplicate, owner_visible_reply,
-    place_city, subject_name, supersedes,
+    ClaimJudgment, ExtractionTiming, FactCategory, NamedEntity, categorize, episode_record,
+    extract_entities, is_status_text, join_owner_messages, judge_claim, looks_like_reasoning,
+    near_duplicate, owner_visible_reply, place_city, should_enqueue_extraction, subject_name,
+    supersedes,
 };
 pub use parse::{ClaimDraft, parse_promotion};
 pub use prepass::{

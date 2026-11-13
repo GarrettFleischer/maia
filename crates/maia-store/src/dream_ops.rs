@@ -26,6 +26,7 @@ use crate::types::CompleteProjection;
 use crate::types::ConsolidationWrite;
 use crate::types::EntityScope;
 use crate::types::EpisodeWrite;
+use crate::types::ExtractionLag;
 use crate::types::MemoryTaint;
 use crate::types::NearestClaimRow;
 use crate::types::PendingProjection;
@@ -380,6 +381,48 @@ pub(crate) fn pending_promotions(
         rows.push(row?);
     }
     Ok(rows)
+}
+
+const QUARANTINE_ID_CAP: usize = 8;
+
+pub(crate) fn extraction_lag(connection: &Connection) -> Result<ExtractionLag, StoreError> {
+    let waiting: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM episodes \
+         WHERE promoted_at IS NULL AND promotion_quarantined = 0",
+        [],
+        |row| row.get(0),
+    )?;
+    let quarantined: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM episodes \
+         WHERE promoted_at IS NULL AND promotion_quarantined = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let oldest_waiting_at: Option<i64> = connection.query_row(
+        "SELECT MIN(created_at) FROM episodes \
+         WHERE promoted_at IS NULL AND promotion_quarantined = 0",
+        [],
+        |row| row.get(0),
+    )?;
+    let mut statement = connection.prepare(
+        "SELECT episode_id FROM episodes \
+         WHERE promoted_at IS NULL AND promotion_quarantined = 1 \
+         ORDER BY created_at ASC, episode_id ASC \
+         LIMIT ?1",
+    )?;
+    let mapped = statement.query_map(params![i64::try_from(QUARANTINE_ID_CAP).unwrap_or(8)], |row| {
+        row.get::<_, String>(0)
+    })?;
+    let mut quarantined_episode_ids = Vec::new();
+    for row in mapped {
+        quarantined_episode_ids.push(row?);
+    }
+    Ok(ExtractionLag {
+        waiting,
+        quarantined,
+        oldest_waiting_at,
+        quarantined_episode_ids,
+    })
 }
 
 pub(crate) fn note_promotion_failure(

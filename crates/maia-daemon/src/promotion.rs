@@ -1102,8 +1102,21 @@ fn episode_memory_taint(episode: &maia_store::PromotionEpisodeRow) -> MemoryTain
 }
 
 fn day_key(now: i64) -> String {
+    promotion_day_key(now)
+}
+
+/// UTC day bucket used by the promoter daily ceiling.
+#[must_use]
+pub fn promotion_day_key(now: i64) -> String {
     let days = now.div_euclid(86_400);
     format!("day-{days}")
+}
+
+/// True when the daily call or token ceiling already holds extraction.
+#[must_use]
+pub fn extraction_paused_for_day(calls: i64, tokens: i64, caps: &PromotionCaps) -> bool {
+    calls >= i64::from(caps.daily_call_cap)
+        || tokens >= i64::try_from(caps.daily_token_cap).unwrap_or(i64::MAX)
 }
 
 fn usage_total(usage: &RouterUsage) -> u64 {

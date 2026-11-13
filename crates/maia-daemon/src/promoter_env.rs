@@ -12,10 +12,10 @@ use crate::env::read_model_env;
 pub const DEFAULT_PROMOTER_MODEL: &str = "auto";
 
 /// Default daily promotion call ceiling.
-pub const DEFAULT_PROMOTER_DAILY_CALL_CAP: u32 = 200;
+pub const DEFAULT_PROMOTER_DAILY_CALL_CAP: u32 = 1_000;
 
 /// Default daily promotion token ceiling.
-pub const DEFAULT_PROMOTER_DAILY_TOKEN_CAP: u64 = 200_000;
+pub const DEFAULT_PROMOTER_DAILY_TOKEN_CAP: u64 = 1_000_000;
 
 /// Promoter endpoint and ceilings read only at the composition root.
 #[derive(Debug)]
@@ -134,7 +134,10 @@ mod tests {
             .expect("env");
         assert_eq!(env.base_url(), "http://127.0.0.1:1/v1");
         assert_eq!(env.model(), "auto");
+        assert_eq!(env.daily_call_cap(), 1_000);
+        assert_eq!(env.daily_token_cap(), 1_000_000);
         assert_eq!(env.daily_call_cap(), DEFAULT_PROMOTER_DAILY_CALL_CAP);
+        assert_eq!(env.daily_token_cap(), DEFAULT_PROMOTER_DAILY_TOKEN_CAP);
     }
 
     #[test]

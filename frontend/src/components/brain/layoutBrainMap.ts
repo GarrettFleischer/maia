@@ -32,6 +32,7 @@ export interface BrainMap {
   edges: BrainEdge[]
   hidden?: BrainNode[]
   tags?: { id: string; name: string; role: string }[]
+  extraction?: ExtractionLag
 }
 
 export interface BrainSearchHit {
@@ -68,6 +69,14 @@ export interface BrainIndex {
   graph_count: number
 }
 
+export interface ExtractionLag {
+  waiting: number
+  quarantined: number
+  oldest_waiting_at: number | null
+  paused_for_day: boolean
+  quarantined_episodes: string[]
+}
+
 export interface BrainMapClient {
   load(): Promise<BrainMap>
   reviseFact(id: string, sentence: string): Promise<BrainMap>
@@ -92,6 +101,36 @@ export function brainStatusLine(index: BrainIndex): string {
       ? 'No markdown export yet'
       : `Last export ${index.exported_at} · ${index.neuron_count} notes · ${index.edge_count} edges`
   return `${exported}. Last recall: keyword ${index.keyword_count} · vector ${index.vector_count} · graph ${index.graph_count}.`
+}
+
+export function memoryBehindLine(extraction: ExtractionLag | undefined, nowSeconds = Date.now() / 1000): string | null {
+  if (!extraction) return null
+  const waiting = extraction.waiting
+  const quarantined = extraction.quarantined
+  if (waiting <= 0 && quarantined <= 0) return null
+  const lag =
+    extraction.oldest_waiting_at == null
+      ? null
+      : Math.max(0, Math.floor(nowSeconds - extraction.oldest_waiting_at))
+  const lagText =
+    lag == null
+      ? ''
+      : lag < 60
+        ? ` Oldest wait ${lag}s.`
+        : lag < 3600
+          ? ` Oldest wait ${Math.floor(lag / 60)}m.`
+          : ` Oldest wait ${Math.floor(lag / 3600)}h.`
+  if (extraction.paused_for_day) {
+    return `Memory is behind: ${waiting} messages waiting to be remembered. Memory paused until tomorrow.${lagText}`
+  }
+  if (quarantined > 0) {
+    const named =
+      extraction.quarantined_episodes.length > 0
+        ? ` Quarantined: ${extraction.quarantined_episodes.join(', ')}.`
+        : ''
+    return `Memory is behind: ${waiting} waiting, ${quarantined} quarantined.${named}${lagText}`
+  }
+  return `Memory is behind: ${waiting} messages waiting to be remembered.${lagText}`
 }
 
 const KINDS: readonly BrainNodeKind[] = ['fact', 'claim', 'episode', 'lexeme', 'entity']
@@ -136,7 +175,33 @@ export function parseBrainMap(body: unknown): BrainMap {
   const edges = body.edges.map(parseEdge)
   const hidden = Array.isArray(body.hidden) ? body.hidden.map(parseNode) : []
   const tags = parseCatalog(body.tag_catalog)
-  return hidden.length === 0 ? { nodes, edges, tags } : { nodes, edges, hidden, tags }
+  const extraction = parseExtraction(body.extraction)
+  const base = hidden.length === 0 ? { nodes, edges, tags } : { nodes, edges, hidden, tags }
+  return extraction ? { ...base, extraction } : base
+}
+
+function parseExtraction(value: unknown): ExtractionLag | undefined {
+  if (!isRecord(value)) return undefined
+  if (typeof value.waiting !== 'number' || typeof value.quarantined !== 'number') return undefined
+  if (typeof value.paused_for_day !== 'boolean') return undefined
+  const oldest =
+    value.oldest_waiting_at === null || value.oldest_waiting_at === undefined
+      ? null
+      : typeof value.oldest_waiting_at === 'number'
+        ? value.oldest_waiting_at
+        : null
+  const quarantined_episodes = Array.isArray(value.quarantined_episodes)
+    ? value.quarantined_episodes.filter((item): item is string => typeof item === 'string')
+    : Array.isArray(value.quarantined_episode_ids)
+      ? value.quarantined_episode_ids.filter((item): item is string => typeof item === 'string')
+      : []
+  return {
+    waiting: value.waiting,
+    quarantined: value.quarantined,
+    oldest_waiting_at: oldest,
+    paused_for_day: value.paused_for_day,
+    quarantined_episodes,
+  }
 }
 
 export function emptyBrainMap(): BrainMap {

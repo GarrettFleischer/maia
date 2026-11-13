@@ -177,6 +177,7 @@ pub use types::NegativeMarkWrite;
 pub use types::OwnerOpen;
 pub use types::PanicLatch;
 pub use types::PendingProjection;
+pub use types::ExtractionLag;
 pub use types::PendingPromotionRow;
 pub use types::PlatformKind;
 pub use types::PresenceProof;

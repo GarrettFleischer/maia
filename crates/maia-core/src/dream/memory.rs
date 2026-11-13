@@ -285,6 +285,34 @@ pub fn owner_visible_reply(reply: &str) -> String {
     kept.last().cloned().unwrap_or_default()
 }
 
+/// When memory extraction should run for one finished unit of work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractionTiming {
+    /// A normal chat reply was stored; extract that turn now.
+    ChatReplyStored,
+    /// A task is still open; wait for a finished state.
+    TaskRunning,
+    /// A task reached completed, failed, cancelled, or abandoned.
+    TaskFinished,
+}
+
+/// Whether the completion hook should enqueue extraction for this unit.
+#[must_use]
+pub fn should_enqueue_extraction(timing: ExtractionTiming) -> bool {
+    !matches!(timing, ExtractionTiming::TaskRunning)
+}
+
+/// Joins owner messages that belong to one task unit, newest last.
+#[must_use]
+pub fn join_owner_messages(messages: &[&str]) -> String {
+    messages
+        .iter()
+        .map(|message| message.trim())
+        .filter(|message| !message.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Episode body and a hide reason. `None` means the episode stays visible.
 #[must_use]
 pub fn episode_record(owner: &str, reply: &str) -> (String, Option<&'static str>) {
