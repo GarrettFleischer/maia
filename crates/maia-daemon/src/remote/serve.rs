@@ -31,8 +31,10 @@ use super::admit::TailnetPeer;
 use super::admit::TailnetRequest;
 use super::admit::canonical_ip;
 use super::admit::cookie_value;
+use super::admit::denial_html;
 use super::admit::gate_tailnet;
 use super::admit::is_tailscale_ip;
+use super::admit::wants_html_denial;
 use super::hub::DeviceView;
 use super::hub::EnableResult;
 use super::hub::IssuedCode;
@@ -51,21 +53,26 @@ pub async fn mark_loopback(mut request: Request, next: Next) -> Response {
 
 /// WhoIs, host, session, and CSRF gate for the Tailscale listener only.
 pub async fn tailnet_gate(State(hub): State<RemoteHub>, request: Request, next: Next) -> Response {
+    let fetch_mode = header_str(
+        request.headers(),
+        header::HeaderName::from_static("sec-fetch-mode"),
+    );
+    let accept = header_str(request.headers(), header::ACCEPT);
     let Some(peer) = request.extensions().get::<ConnectInfo<PeerAddr>>().copied() else {
-        return error_response(403, "denied");
+        return gate_reject_response(403, "denied", fetch_mode, accept);
     };
     let ip = canonical_ip(peer.0.0.ip());
     if ip.is_loopback() || !is_tailscale_ip(ip) {
-        return error_response(403, "denied");
+        return gate_reject_response(403, "denied", fetch_mode, accept);
     }
     let now = unix_now();
     let hub_lookup = hub.clone();
     let identity = match tokio::task::spawn_blocking(move || hub_lookup.lookup(ip, now)).await {
         Ok(Ok(identity)) => identity,
-        _ => return error_response(403, "whois_unavailable"),
+        _ => return gate_reject_response(403, "whois_unavailable", fetch_mode, accept),
     };
     let Some(names) = hub.host_names() else {
-        return error_response(403, "denied");
+        return gate_reject_response(403, "denied", fetch_mode, accept);
     };
     let host = header_str(request.headers(), header::HOST).unwrap_or_default();
     let origin = header_str(request.headers(), header::ORIGIN);
@@ -99,6 +106,7 @@ pub async fn tailnet_gate(State(hub): State<RemoteHub>, request: Request, next: 
             host: &host,
             origin,
             fetch_site,
+            fetch_mode,
             csrf,
         },
         &identity,
@@ -112,7 +120,7 @@ pub async fn tailnet_gate(State(hub): State<RemoteHub>, request: Request, next: 
         now,
     );
     if let TailnetGate::Reject { status, error } = decision {
-        return error_response(status, error);
+        return gate_reject_response(status, error, fetch_mode, accept);
     }
     if let Some(value) = token.as_deref() {
         hub.touch(value, now);
@@ -297,6 +305,25 @@ pub fn unpair_response(hub: &RemoteHub, actor: UnpairActor, node_id: &str, now: 
 pub fn error_response(status: u16, error: &'static str) -> Response {
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
     (code, Json(serde_json::json!({ "error": error }))).into_response()
+}
+
+/// Gate rejection: HTML for document navigations, JSON for API clients.
+pub fn gate_reject_response(
+    status: u16,
+    error: &'static str,
+    fetch_mode: Option<&str>,
+    accept: Option<&str>,
+) -> Response {
+    let code = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
+    if wants_html_denial(fetch_mode, accept) {
+        return (
+            code,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            denial_html(error),
+        )
+            .into_response();
+    }
+    error_response(status, error)
 }
 
 fn session_body(issued: SessionIssued) -> Response {

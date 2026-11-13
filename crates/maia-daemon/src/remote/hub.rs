@@ -591,7 +591,7 @@ impl RemoteHub {
     /// Cookie header value for one session token.
     pub fn cookie_header(token: &str, max_age: i64) -> String {
         format!(
-            "{COOKIE_NAME}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age}"
+            "{COOKIE_NAME}={token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={max_age}"
         )
     }
 

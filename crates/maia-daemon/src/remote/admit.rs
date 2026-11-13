@@ -91,6 +91,8 @@ pub struct TailnetRequest<'a> {
     pub origin: Option<&'a str>,
     /// `Sec-Fetch-Site` when the browser sent one.
     pub fetch_site: Option<&'a str>,
+    /// `Sec-Fetch-Mode` when the browser sent one.
+    pub fetch_mode: Option<&'a str>,
     /// `x-csrf-token` when the page sent one.
     pub csrf: Option<&'a str>,
 }
@@ -168,21 +170,31 @@ pub fn failures_allow(count: u32, window_start: i64, now: i64) -> bool {
     count < PAIR_FAILURE_LIMIT
 }
 
-/// `Host` must be this process's MagicDNS name or Tailscale address, with the UI port.
+/// `Host` must be this process's MagicDNS name or Tailscale address.
+///
+/// The UI port may be omitted: some clients send bare authorities even when the
+/// TCP connection already landed on this listener.
 pub fn host_allowed(host: &str, names: &HostNames<'_>) -> bool {
     let host = host.trim();
     if host.is_empty() || host.contains(['@', '/', ' ']) {
         return false;
+    }
+    if host.eq_ignore_ascii_case(names.dns_name) {
+        return true;
     }
     let dns = format!("{}:{}", names.dns_name, names.port);
     if host.eq_ignore_ascii_case(&dns) {
         return true;
     }
     names.ips.iter().any(|ip| {
-        let expected = match ip {
-            IpAddr::V4(value) => format!("{value}:{}", names.port),
-            IpAddr::V6(value) => format!("[{value}]:{}", names.port),
+        let bare = match ip {
+            IpAddr::V4(value) => value.to_string(),
+            IpAddr::V6(value) => format!("[{value}]"),
         };
+        if host.eq_ignore_ascii_case(&bare) {
+            return true;
+        }
+        let expected = format!("{bare}:{}", names.port);
         host.eq_ignore_ascii_case(&expected)
     })
 }
@@ -225,7 +237,9 @@ pub fn gate_tailnet(
     if !host_allowed(request.host, names) {
         return reject(403, "denied");
     }
-    if fetch_site_is_cross_origin(request.fetch_site) {
+    // Android WebAPK cold starts send Sec-Fetch-Site: cross-site on the start
+    // URL. Document navigations still require Tailscale WhoIs + Host.
+    if !is_document_navigation(request) && fetch_site_is_cross_origin(request.fetch_site) {
         return reject(403, "denied");
     }
     if origin_is_foreign(request.origin, names) {
@@ -250,6 +264,59 @@ pub fn gate_tailnet(
         return reject(403, "denied");
     }
     TailnetGate::Continue
+}
+
+/// True when the browser is loading a top-level document (including WebAPK launch).
+pub fn is_document_navigation(request: &TailnetRequest<'_>) -> bool {
+    request.method.eq_ignore_ascii_case("GET")
+        && matches!(request.fetch_mode, Some("navigate"))
+        && !request.path.starts_with("/api")
+}
+
+/// Prefer an HTML denial page for navigations and HTML Accept headers.
+pub fn wants_html_denial(fetch_mode: Option<&str>, accept: Option<&str>) -> bool {
+    if matches!(fetch_mode, Some("navigate")) {
+        return true;
+    }
+    accept.is_some_and(|value| {
+        value
+            .split(',')
+            .next()
+            .is_some_and(|first| first.trim().to_ascii_lowercase().starts_with("text/html"))
+    })
+}
+
+/// Owner-facing HTML for a stable denial token. No secrets, no Tailscale text.
+pub fn denial_html(error: &str) -> String {
+    let (title, body) = match error {
+        "unpaired" => (
+            "Pair this phone",
+            "This phone is on your Tailscale network but is not paired with Maia yet. Open Settings on the computer that runs Maia, show a pairing code, and enter it here after you reload.",
+        ),
+        "session_expired" => (
+            "Session expired",
+            "This phone's Maia session expired. Reload the app. If it asks to pair again, show a new code in Settings on the computer.",
+        ),
+        "whois_unavailable" => (
+            "Cannot verify this phone",
+            "Maia could not ask Tailscale who is calling. Check that Tailscale is running on both this phone and the computer, then reload.",
+        ),
+        _ => (
+            "This phone cannot open Maia",
+            "Only Garrett's own Tailscale devices can open Maia. Use the address shown in Settings on the computer (the .ts.net link with port 4178). If this home-screen app was added from a different address, remove it and add Maia again from that Settings link.",
+        ),
+    };
+    format!(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"/>\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>\
+         <title>{title}</title>\
+         <style>body{{font-family:system-ui,sans-serif;background:#0C0E10;color:#E8EAED;\
+         max-width:28rem;margin:3rem auto;padding:0 1.25rem;line-height:1.45}}\
+         h1{{font-size:1.35rem;margin:0 0 .75rem}}p{{margin:0 0 1rem;color:#C5C9CE}}\
+         </style></head><body><h1>{title}</h1><p>{body}</p>\
+         <p>Reload after fixing this. Maia never shows raw error JSON in the app shell.</p>\
+         </body></html>"
+    )
 }
 
 /// Read one cookie value. The name match is exact.
@@ -465,6 +532,24 @@ mod tests {
         }
     }
 
+    fn test_request<'a>(
+        method: &'a str,
+        path: &'a str,
+        host: &'a str,
+        fetch_site: Option<&'a str>,
+        fetch_mode: Option<&'a str>,
+    ) -> TailnetRequest<'a> {
+        TailnetRequest {
+            method,
+            path,
+            host,
+            origin: None,
+            fetch_site,
+            fetch_mode,
+            csrf: None,
+        }
+    }
+
     #[test]
     fn tailscale_ranges_exclude_lan_and_wildcard() {
         let kept = tailscale_addrs(&[
@@ -497,9 +582,11 @@ mod tests {
         let ips = vec![ip("100.77.132.115"), ip("fd7a:115c:a1e0::1")];
         let names = host_names(&ips);
         assert!(host_allowed("gamma.example.ts.net:4178", &names));
+        assert!(host_allowed("gamma.example.ts.net", &names));
         assert!(host_allowed("100.77.132.115:4178", &names));
+        assert!(host_allowed("100.77.132.115", &names));
         assert!(host_allowed("[fd7a:115c:a1e0::1]:4178", &names));
-        assert!(!host_allowed("gamma.example.ts.net", &names));
+        assert!(host_allowed("[fd7a:115c:a1e0::1]", &names));
         assert!(!host_allowed("gamma.example.ts.net:443", &names));
         assert!(!host_allowed("evil.ts.net:4178", &names));
         assert!(!host_allowed("127.0.0.1:4178", &names));
@@ -552,14 +639,7 @@ mod tests {
     fn tagged_and_anonymous_nodes_are_denied_before_pairing() {
         let ips = vec![ip("100.77.132.115")];
         let names = host_names(&ips);
-        let request = TailnetRequest {
-            method: "GET",
-            path: "/",
-            host: "gamma.example.ts.net:4178",
-            origin: None,
-            fetch_site: None,
-            csrf: None,
-        };
+        let request = test_request("GET", "/", "gamma.example.ts.net:4178", None, None);
         let mut tagged = phone();
         tagged.tags.push("tag:server".to_owned());
         assert_eq!(
@@ -591,6 +671,7 @@ mod tests {
             host: "gamma.example.ts.net:4178",
             origin: Some("https://gamma.example.ts.net:4178"),
             fetch_site: Some("same-origin"),
+            fetch_mode: Some("cors"),
             csrf: None,
         };
         assert_eq!(
@@ -603,6 +684,7 @@ mod tests {
             host: "gamma.example.ts.net:4178",
             origin: Some("https://gamma.example.ts.net:4178"),
             fetch_site: Some("same-origin"),
+            fetch_mode: Some("cors"),
             csrf: None,
         };
         assert_eq!(
@@ -612,18 +694,90 @@ mod tests {
                 error: "unpaired"
             }
         );
-        let page = TailnetRequest {
-            method: "GET",
-            path: "/",
-            host: "gamma.example.ts.net:4178",
-            origin: None,
-            fetch_site: Some("none"),
-            csrf: None,
-        };
+        let page = test_request(
+            "GET",
+            "/",
+            "gamma.example.ts.net:4178",
+            Some("none"),
+            Some("navigate"),
+        );
         assert_eq!(
             gate_tailnet(&page, &identity, false, None, &names, 1_500),
             TailnetGate::Continue
         );
+    }
+
+    #[test]
+    fn webapk_cold_start_navigation_is_allowed_despite_cross_site() {
+        let ips = vec![ip("100.77.132.115")];
+        let names = host_names(&ips);
+        let launch = test_request(
+            "GET",
+            "/",
+            "gamma.example.ts.net:4178",
+            Some("cross-site"),
+            Some("navigate"),
+        );
+        assert_eq!(
+            gate_tailnet(&launch, &phone(), true, None, &names, 1_500),
+            TailnetGate::Continue
+        );
+        let manifest = test_request(
+            "GET",
+            "/manifest.webmanifest",
+            "gamma.example.ts.net:4178",
+            Some("same-site"),
+            Some("navigate"),
+        );
+        assert_eq!(
+            gate_tailnet(&manifest, &phone(), true, None, &names, 1_500),
+            TailnetGate::Continue
+        );
+        assert!(host_allowed("gamma.example.ts.net", &names));
+        assert!(host_allowed("100.77.132.115", &names));
+    }
+
+    #[test]
+    fn cross_site_api_fetch_stays_denied_and_html_denial_explains_next_step() {
+        let ips = vec![ip("100.77.132.115")];
+        let names = host_names(&ips);
+        let request = TailnetRequest {
+            method: "POST",
+            path: "/api/remote/pair",
+            host: "gamma.example.ts.net:4178",
+            origin: Some("https://evil.example"),
+            fetch_site: Some("cross-site"),
+            fetch_mode: Some("cors"),
+            csrf: None,
+        };
+        assert_eq!(
+            gate_tailnet(&request, &phone(), false, None, &names, 1_500),
+            TailnetGate::Reject {
+                status: 403,
+                error: "denied"
+            }
+        );
+        let cross_get = test_request(
+            "GET",
+            "/api/super-agent/sidebar",
+            "gamma.example.ts.net:4178",
+            Some("cross-site"),
+            Some("cors"),
+        );
+        assert_eq!(
+            gate_tailnet(&cross_get, &phone(), true, Some(session("csrf")), &names, 1_500),
+            TailnetGate::Reject {
+                status: 403,
+                error: "denied"
+            }
+        );
+        assert!(wants_html_denial(Some("navigate"), None));
+        assert!(wants_html_denial(None, Some("text/html,application/xhtml+xml")));
+        assert!(!wants_html_denial(Some("cors"), Some("application/json")));
+        let page = denial_html("denied");
+        assert!(page.contains("This phone cannot open Maia"));
+        assert!(page.contains("Settings"));
+        assert!(!page.contains("\"error\""));
     }
 
     #[test]
@@ -637,6 +791,7 @@ mod tests {
             host: "gamma.example.ts.net:4178",
             origin: Some("https://gamma.example.ts.net:4178"),
             fetch_site: Some("same-origin"),
+            fetch_mode: Some("cors"),
             csrf: Some("csrf-token"),
         };
         assert_eq!(
@@ -665,14 +820,13 @@ mod tests {
                 error: "denied"
             }
         );
-        let other = TailnetRequest {
-            method: "GET",
-            path: "/api/super-agent/sidebar",
-            host: "gamma.example.ts.net:4178",
-            origin: None,
-            fetch_site: None,
-            csrf: None,
-        };
+        let other = test_request(
+            "GET",
+            "/api/super-agent/sidebar",
+            "gamma.example.ts.net:4178",
+            None,
+            None,
+        );
         assert_eq!(
             gate_tailnet(
                 &other,
@@ -711,6 +865,7 @@ mod tests {
             host: "gamma.example.ts.net:4178",
             origin: Some("https://evil.example"),
             fetch_site: Some("cross-site"),
+            fetch_mode: Some("cors"),
             csrf: None,
         };
         assert_eq!(
