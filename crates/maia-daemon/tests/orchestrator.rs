@@ -112,6 +112,8 @@ use maia_store::AppendEvents;
 use maia_store::ApprovalDecision;
 use maia_store::ApprovalSettlement;
 use maia_store::AttachmentWrite;
+use maia_store::BotRequest;
+use maia_store::BotResponse;
 use maia_store::EpisodeWrite;
 use maia_store::MemoryTaint;
 use maia_store::OwnerOpen;
@@ -2277,6 +2279,61 @@ fn spawn_task_tool_starts_one_parent() {
     assert_eq!(
         count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
         1
+    );
+}
+
+#[test]
+fn switching_bots_does_not_leak_the_previous_transcript_into_the_prompt() {
+    let mut harness = Harness::open("bot-transcript-isolation", prompt_supply());
+    let other = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Create {
+            name: "coding".to_owned(),
+            instructions: String::new(),
+            now: NOW,
+        })
+        .expect("create bot")
+    {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("expected bot, got {other:?}"),
+    };
+
+    harness.router.push_tool(
+        "success",
+        &success_arguments("Maia heard the secret oat preference."),
+    );
+    wait(harness.host().handle_user_message("secret-from-maia-oat-milk")).expect("maia chat");
+
+    harness.host().set_next_bot(&other.bot_id);
+    harness
+        .router
+        .push_tool("success", &success_arguments("Coding is ready."));
+    wait(harness.host().handle_user_message("coding-only-hello")).expect("coding chat");
+
+    let request = harness
+        .router
+        .requests()
+        .into_iter()
+        .next_back()
+        .expect("coding request");
+    let prompt = request
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        prompt.contains("coding-only-hello"),
+        "current bot turn must be present: {prompt}"
+    );
+    assert!(
+        !prompt.contains("secret-from-maia-oat-milk"),
+        "previous bot transcript must not leak: {prompt}"
+    );
+    assert!(
+        !prompt.contains("Maia heard the secret oat preference."),
+        "previous bot reply must not leak: {prompt}"
     );
 }
 

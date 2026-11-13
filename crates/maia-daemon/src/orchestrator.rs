@@ -128,8 +128,13 @@ use maia_core::task_loop::estimate_tokens;
 use maia_core::task_loop::nears_context_budget;
 use maia_core::task_loop::split_for_compaction;
 use maia_core::task_loop::summary_note;
+use maia_core::thread_cache::CONTEXT_PACKET_BUDGET;
 use maia_core::thread_cache::ChatMessage;
 use maia_core::thread_cache::ChatRole;
+use maia_core::thread_cache::ContextPacketInput;
+use maia_core::thread_cache::PacketRole;
+use maia_core::thread_cache::PacketTurn;
+use maia_core::thread_cache::pack_context_packet;
 use maia_store::AppendEvents;
 use maia_store::ApprovalDecision;
 use maia_store::ApprovalSettlement;
@@ -1384,7 +1389,6 @@ fn router_request(
 }
 
 const TURN_MARK: &str = "\u{1}maia-turn\u{1}";
-const HISTORY_TURNS: usize = 16;
 
 /// Text, thinking, and route label shown for one stored router message.
 pub struct PresentedRouterBody {
@@ -1488,11 +1492,70 @@ fn conversation_before_latest(messages: &[RuntimeMessage], latest: &str) -> Vec<
         }
         _ => messages,
     };
-    let start = prior.len().saturating_sub(HISTORY_TURNS);
-    prior[start..]
+    prior.iter().filter_map(stored_chat_message).collect()
+}
+
+fn packet_token_estimate(text: &str) -> u32 {
+    estimate_tokens(text.chars().count())
+}
+
+fn chat_to_packet_turns(history: &[ChatMessage]) -> Vec<PacketTurn> {
+    history
         .iter()
-        .filter_map(stored_chat_message)
+        .filter_map(|message| {
+            let role = match message.role {
+                ChatRole::User => PacketRole::User,
+                ChatRole::Assistant => PacketRole::Assistant,
+                _ => return None,
+            };
+            Some(PacketTurn {
+                role,
+                text: message.content.clone(),
+            })
+        })
         .collect()
+}
+
+fn packet_turns_to_chat(turns: &[PacketTurn]) -> Vec<ChatMessage> {
+    turns
+        .iter()
+        .map(|turn| {
+            let role = match turn.role {
+                PacketRole::User => ChatRole::User,
+                PacketRole::Assistant => ChatRole::Assistant,
+            };
+            ChatMessage::text(role, turn.text.clone())
+        })
+        .collect()
+}
+
+fn budget_router_context(
+    history: &[ChatMessage],
+    recall: Option<&PackedRecall>,
+) -> (Vec<ChatMessage>, Option<PackedRecall>) {
+    let recent = chat_to_packet_turns(history);
+    let conclusions = recall.map(|packed| packed.bytes.as_str()).unwrap_or("");
+    let packed = pack_context_packet(
+        ContextPacketInput {
+            card: "",
+            conclusions,
+            summary: "",
+            recent: &recent,
+            budget: CONTEXT_PACKET_BUDGET,
+        },
+        packet_token_estimate,
+    );
+    let history = packet_turns_to_chat(&packed.recent);
+    let memory = packed.memory_block();
+    let recall = if memory.is_empty() {
+        None
+    } else {
+        Some(PackedRecall {
+            bytes: memory,
+            items: recall.map(|packed| packed.items.clone()).unwrap_or_default(),
+        })
+    };
+    (history, recall)
 }
 
 fn stored_chat_message(message: &RuntimeMessage) -> Option<ChatMessage> {
@@ -3291,7 +3354,7 @@ impl<R: Router> Orchestrator<R> {
     }
 
     /// Chooses which bot receives the next owner message.
-    pub(crate) fn set_next_bot(&mut self, bot_id: &str) {
+    pub fn set_next_bot(&mut self, bot_id: &str) {
         let trimmed = bot_id.trim();
         self.next_bot = if trimmed.is_empty() {
             "maia".to_owned()
@@ -3806,7 +3869,15 @@ impl<R: Router> Orchestrator<R> {
         attachments: &[StagedAttachment],
     ) -> Result<MessageOutcome, OrchestratorError> {
         let message = MessageId(self.ids.pop_message()?);
+        let bot_id = std::mem::replace(&mut self.next_bot, "maia".to_owned());
         self.insert_user_message(&message, text, attachments)?;
+        let _ = self.store.bots(maia_store::BotRequest::BindMessage {
+            message_id: message.0.clone(),
+            bot_id,
+            preview: text.to_owned(),
+            now: self.ids.now,
+            from_owner: true,
+        });
         Ok(self
             .process_admitted_message(message, text, attachments)
             .await)
@@ -3992,6 +4063,9 @@ impl<R: Router> Orchestrator<R> {
         attachments: &[StagedAttachment],
     ) -> Result<RouteMachine, MessageOutcome> {
         self.record_activity("Router: reading your message", None);
+        // Bot id must be known before history and also_happening, or a switch
+        // leaks the previous Super Agent transcript into this prompt.
+        self.turn_bot = self.message_bot(&message.0);
         if !attachments.is_empty() {
             let ids = attachments
                 .iter()
@@ -4007,6 +4081,7 @@ impl<R: Router> Orchestrator<R> {
         };
         let recall = self.recall_for(text);
         self.note_recall(recall.as_ref(), None);
+        let (history, recall) = budget_router_context(&history, recall.as_ref());
         let request_id = match self.ids.pop_request() {
             Ok(id) => RequestId(id),
             Err(error) => return Err(self.admitted_failure(message, error)),
@@ -4025,7 +4100,6 @@ impl<R: Router> Orchestrator<R> {
         );
         let mut messages = built.request.messages.clone();
         push_untrusted(&mut messages, attachments);
-        self.turn_bot = self.message_bot(&message.0);
         if let Ok(maia_store::BotResponse::Bot(bot)) =
             self.store.bots(maia_store::BotRequest::Get {
                 bot_id: self.turn_bot.clone(),
@@ -5505,6 +5579,7 @@ impl<R: Router> Orchestrator<R> {
         ));
         let recall = self.recall_for(&prompt);
         self.note_recall(recall.as_ref(), Some(task));
+        let (_, recall) = budget_router_context(&[], recall.as_ref());
         if let Some(packed) = recall
             && !packed.bytes.is_empty()
         {

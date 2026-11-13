@@ -570,12 +570,12 @@ fn router_rank_policy() -> RankPolicy {
             iterations: 2,
         },
         weights: ScoreWeights {
-            activation: 0.0,
+            activation: 1.0,
             pagerank: 1.0,
             embedding: 1.0,
         },
         inclusion_threshold: 0.05,
-        recall_token_budget: 800,
+        recall_token_budget: 500,
         taint_mode: RecallTaintMode::IncludeUntrusted,
     }
 }
@@ -594,7 +594,7 @@ fn blank_prefix() -> CompiledPrefix {
 }
 
 fn estimate_tokens(text: &str) -> u32 {
-    u32::try_from(text.len()).unwrap_or(u32::MAX)
+    maia_core::task_loop::estimate_tokens(text.chars().count())
 }
 
 fn digest_len(bytes: &[u8]) -> PrefixHash {

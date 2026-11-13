@@ -76,6 +76,8 @@ use crate::promoter_env::DEFAULT_PROMOTER_DAILY_CALL_CAP;
 use crate::promoter_env::DEFAULT_PROMOTER_DAILY_TOKEN_CAP;
 
 const NEAREST_CLAIM_LIMIT: i64 = 5;
+/// Seed cap for chat recall so the conclusion budget can fill.
+const RECALL_SEED_LIMIT: i64 = 24;
 /// One promoter HTTP call is abandoned after this long. A 74s outlier becomes a retry.
 pub const PROMOTER_CALL_TIMEOUT: Duration = Duration::from_secs(20);
 /// Fast transport failures tried inside one episode selection.
@@ -925,7 +927,7 @@ fn nearest_for_episode(
             .unwrap_or_default()
     };
     let fts_seeds = seeds_from_rows(&fts_rows);
-    let (vector_seeds, _) = vector_seeds(store, body, embedder);
+    let (vector_seeds, _) = vector_seeds(store, body, embedder, NEAREST_CLAIM_LIMIT);
     merge_claim_seeds(&fts_seeds, &vector_seeds, NEAREST_CLAIM_LIMIT as usize)
         .into_iter()
         .map(|seed| NearestClaimRow {
@@ -949,6 +951,7 @@ fn vector_seeds(
     store: &SqliteOwner,
     text: &str,
     embedder: Option<&dyn ClaimEmbedder>,
+    limit: i64,
 ) -> (Vec<ClaimSeed>, Option<QueryEmbedding>) {
     let Some(embedder) = embedder else {
         return (Vec::new(), None);
@@ -961,7 +964,7 @@ fn vector_seeds(
     };
     let identity = embedder.identity();
     let hits = store
-        .nearest_claim_vectors(&identity.model_id, &values, NEAREST_CLAIM_LIMIT)
+        .nearest_claim_vectors(&identity.model_id, &values, limit)
         .unwrap_or_default();
     let seeds = hits
         .into_iter()
@@ -1215,11 +1218,12 @@ pub fn recall_run(
         .map(|lexeme| lexeme.as_str().to_owned())
         .collect();
     let keyword_hits = store
-        .search_neurons(query, NEAREST_CLAIM_LIMIT)
+        .search_neurons(query, RECALL_SEED_LIMIT)
         .unwrap_or_default();
-    let (vector_seeds, query_embedding) = vector_seeds(store, query, embedder);
+    let (vector_seeds, query_embedding) =
+        vector_seeds(store, query, embedder, RECALL_SEED_LIMIT);
     let graph_hits = store
-        .graph_arm(&lexeme_ids, NEAREST_CLAIM_LIMIT)
+        .graph_arm(&lexeme_ids, RECALL_SEED_LIMIT)
         .unwrap_or_default();
     let keyword_arm = keyword_hits
         .iter()
@@ -1240,7 +1244,7 @@ pub fn recall_run(
         .unwrap_or_default();
     let mut claim_ids = Vec::new();
     let mut fact_ids = Vec::new();
-    for rank in fused.iter().take(NEAREST_CLAIM_LIMIT as usize) {
+    for rank in fused.iter().take(RECALL_SEED_LIMIT as usize) {
         let Some((kind, id)) = rank.id.split_once(':') else {
             continue;
         };
@@ -1263,7 +1267,7 @@ pub fn recall_run(
     }
     let hits = fused
         .iter()
-        .take(NEAREST_CLAIM_LIMIT as usize)
+        .take(RECALL_SEED_LIMIT as usize)
         .filter_map(|rank| {
             let (kind, id) = rank.id.split_once(':')?;
             if id.is_empty() {
