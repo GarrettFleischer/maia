@@ -149,6 +149,10 @@ enum NormalCommand {
         request: PromotionWrite,
         reply: Reply<Executed<()>>,
     },
+    SessionSummary {
+        bot_id: String,
+        reply: Reply<Option<String>>,
+    },
     PendingPromotions {
         reply: Reply<Vec<PendingPromotionRow>>,
     },
@@ -939,6 +943,23 @@ impl SqliteOwner {
         let _ = promotion_canonical(&request)?;
         let (reply, rx) = oneshot::channel();
         self.send_normal(NormalCommand::Promotion { request, reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Rolling session summary for one Super Agent, when present.
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn session_summary(&self, bot_id: &str) -> Result<Option<String>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::SessionSummary {
+                bot_id: bot_id.to_owned(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
         Pending { rx }.wait()
     }
 
@@ -3201,6 +3222,9 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
                 sequence,
                 dream_ops::apply_promotion(connection, &request),
             );
+        }
+        NormalCommand::SessionSummary { bot_id, reply } => {
+            send(reply, dream_ops::load_session_summary(connection, &bot_id))
         }
         NormalCommand::PendingPromotions { reply } => {
             send(reply, dream_ops::pending_promotions(connection))

@@ -1297,3 +1297,80 @@ fn one_completed_unit_yields_one_extraction_without_duplicate_claims() {
     assert_eq!(oat, 1, "one completed unit must not duplicate the claim");
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn one_model_call_commits_summary_and_claim_together() {
+    let path = temp_db("summary-one-call");
+    let store = open_store(&path);
+    seed_thread(&store, "thread-a");
+    insert_episode(
+        &store,
+        "episode-summary",
+        "thread-a",
+        "Owner: I prefer oat milk.\nMaia: Noted.",
+    );
+    store
+        .bots(maia_store::BotRequest::NoteProvenance {
+            target_kind: "episode".to_owned(),
+            target_id: "episode-summary".to_owned(),
+            bot_id: "maia".to_owned(),
+            session_id: "turn-summary".to_owned(),
+            noted_at: NOW,
+        })
+        .expect("provenance");
+    let mut promoter = ScriptedPromoter::create();
+    promoter.push_ok(
+        r#"{"skip":false,"new":["The owner prefers oat milk."],"same":[],"replaces":[],"summary":"Talking about coffee preferences."}"#,
+    );
+    promoter.push_ok(r#"{"skip":false,"new":[],"same":[],"replaces":[],"summary":1}"#);
+    let runner = PromotionRunner::new(
+        store,
+        promoter,
+        "fake-promoter",
+        PromotionCaps::default(),
+        Arc::new(|| NOW),
+    );
+    assert_eq!(
+        runner.promote_one().expect("apply"),
+        PromotionAttempt::Applied {
+            claim_ids: vec!["claim-episode-summary-0".to_owned()]
+        }
+    );
+    assert_eq!(
+        runner
+            .store()
+            .session_summary("maia")
+            .expect("summary")
+            .as_deref(),
+        Some("Talking about coffee preferences.")
+    );
+    insert_episode(
+        &runner.store(),
+        "episode-bad-json",
+        "thread-a",
+        "Owner: Do not keep this.\nMaia: Ok.",
+    );
+    runner
+        .store()
+        .bots(maia_store::BotRequest::NoteProvenance {
+            target_kind: "episode".to_owned(),
+            target_id: "episode-bad-json".to_owned(),
+            bot_id: "maia".to_owned(),
+            session_id: "turn-bad".to_owned(),
+            noted_at: NOW,
+        })
+        .expect("provenance");
+    assert_eq!(
+        runner.promote_one().expect("bad json"),
+        PromotionAttempt::QueuedRetry
+    );
+    assert_eq!(
+        runner
+            .store()
+            .session_summary("maia")
+            .expect("summary unchanged")
+            .as_deref(),
+        Some("Talking about coffee preferences.")
+    );
+    let _ = std::fs::remove_file(&path);
+}

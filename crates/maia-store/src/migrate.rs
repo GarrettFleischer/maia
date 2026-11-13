@@ -29,9 +29,10 @@ use crate::sql::MIGRATION_V15;
 use crate::sql::MIGRATION_V16;
 use crate::sql::MIGRATION_V17;
 use crate::sql::MIGRATION_V18;
+use crate::sql::MIGRATION_V19;
 
 /// Highest `user_version` this binary can open.
-pub const LATEST_SCHEMA_VERSION: i64 = 18;
+pub const LATEST_SCHEMA_VERSION: i64 = 19;
 
 /// How long a second opener waits for the migration writer. This is SQLite's
 /// lock wait, not a process-global path mutex.
@@ -155,6 +156,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 18,
         name: "claim_kind_and_scope",
         statements: MIGRATION_V18,
+    },
+    Migration {
+        version: 19,
+        name: "session_summaries",
+        statements: MIGRATION_V19,
     },
 ];
 
@@ -307,7 +313,7 @@ mod tests {
         let connection = ready(Connection::open(&path));
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 18);
+        assert_eq!(version, 19);
         let mut statement = ready(
             connection
                 .prepare("SELECT version, applied_at FROM schema_migrations ORDER BY version"),
@@ -337,7 +343,8 @@ mod tests {
                 (15, 40),
                 (16, 40),
                 (17, 40),
-                (18, 40)
+                (18, 40),
+                (19, 40)
             ]
         );
         let _ = fs::remove_dir_all(directory);
@@ -363,7 +370,7 @@ mod tests {
 
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 18);
+        assert_eq!(version, 19);
         let legacy: String = ready(connection.query_row(
             "SELECT body FROM router_messages WHERE message_id = 'legacy-message'",
             [],
@@ -480,7 +487,7 @@ mod tests {
         assert_eq!(ordinals, "0,1");
         let version: i64 =
             ready(connection.pragma_query_value(None, "user_version", |row| row.get(0)));
-        assert_eq!(version, 18);
+        assert_eq!(version, 19);
         drop(connection);
         let _ = fs::remove_dir_all(directory);
     }

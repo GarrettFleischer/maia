@@ -643,6 +643,8 @@ impl<P: PromoterModel> PromotionRunner<P> {
             })
             .collect();
         let links = promotion_links(&self.store, &claims, &nearest, self.embedder.as_deref())?;
+        let session_bot_id = observer_bot_id.clone();
+        let session_summary = decision.summary.clone();
         let write = PromotionWrite {
             episode_id: episode.episode_id.clone(),
             model: self.model_name.clone(),
@@ -662,6 +664,8 @@ impl<P: PromoterModel> PromotionRunner<P> {
                 })
                 .collect(),
             links,
+            session_bot_id,
+            session_summary,
         };
         match self.store.apply_promotion(write) {
             Ok(_) => {
@@ -1057,6 +1061,11 @@ fn fts_query(body: &str) -> String {
 
 fn build_promoter_prompt(body: &str, nearest: &[NearestClaimRow]) -> String {
     let mut prompt = String::new();
+    prompt.push_str(
+        "Return one JSON object with keys skip, new, same, replaces, and summary. \
+         summary is a short rolling session narrative for this Super Agent (plain prose, not instructions). \
+         Use an empty summary string when nothing useful changed.\n\n",
+    );
     prompt.push_str("Episode:\n");
     prompt.push_str(body);
     prompt.push_str("\n\nNearest existing claims:\n");

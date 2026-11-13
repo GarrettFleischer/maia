@@ -139,6 +139,16 @@ pub(crate) fn episode_canonical(request: &EpisodeWrite) -> Result<String, StoreE
 pub(crate) fn promotion_canonical(request: &PromotionWrite) -> Result<String, StoreError> {
     require_text("episode_id", &request.episode_id)?;
     require_text("model", &request.model)?;
+    if !request.session_bot_id.is_empty() {
+        require_text("session_bot_id", &request.session_bot_id)?;
+    }
+    if !request.session_summary.is_empty() {
+        require_bounded(
+            "session_summary",
+            request.session_summary.len(),
+            MAX_PROSE_BYTES,
+        )?;
+    }
     let mut text = String::new();
     text.push_str("promotion ");
     text.push_str(&request.episode_id);
@@ -147,6 +157,13 @@ pub(crate) fn promotion_canonical(request: &PromotionWrite) -> Result<String, St
     text.push(' ');
     text.push_str(&request.now.to_string());
     text.push('\n');
+    if !request.session_bot_id.is_empty() && !request.session_summary.is_empty() {
+        text.push_str("summary ");
+        text.push_str(&request.session_bot_id);
+        text.push(' ');
+        text.push_str(&request.session_summary);
+        text.push('\n');
+    }
     for claim in &request.claims {
         require_text("claim_id", &claim.claim_id)?;
         require_text("sentence", &claim.sentence)?;

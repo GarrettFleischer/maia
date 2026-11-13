@@ -153,6 +153,8 @@ fn live_slice1_throwaway_bot_preference_replace() {
             same_claim_ids: vec![],
             replacements: vec![],
             links: vec![],
+        session_bot_id: String::new(),
+        session_summary: String::new(),
         })
         .expect("tea write");
     let _ = store.bots(BotRequest::NoteProvenance {
@@ -190,6 +192,8 @@ fn live_slice1_throwaway_bot_preference_replace() {
                 new_claim_id: coffee_claim.clone(),
             }],
             links: vec![],
+        session_bot_id: String::new(),
+        session_summary: String::new(),
         })
         .expect("coffee write");
     let _ = store.bots(BotRequest::NoteProvenance {

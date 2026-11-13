@@ -210,6 +210,16 @@ pub(crate) const MIGRATION_V18: &[&str] = &[
      ), '') WHERE observer_bot_id = ''",
 ];
 
+/// Migration 19 stores one rolling session summary per Super Agent.
+pub(crate) const MIGRATION_V19: &[&str] = &[
+    "CREATE TABLE session_summaries (\
+        bot_id TEXT PRIMARY KEY, \
+        body TEXT NOT NULL, \
+        updated_at INTEGER NOT NULL, \
+        FOREIGN KEY (bot_id) REFERENCES bots (bot_id) ON DELETE CASCADE\
+     )",
+];
+
 /// Migration 17 drops tasks whose owner-message source was already deleted.
 ///
 /// A deleted bot used to remove chat rows while leaving the task. Restore then

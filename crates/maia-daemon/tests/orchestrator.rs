@@ -3023,7 +3023,13 @@ fn a_stored_claim_is_packed_into_the_router_request() {
         router_request
             .messages
             .iter()
-            .any(|message| message.content.starts_with("## recall\n"))
+            .any(|message| message.content.contains("## summary\nTalking about the Obsidian vault."))
+    );
+    assert!(
+        router_request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("Obsidian opens the vault."))
     );
     let recall: Value = serde_json::from_str(&scalar(
         &harness.database,
@@ -3180,6 +3186,8 @@ fn seed_obsidian_claim(path: &Path) {
             same_claim_ids: Vec::new(),
             replacements: Vec::new(),
             links: Vec::new(),
+            session_bot_id: "maia".to_owned(),
+            session_summary: "Talking about the Obsidian vault.".to_owned(),
         })
         .expect("promotion");
 }

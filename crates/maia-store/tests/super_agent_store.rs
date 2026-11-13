@@ -865,16 +865,16 @@ fn closed_detail_high_water_survives_restart() {
 
 #[test]
 fn fresh_open_is_schema_version_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 18);
+    assert_eq!(LATEST_SCHEMA_VERSION, 19);
     let db = TestDb::open("version", 1);
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 18);
+    assert_eq!(settings.user_version, 19);
     let rows = must(db.owner().migrations());
-    assert_eq!(rows.len(), 18);
-    assert_eq!(rows.last().map(|row| row.version), Some(18));
+    assert_eq!(rows.len(), 19);
+    assert_eq!(rows.last().map(|row| row.version), Some(19));
     assert_eq!(
         rows.last().map(|row| row.name.as_str()),
-        Some("claim_kind_and_scope")
+        Some("session_summaries")
     );
 }
 
@@ -1961,6 +1961,8 @@ fn bots_keep_separate_histories_and_share_one_brain() {
         same_claim_ids: Vec::new(),
         replacements: Vec::new(),
         links: Vec::new(),
+    session_bot_id: String::new(),
+    session_summary: String::new(),
     }));
     must(db.owner().bots(BotRequest::NoteProvenance {
         target_kind: "claim".to_owned(),

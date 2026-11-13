@@ -103,6 +103,8 @@ fn remember(owner: &SqliteOwner, episode_id: &str, claim_id: &str, sentence: &st
         same_claim_ids: vec![],
         replacements: vec![],
         links: vec![],
+    session_bot_id: String::new(),
+    session_summary: String::new(),
     }));
 }
 

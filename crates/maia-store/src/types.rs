@@ -266,6 +266,10 @@ pub struct PromotionWrite {
     pub replacements: Vec<PromotionReplaceWrite>,
     /// Relatedness and entity edges committed in the same transaction.
     pub links: Vec<PromotionLinkWrite>,
+    /// Super Agent whose rolling summary should update. Empty skips the write.
+    pub session_bot_id: String,
+    /// Replacement session summary. Empty skips the write.
+    pub session_summary: String,
 }
 
 /// Relatedness or entity edge written with a promotion.

@@ -165,6 +165,8 @@ fn live_recall_export_and_autolink_on_a_temp_database() {
             same_claim_ids: vec![],
             replacements: vec![],
             links: vec![],
+        session_bot_id: String::new(),
+        session_summary: String::new(),
         })
         .expect("promotion");
     store

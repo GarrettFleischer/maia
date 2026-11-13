@@ -28,7 +28,30 @@ fn accepts_new_same_replaces_and_skip() {
                 old: ClaimId::new("claim_old"),
                 sentence: "The project is named Bob's Better Burgers.".to_owned(),
             }],
+            summary: String::new(),
         }
+    );
+}
+
+#[test]
+fn accepts_a_summary_with_one_claim_in_the_same_object() {
+    let raw = r#"{
+      "skip": false,
+      "new": ["The owner prefers oat milk."],
+      "same": [],
+      "replaces": [],
+      "summary": "Talking about coffee preferences."
+    }"#;
+    let decision = parse_promotion_decision(raw).expect("summary decision");
+    assert_eq!(decision.summary, "Talking about coffee preferences.");
+    assert_eq!(decision.new.len(), 1);
+}
+
+#[test]
+fn failed_json_yields_neither_claims_nor_summary() {
+    assert_eq!(
+        parse_promotion_decision(r#"{"skip":false,"new":[],"same":[],"replaces":[],"summary":1}"#),
+        Err(PromotionError::InvalidType)
     );
 }
 

@@ -145,6 +145,8 @@ fn live_slice2_completed_unit_recallable_and_lag_visible() {
             same_claim_ids: vec![],
             replacements: vec![],
             links: vec![],
+        session_bot_id: String::new(),
+        session_summary: String::new(),
         })
         .expect("promote completed unit once");
     let _ = store.bots(BotRequest::NoteProvenance {

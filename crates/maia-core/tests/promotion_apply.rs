@@ -256,6 +256,7 @@ fn same_and_replaces_cannot_cite_one_claim() {
             old: ClaimId::new("claim-shown"),
             sentence: "The project is named Northwind Pantry.".to_owned(),
         }],
+        summary: String::new(),
     };
     let error = describe_promotion_decision(
         &episode(&["claim-shown"]),

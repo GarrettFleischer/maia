@@ -3692,6 +3692,8 @@ fn seed_http_brain(path: &Path) {
             same_claim_ids: Vec::new(),
             replacements: Vec::new(),
             links: Vec::new(),
+        session_bot_id: String::new(),
+        session_summary: String::new(),
         })
         .expect("promotion");
     owner

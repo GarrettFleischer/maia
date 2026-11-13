@@ -222,6 +222,8 @@ fn promotion_link_is_committed_with_the_claim_and_a_missing_target_rolls_back() 
             same_claim_ids: Vec::new(),
             replacements: Vec::new(),
             links: Vec::new(),
+            session_bot_id: String::new(),
+            session_summary: String::new(),
         })
         .expect("first");
     episode(db.owner(), "episode-2");
@@ -246,6 +248,8 @@ fn promotion_link_is_committed_with_the_claim_and_a_missing_target_rolls_back() 
             to_id: "missing-claim".to_owned(),
             weight_millis: 250,
         }],
+        session_bot_id: String::new(),
+        session_summary: String::new(),
     });
     assert!(matches!(failed, Err(StoreError::NotFound { .. })));
     assert!(
@@ -278,6 +282,8 @@ fn promotion_link_is_committed_with_the_claim_and_a_missing_target_rolls_back() 
                 to_id: "claim-old".to_owned(),
                 weight_millis: 250,
             }],
+            session_bot_id: String::new(),
+            session_summary: String::new(),
         })
         .expect("linked");
     let edge = db

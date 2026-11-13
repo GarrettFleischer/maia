@@ -88,6 +88,7 @@ index|sqlite_autoindex_router_messages_2|router_messages|
 index|sqlite_autoindex_router_sessions_1|router_sessions|
 index|sqlite_autoindex_router_turn_snapshots_1|router_turn_snapshots|
 index|sqlite_autoindex_runtime_id_high_water_1|runtime_id_high_water|
+index|sqlite_autoindex_session_summaries_1|session_summaries|
 index|sqlite_autoindex_slot_heat_1|slot_heat|
 index|sqlite_autoindex_task_attempts_1|task_attempts|
 index|sqlite_autoindex_task_bots_1|task_bots|
@@ -194,6 +195,7 @@ table|router_turn_snapshots|router_turn_snapshots|CREATE TABLE router_turn_snaps
 table|runtime_id_high_water|runtime_id_high_water|CREATE TABLE runtime_id_high_water (namespace TEXT PRIMARY KEY, value TEXT NOT NULL)
 table|schema_migrations|schema_migrations|CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)
 table|security_settings|security_settings|CREATE TABLE security_settings (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), profile TEXT NOT NULL CHECK (profile IN ('protected', 'allowlisted', 'unrestricted')), activated_at INTEGER NOT NULL, activated_by TEXT NOT NULL, confirmation_at INTEGER, confirmation_desktop_client TEXT, confirmation_presence_proof TEXT)
+table|session_summaries|session_summaries|CREATE TABLE session_summaries (bot_id TEXT PRIMARY KEY, body TEXT NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY (bot_id) REFERENCES bots (bot_id) ON DELETE CASCADE)
 table|slot_heat|slot_heat|CREATE TABLE slot_heat (thread_id TEXT NOT NULL, slot_id TEXT NOT NULL, heat REAL NOT NULL, PRIMARY KEY (thread_id, slot_id))
 table|sqlite_sequence|sqlite_sequence|CREATE TABLE sqlite_sequence(name,seq)
 table|task_attempts|task_attempts|CREATE TABLE task_attempts (task_id TEXT NOT NULL, attempt_id TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (task_id, attempt_id), FOREIGN KEY (task_id) REFERENCES task_sessions (task_id))

@@ -337,6 +337,8 @@ mod tests {
                 same_claim_ids: Vec::new(),
                 replacements: Vec::new(),
                 links: Vec::new(),
+            session_bot_id: String::new(),
+            session_summary: String::new(),
             })
             .expect("promotion");
         let before = bounded_recall(&store, "portland", Timestamp(100), None);

@@ -129,6 +129,8 @@ fn promote(owner: &SqliteOwner, claims: Vec<PromotionClaimWrite>) {
         same_claim_ids: vec![],
         replacements: vec![],
         links: vec![],
+    session_bot_id: String::new(),
+    session_summary: String::new(),
     }));
 }
 
@@ -165,7 +167,7 @@ fn consolidate(owner: &SqliteOwner, sentence: &str) {
 
 #[test]
 fn schema_version_is_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 18);
+    assert_eq!(LATEST_SCHEMA_VERSION, 19);
 }
 
 #[test]

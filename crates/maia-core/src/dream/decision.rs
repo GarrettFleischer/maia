@@ -12,6 +12,9 @@ use crate::dream::sentence::validate_sentence;
 /// Maximum characters allowed in one promoted sentence.
 pub const MAX_CLAIM_SENTENCE_CHARS: usize = 280;
 
+/// Maximum characters allowed in one session summary from the promoter.
+pub const MAX_SESSION_SUMMARY_CHARS: usize = 2_000;
+
 /// How a conclusion was formed. Induced rows are dream-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimKind {
@@ -73,6 +76,8 @@ pub struct PromotionDecision {
     pub same: Vec<ClaimId>,
     /// Existing claims to close with a successor sentence.
     pub replaces: Vec<ReplaceDraft>,
+    /// Updated rolling session summary for this bot. Empty means leave the stored summary alone.
+    pub summary: String,
 }
 
 /// Parses one promotion decision. Unknown fields and tool channels fail the call.
@@ -89,7 +94,7 @@ pub fn parse_promotion_decision(response: &str) -> Result<PromotionDecision, Pro
     let Json::Object(map) = value else {
         return Err(PromotionError::InvalidType);
     };
-    const ALLOWED: [&str; 4] = ["new", "replaces", "same", "skip"];
+    const ALLOWED: [&str; 5] = ["new", "replaces", "same", "skip", "summary"];
     if map.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
         return Err(PromotionError::UnknownField);
     }
@@ -101,11 +106,23 @@ pub fn parse_promotion_decision(response: &str) -> Result<PromotionDecision, Pro
     let new = new_claim_array(map.get("new").ok_or(PromotionError::MissingField)?)?;
     let same = id_array(map.get("same").ok_or(PromotionError::MissingField)?)?;
     let replaces = replace_array(map.get("replaces").ok_or(PromotionError::MissingField)?)?;
+    let summary = match map.get("summary") {
+        None => String::new(),
+        Some(Json::String(text)) => {
+            let trimmed = text.trim().to_owned();
+            if trimmed.chars().count() > MAX_SESSION_SUMMARY_CHARS {
+                return Err(PromotionError::SentenceTooLong);
+            }
+            trimmed
+        }
+        Some(_) => return Err(PromotionError::InvalidType),
+    };
     Ok(PromotionDecision {
         skip,
         new,
         same,
         replaces,
+        summary,
     })
 }
 

@@ -377,6 +377,8 @@ fn live_chat_thickens_a_co_use_path() {
             same_claim_ids: Vec::new(),
             replacements: Vec::new(),
             links: Vec::new(),
+        session_bot_id: String::new(),
+        session_summary: String::new(),
         })
         .expect("claims");
     let before_recall = recall_has_zephyr(&store, now);

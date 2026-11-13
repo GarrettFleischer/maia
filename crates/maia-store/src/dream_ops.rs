@@ -288,12 +288,48 @@ pub(crate) fn apply_promotion(
             id: request.episode_id.clone(),
         });
     }
+    if !request.session_bot_id.is_empty() && !request.session_summary.is_empty() {
+        upsert_session_summary(
+            &transaction,
+            &request.session_bot_id,
+            &request.session_summary,
+            request.now,
+        )?;
+    }
     crate::auto_link::on_neuron_written(&transaction, "episode", &request.episode_id)?;
     for claim in &request.claims {
         crate::auto_link::on_neuron_written(&transaction, "claim", &claim.claim_id)?;
     }
     transaction.commit()?;
     Ok(())
+}
+
+pub(crate) fn upsert_session_summary(
+    transaction: &rusqlite::Transaction<'_>,
+    bot_id: &str,
+    body: &str,
+    now: i64,
+) -> Result<(), StoreError> {
+    transaction.execute(
+        "INSERT INTO session_summaries (bot_id, body, updated_at) VALUES (?1, ?2, ?3) \
+         ON CONFLICT (bot_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+        params![bot_id, body, now],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn load_session_summary(
+    connection: &Connection,
+    bot_id: &str,
+) -> Result<Option<String>, StoreError> {
+    let body: Option<String> = connection
+        .query_row(
+            "SELECT body FROM session_summaries WHERE bot_id = ?1",
+            params![bot_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(body)
 }
 
 type EpisodeIdentityRow = (String, String, String, String, Option<String>, String, i64);

@@ -1532,6 +1532,7 @@ fn packet_turns_to_chat(turns: &[PacketTurn]) -> Vec<ChatMessage> {
 fn budget_router_context(
     history: &[ChatMessage],
     recall: Option<&PackedRecall>,
+    summary: &str,
 ) -> (Vec<ChatMessage>, Option<PackedRecall>) {
     let recent = chat_to_packet_turns(history);
     let conclusions = recall.map(|packed| packed.bytes.as_str()).unwrap_or("");
@@ -1539,7 +1540,7 @@ fn budget_router_context(
         ContextPacketInput {
             card: "",
             conclusions,
-            summary: "",
+            summary,
             recent: &recent,
             budget: CONTEXT_PACKET_BUDGET,
         },
@@ -4081,7 +4082,8 @@ impl<R: Router> Orchestrator<R> {
         };
         let recall = self.recall_for(text);
         self.note_recall(recall.as_ref(), None);
-        let (history, recall) = budget_router_context(&history, recall.as_ref());
+        let summary = self.session_summary_for_bot(&self.turn_bot);
+        let (history, recall) = budget_router_context(&history, recall.as_ref(), &summary);
         let request_id = match self.ids.pop_request() {
             Ok(id) => RequestId(id),
             Err(error) => return Err(self.admitted_failure(message, error)),
@@ -5102,6 +5104,18 @@ impl<R: Router> Orchestrator<R> {
         }
     }
 
+    fn session_summary_for_bot(&self, bot_id: &str) -> String {
+        self.store
+            .session_summary(bot_id)
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    }
+
+    fn session_summary_for_current_task(&self, task: &TaskId) -> String {
+        self.session_summary_for_bot(&self.task_bot(task))
+    }
+
     fn ensure_router_thread(&self) -> Result<(), OrchestratorError> {
         match self.store.thread(ROUTER_THREAD) {
             Ok(_) => Ok(()),
@@ -5579,7 +5593,8 @@ impl<R: Router> Orchestrator<R> {
         ));
         let recall = self.recall_for(&prompt);
         self.note_recall(recall.as_ref(), Some(task));
-        let (_, recall) = budget_router_context(&[], recall.as_ref());
+        let summary = self.session_summary_for_current_task(task);
+        let (_, recall) = budget_router_context(&[], recall.as_ref(), &summary);
         if let Some(packed) = recall
             && !packed.bytes.is_empty()
         {
