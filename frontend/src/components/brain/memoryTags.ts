@@ -52,3 +52,8 @@ function searchRank(kind: string): number {
 export function searchKindLabel(kind: string): string {
   return kind === 'episode' ? 'Conversation' : 'Fact'
 }
+
+/** Honest leaf: what a search hit should do when the owner opens it. */
+export function searchHitAction(kind: string): 'open_fact' | 'view_source' {
+  return kind === 'claim' || kind === 'fact' ? 'open_fact' : 'view_source'
+}

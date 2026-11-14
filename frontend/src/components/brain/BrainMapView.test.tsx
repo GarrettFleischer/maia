@@ -255,6 +255,29 @@ describe('BrainMapView', () => {
     expect(items[1]).toHaveTextContent('Conversation')
   })
 
+  it('opens a fact hit for edit and a conversation hit on the timeline', async () => {
+    const user = userEvent.setup()
+    const client = clientFor(sampleMap(), [
+      { id: 'episode-1', kind: 'episode', sentence: 'I live in Canby', arms: ['keyword'] },
+      { id: 'claim-city', kind: 'claim', sentence: 'The user lives in Canby, Oregon.', arms: ['keyword'] },
+    ])
+    render(<BrainMapView client={client} />)
+    await screen.findByRole('heading', { name: 'People' })
+    await user.click(screen.getByRole('tab', { name: 'Search' }))
+    await user.type(screen.getByRole('searchbox', { name: 'Search the brain' }), 'Canby')
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+    const results = await screen.findByRole('list', { name: 'Search results' })
+    await user.click(within(results).getByRole('button', { name: 'Open fact' }))
+    expect(screen.getByRole('tab', { name: 'Memory' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByDisplayValue('The user lives in Canby, Oregon.')).toBeVisible()
+    await user.click(screen.getByRole('tab', { name: 'Search' }))
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+    const again = await screen.findByRole('list', { name: 'Search results' })
+    await user.click(within(again).getByRole('button', { name: 'View source' }))
+    expect(screen.getByRole('tab', { name: 'Timeline' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText('Source: episode-1')).toBeVisible()
+  })
+
   it('reviews a low-confidence fact and restores a hidden one', async () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap())

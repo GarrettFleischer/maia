@@ -17,6 +17,7 @@ import {
 import {
   groupFactsByPrimaryTag,
   orderSearchHits,
+  searchHitAction,
   searchKindLabel,
   type MemoryGroup,
   type MemoryTag,
@@ -233,7 +234,23 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           }}
         />
       ) : null}
-      {view === 'search' ? <SearchResults hits={hits} onSearch={runSearch} /> : null}
+      {view === 'search' ? (
+        <SearchResults
+          hits={hits}
+          onSearch={runSearch}
+          onOpenFact={(id) => {
+            const node = facts(map).find((item) => item.id === id)
+            if (!node) return
+            setView('memory')
+            setEditing(node.id)
+            setDraft(node.sentence ?? node.label)
+          }}
+          onViewSource={(id) => {
+            setSelected(id)
+            setView('timeline')
+          }}
+        />
+      ) : null}
       {view === 'review' ? (
         <ReviewList
           nodes={facts(map).filter((node) => (node.confidence_millis ?? 700) < 700)}
@@ -507,7 +524,17 @@ function TagEditor({
   )
 }
 
-function SearchResults({ hits, onSearch }: { hits: BrainSearchHit[] | null; onSearch: () => void }) {
+function SearchResults({
+  hits,
+  onSearch,
+  onOpenFact,
+  onViewSource,
+}: {
+  hits: BrainSearchHit[] | null
+  onSearch: () => void
+  onOpenFact: (id: string) => void
+  onViewSource: (id: string) => void
+}) {
   return (
     <div>
       <button type="button" className="maia-btn" onClick={onSearch}>
@@ -516,17 +543,41 @@ function SearchResults({ hits, onSearch }: { hits: BrainSearchHit[] | null; onSe
       {hits === null ? <p>Search uses the same recall Maia uses.</p> : null}
       {hits?.length === 0 ? <p>Nothing matched.</p> : null}
       <ul aria-label="Search results">
-        {hits ? orderSearchHits(hits).map((hit) => (
-          <li key={`${hit.kind}-${hit.id}`}>
-            <p>{hit.sentence || hit.id}</p>
-            <span className="maia-chip">{searchKindLabel(hit.kind)}</span>
-            {hit.arms.map((arm) => (
-              <span key={arm} className="maia-chip">
-                {arm}
-              </span>
-            ))}
-          </li>
-        )) : null}
+        {hits
+          ? orderSearchHits(hits).map((hit) => {
+              const action = searchHitAction(hit.kind)
+              return (
+                <li key={`${hit.kind}-${hit.id}`}>
+                  <p>{hit.sentence || hit.id}</p>
+                  <span className="maia-chip">{searchKindLabel(hit.kind)}</span>
+                  {hit.arms.map((arm) => (
+                    <span key={arm} className="maia-chip">
+                      {arm}
+                    </span>
+                  ))}
+                  {action === 'open_fact' ? (
+                    <button
+                      type="button"
+                      className="maia-btn"
+                      aria-label="Open fact"
+                      onClick={() => onOpenFact(hit.id)}
+                    >
+                      Open
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="maia-btn"
+                      aria-label="View source"
+                      onClick={() => onViewSource(hit.id)}
+                    >
+                      View source
+                    </button>
+                  )}
+                </li>
+              )
+            })
+          : null}
       </ul>
     </div>
   )

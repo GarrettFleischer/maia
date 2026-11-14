@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { BrainNode, BrainSearchHit } from '@/components/brain/layoutBrainMap'
-import { groupFactsByPrimaryTag, orderSearchHits, type MemoryTag } from '@/components/brain/memoryTags'
+import {
+  groupFactsByPrimaryTag,
+  orderSearchHits,
+  searchHitAction,
+  type MemoryTag,
+} from '@/components/brain/memoryTags'
 
 const catalog: MemoryTag[] = [
   { id: 'tag-people', name: 'People', role: 'people' },
@@ -46,5 +51,14 @@ describe('orderSearchHits', () => {
       { id: 'claim-city', kind: 'claim', sentence: 'The user lives in Canby, Oregon.', arms: ['keyword'] },
     ]
     expect(orderSearchHits(hits).map((hit) => hit.id)).toEqual(['claim-city', 'episode-1'])
+  })
+})
+
+describe('searchHitAction', () => {
+  it('opens durable facts for edit and conversations for source', () => {
+    expect(searchHitAction('claim')).toBe('open_fact')
+    expect(searchHitAction('fact')).toBe('open_fact')
+    expect(searchHitAction('episode')).toBe('view_source')
+    expect(searchHitAction('lexeme')).toBe('view_source')
   })
 })
