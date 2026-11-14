@@ -249,7 +249,11 @@ function BotRow({
         </span>
         <span className="maia-bot-meta">
           <span>{relativeChatTime(bot.last_message_at, now)}</span>
-          {bot.unread > 0 ? <span className="maia-bot-unread">{bot.unread}</span> : null}
+          {bot.unread > 0 ? (
+            <span className="maia-bot-unread" aria-label={`${bot.unread} unread`}>
+              {bot.unread}
+            </span>
+          ) : null}
           {bot.running ? <span className="maia-bot-dot" aria-label="Running" /> : null}
         </span>
       </button>

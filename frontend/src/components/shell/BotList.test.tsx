@@ -48,7 +48,7 @@ describe('BotList', () => {
     expect(screen.getByText('Yes. Same UI over Tailscale.')).toBeVisible()
     expect(screen.getByText('Working on the phone layout')).toBeVisible()
     expect(screen.getByText('5m')).toBeVisible()
-    expect(screen.getByText('2')).toBeVisible()
+    expect(screen.getByLabelText('2 unread')).toBeVisible()
     expect(relativeChatTime(now - 30_000, now)).toBe('now')
   })
 

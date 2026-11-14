@@ -10,6 +10,7 @@ import { OnboardingView } from '@/components/onboarding/OnboardingView'
 import { InspectorPanel } from '@/components/inspector/InspectorPanel'
 import { UnrestrictedBanner } from '@/components/security/UnrestrictedBanner'
 import { BotList } from '@/components/shell/BotList'
+import { withClearedUnread } from '@/components/shell/botCatalog'
 import { ConversationPane, type ConversationLayout } from '@/components/shell/ConversationPane'
 import { StopAllButton } from '@/components/shell/StopAllButton'
 import { McpServersSection } from '@/components/settings/McpServersSection'
@@ -157,7 +158,14 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
   }
   const choose = (id: string) => {
     remember(id)
-    void client.selectBot?.(id)?.catch(() => undefined)
+    setBots((current) => withClearedUnread(current, id))
+    void client
+      .selectBot?.(id)
+      ?.then(() => client.listBots?.())
+      .then((catalog) => {
+        if (catalog && catalog.bots.length > 0) setBots(catalog.bots)
+      })
+      .catch(() => undefined)
   }
   const dataSource = client.dataSource
   const connection = useLiveConnection(client)
