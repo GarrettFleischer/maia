@@ -118,6 +118,11 @@ export function ConversationPane({
               void router.closeDetail()
             })
           }}
+          onRetry={(taskId) => {
+            void router.hostCommand({ command: 'retry', task_id: taskId }).then(() => {
+              void router.closeDetail()
+            })
+          }}
         />
       ) : (
         <>
@@ -195,6 +200,7 @@ export function ConversationPane({
             }}
             placeholder={`Message ${title}`}
             liveReply={router.liveReply}
+            onDismissLiveReply={router.dismissLiveReply}
             botId={botId}
             accessory={
               phoneStop ? (

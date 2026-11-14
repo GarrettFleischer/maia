@@ -165,6 +165,7 @@ export type HostCommand =
   | { command: 'stop_all' }
   | { command: 'cancel'; task_id: string }
   | { command: 'abandon'; task_id: string }
+  | { command: 'retry'; task_id: string }
 
 export type ComposerNotice =
   | { kind: 'idle' }

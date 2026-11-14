@@ -135,6 +135,17 @@ function endRow(row: SidebarRow, rowMeta: RowMeta | undefined, phase: 'cancelled
   placeAfterHost(row, rowMeta, phase)
 }
 
+function retryRow(row: SidebarRow, rowMeta: RowMeta | undefined) {
+  if (row.phase !== 'failed' && row.phase !== 'stopped') return
+  row.phase = 'running'
+  if (!rowMeta || rowMeta.pin === 'pinned') {
+    if (rowMeta?.pin === 'pinned') row.section = 'pinned'
+    return
+  }
+  row.section = 'working'
+  rowMeta.home = 'working'
+}
+
 export function createFixtureSuperAgentClient(options?: {
   send?: FixtureSendScript
   backendScope?: SuperAgentBackendScope
@@ -251,6 +262,8 @@ export function createFixtureSuperAgentClient(options?: {
     },
     async selectBot(botId) {
       selected = botId
+      const bot = bots.find((item) => item.bot_id === botId)
+      if (bot) bot.unread = 0
     },
     async task(taskId) {
       const row = findRow(rows, taskId)
@@ -326,9 +339,13 @@ export function createFixtureSuperAgentClient(options?: {
         return { phase: 'stopped' }
       }
       const row = findRow(rows, command.task_id)
-      if (!row) return { phase: command.command === 'abandon' ? 'abandoned' : 'stopped' }
+      if (!row) {
+        if (command.command === 'retry') return { phase: 'failed' }
+        return { phase: command.command === 'abandon' ? 'abandoned' : 'stopped' }
+      }
       const rowMeta = meta.get(command.task_id)
       if (command.command === 'stop') holdRow(row, rowMeta)
+      else if (command.command === 'retry') retryRow(row, rowMeta)
       else endRow(row, rowMeta, command.command === 'cancel' ? 'cancelled' : 'abandoned')
       return { phase: row.phase }
     },

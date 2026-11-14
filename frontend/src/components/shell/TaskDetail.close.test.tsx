@@ -62,6 +62,25 @@ describe('TaskDetail close controls', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
+  it('offers Retry for a failed task', async () => {
+    const user = userEvent.setup()
+    const onRetry = vi.fn()
+    render(
+      <TaskDetail
+        detail={detail}
+        pin="unpinned"
+        phase="failed"
+        operation={{ kind: 'idle' }}
+        onClose={vi.fn()}
+        onQuote={() => undefined}
+        onPin={() => undefined}
+        onRetry={onRetry}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Retry task' }))
+    expect(onRetry).toHaveBeenCalledWith('task-a')
+  })
+
   it('shows a real acceptance note and skips the stock advisory word', () => {
     renderDetail()
     expect(screen.getByRole('heading', { name: 'Acceptance context' })).toBeVisible()

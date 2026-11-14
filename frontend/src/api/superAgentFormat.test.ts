@@ -13,6 +13,7 @@ import {
   needsYouChipLabel,
   isNonTerminalPhase,
   canCancelTask,
+  canRetryTask,
   routeFold,
   shownAcceptanceContext,
   visibleInspectionGroups,
@@ -152,6 +153,15 @@ describe('countActivity', () => {
     expect(canCancelTask('completed')).toBe(false)
     expect(canCancelTask('cancelled')).toBe(false)
     expect(canCancelTask('abandoned')).toBe(false)
+  })
+
+  it('offers Retry only for failed or stopped work', () => {
+    expect(canRetryTask('failed')).toBe(true)
+    expect(canRetryTask('stopped')).toBe(true)
+    expect(canRetryTask('running')).toBe(false)
+    expect(canRetryTask('waiting_for_user')).toBe(false)
+    expect(canRetryTask('completed')).toBe(false)
+    expect(canRetryTask('cancelled')).toBe(false)
   })
 })
 

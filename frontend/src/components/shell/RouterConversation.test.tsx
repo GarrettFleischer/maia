@@ -906,6 +906,16 @@ describe('fixture client isolation', () => {
     expect(ended?.phase).toBe('cancelled')
     expect(ended?.section).toBe('archive')
   })
+
+  it('retries a stopped helper back into working', async () => {
+    const client = createFixtureSuperAgentClient()
+    await client.hostCommand({ command: 'stop', task_id: 'child-1' })
+    const retried = await client.hostCommand({ command: 'retry', task_id: 'child-1' })
+    expect(retried.phase).toBe('running')
+    const child = (await client.sidebar()).rows[0]?.children[0]
+    expect(child?.phase).toBe('running')
+    expect(child?.section).toBe('working')
+  })
 })
 
 async function expandTaskStrip(user: ReturnType<typeof userEvent.setup>) {

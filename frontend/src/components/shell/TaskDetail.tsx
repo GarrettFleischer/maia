@@ -2,6 +2,7 @@ import { useEffect, useId, useRef } from 'react'
 import type { PinMark, TaskDetail as TaskDetailData, TaskPhaseName } from '@/api/superAgentTypes'
 import {
   canCancelTask,
+  canRetryTask,
   shownAcceptanceContext,
   textOrNone,
   visibleInspectionGroups,
@@ -35,6 +36,7 @@ export function TaskDetail({
   onQuote,
   onPin,
   onCancel,
+  onRetry,
 }: {
   detail: TaskDetailData
   pin: PinMark
@@ -44,9 +46,11 @@ export function TaskDetail({
   onQuote: (taskId: string) => void
   onPin: (taskId: string, pin: PinMark) => void
   onCancel?: (taskId: string) => void
+  onRetry?: (taskId: string) => void
 }) {
   const nextPin: PinMark = pin === 'pinned' ? 'unpinned' : 'pinned'
   const showCancel = phase != null && onCancel != null && canCancelTask(phase)
+  const showRetry = phase != null && onRetry != null && canRetryTask(phase)
   const backRef = useRef<HTMLButtonElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
@@ -122,6 +126,16 @@ export function TaskDetail({
             <button type="button" className="maia-btn" onClick={() => onPin(detail.task_id, nextPin)}>
               {pin === 'pinned' ? 'Unpin this task' : 'Pin this task'}
             </button>
+            {showRetry ? (
+              <button
+                type="button"
+                className="maia-btn"
+                disabled={operation.kind === 'sending'}
+                onClick={() => onRetry(detail.task_id)}
+              >
+                Retry task
+              </button>
+            ) : null}
             {showCancel ? (
               <button
                 type="button"

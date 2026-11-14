@@ -90,6 +90,11 @@ export function canCancelTask(phase: TaskPhaseName): boolean {
   return isNonTerminalPhase(phase)
 }
 
+/** Owner can retry failed or stopped work from task detail. */
+export function canRetryTask(phase: TaskPhaseName): boolean {
+  return phase === 'failed' || phase === 'stopped'
+}
+
 export function countActivity(rows: readonly SidebarRow[]): { running: number; needsYou: number } {
   return {
     running: rows.reduce((total, row) => total + countRunningThreads(row), 0),
