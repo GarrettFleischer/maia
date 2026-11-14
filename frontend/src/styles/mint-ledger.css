@@ -1807,6 +1807,19 @@ details:not([open]) > .maia-task-tree {
   line-height: 1.35;
 }
 
+.maia-brain-behind > p {
+  margin: 0;
+}
+
+.maia-brain-quarantine {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .maia-brain-list article,
 .maia-brain-settings {
   display: flex;

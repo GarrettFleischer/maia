@@ -1206,6 +1206,11 @@ enum ActorCall {
         claim_id: String,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
+    SkipQuarantinedEpisode {
+        episode_id: String,
+        promotion_caps: PromotionCaps,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
     RestoreClaim {
         claim_id: String,
         reply: oneshot::Sender<Result<Value, ApiError>>,
@@ -1862,6 +1867,13 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
         }
         ActorCall::ForgetClaim { claim_id, reply } => {
             let _ = reply.send(forget_claim(actor, claim_id));
+        }
+        ActorCall::SkipQuarantinedEpisode {
+            episode_id,
+            promotion_caps,
+            reply,
+        } => {
+            let _ = reply.send(skip_quarantined_episode(actor, episode_id, &promotion_caps));
         }
         ActorCall::RestoreClaim { claim_id, reply } => {
             let _ = reply.send(restore_claim(actor, claim_id));
@@ -2561,6 +2573,10 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
             post(confirm_claim_route),
         )
         .route("/brain/claims/{claim_id}/forget", post(forget_claim_route))
+        .route(
+            "/brain/episodes/{episode_id}/skip",
+            post(skip_quarantined_episode_route),
+        )
         .route(
             "/brain/claims/{claim_id}/restore",
             post(restore_claim_route),
@@ -3378,6 +3394,21 @@ async fn forget_claim_route(
     finish(ask(&state, |reply| ActorCall::ForgetClaim { claim_id, reply }).await)
 }
 
+async fn skip_quarantined_episode_route(
+    State(state): State<AppState>,
+    Path(episode_id): Path<String>,
+) -> Response {
+    let promotion_caps = state.promotion_caps;
+    finish(
+        ask(&state, |reply| ActorCall::SkipQuarantinedEpisode {
+            episode_id,
+            promotion_caps,
+            reply,
+        })
+        .await,
+    )
+}
+
 async fn restore_claim_route(
     State(state): State<AppState>,
     Path(claim_id): Path<String>,
@@ -3636,6 +3667,19 @@ fn forget_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String) -> Result<Val
         .forget_claim(claim_id)
         .map_err(map_brain_store)?;
     Ok(brain_map_value(&forgotten.value, false))
+}
+
+fn skip_quarantined_episode<R: RouterPort>(
+    actor: &Actor<R>,
+    episode_id: String,
+    caps: &PromotionCaps,
+) -> Result<Value, ApiError> {
+    actor
+        .host
+        .store()
+        .mark_promotion_skipped(&episode_id, unix_now(), "owner-dismiss")
+        .map_err(map_brain_store)?;
+    read_brain(actor, false, caps)
 }
 
 fn restore_claim<R: RouterPort>(actor: &Actor<R>, claim_id: String) -> Result<Value, ApiError> {

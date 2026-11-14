@@ -127,6 +127,14 @@ export function liveBrainMapClient(origin: string): BrainMapClient {
         }),
       )
     },
+    dismissQuarantinedEpisode(episodeId: string) {
+      return readMap(
+        fetch(`${root}/api/brain/episodes/${encodeURIComponent(episodeId)}/skip`, {
+          method: 'POST',
+          headers: withCsrf('POST', {}),
+        }),
+      )
+    },
   }
 }
 

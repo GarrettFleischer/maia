@@ -162,4 +162,16 @@ describe('memoryBehindLine', () => {
       }),
     ).toBeNull()
   })
+
+  it('names stuck quarantine without dumping opaque episode ids', () => {
+    expect(
+      memoryBehindLine({
+        waiting: 0,
+        quarantined: 1,
+        oldest_waiting_at: null,
+        paused_for_day: false,
+        quarantined_episodes: ['episode-m-999428'],
+      }),
+    ).toBe('Memory could not learn 1 stuck note.')
+  })
 })

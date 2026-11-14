@@ -93,6 +93,7 @@ export interface BrainMapClient {
   mergeTags?(keepId: string, dropId: string): Promise<BrainMap>
   removeTag?(id: string): Promise<BrainMap>
   setClaimTags?(id: string, tags: readonly string[]): Promise<BrainMap>
+  dismissQuarantinedEpisode?(episodeId: string): Promise<BrainMap>
 }
 
 export function brainStatusLine(index: BrainIndex): string {
@@ -123,12 +124,13 @@ export function memoryBehindLine(extraction: ExtractionLag | undefined, nowSecon
   if (extraction.paused_for_day) {
     return `Memory is behind: ${waiting} messages waiting to be remembered. Memory paused until tomorrow.${lagText}`
   }
+  if (quarantined > 0 && waiting <= 0) {
+    return quarantined === 1
+      ? `Memory could not learn 1 stuck note.${lagText}`
+      : `Memory could not learn ${quarantined} stuck notes.${lagText}`
+  }
   if (quarantined > 0) {
-    const named =
-      extraction.quarantined_episodes.length > 0
-        ? ` Quarantined: ${extraction.quarantined_episodes.join(', ')}.`
-        : ''
-    return `Memory is behind: ${waiting} waiting, ${quarantined} quarantined.${named}${lagText}`
+    return `Memory is behind: ${waiting} waiting, ${quarantined} stuck.${lagText}`
   }
   return `Memory is behind: ${waiting} messages waiting to be remembered.${lagText}`
 }

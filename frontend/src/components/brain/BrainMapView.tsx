@@ -155,9 +155,29 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
         />
       </div>
       {behind ? (
-        <p role="status" className="maia-brain-behind" data-testid="memory-behind">
-          {behind}
-        </p>
+        <div className="maia-brain-behind" data-testid="memory-behind">
+          <p role="status">{behind}</p>
+          {client.dismissQuarantinedEpisode && (map.extraction?.quarantined_episodes?.length ?? 0) > 0 ? (
+            <ul className="maia-brain-quarantine" aria-label="Stuck memory notes">
+              {map.extraction!.quarantined_episodes.map((episodeId) => (
+                <li key={episodeId}>
+                  <button
+                    type="button"
+                    className="maia-btn"
+                    aria-label={`Dismiss stuck note ${episodeId}`}
+                    onClick={() => {
+                      void client.dismissQuarantinedEpisode?.(episodeId).then(reload, () =>
+                        setError('That stuck note could not be dismissed.'),
+                      )
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
       {view === 'memory' ? (

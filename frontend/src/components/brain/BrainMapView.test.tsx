@@ -198,6 +198,42 @@ describe('BrainMapView', () => {
     )
   })
 
+  it('lets the owner dismiss a quarantined episode from the behind banner', async () => {
+    const user = userEvent.setup()
+    let map: BrainMap = {
+      nodes: [],
+      edges: [],
+      extraction: {
+        waiting: 0,
+        quarantined: 1,
+        oldest_waiting_at: null,
+        paused_for_day: false,
+        quarantined_episodes: ['episode-m-999428'],
+      },
+    }
+    const client = clientFor(map)
+    client.dismissQuarantinedEpisode = async (episodeId) => {
+      expect(episodeId).toBe('episode-m-999428')
+      map = {
+        ...map,
+        extraction: {
+          waiting: 0,
+          quarantined: 0,
+          oldest_waiting_at: null,
+          paused_for_day: false,
+          quarantined_episodes: [],
+        },
+      }
+      return map
+    }
+    render(<BrainMapView client={client} />)
+    expect(await screen.findByTestId('memory-behind')).toHaveTextContent(
+      'Memory could not learn 1 stuck note.',
+    )
+    await user.click(screen.getByRole('button', { name: 'Dismiss stuck note episode-m-999428' }))
+    expect(screen.queryByTestId('memory-behind')).not.toBeInTheDocument()
+  })
+
   it('searches with recall arms', async () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap(), [

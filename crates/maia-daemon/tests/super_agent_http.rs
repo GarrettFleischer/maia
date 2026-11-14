@@ -3787,6 +3787,77 @@ fn seed_http_brain(path: &Path) {
     owner.shutdown().expect("close seed store");
 }
 
+#[test]
+fn brain_skip_clears_a_quarantined_episode_from_the_lag() {
+    let session = Session::open("brain-skip-quarantine");
+    seed_quarantined_episode(&session.database);
+    tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(skip_quarantined_episode(session));
+}
+
+async fn skip_quarantined_episode(session: Session) {
+    let server = session.spawn();
+    let before = get(&server, "/api/brain/map").await;
+    assert_eq!(before.status(), 200);
+    let before = before.json::<Value>().await.expect("before");
+    assert_eq!(before["extraction"]["quarantined"], 1);
+    assert_eq!(
+        before["extraction"]["quarantined_episodes"],
+        json!(["episode-stuck"])
+    );
+
+    let skipped = post_json(&server, "/api/brain/episodes/episode-stuck/skip", json!({})).await;
+    assert_eq!(skipped.status(), 200);
+    let after = skipped.json::<Value>().await.expect("after");
+    assert_eq!(after["extraction"]["quarantined"], 0);
+    assert_eq!(after["extraction"]["quarantined_episodes"], json!([]));
+}
+
+fn seed_quarantined_episode(path: &Path) {
+    let owner = SqliteOwner::open(OwnerOpen {
+        path: path.to_path_buf(),
+        now: NOW,
+        normal_capacity: 8,
+        panic_capacity: 2,
+    })
+    .expect("seed store");
+    owner
+        .append(AppendEvents {
+            thread_id: "thread-skip".to_owned(),
+            expected_version: 0,
+            participants: "owner".to_owned(),
+            occurred_at: 81,
+            events: vec![ThreadEventWrite {
+                event_id: "event-skip".to_owned(),
+                kind: "user".to_owned(),
+                body: "quarantine probe".to_owned(),
+            }],
+        })
+        .expect("append");
+    owner
+        .insert_episode(EpisodeWrite {
+            episode_id: "episode-stuck".to_owned(),
+            thread_id: "thread-skip".to_owned(),
+            turn_id: "turn-skip".to_owned(),
+            body: "Owner: quarantine probe.\nMaia: Noted.".to_owned(),
+            taint: MemoryTaint::Untrusted,
+            reasoning: None,
+            participants: "owner".to_owned(),
+            created_at: 40,
+            segments: vec![SegmentWrite {
+                text: "quarantine probe".to_owned(),
+                taint: MemoryTaint::Untrusted,
+                sources: "owner".to_owned(),
+            }],
+        })
+        .expect("episode");
+    owner
+        .note_promotion_failure("episode-stuck", 1)
+        .expect("quarantine");
+    owner.shutdown().expect("close seed store");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn brain_map_is_empty_and_rejects_a_missing_fact() {
     let server = Session::open("brain-empty").spawn();
