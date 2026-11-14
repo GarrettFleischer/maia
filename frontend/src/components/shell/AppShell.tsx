@@ -499,7 +499,9 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
                 }}
               />
               {dataSource === 'live' ? (
-                <p className="maia-field-help">Agent security settings are not on this screen.</p>
+                <p className="maia-field-help">
+                  Capability approvals open in chat when Maia needs permission — not on this screen.
+                </p>
               ) : (
                 <SecuritySettingsPage />
               )}
