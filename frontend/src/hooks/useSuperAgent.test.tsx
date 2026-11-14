@@ -653,7 +653,7 @@ describe('useSuperAgent submission and transcript state', () => {
             reason: 'processing_unavailable',
           },
         },
-        expected: 'The message was accepted, but processing could not continue.',
+        expected: 'Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you.',
       },
       {
         name: 'unknown future outcome',

@@ -126,6 +126,16 @@ export function shortWorkStatus(line: string): string {
   return working ? `Working on ${text}` : text
 }
 
+/** Compact chip for a needs-you task sitting above the chat. */
+export function needsYouChipLabel(row: SidebarRow): string {
+  const summary = activityPreview(row.summary, 72)
+  if (summary.length > 0) {
+    return `Needs you · ${summary}`
+  }
+  const label = shortWorkStatus(row.title) || row.title
+  return `Needs you · ${label}`
+}
+
 export function phoneStopLabel(counts: { running: number; needsYou: number }): string | null {
   if (counts.running <= 0) return null
   if (counts.needsYou > 0) {

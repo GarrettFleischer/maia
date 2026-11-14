@@ -10,6 +10,7 @@ import {
   chatActivityLabel,
   taskStripLabel,
   shortWorkStatus,
+  needsYouChipLabel,
   isNonTerminalPhase,
   canCancelTask,
   routeFold,
@@ -85,6 +86,33 @@ describe('countActivity', () => {
       shortWorkStatus('Working on I want you to investigate it and ideally fix the chat layout'),
     ).toBe('Working on investigate it and ideally fix…')
     expect(shortWorkStatus('Working on the phone layout')).toBe('Working on the phone layout')
+  })
+
+  it('labels a needs-you chip from the waiting summary, not a multi-day age', () => {
+    expect(
+      needsYouChipLabel(
+        row({
+          task_id: 'wait',
+          section: 'needs_you',
+          phase: 'waiting_for_user',
+          title: 'I want you to investigate it and ideally fix the chat',
+          summary: 'I stopped after 32 unfinished replies and I am waiting on you.',
+          elapsed_ms: 3 * 86_400_000,
+        }),
+      ),
+    ).toBe('Needs you · I stopped after 32 unfinished replies and I am waiting on you.')
+    expect(
+      needsYouChipLabel(
+        row({
+          task_id: 'wait',
+          section: 'needs_you',
+          phase: 'waiting_for_user',
+          title: 'I want you to investigate it and ideally fix the chat',
+          summary: '',
+          elapsed_ms: 3 * 86_400_000,
+        }),
+      ),
+    ).toBe('Needs you · investigate it and ideally fix…')
   })
 
   it('labels a stopped phase as Stopped and keeps it resumable', () => {

@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { ApprovalSheet } from '@/components/approval/ApprovalSheet'
 import { NeedsHumanBanner } from '@/components/conversation/NeedsHumanBanner'
 import { LiveApprovalNotice, openLiveApproval } from '@/components/conversation/LiveApprovalNotice'
-import { findSidebarRow, formatElapsed, shortWorkStatus, taskStripLabel } from '@/api/superAgentFormat'
+import { findSidebarRow, needsYouChipLabel, taskStripLabel } from '@/api/superAgentFormat'
 import { RouterConversation } from '@/components/shell/RouterConversation'
 import { StopAllButton } from '@/components/shell/StopAllButton'
 import { TaskRail } from '@/components/shell/TaskRail'
@@ -35,15 +35,11 @@ export function TaskStrip({
         {taskStripLabel(rows)}
       </button>
       {!open
-        ? needs.map((row) => {
-            const label = shortWorkStatus(row.title) || row.title
-            const age = row.elapsed_ms > 0 ? ` · ${formatElapsed(row.elapsed_ms)}` : ''
-            return (
+        ? needs.map((row) => (
               <button key={row.task_id} type="button" className="maia-btn" onClick={() => onOpen(row.task_id)}>
-                {`Open ${label}${age}`}
+                {needsYouChipLabel(row)}
               </button>
-            )
-          })
+            ))
         : null}
       {open ? <TaskRail rows={rows} onOpen={onOpen} onPin={onPin} /> : null}
     </section>
