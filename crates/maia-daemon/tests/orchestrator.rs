@@ -1720,7 +1720,7 @@ fn aggregate_validation_failure_leaves_no_partial_task() {
         ),
         vec![
             USER_TEXT.to_owned(),
-            "The message was accepted, but processing could not continue.".to_owned(),
+            "Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you.".to_owned(),
         ]
     );
 }
@@ -1951,7 +1951,7 @@ fn request_id_exhaustion_after_owner_commit_is_admitted_processing_failure() {
         ),
         vec![
             USER_TEXT.to_owned(),
-            "The message was accepted, but processing could not continue.".to_owned(),
+            "Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you.".to_owned(),
         ]
     );
     assert_no_task_aggregate(&harness.database);
@@ -2029,7 +2029,7 @@ fn unreadable_route_note_and_route_apply_failure_are_admitted() {
         ),
         vec![
             USER_TEXT.to_owned(),
-            "The message was accepted, but processing could not continue.".to_owned(),
+            "Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you.".to_owned(),
         ]
     );
     assert_no_task_aggregate(&apply.database);
@@ -2076,7 +2076,7 @@ fn task_aggregate_write_failpoints_roll_back_and_are_admitted() {
             ),
             vec![
                 USER_TEXT.to_owned(),
-                "The message was accepted, but processing could not continue.".to_owned(),
+                "Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you.".to_owned(),
             ],
             "{table}"
         );

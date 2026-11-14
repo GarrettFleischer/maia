@@ -204,7 +204,8 @@ const ROUTE_REPAIR_LIMIT: u32 = 1;
 const ROUTE_REPAIR: &str = "That call was not a valid route. Call spawn_task for new work, continue_task or inspect_task with a listed task_id, or success with the sentence the owner should read. Send one tool call.";
 const AMBIGUOUS_ASK: &str =
     "What should I do with that? Name the task to continue, or tell me the work to start.";
-const PROCESSING_NOTE: &str = "The message was accepted, but processing could not continue.";
+const PROCESSING_NOTE: &str =
+    "Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you.";
 const USER_ROLE: &str = "user";
 const ASSISTANT_ROLE: &str = "assistant";
 const PIN_UNPINNED: &str = "unpinned";
@@ -1805,17 +1806,54 @@ fn push_route_repair(messages: &mut Vec<ChatMessage>, response: &RouterResponse)
     messages.push(ChatMessage::text(ChatRole::User, ROUTE_REPAIR));
 }
 
-fn with_listed_tasks(text: &str, phases: &BTreeMap<TaskId, TaskPhase>) -> String {
+fn with_listed_tasks(
+    text: &str,
+    phases: &BTreeMap<TaskId, TaskPhase>,
+    prompts: &BTreeMap<TaskId, Vec<u8>>,
+) -> String {
     let listed = phases
-        .keys()
+        .iter()
+        .filter(|(_, phase)| !is_terminal(phase))
         .take(8)
-        .map(|task| task.0.as_str())
+        .map(|(task, _)| listed_task_label(task, prompts.get(task)))
         .collect::<Vec<_>>();
     if listed.is_empty() {
-        format!("{text} There is no listed task yet.")
+        format!("{text} There is no open task yet.")
     } else {
-        format!("{text} Listed tasks: {}.", listed.join(", "))
+        format!("{text} Open tasks: {}.", listed.join("; "))
     }
+}
+
+fn listed_task_label(task: &TaskId, prompt: Option<&Vec<u8>>) -> String {
+    let title = prompt
+        .and_then(|bytes| {
+            let text = String::from_utf8_lossy(bytes);
+            let line = first_line(&text);
+            let line = line.trim();
+            if line.is_empty() {
+                None
+            } else {
+                Some(short_listed_title(line))
+            }
+        })
+        .filter(|title| !title.is_empty());
+    match title {
+        Some(title) => format!("{} ({})", task.0, title),
+        None => task.0.clone(),
+    }
+}
+
+fn short_listed_title(title: &str) -> String {
+    let flat = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = String::new();
+    for (index, ch) in flat.chars().enumerate() {
+        if index == 48 {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn agent_stop(response: &RouterResponse) -> AgentStop {
@@ -4390,7 +4428,7 @@ impl<R: Router> Orchestrator<R> {
         if owner_text_is_new_work(text) {
             return self.fallback_spawn(message, text, thinking, usage, measured, attachments);
         }
-        let sentence = with_listed_tasks(AMBIGUOUS_ASK, &self.phases);
+        let sentence = with_listed_tasks(AMBIGUOUS_ASK, &self.phases, &self.prompts);
         self.finish_owner_turn(
             message,
             text,
@@ -5179,7 +5217,7 @@ impl<R: Router> Orchestrator<R> {
                 .execute_admitted(message, text, &decision, guidance.as_deref())
                 .map(RouteExecution::Continue),
             AdmittedRoute::AskUser { clarification } => Ok(RouteExecution::TellOwner(
-                with_listed_tasks(&clarification.0, &self.phases),
+                with_listed_tasks(&clarification.0, &self.phases, &self.prompts),
             )),
             AdmittedRoute::Refuse { reason } => Ok(RouteExecution::Continue(RouteEffect {
                 applied: None,
@@ -7429,6 +7467,72 @@ fn required_text(id: String) -> Result<String, ProposalParseError> {
         Err(ProposalParseError::Target)
     } else {
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod listed_tasks_tests {
+    use std::collections::BTreeMap;
+
+    use maia_core::super_agent::{
+        AttemptId, EvidenceSetId, TaskId, TaskPhase, WaitReason,
+    };
+
+    use super::with_listed_tasks;
+
+    #[test]
+    fn listed_tasks_skip_finished_work_and_prefer_titles() {
+        let mut phases = BTreeMap::new();
+        phases.insert(
+            TaskId("task-done".to_owned()),
+            TaskPhase::Completed {
+                evidence: EvidenceSetId("ev-1".to_owned()),
+            },
+        );
+        phases.insert(
+            TaskId("task-wait".to_owned()),
+            TaskPhase::WaitingForUser {
+                reason: WaitReason::Clarification,
+            },
+        );
+        phases.insert(
+            TaskId("task-run".to_owned()),
+            TaskPhase::Running {
+                attempt: AttemptId("a-1".to_owned()),
+            },
+        );
+        let mut prompts = BTreeMap::new();
+        prompts.insert(
+            TaskId("task-wait".to_owned()),
+            b"Investigate live token streaming on phone\nmore".to_vec(),
+        );
+        let sentence = with_listed_tasks("Pick one.", &phases, &prompts);
+        assert!(
+            sentence.contains("task-wait") && sentence.contains("Investigate live token streaming"),
+            "{sentence}"
+        );
+        assert!(sentence.contains("task-run"), "{sentence}");
+        assert!(
+            !sentence.contains("task-done"),
+            "finished tasks must not be listed: {sentence}"
+        );
+    }
+
+    #[test]
+    fn listed_tasks_say_when_nothing_is_open() {
+        let mut phases = BTreeMap::new();
+        phases.insert(
+            TaskId("task-done".to_owned()),
+            TaskPhase::Completed {
+                evidence: EvidenceSetId("ev-1".to_owned()),
+            },
+        );
+        let sentence = with_listed_tasks("Pick one.", &phases, &BTreeMap::new());
+        assert!(
+            sentence.contains("no open task"),
+            "{sentence}"
+        );
+        assert!(!sentence.contains("task-done"), "{sentence}");
     }
 }
 

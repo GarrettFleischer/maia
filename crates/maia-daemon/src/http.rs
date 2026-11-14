@@ -1716,15 +1716,9 @@ fn settle_route<R: RouterPort>(
                 );
                 return;
             }
-            if publish(actor).is_err() {
-                actor.host.record_processing_failure();
-                let _ = actor.host.finish_submission(
-                    operation,
-                    outcome.message,
-                    AdmittedOutcome::ProcessingFailed,
-                );
-                return;
-            }
+            // Sidebar publish is best-effort after a committed route. The owner
+            // already has the reply; a publish miss must not stamp a failure note.
+            publish_best_effort(actor);
             let route = match outcome.admitted {
                 AdmittedRoute::Admit(_) => RoutedOutcome::Admit,
                 AdmittedRoute::AskUser { .. } => RoutedOutcome::Ask,
@@ -2094,14 +2088,9 @@ fn message<R: RouterPort>(
             AdmittedOutcome::ProcessingFailed,
         )));
     }
-    if publish(actor).is_err() {
-        actor.host.record_processing_failure();
-        return Ok(submission_value(actor.host.finish_submission(
-            operation,
-            outcome.message,
-            AdmittedOutcome::ProcessingFailed,
-        )));
-    }
+    // Sidebar publish is best-effort after a committed route. The owner already
+    // has the reply; a publish miss must not stamp a failure note.
+    publish_best_effort(actor);
     let route = match outcome.admitted {
         AdmittedRoute::Admit(_) => RoutedOutcome::Admit,
         AdmittedRoute::AskUser { .. } => RoutedOutcome::Ask,

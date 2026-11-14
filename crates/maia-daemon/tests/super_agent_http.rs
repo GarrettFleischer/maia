@@ -1466,7 +1466,7 @@ async fn step_failure_after_admission_returns_processing_failed() {
         vec![
             USER_TEXT.to_owned(),
             "Done.".to_owned(),
-            "The message was accepted, but processing could not continue.".to_owned(),
+            "Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you.".to_owned(),
         ]
     );
     assert_eq!(
@@ -1490,7 +1490,7 @@ async fn step_failure_after_admission_returns_processing_failed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn publication_failure_after_admission_returns_processing_failed() {
+async fn publication_failure_after_admission_keeps_the_routed_reply() {
     let session = Session::open("publish-processing-failure");
     session.queue_create();
     let router = session.router.clone();
@@ -1514,11 +1514,12 @@ async fn publication_failure_after_admission_returns_processing_failed() {
     assert_eq!(
         first_body,
         json!({
+            "admitted": "admit",
             "admission": "admitted",
             "message_id": "m-1",
             "outcome": {
-                "kind": "processing_failed",
-                "reason": "processing_unavailable",
+                "kind": "routed",
+                "route": "admit",
             },
         })
     );
@@ -1540,11 +1541,7 @@ async fn publication_failure_after_admission_returns_processing_failed() {
             &server.database,
             "SELECT body FROM router_messages ORDER BY ordinal"
         ),
-        vec![
-            USER_TEXT.to_owned(),
-            "Done.".to_owned(),
-            "The message was accepted, but processing could not continue.".to_owned(),
-        ]
+        vec![USER_TEXT.to_owned(), "Done.".to_owned(),]
     );
     let replay = post_json(&server, "/api/super-agent/messages", request).await;
     assert_eq!(
@@ -1554,7 +1551,7 @@ async fn publication_failure_after_admission_returns_processing_failed() {
     assert_eq!(router.request_count(), 2);
     assert_eq!(
         count(&server.database, "SELECT COUNT(*) FROM router_messages"),
-        3
+        2
     );
 }
 
@@ -1766,7 +1763,7 @@ async fn atomic_task_failure_returns_admitted_with_no_partial_task() {
         ),
         vec![
             USER_TEXT.to_owned(),
-            "The message was accepted, but processing could not continue.".to_owned(),
+            "Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you.".to_owned(),
         ]
     );
     let replay = post_json(&server, "/api/super-agent/messages", request).await;

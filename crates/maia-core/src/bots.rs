@@ -93,6 +93,7 @@ pub fn is_ephemeral_status_note(text: &str) -> bool {
     matches!(
         text.trim(),
         "The message was accepted, but processing could not continue."
+            | "Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you."
             | "The message was accepted. A final reply is not in the chat yet; the task may still be running."
             | "The router proposal could not be read."
             | "The model provider is unavailable."
@@ -369,6 +370,9 @@ mod tests {
     fn catalog_preview_skips_ephemeral_status_notes() {
         assert!(is_ephemeral_status_note(
             "The message was accepted, but processing could not continue."
+        ));
+        assert!(is_ephemeral_status_note(
+            "Your message was saved, but that turn could not finish. Send it again, or open Tasks if something still needs you."
         ));
         assert_eq!(
             catalog_preview(
