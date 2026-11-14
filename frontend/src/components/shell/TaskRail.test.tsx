@@ -329,10 +329,12 @@ describe('TaskDetail', () => {
           attempts: [{ attempt_id: 'attempt-1', phase: 'running', summary: 'Editing' }],
         }}
         pin="unpinned"
+        phase="running"
         operation={{ kind: 'idle' }}
         onClose={onClose}
         onQuote={onQuote}
         onPin={onPin}
+        onCancel={vi.fn()}
       />,
     )
     await user.click(screen.getByRole('button', { name: 'Quote task' }))
@@ -344,36 +346,45 @@ describe('TaskDetail', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
-  it('never offers Stop on task detail, even for a running task', () => {
+  it('offers Cancel for a needs-you task and keeps Stop off the detail', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
     render(
       <TaskDetail
         detail={{
           ...inspection,
-          attempts: [{ attempt_id: 'attempt-1', phase: 'running', summary: 'Editing' }],
+          attempts: [{ attempt_id: 'attempt-1', phase: 'waiting_for_user', summary: 'Waiting' }],
         }}
         pin="unpinned"
+        phase="waiting_for_user"
         operation={{ kind: 'idle' }}
         onClose={vi.fn()}
         onQuote={vi.fn()}
         onPin={vi.fn()}
+        onCancel={onCancel}
       />,
     )
 
     expect(screen.queryByRole('button', { name: 'Stop this task' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel task' }))
+    expect(onCancel).toHaveBeenCalledWith('task-1')
   })
 
-  it('hides Stop for terminal task detail', () => {
+  it('hides Cancel for terminal task detail', () => {
     render(
       <TaskDetail
         detail={inspection}
         pin="unpinned"
+        phase="completed"
         operation={{ kind: 'idle' }}
         onClose={vi.fn()}
         onQuote={vi.fn()}
         onPin={vi.fn()}
+        onCancel={vi.fn()}
       />,
     )
 
+    expect(screen.queryByRole('button', { name: 'Cancel task' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Stop this task' })).not.toBeInTheDocument()
   })
 

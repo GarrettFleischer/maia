@@ -64,7 +64,7 @@ export function AgentRail({
         />
       </div>
       <div className="maia-nav-footer">
-        <StopAllButton onStop={onStopAll} />
+        {countActivity(rows).running > 0 ? <StopAllButton onStop={onStopAll} /> : null}
         <button
           type="button"
           className="maia-foot-link"

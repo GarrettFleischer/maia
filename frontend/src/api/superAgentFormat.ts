@@ -85,6 +85,11 @@ export function isNonTerminalPhase(phase: TaskPhaseName): boolean {
   return !TERMINAL_PHASES.has(phase)
 }
 
+/** Owner can end open work from task detail; finished work stays read-only. */
+export function canCancelTask(phase: TaskPhaseName): boolean {
+  return isNonTerminalPhase(phase)
+}
+
 export function countActivity(rows: readonly SidebarRow[]): { running: number; needsYou: number } {
   return {
     running: rows.reduce((total, row) => total + countRunningThreads(row), 0),
@@ -122,12 +127,11 @@ export function shortWorkStatus(line: string): string {
 }
 
 export function phoneStopLabel(counts: { running: number; needsYou: number }): string | null {
-  if (counts.running <= 0 && counts.needsYou <= 0) return null
-  if (counts.running > 0 && counts.needsYou > 0) {
+  if (counts.running <= 0) return null
+  if (counts.needsYou > 0) {
     return `${counts.running} running · ${counts.needsYou} needs you`
   }
-  if (counts.running > 0) return `${counts.running} running`
-  return `${counts.needsYou} needs you`
+  return `${counts.running} running`
 }
 
 function countRunningThreads(row: SidebarRow): number {
@@ -147,6 +151,16 @@ export function formatElapsed(elapsedMs: number): string {
   const safe = Number.isFinite(elapsedMs) && elapsedMs > 0 ? Math.floor(elapsedMs) : 0
   if (safe < 1000) return `${safe} ms`
   const totalSeconds = Math.floor(safe / 1000)
+  const days = Math.floor(totalSeconds / 86_400)
+  if (days > 0) {
+    const hours = Math.floor((totalSeconds % 86_400) / 3_600)
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`
+  }
+  const hours = Math.floor(totalSeconds / 3_600)
+  if (hours > 0) {
+    const minutes = Math.floor((totalSeconds % 3_600) / 60)
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
+  }
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   if (minutes > 0) return `${minutes}m ${seconds}s`

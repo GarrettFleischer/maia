@@ -398,7 +398,8 @@ describe('Stop all wiring', () => {
     )
 
     expect(screen.getByTestId('activity-probe')).toHaveTextContent('2/1')
-    await user.click(screen.getByLabelText('Stop all running threads'))
+    const stopAll = await screen.findByLabelText('Stop all running threads')
+    await user.click(stopAll)
     expect(hostCommand).toHaveBeenCalledWith({ command: 'stop_all' })
     expect(screen.getByTestId('activity-probe')).toHaveTextContent('2/1')
   })
@@ -595,7 +596,7 @@ describe('Live phone stop and connection', () => {
     expect(screen.getByRole('button', { name: 'Stop all running threads' })).toBeVisible()
   })
 
-  it('shows the phone stop bar when live work is waiting', async () => {
+  it('keeps the phone stop bar off when live work is only waiting on the owner', async () => {
     window.innerWidth = 390
     window.dispatchEvent(new Event('resize'))
     vi.stubGlobal('WebSocket', class {
@@ -620,7 +621,9 @@ describe('Live phone stop and connection', () => {
     renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
     await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
     expect(await screen.findByText('Live waiting')).toBeVisible()
-    expect(screen.getByTestId('phone-stop-bar')).toHaveTextContent('1 needs you')
+    expect(screen.queryByTestId('phone-stop-bar')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop all running threads' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Tasks · 1 needs you/ })).toBeVisible()
   })
 
   it('shows a reconnecting banner and keeps the draft', async () => {

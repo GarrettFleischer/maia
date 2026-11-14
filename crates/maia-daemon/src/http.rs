@@ -4432,7 +4432,7 @@ fn open_read(path: &FsPath) -> Result<Connection, ApiError> {
 fn sidebar_value(connection: &Connection, bot: Option<&str>) -> Result<Value, ApiError> {
     let tasks = load_tasks(connection, bot)?;
     let children = load_children(connection)?;
-    let rows = nest_rows(&tasks, &children)?;
+    let rows = nest_rows(&tasks, &children, unix_now())?;
     let approvals = approval_values(connection)?;
     Ok(serde_json::json!({ "rows": rows, "approvals": approvals }))
 }
@@ -4605,6 +4605,16 @@ struct TaskRecord {
     completion_view: String,
     summary: String,
     criteria_total: u32,
+    created_at: i64,
+}
+
+/// Honest leaf: age from stored created_at and a caller-supplied clock.
+fn elapsed_ms_since(created_at: i64, now: i64) -> u64 {
+    if now <= created_at {
+        return 0;
+    }
+    let seconds = (now - created_at) as u64;
+    seconds.saturating_mul(1000)
 }
 
 struct ChildRecord {
@@ -4616,7 +4626,7 @@ struct ChildRecord {
 fn load_tasks(connection: &Connection, bot: Option<&str>) -> Result<Vec<TaskRecord>, ApiError> {
     let mut statement = connection
         .prepare(
-            "SELECT t.task_id, t.title, t.phase, t.pinned, t.completion_view FROM task_sessions t \
+            "SELECT t.task_id, t.title, t.phase, t.pinned, t.completion_view, t.created_at FROM task_sessions t \
              LEFT JOIN task_bots b ON b.task_id = t.task_id \
              WHERE ( \
                 ?1 IS NULL \
@@ -4638,12 +4648,14 @@ fn load_tasks(connection: &Connection, bot: Option<&str>) -> Result<Vec<TaskReco
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         })
         .map_err(|_| ApiError::Store)?;
     let mut tasks = Vec::new();
     for row in mapped {
-        let (task_id, title, phase, pin, completion_view) = row.map_err(|_| ApiError::Store)?;
+        let (task_id, title, phase, pin, completion_view, created_at) =
+            row.map_err(|_| ApiError::Store)?;
         tasks.push(TaskRecord {
             summary: load_summary(connection, &task_id)?,
             criteria_total: count_criteria(connection, &task_id)?,
@@ -4652,6 +4664,7 @@ fn load_tasks(connection: &Connection, bot: Option<&str>) -> Result<Vec<TaskReco
             phase,
             pin,
             completion_view,
+            created_at,
         });
     }
     Ok(tasks)
@@ -4750,6 +4763,7 @@ struct SidebarRowBody {
 fn nest_rows(
     tasks: &[TaskRecord],
     children: &[ChildRecord],
+    now: i64,
 ) -> Result<Vec<SidebarRowBody>, ApiError> {
     let child_ids: BTreeSet<&str> = children
         .iter()
@@ -4767,7 +4781,7 @@ fn nest_rows(
         if child_ids.contains(task.task_id.as_str()) {
             continue;
         }
-        rows.push(task_row(task, tasks, &by_parent, 0)?);
+        rows.push(task_row(task, tasks, &by_parent, 0, now)?);
     }
     Ok(rows)
 }
@@ -4777,10 +4791,11 @@ fn task_row(
     tasks: &[TaskRecord],
     by_parent: &BTreeMap<&str, Vec<&ChildRecord>>,
     depth: u32,
+    now: i64,
 ) -> Result<SidebarRowBody, ApiError> {
-    let mut row = project_task(task)?;
+    let mut row = project_task(task, now)?;
     if depth < 3 {
-        row.children = child_rows(&task.task_id, tasks, by_parent, depth)?;
+        row.children = child_rows(&task.task_id, tasks, by_parent, depth, now)?;
     }
     Ok(row)
 }
@@ -4790,6 +4805,7 @@ fn child_rows(
     tasks: &[TaskRecord],
     by_parent: &BTreeMap<&str, Vec<&ChildRecord>>,
     depth: u32,
+    now: i64,
 ) -> Result<Vec<SidebarRowBody>, ApiError> {
     let Some(children) = by_parent.get(parent) else {
         return Ok(Vec::new());
@@ -4797,17 +4813,23 @@ fn child_rows(
     let mut rows = Vec::new();
     for child in children {
         if let Some(task) = tasks.iter().find(|task| task.task_id == child.child_id) {
-            rows.push(task_row(task, tasks, by_parent, depth.saturating_add(1))?);
+            rows.push(task_row(task, tasks, by_parent, depth.saturating_add(1), now)?);
         } else if depth < 3 {
             let mut row = synthetic_child(child);
-            row.children = child_rows(&child.child_id, tasks, by_parent, depth.saturating_add(1))?;
+            row.children = child_rows(
+                &child.child_id,
+                tasks,
+                by_parent,
+                depth.saturating_add(1),
+                now,
+            )?;
             rows.push(row);
         }
     }
     Ok(rows)
 }
 
-fn project_task(task: &TaskRecord) -> Result<SidebarRowBody, ApiError> {
+fn project_task(task: &TaskRecord, now: i64) -> Result<SidebarRowBody, ApiError> {
     let phase = parse_canonical_phase(&task.phase).map_err(|_| ApiError::Store)?;
     let pin = decode_pin(&task.pin)?;
     let view = decode_view(&task.completion_view)?;
@@ -4822,7 +4844,7 @@ fn project_task(task: &TaskRecord) -> Result<SidebarRowBody, ApiError> {
         section: section_name(place_sidebar(&phase, pin, &view)),
         phase: phase_name(&phase),
         summary: task.summary.clone(),
-        elapsed_ms: 0,
+        elapsed_ms: elapsed_ms_since(task.created_at, now),
         criteria_done: done,
         criteria_total: task.criteria_total,
         children: Vec::new(),
@@ -4952,4 +4974,17 @@ fn drive<T>(future: impl Future<Output = T>) -> T {
 /// Loopback check used by bind. Non-loopback addresses are refused.
 pub fn is_loopback_ip(ip: IpAddr) -> bool {
     ip.is_loopback()
+}
+
+#[cfg(test)]
+mod elapsed_ms_tests {
+    use super::elapsed_ms_since;
+
+    #[test]
+    fn elapsed_ms_since_counts_whole_seconds_forward_only() {
+        assert_eq!(elapsed_ms_since(100, 100), 0);
+        assert_eq!(elapsed_ms_since(100, 99), 0);
+        assert_eq!(elapsed_ms_since(100, 102), 2_000);
+        assert_eq!(elapsed_ms_since(0, 86_400), 86_400_000);
+    }
 }

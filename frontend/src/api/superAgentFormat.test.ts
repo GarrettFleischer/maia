@@ -3,6 +3,7 @@ import {
   ACTIVITY_PREVIEW_LIMIT,
   activityPreview,
   countActivity,
+  formatElapsed,
   formatPhase,
   phoneStopLabel,
   taskCardMeta,
@@ -10,6 +11,7 @@ import {
   taskStripLabel,
   shortWorkStatus,
   isNonTerminalPhase,
+  canCancelTask,
   routeFold,
   shownAcceptanceContext,
   visibleInspectionGroups,
@@ -57,12 +59,13 @@ describe('countActivity', () => {
     expect(phoneStopLabel(countActivity([]))).toBeNull()
   })
 
-  it('names running work and waiting needs-you work for the phone stop bar', () => {
+  it('names running work for the phone stop bar and hides it when nothing is running', () => {
     expect(phoneStopLabel({ running: 2, needsYou: 0 })).toBe('2 running')
-    expect(phoneStopLabel({ running: 0, needsYou: 1 })).toBe('1 needs you')
+    expect(phoneStopLabel({ running: 1, needsYou: 1 })).toBe('1 running · 1 needs you')
+    expect(phoneStopLabel({ running: 0, needsYou: 1 })).toBeNull()
     expect(phoneStopLabel(countActivity([
       row({ task_id: 'wait', section: 'needs_you', phase: 'waiting_for_user' }),
-    ]))).toBe('1 needs you')
+    ]))).toBeNull()
   })
 
   it('speaks about the chat instead of dumping a long goal', () => {
@@ -97,7 +100,30 @@ describe('countActivity', () => {
     expect(taskCardMeta('completed', 0, 1, 1)).toBe('1/1 criteria')
     expect(taskCardMeta('completed', 0, 1, 1)).not.toContain('ms')
     expect(taskCardMeta('running', 90_000, 0, 1)).toBe('1m 30s · 0/1 criteria')
+    expect(taskCardMeta('waiting_for_user', 2 * 86_400_000, 0, 1)).toBe('2d · 0/1 criteria')
     expect(taskCardMeta('cancelled', 0, 0, 0)).toBe('')
+  })
+
+  it('formats long waits as days and hours, not only minutes', () => {
+    expect(formatElapsed(500)).toBe('500 ms')
+    expect(formatElapsed(45_000)).toBe('45s')
+    expect(formatElapsed(90_000)).toBe('1m 30s')
+    expect(formatElapsed(3_600_000)).toBe('1h')
+    expect(formatElapsed(3_600_000 + 120_000)).toBe('1h 2m')
+    expect(formatElapsed(86_400_000)).toBe('1d')
+    expect(formatElapsed(2 * 86_400_000 + 5 * 3_600_000)).toBe('2d 5h')
+  })
+
+  it('offers Cancel only for open work that the owner can end', () => {
+    expect(canCancelTask('waiting_for_user')).toBe(true)
+    expect(canCancelTask('failed')).toBe(true)
+    expect(canCancelTask('stopped')).toBe(true)
+    expect(canCancelTask('blocked')).toBe(true)
+    expect(canCancelTask('running')).toBe(true)
+    expect(canCancelTask('queued')).toBe(true)
+    expect(canCancelTask('completed')).toBe(false)
+    expect(canCancelTask('cancelled')).toBe(false)
+    expect(canCancelTask('abandoned')).toBe(false)
   })
 })
 

@@ -2388,6 +2388,11 @@ async fn catalog_reads_pin_detail_reference_and_host_commands() {
     assert_eq!(row["phase"], "completed");
     assert_eq!(row["summary"], "Pin is ready");
     assert_eq!(row["children"], json!([]));
+    let elapsed = row["elapsed_ms"].as_u64().expect("elapsed_ms");
+    assert!(
+        elapsed > 0,
+        "sidebar should project age from created_at, got {elapsed}"
+    );
     assert!(!sidebar_body.contains("API_KEY"));
     assert!(!sidebar_body.contains("fixture-model"));
 

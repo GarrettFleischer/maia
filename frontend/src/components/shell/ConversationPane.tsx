@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { ApprovalSheet } from '@/components/approval/ApprovalSheet'
 import { NeedsHumanBanner } from '@/components/conversation/NeedsHumanBanner'
 import { LiveApprovalNotice, openLiveApproval } from '@/components/conversation/LiveApprovalNotice'
-import { shortWorkStatus, taskStripLabel } from '@/api/superAgentFormat'
+import { findSidebarRow, formatElapsed, shortWorkStatus, taskStripLabel } from '@/api/superAgentFormat'
 import { RouterConversation } from '@/components/shell/RouterConversation'
 import { StopAllButton } from '@/components/shell/StopAllButton'
 import { TaskRail } from '@/components/shell/TaskRail'
@@ -35,11 +35,15 @@ export function TaskStrip({
         {taskStripLabel(rows)}
       </button>
       {!open
-        ? needs.map((row) => (
-            <button key={row.task_id} type="button" className="maia-btn" onClick={() => onOpen(row.task_id)}>
-              {`Open ${shortWorkStatus(row.title) || row.title}`}
-            </button>
-          ))
+        ? needs.map((row) => {
+            const label = shortWorkStatus(row.title) || row.title
+            const age = row.elapsed_ms > 0 ? ` · ${formatElapsed(row.elapsed_ms)}` : ''
+            return (
+              <button key={row.task_id} type="button" className="maia-btn" onClick={() => onOpen(row.task_id)}>
+                {`Open ${label}${age}`}
+              </button>
+            )
+          })
         : null}
       {open ? <TaskRail rows={rows} onOpen={onOpen} onPin={onPin} /> : null}
     </section>
@@ -102,6 +106,7 @@ export function ConversationPane({
         <TaskDetail
           detail={router.detail}
           pin={router.pinMark}
+          phase={findSidebarRow(tasks, router.detail.task_id)?.phase ?? null}
           operation={router.operation}
           onClose={() => {
             void router.closeDetail()
@@ -111,6 +116,11 @@ export function ConversationPane({
           }}
           onPin={(taskId, mark) => {
             void router.pin(taskId, mark)
+          }}
+          onCancel={(taskId) => {
+            void router.hostCommand({ command: 'cancel', task_id: taskId }).then(() => {
+              void router.closeDetail()
+            })
           }}
         />
       ) : (

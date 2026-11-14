@@ -1,4 +1,5 @@
 import type { PinMark, SidebarRow, SuperAgentDataSource } from '@/api/superAgentTypes'
+import { countActivity } from '@/api/superAgentFormat'
 import { FocusTrap } from '@/components/a11y/FocusTrap'
 import { AgentRailBody } from '@/components/shell/AgentRail'
 import { StopAllButton } from '@/components/shell/StopAllButton'
@@ -47,7 +48,7 @@ export function AgentPhoneDrawer({
           />
         </div>
         <div style={{ marginTop: 16, display: 'grid', gap: 8 }}>
-          <StopAllButton onStop={onStopAll} />
+          {countActivity(rows).running > 0 ? <StopAllButton onStop={onStopAll} /> : null}
           <button
             type="button"
             className="maia-btn"

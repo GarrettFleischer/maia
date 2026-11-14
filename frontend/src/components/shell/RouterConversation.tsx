@@ -482,7 +482,9 @@ export function RouterConversation({
               <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line
             </span>
           ) : (
-            <span className="maia-composer-hint" />
+            <span className="maia-composer-hint">
+              Send to submit · <kbd>Enter</kbd> new line
+            </span>
           )}
           {canAttach ? (
             <label className="maia-btn">

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from 'react'
-import type { PinMark, TaskDetail as TaskDetailData } from '@/api/superAgentTypes'
+import type { PinMark, TaskDetail as TaskDetailData, TaskPhaseName } from '@/api/superAgentTypes'
 import {
+  canCancelTask,
   shownAcceptanceContext,
   textOrNone,
   visibleInspectionGroups,
@@ -28,19 +29,24 @@ function RecordList({ label, items }: { label: string; items: readonly Inspectio
 export function TaskDetail({
   detail,
   pin,
+  phase = null,
   operation,
   onClose,
   onQuote,
   onPin,
+  onCancel,
 }: {
   detail: TaskDetailData
   pin: PinMark
+  phase?: TaskPhaseName | null
   operation: { kind: 'idle' } | { kind: 'sending' }
   onClose: () => void
   onQuote: (taskId: string) => void
   onPin: (taskId: string, pin: PinMark) => void
+  onCancel?: (taskId: string) => void
 }) {
   const nextPin: PinMark = pin === 'pinned' ? 'unpinned' : 'pinned'
+  const showCancel = phase != null && onCancel != null && canCancelTask(phase)
   const backRef = useRef<HTMLButtonElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
@@ -116,6 +122,16 @@ export function TaskDetail({
             <button type="button" className="maia-btn" onClick={() => onPin(detail.task_id, nextPin)}>
               {pin === 'pinned' ? 'Unpin this task' : 'Pin this task'}
             </button>
+            {showCancel ? (
+              <button
+                type="button"
+                className="maia-btn"
+                disabled={operation.kind === 'sending'}
+                onClick={() => onCancel(detail.task_id)}
+              >
+                Cancel task
+              </button>
+            ) : null}
           </div>
         </div>
       </article>

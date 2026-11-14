@@ -367,7 +367,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
                 {activity.running} running · {activity.needsYou} needs you
               </p>
             ) : null}
-            <StopAllButton onStop={stopAll} />
+            {activity.running > 0 ? <StopAllButton onStop={stopAll} /> : null}
             <button
               type="button"
               className="maia-foot-link"
