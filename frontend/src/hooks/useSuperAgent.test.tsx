@@ -589,6 +589,25 @@ describe('useSuperAgent submission and transcript state', () => {
     expect(send).toHaveBeenCalledTimes(1)
   })
 
+  it('clears a phone draft that still has the Enter newline after a successful send', async () => {
+    const send = vi.fn().mockResolvedValue(routed())
+    const transcript = vi
+      .fn()
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({
+        messages: [ownerMessage('m-owner', 'Status from the phone')],
+      })
+    const client = clientWith({ send, transcript })
+    const { result } = renderHook(() => useSuperAgent(client))
+    await waitFor(() => expect(result.current.transcriptState).toEqual({ kind: 'empty' }))
+
+    act(() => result.current.setDraft('Status from the phone\n'))
+    await act(async () => result.current.submit())
+
+    expect(send).toHaveBeenCalledWith(expect.any(String), 'Status from the phone')
+    expect(result.current.draft).toBe('')
+  })
+
   it('uses the specific safe routing outcome when its transcript refresh also fails', async () => {
     const send = vi.fn().mockResolvedValue({
       admission: 'admitted',

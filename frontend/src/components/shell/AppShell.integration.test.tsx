@@ -325,6 +325,155 @@ describe('Live shell integration', () => {
     expect(sends).toBe(1)
   })
 
+  it('clears the composer after a successful Send button press', async () => {
+    const user = userEvent.setup()
+    let sends = 0
+    vi.stubGlobal('WebSocket', FakeSocket)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: URL | RequestInfo) => {
+        const path = new URL(String(input)).pathname
+        if (path === '/api/super-agent/sidebar') return jsonResponse({ rows: [] })
+        if (path === '/api/super-agent/transcript') {
+          return jsonResponse({
+            messages:
+              sends === 0
+                ? []
+                : [{ message_id: 'm-owner', role: 'owner', text: 'Clear after send button' }],
+          })
+        }
+        if (path === '/api/super-agent/messages') {
+          sends += 1
+          return jsonResponse({
+            admission: 'admitted',
+            message_id: 'm-owner',
+            outcome: { kind: 'routed', route: 'admit' },
+          })
+        }
+        return jsonResponse({ error: 'unknown_route' }, 404)
+      }),
+    )
+
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
+    renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    await user.type(composer, 'Clear after send button')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue(''))
+    expect(sends).toBe(1)
+  })
+
+  it('clears the composer after a successful Enter keyboard send', async () => {
+    const user = userEvent.setup()
+    let sends = 0
+    vi.stubGlobal('WebSocket', FakeSocket)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: URL | RequestInfo) => {
+        const path = new URL(String(input)).pathname
+        if (path === '/api/super-agent/sidebar') return jsonResponse({ rows: [] })
+        if (path === '/api/super-agent/transcript') {
+          return jsonResponse({
+            messages:
+              sends === 0
+                ? []
+                : [{ message_id: 'm-owner', role: 'owner', text: 'Clear after enter key' }],
+          })
+        }
+        if (path === '/api/super-agent/messages') {
+          sends += 1
+          return jsonResponse({
+            admission: 'admitted',
+            message_id: 'm-owner',
+            outcome: { kind: 'routed', route: 'admit' },
+          })
+        }
+        return jsonResponse({ error: 'unknown_route' }, 404)
+      }),
+    )
+
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
+    renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    await user.type(composer, 'Clear after enter key{Enter}')
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue(''))
+    expect(sends).toBe(1)
+  })
+
+  it('clears a phone composer whose draft still ends with an Enter newline', async () => {
+    const user = userEvent.setup()
+    let sends = 0
+    vi.stubGlobal('WebSocket', FakeSocket)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: URL | RequestInfo) => {
+        const path = new URL(String(input)).pathname
+        if (path === '/api/super-agent/sidebar') return jsonResponse({ rows: [] })
+        if (path === '/api/super-agent/transcript') {
+          return jsonResponse({
+            messages:
+              sends === 0
+                ? []
+                : [{ message_id: 'm-owner', role: 'owner', text: 'phone newline clear' }],
+          })
+        }
+        if (path === '/api/super-agent/messages') {
+          sends += 1
+          return jsonResponse({
+            admission: 'admitted',
+            message_id: 'm-owner',
+            outcome: { kind: 'routed', route: 'admit' },
+          })
+        }
+        return jsonResponse({ error: 'unknown_route' }, 404)
+      }),
+    )
+
+    window.innerWidth = 390
+    window.dispatchEvent(new Event('resize'))
+    renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    await user.type(composer, 'phone newline clear{Enter}')
+    expect(composer).toHaveValue('phone newline clear\n')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue(''))
+    expect(sends).toBe(1)
+  })
+
+  it('keeps the composer text when send fails before admission', async () => {
+    const user = userEvent.setup()
+    let sends = 0
+    vi.stubGlobal('WebSocket', FakeSocket)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: URL | RequestInfo) => {
+        const path = new URL(String(input)).pathname
+        if (path === '/api/super-agent/sidebar') return jsonResponse({ rows: [] })
+        if (path === '/api/super-agent/transcript') return jsonResponse({ messages: [] })
+        if (path === '/api/super-agent/messages') {
+          sends += 1
+          return jsonResponse({ error: 'empty_message' }, 400)
+        }
+        return jsonResponse({ error: 'unknown_route' }, 404)
+      }),
+    )
+
+    renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    await user.type(composer, 'Keep this on failure')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(screen.getByRole('status')).toBeVisible())
+    expect(composer).toHaveValue('Keep this on failure')
+    expect(sends).toBe(1)
+  })
+
   it('clears an unknown admitted outcome once and uses generic safe copy', async () => {
     const user = userEvent.setup()
     let sends = 0

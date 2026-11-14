@@ -503,7 +503,7 @@ export function reduceSuperAgentState(
         if (
           state.operation.kind === 'idle' &&
           event.sent_text !== undefined &&
-          state.draft === event.sent_text
+          state.draft.trim() === event.sent_text
         ) {
           return { ...state, draft: '', notice: { kind: 'idle' } }
         }
@@ -512,7 +512,7 @@ export function reduceSuperAgentState(
       if (
         event.sent_text !== undefined &&
         state.draft.length > 0 &&
-        state.draft !== event.sent_text
+        state.draft.trim() !== event.sent_text
       ) {
         return { ...state, notice: { kind: 'idle' } }
       }

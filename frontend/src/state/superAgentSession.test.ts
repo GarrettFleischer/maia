@@ -309,6 +309,32 @@ describe('reduceSuperAgentState send ownership', () => {
     expect(admitted.notice).toEqual({ kind: 'idle' })
   })
 
+  it('clears a phone draft that only differs by Enter newline whitespace', () => {
+    const token = Symbol('phone-newline') as SendOperationToken
+    const drafted = reduceSuperAgentState(hydratedState(), {
+      type: 'draft_changed',
+      session,
+      activation,
+      draft: 'Status from the phone\n',
+    })
+    const sending = reduceSuperAgentState(drafted, {
+      type: 'send_started',
+      session,
+      activation,
+      token,
+    })
+    const admitted = reduceSuperAgentState(sending, {
+      type: 'send_admitted',
+      session,
+      activation,
+      token,
+      sent_text: 'Status from the phone',
+    })
+
+    expect(admitted.draft).toBe('')
+    expect(admitted.notice).toEqual({ kind: 'idle' })
+  })
+
   it('leaves a newer draft when a late admission arrives', () => {
     const token = Symbol('given-up') as SendOperationToken
     const drafted = reduceSuperAgentState(hydratedState(), {
