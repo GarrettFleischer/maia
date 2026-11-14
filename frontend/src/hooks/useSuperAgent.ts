@@ -352,7 +352,8 @@ export interface RouterBindings {
   outgoing: readonly OutgoingMessage[]
   retryOutgoing: (id: string) => void
   activity: readonly ActivityLine[]
-  liveReply: { text: string; dots: boolean } | null
+  liveReply: { text: string; dots: boolean; phase: 'streaming' | 'interrupted' } | null
+  dismissLiveReply: () => void
 }
 
 export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
@@ -378,7 +379,11 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
   const [flushTick, setFlushTick] = useState(0)
   const inflightText = useRef(new Map<string, SendOperationToken>())
   const refreshOnConnect = useRef<() => void>(() => undefined)
-  const { held: liveReply, applyLive } = useHeldReply(client, () => refreshOnConnect.current())
+  const {
+    held: liveReply,
+    applyLive,
+    dismissLiveReply,
+  } = useHeldReply(client, () => refreshOnConnect.current())
   const [activity, setActivity] = useState<ActivityLine[]>([])
   const [outgoing, setOutgoing] = useState<OutgoingMessage[]>([])
   const outgoingRef = useRef(outgoing)
@@ -1221,6 +1226,9 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     outgoing,
     retryOutgoing,
     activity,
-    liveReply: liveReply ? { text: liveReply.text, dots: liveReply.dots } : null,
+    liveReply: liveReply
+      ? { text: liveReply.text, dots: liveReply.dots, phase: liveReply.phase }
+      : null,
+    dismissLiveReply,
   }
 }

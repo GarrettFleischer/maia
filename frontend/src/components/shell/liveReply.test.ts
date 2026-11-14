@@ -50,10 +50,32 @@ describe('catchUpReply', () => {
     expect(next?.revision).toBe(2)
   })
 
-  it('shows dots on an interrupted stream even while the link is up', () => {
+  it('marks an interrupted stream without pretending it is still writing', () => {
     const next = catchUpReply(held, server({ phase: 'interrupted', text: 'The pin is' }), 'connected')
-    expect(next?.dots).toBe(true)
+    expect(next?.dots).toBe(false)
+    expect(next?.phase).toBe('interrupted')
     expect(next?.text).toBe('The pin is')
+  })
+
+  it('keeps a dismissed interrupted stream cleared while the same stream remains', () => {
+    const next = catchUpReply(
+      held,
+      server({ phase: 'interrupted', text: 'The pin is' }),
+      'connected',
+      new Set(['4']),
+    )
+    expect(next).toBeNull()
+  })
+
+  it('adopts a newer stream after an interrupted one was dismissed', () => {
+    const next = catchUpReply(
+      null,
+      server({ stream_id: '5', revision: 1, text: 'Fresh', phase: 'streaming' }),
+      'connected',
+      new Set(['4']),
+    )
+    expect(next?.stream_id).toBe('5')
+    expect(next?.text).toBe('Fresh')
   })
 
   it('drops the partial once the server clears it and the link is up', () => {

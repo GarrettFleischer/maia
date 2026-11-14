@@ -53,6 +53,7 @@ export function RouterConversation({
   onStopTask,
   placeholder = 'Message',
   liveReply = null,
+  onDismissLiveReply,
   botId = 'maia',
 }: {
   messages: readonly RouterMessage[]
@@ -79,7 +80,8 @@ export function RouterConversation({
   activity?: readonly ActivityLine[]
   onStopTask?: (taskId: string) => void
   placeholder?: string
-  liveReply?: { text: string; dots: boolean } | null
+  liveReply?: { text: string; dots: boolean; phase?: 'streaming' | 'interrupted' } | null
+  onDismissLiveReply?: () => void
   botId?: string
 }) {
   const [rejection, setRejection] = useState<string | null>(null)
@@ -344,8 +346,14 @@ export function RouterConversation({
                 className="maia-run"
                 data-testid="live-reply"
                 data-final="false"
-                aria-busy="true"
-                aria-label={liveReply.dots ? 'Maia is still writing' : 'Maia is writing'}
+                aria-busy={liveReply.phase === 'interrupted' ? 'false' : 'true'}
+                aria-label={
+                  liveReply.phase === 'interrupted'
+                    ? 'Reply interrupted'
+                    : liveReply.dots
+                      ? 'Maia is still writing'
+                      : 'Maia is writing'
+                }
               >
                 <p className="maia-speaker">Maia</p>
                 <div className="maia-live-copy">
@@ -358,6 +366,16 @@ export function RouterConversation({
                     </span>
                   ) : null}
                 </div>
+                {liveReply.phase === 'interrupted' ? (
+                  <div className="maia-live-interrupted">
+                    <p role="status">Interrupted · not a saved reply</p>
+                    {onDismissLiveReply ? (
+                      <button type="button" className="maia-btn" onClick={onDismissLiveReply}>
+                        Dismiss
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </article>
             </li>
           ) : null}

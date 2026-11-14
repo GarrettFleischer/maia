@@ -12,7 +12,8 @@ const message = (id: string, text: string, role: 'owner' | 'router' = 'router') 
 
 function renderConversation(
   messages: ReturnType<typeof message>[],
-  liveReply: { text: string; dots: boolean } | null = null,
+  liveReply: { text: string; dots: boolean; phase?: 'streaming' | 'interrupted' } | null = null,
+  onDismissLiveReply?: () => void,
 ) {
   return render(
     <RouterConversation
@@ -29,6 +30,7 @@ function renderConversation(
       onAnnouncementAcknowledged={() => undefined}
       onSubmit={() => undefined}
       liveReply={liveReply}
+      onDismissLiveReply={onDismissLiveReply}
       botId="maia"
     />,
   )
@@ -54,6 +56,23 @@ describe('live reply', () => {
     expect(dots).toHaveTextContent('...')
     expect(dots.querySelectorAll('span')).toHaveLength(3)
     expect(screen.getByLabelText('Maia is still writing')).toContainElement(dots)
+  })
+
+  it('labels an interrupted reply and offers dismiss instead of still-writing dots', async () => {
+    const user = userEvent.setup()
+    const onDismissLiveReply = vi.fn()
+    renderConversation(
+      [message('m1', 'Hello')],
+      { text: 'The pin is', dots: false, phase: 'interrupted' },
+      onDismissLiveReply,
+    )
+    const live = screen.getByTestId('live-reply')
+    expect(live).toHaveAttribute('aria-busy', 'false')
+    expect(screen.getByLabelText('Reply interrupted')).toBeVisible()
+    expect(screen.queryByTestId('stream-dots')).not.toBeInTheDocument()
+    expect(screen.getByText('Interrupted · not a saved reply')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(onDismissLiveReply).toHaveBeenCalledOnce()
   })
 })
 

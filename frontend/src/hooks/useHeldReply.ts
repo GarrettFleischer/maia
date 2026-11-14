@@ -5,13 +5,21 @@ import { catchUpReply, type HeldReply, type LinkPhase } from '@/components/shell
 export function useHeldReply(client: SuperAgentClient, onConnected: () => void): {
   held: HeldReply | null
   applyLive: (server: LiveReply | null | undefined) => void
+  dismissLiveReply: () => void
 } {
   const link = useRef<LinkPhase>('connected')
+  const dismissed = useRef(new Set<string>())
   const onConnectedRef = useRef(onConnected)
   onConnectedRef.current = onConnected
   const [held, setHeld] = useState<HeldReply | null>(null)
   const applyLive = useCallback((server: LiveReply | null | undefined) => {
-    setHeld((current) => catchUpReply(current, server, link.current))
+    setHeld((current) => catchUpReply(current, server, link.current, dismissed.current))
+  }, [])
+  const dismissLiveReply = useCallback(() => {
+    setHeld((current) => {
+      if (current?.phase === 'interrupted') dismissed.current.add(current.stream_id)
+      return null
+    })
   }, [])
 
   useEffect(() => {
@@ -32,5 +40,5 @@ export function useHeldReply(client: SuperAgentClient, onConnected: () => void):
     }
   }, [applyLive, client])
 
-  return { held, applyLive }
+  return { held, applyLive, dismissLiveReply }
 }

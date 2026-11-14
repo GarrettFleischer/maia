@@ -45,6 +45,7 @@ function bindings(decideApproval: RouterBindings['decideApproval']): RouterBindi
     retryOutgoing: () => undefined,
     activity: [],
     liveReply: null,
+    dismissLiveReply: () => undefined,
   }
 }
 

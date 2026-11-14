@@ -26,13 +26,21 @@ export function catchUpReply(
   held: HeldReply | null,
   server: LiveReply | null | undefined,
   link: LinkPhase,
+  dismissed: ReadonlySet<string> = new Set(),
 ): HeldReply | null {
   if (server === undefined) {
     if (!held) return null
+    if (dismissed.has(held.stream_id) && held.phase === 'interrupted') return null
     return present(held, link)
   }
   if (server === null || server.text.length === 0) {
-    if (link === 'reconnecting' && held) return present(held, link)
+    if (link === 'reconnecting' && held) {
+      if (dismissed.has(held.stream_id) && held.phase === 'interrupted') return null
+      return present(held, link)
+    }
+    return null
+  }
+  if (server.phase === 'interrupted' && dismissed.has(server.stream_id)) {
     return null
   }
   const adopt =
@@ -50,6 +58,7 @@ export function catchUpReply(
         text: held.text,
         phase: held.phase,
       }
+  if (next.phase === 'interrupted' && dismissed.has(next.stream_id)) return null
   return present(next, link)
 }
 
@@ -59,6 +68,6 @@ function present(
 ): HeldReply {
   return {
     ...reply,
-    dots: link === 'reconnecting' || reply.phase === 'interrupted',
+    dots: link === 'reconnecting' && reply.phase !== 'interrupted',
   }
 }

@@ -1257,6 +1257,20 @@ textarea {
   }
 }
 
+.maia-live-interrupted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.maia-live-interrupted p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .maia-choice {
   display: inline-flex;
   align-items: center;
