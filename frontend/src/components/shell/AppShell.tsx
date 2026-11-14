@@ -297,6 +297,9 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
       : countActivity(agent.rows)
   const listedBots = bots.map((bot) => {
     if (bot.bot_id !== selected.bot_id) return bot
+    if (activity.needsYou > 0 && activity.running === 0) {
+      return { ...bot, status_line: 'Needs you', running: false }
+    }
     if (activity.needsYou > 0) return { ...bot, status_line: 'Needs you' }
     if (bot.status_line.trim().length > 0) return bot
     if (activity.running > 0 || bot.running) return { ...bot, status_line: 'Working' }

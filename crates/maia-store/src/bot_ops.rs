@@ -413,41 +413,49 @@ pub fn read_bot_catalog(path: &Path) -> Result<(Vec<BotRecord>, String), StoreEr
     Ok((list(&connection)?, selected(&connection)?))
 }
 
+const BOT_TASK_SCOPE: &str = "( \
+    (SELECT bot_id FROM task_bots tb WHERE tb.task_id = t.task_id) = b.bot_id \
+    OR ( \
+        NOT EXISTS (SELECT 1 FROM task_bots tb WHERE tb.task_id = t.task_id) \
+        AND b.bot_id = 'maia' \
+        AND t.title NOT LIKE '[archived:%' \
+    ) \
+)";
+
+const RUNNING_PHASES: &str =
+    "(t.phase = 'queued' OR t.phase LIKE 'running:%' OR t.phase LIKE 'blocked:%')";
+
+const WAITING_PHASES: &str = "(t.phase LIKE 'waiting:%')";
+
 fn list(connection: &Connection) -> Result<Vec<BotRecord>, StoreError> {
-    let mut statement = connection.prepare(
+    let sql = format!(
         "SELECT b.bot_id, b.name, b.color, b.instructions, b.pinned, b.archived, \
                 b.created_at, b.updated_at, b.last_message_at, b.preview, b.unread, \
                 COALESCE(w.activity, ''), \
                 EXISTS ( \
                     SELECT 1 FROM task_sessions t \
-                    WHERE ( \
-                        (SELECT bot_id FROM task_bots tb WHERE tb.task_id = t.task_id) = b.bot_id \
-                        OR ( \
-                            NOT EXISTS (SELECT 1 FROM task_bots tb WHERE tb.task_id = t.task_id) \
-                            AND b.bot_id = 'maia' \
-                            AND t.title NOT LIKE '[archived:%' \
-                        ) \
-                    ) \
-                    AND (t.phase = 'queued' OR t.phase LIKE 'running:%' OR t.phase LIKE 'waiting:%' OR t.phase LIKE 'blocked:%') \
+                    WHERE {BOT_TASK_SCOPE} \
+                    AND {RUNNING_PHASES} \
                 ), \
                 COALESCE(( \
                     SELECT t.title FROM task_sessions t \
-                    WHERE ( \
-                        (SELECT bot_id FROM task_bots tb WHERE tb.task_id = t.task_id) = b.bot_id \
-                        OR ( \
-                            NOT EXISTS (SELECT 1 FROM task_bots tb WHERE tb.task_id = t.task_id) \
-                            AND b.bot_id = 'maia' \
-                            AND t.title NOT LIKE '[archived:%' \
-                        ) \
-                    ) \
-                    AND (t.phase = 'queued' OR t.phase LIKE 'running:%' OR t.phase LIKE 'waiting:%' OR t.phase LIKE 'blocked:%') \
+                    WHERE {BOT_TASK_SCOPE} \
+                    AND {RUNNING_PHASES} \
+                    ORDER BY t.created_at DESC \
+                    LIMIT 1 \
+                ), ''), \
+                COALESCE(( \
+                    SELECT t.title FROM task_sessions t \
+                    WHERE {BOT_TASK_SCOPE} \
+                    AND {WAITING_PHASES} \
                     ORDER BY t.created_at DESC \
                     LIMIT 1 \
                 ), '') \
          FROM bots b \
          LEFT JOIN bot_work w ON w.bot_id = b.bot_id \
-         ORDER BY b.archived ASC, b.pinned DESC, COALESCE(b.last_message_at, 0) DESC, b.name COLLATE NOCASE ASC",
-    )?;
+         ORDER BY b.archived ASC, b.pinned DESC, COALESCE(b.last_message_at, 0) DESC, b.name COLLATE NOCASE ASC"
+    );
+    let mut statement = connection.prepare(&sql)?;
     let mapped = statement.query_map([], read_bot)?;
     let mut bots = Vec::new();
     for bot in mapped {
@@ -456,15 +464,13 @@ fn list(connection: &Connection) -> Result<Vec<BotRecord>, StoreError> {
     Ok(bots)
 }
 
-fn status_line(activity: &str, running_title: &str) -> String {
-    if !activity.trim().is_empty() {
-        return activity.to_owned();
-    }
-    maia_core::bots::work_status_line(running_title, None)
-}
-
 fn read_bot(row: &rusqlite::Row<'_>) -> rusqlite::Result<BotRecord> {
     let last_message_at: Option<i64> = row.get(8)?;
+    let stored_preview: String = row.get(9)?;
+    let activity: String = row.get(11)?;
+    let running = row.get::<_, i64>(12)? != 0;
+    let running_title: String = row.get(13)?;
+    let waiting_title: String = row.get(14)?;
     Ok(BotRecord {
         bot_id: row.get(0)?,
         name: row.get(1)?,
@@ -475,10 +481,10 @@ fn read_bot(row: &rusqlite::Row<'_>) -> rusqlite::Result<BotRecord> {
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
         last_message_at,
-        preview: maia_core::bots::message_preview(&row.get::<_, String>(9)?, 80),
+        preview: maia_core::bots::catalog_preview(&stored_preview, &waiting_title, 80),
         unread: row.get(10)?,
-        status_line: status_line(&row.get::<_, String>(11)?, &row.get::<_, String>(13)?),
-        running: row.get::<_, i64>(12)? != 0,
+        status_line: maia_core::bots::catalog_status_line(&activity, &running_title, &waiting_title),
+        running,
     })
 }
 
@@ -829,6 +835,23 @@ fn bind_message(
     )?;
     let preview = maia_core::bots::message_preview(preview, 80);
     let chosen = selected(connection).unwrap_or_else(|_| "maia".to_owned());
+    let keep_preview = maia_core::bots::is_ephemeral_status_note(&preview);
+    if keep_preview {
+        if from_owner || bot_id == chosen {
+            connection.execute(
+                "UPDATE bots SET last_message_at = ?1, updated_at = ?1, unread = 0 \
+                 WHERE bot_id = ?2",
+                params![now, bot_id],
+            )?;
+        } else {
+            connection.execute(
+                "UPDATE bots SET last_message_at = ?1, updated_at = ?1, unread = unread + 1 \
+                 WHERE bot_id = ?2",
+                params![now, bot_id],
+            )?;
+        }
+        return Ok(());
+    }
     if from_owner || bot_id == chosen {
         connection.execute(
             "UPDATE bots SET preview = ?1, last_message_at = ?2, updated_at = ?2, unread = 0 \

@@ -87,6 +87,44 @@ fn clip_words(text: &str, max_words: usize) -> String {
     format!("{}…", words.into_iter().take(max_words).collect::<Vec<_>>().join(" "))
 }
 
+/// Router outcome lines that belong in the transcript, not the chat-list preview.
+#[must_use]
+pub fn is_ephemeral_status_note(text: &str) -> bool {
+    matches!(
+        text.trim(),
+        "The message was accepted, but processing could not continue."
+            | "The message was accepted. A final reply is not in the chat yet; the task may still be running."
+            | "The router proposal could not be read."
+            | "The model provider is unavailable."
+            | "The message was accepted, but its outcome is unavailable."
+    )
+}
+
+/// Chat-list status: live work, needs-you waiting, or idle (hide stale activity).
+#[must_use]
+pub fn catalog_status_line(activity: &str, running_title: &str, waiting_title: &str) -> String {
+    if !running_title.trim().is_empty() {
+        if !activity.trim().is_empty() {
+            return activity.to_owned();
+        }
+        return work_status_line(running_title, None);
+    }
+    if !waiting_title.trim().is_empty() {
+        return "Needs you".to_owned();
+    }
+    String::new()
+}
+
+/// Prefer a real chat preview; fall back to waiting work when stored is empty or ephemeral.
+#[must_use]
+pub fn catalog_preview(stored: &str, waiting_title: &str, limit: usize) -> String {
+    let preview = message_preview(stored, limit);
+    if !preview.is_empty() && !is_ephemeral_status_note(&preview) {
+        return preview;
+    }
+    message_preview(waiting_title, limit)
+}
+
 /// Last-message preview, collapsed to one line and capped by characters.
 ///
 /// A stored turn envelope contributes its sentence, not the wrapper.
@@ -208,6 +246,9 @@ mod tests {
     use super::WorkNote;
     use super::also_happening;
     use super::bot_color;
+    use super::catalog_preview;
+    use super::catalog_status_line;
+    use super::is_ephemeral_status_note;
     use super::message_preview;
     use super::work_status_line;
 
@@ -308,6 +349,38 @@ mod tests {
         assert_eq!(
             message_preview(body, 80),
             "The chat is stuck on the investigation."
+        );
+    }
+
+    #[test]
+    fn catalog_status_treats_waiting_as_needs_you_not_working() {
+        assert_eq!(
+            catalog_status_line("Working on investigate it", "", "investigate the chat"),
+            "Needs you"
+        );
+        assert_eq!(
+            catalog_status_line("Working on investigate it", "live title", "waiting title"),
+            "Working on investigate it"
+        );
+        assert_eq!(catalog_status_line("Working on leftover", "", ""), "");
+    }
+
+    #[test]
+    fn catalog_preview_skips_ephemeral_status_notes() {
+        assert!(is_ephemeral_status_note(
+            "The message was accepted, but processing could not continue."
+        ));
+        assert_eq!(
+            catalog_preview(
+                "The message was accepted, but processing could not continue.",
+                "investigate the live chat streaming",
+                80
+            ),
+            "investigate the live chat streaming"
+        );
+        assert_eq!(
+            catalog_preview("Hello from the desk", "ignored waiting title", 80),
+            "Hello from the desk"
         );
     }
 }

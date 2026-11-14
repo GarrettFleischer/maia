@@ -1848,6 +1848,50 @@ fn listed_preview_is_the_turn_sentence_and_a_running_task_sets_status() {
 }
 
 #[test]
+fn waiting_task_is_needs_you_not_running_and_skips_ephemeral_preview() {
+    let db = TestDb::open("bot-waiting-needs-you", 20);
+    must(db.owner().insert_task(TaskWrite {
+        task_id: "task-wait".to_owned(),
+        phase: "waiting:clarification".to_owned(),
+        title: "investigate the live chat streaming".to_owned(),
+        pin: "unpinned".to_owned(),
+        completion_view: "unopened".to_owned(),
+        prior_task_id: None,
+        created_at: 21,
+        attempt_id: "attempt-wait".to_owned(),
+        attempt_state: "active".to_owned(),
+    }));
+    must(db.owner().bots(BotRequest::UpsertWork {
+        bot_id: "maia".to_owned(),
+        goal: "investigate the live chat streaming".to_owned(),
+        todos_json: "[]".to_owned(),
+        activity: "Working on investigate the live chat streaming".to_owned(),
+        now: 22,
+    }));
+    must(db.owner().insert_router_message(RouterMessageWrite {
+        message_id: "m-fail".to_owned(),
+        role: "assistant".to_owned(),
+        body: "The message was accepted, but processing could not continue.".to_owned(),
+        created_at: 23,
+    }));
+    must(db.owner().bots(BotRequest::BindMessage {
+        message_id: "m-fail".to_owned(),
+        bot_id: "maia".to_owned(),
+        preview: "The message was accepted, but processing could not continue.".to_owned(),
+        now: 23,
+        from_owner: false,
+    }));
+    match must(db.owner().bots(BotRequest::List)) {
+        BotResponse::List(bots) => {
+            assert!(!bots[0].running, "waiting work must not look running: {bots:?}");
+            assert_eq!(bots[0].status_line, "Needs you");
+            assert_eq!(bots[0].preview, "investigate the live chat streaming");
+        }
+        other => panic!("list {other:?}"),
+    }
+}
+
+#[test]
 fn bots_keep_separate_histories_and_share_one_brain() {
     let db = TestDb::open("bots", 10);
     match must(db.owner().bots(BotRequest::List)) {
