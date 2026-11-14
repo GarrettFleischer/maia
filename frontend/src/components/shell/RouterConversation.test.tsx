@@ -318,6 +318,71 @@ describe('RouterConversation', () => {
     expect(within(router).getByText('Maia')).toBeVisible()
   })
 
+  it('copies a message and edits an owner message into the composer', async () => {
+    const user = userEvent.setup()
+    const onDraftChange = vi.fn()
+    render(
+      <ReviewedRouterConversation
+        messages={[
+          { message_id: 'm-owner', role: 'owner', text: 'Owner body' },
+          { message_id: 'm-router', role: 'router', text: 'Router body' },
+        ]}
+        transcriptState={{ kind: 'ready' }}
+        admission={{ kind: 'ready' }}
+        operation={{ kind: 'idle' }}
+        announcement={null}
+        draft=""
+        notice={{ kind: 'idle' }}
+        disabled={false}
+        onDraftChange={onDraftChange}
+        onRetryTranscript={vi.fn()}
+        onAnnouncementAcknowledged={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    )
+
+    const owner = screen.getByRole('article', { name: 'Message from You' })
+    const router = screen.getByRole('article', { name: 'Message from Maia' })
+    await user.click(within(router).getByRole('button', { name: 'Copy message' }))
+    expect(await navigator.clipboard.readText()).toBe('Router body')
+    expect(within(router).getByRole('status')).toHaveTextContent('Copied')
+    expect(within(owner).getByRole('button', { name: 'Edit message' })).toBeVisible()
+    expect(within(router).queryByRole('button', { name: 'Edit message' })).toBeNull()
+    await user.click(within(owner).getByRole('button', { name: 'Edit message' }))
+    expect(onDraftChange).toHaveBeenCalledWith('Owner body')
+  })
+
+  it('filters the transcript when Find in chat matches', async () => {
+    const user = userEvent.setup()
+    render(
+      <ReviewedRouterConversation
+        messages={[
+          { message_id: 'm-1', role: 'owner', text: 'Weather in Canby' },
+          { message_id: 'm-2', role: 'router', text: 'It is raining' },
+          { message_id: 'm-3', role: 'owner', text: 'Thanks' },
+        ]}
+        transcriptState={{ kind: 'ready' }}
+        admission={{ kind: 'ready' }}
+        operation={{ kind: 'idle' }}
+        announcement={null}
+        draft=""
+        notice={{ kind: 'idle' }}
+        disabled={false}
+        onDraftChange={vi.fn()}
+        onRetryTranscript={vi.fn()}
+        onAnnouncementAcknowledged={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    )
+
+    await user.type(screen.getByRole('searchbox', { name: 'Find in chat' }), 'canby')
+    const list = screen.getByRole('list', { name: 'Transcript messages' })
+    expect(within(list).getByText('Weather in Canby')).toBeVisible()
+    expect(within(list).queryByText('It is raining')).not.toBeInTheDocument()
+    expect(within(list).queryByText('Thanks')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('1 match')
+  })
+
   it('keeps an ordinary admitted route out of the message', () => {
     render(
       <ReviewedRouterConversation

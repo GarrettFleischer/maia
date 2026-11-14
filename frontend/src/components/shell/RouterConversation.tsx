@@ -10,8 +10,10 @@ import type {
 } from '@/api/superAgentTypes'
 import { composerStatusText, routeFold } from '@/api/superAgentFormat'
 import { composerFieldPx } from '@/components/shell/composerField'
+import { findMatchLabel, messageMatchesFind } from '@/components/shell/transcriptFind'
 import { useTranscriptPosition } from '@/components/shell/transcriptPosition'
 import { cursorAfterView, readSeenCursor, writeSeenCursor } from '@/components/shell/unseenMarker'
+import { copyText } from '@/lib/copyText'
 import {
   dedupeRouterMessages,
   type AdmissionState,
@@ -87,6 +89,8 @@ export function RouterConversation({
   const [rejection, setRejection] = useState<string | null>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [composerKey, setComposerKey] = useState(0)
+  const [findQuery, setFindQuery] = useState('')
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const fieldRef = useRef<HTMLTextAreaElement>(null)
   const previousComposer = useRef({
     draft,
@@ -114,6 +118,10 @@ export function RouterConversation({
   }, [activity.length])
   const activityCards = latestActivity(activity)
   const visibleMessages = dedupeRouterMessages(messages)
+  const foundMessages = visibleMessages.filter((message) =>
+    messageMatchesFind(message.text, findQuery),
+  )
+  const findStatus = findMatchLabel(foundMessages.length, findQuery)
   const messageIds = visibleMessages.map((message) => message.message_id)
   const messageKey = JSON.stringify(messageIds)
   const [seenId, setSeenId] = useState<string | null>(() => readCursor(botId))
@@ -204,6 +212,12 @@ export function RouterConversation({
     return () => window.clearTimeout(timeout)
   }, [announcement, onAnnouncementAcknowledged])
 
+  useEffect(() => {
+    if (!copiedMessageId) return
+    const timer = window.setTimeout(() => setCopiedMessageId(null), 1500)
+    return () => window.clearTimeout(timer)
+  }, [copiedMessageId])
+
   const addFiles = (list: FileList | null) => {
     if (!list) return
     const next: File[] = []
@@ -253,6 +267,20 @@ export function RouterConversation({
           </span>
         ) : null}
       </div>
+      <div className="maia-transcript-find">
+        <input
+          type="search"
+          aria-label="Find in chat"
+          placeholder="Find in chat"
+          value={findQuery}
+          onChange={(event) => setFindQuery(event.target.value)}
+        />
+        {findStatus ? (
+          <p role="status" className="maia-transcript-find-status">
+            {findStatus}
+          </p>
+        ) : null}
+      </div>
       <div
         ref={transcriptRef}
         className="maia-transcript"
@@ -286,7 +314,8 @@ export function RouterConversation({
           </div>
         ) : null}
         <ol className="maia-transcript-list" aria-label="Transcript messages">
-          {visibleMessages.map((message, index) => {
+          {foundMessages.map((message) => {
+            const index = visibleMessages.findIndex((item) => item.message_id === message.message_id)
             const speaker = message.role === 'owner' ? 'You' : 'Maia'
             const fold = message.route ? routeFold(message.route) : null
             return (
@@ -320,6 +349,42 @@ export function RouterConversation({
                         )
                       }
                     />
+                    <div
+                      className="maia-message-actions"
+                      role="group"
+                      aria-label={`Actions for message from ${speaker}`}
+                    >
+                      <button
+                        type="button"
+                        className="maia-btn"
+                        aria-label="Copy message"
+                        onClick={() => {
+                          const clipboard = globalThis.navigator?.clipboard
+                          if (!clipboard) return
+                          void copyText(message.text, clipboard).then((result) => {
+                            if (result === 'copied') setCopiedMessageId(message.message_id)
+                          })
+                        }}
+                      >
+                        Copy
+                      </button>
+                      {message.role === 'owner' ? (
+                        <button
+                          type="button"
+                          className="maia-btn"
+                          aria-label="Edit message"
+                          onClick={() => {
+                            onDraftChange(message.text)
+                            fieldRef.current?.focus()
+                          }}
+                        >
+                          Edit
+                        </button>
+                      ) : null}
+                      {copiedMessageId === message.message_id ? (
+                        <span role="status">Copied</span>
+                      ) : null}
+                    </div>
                   </article>
                 </div>
               </li>

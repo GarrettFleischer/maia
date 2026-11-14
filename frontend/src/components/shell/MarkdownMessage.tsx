@@ -1,7 +1,8 @@
-import { Children, isValidElement, type ReactNode } from 'react'
+import { Children, isValidElement, useEffect, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { MermaidDiagram } from '@/components/shell/MermaidDiagram'
+import { copyText } from '@/lib/copyText'
 
 const markdownComponents = {
   a: MarkdownLink,
@@ -55,10 +56,49 @@ function MarkdownInput({ type, checked }: { type?: string; checked?: boolean }) 
   return <input type={type} checked={checked ?? false} disabled readOnly />
 }
 
+function fenceText(children: ReactNode): string {
+  const first = Children.toArray(children)[0]
+  if (isValidElement<{ children?: ReactNode }>(first)) {
+    return String(first.props.children ?? '').replace(/\n$/, '')
+  }
+  return String(children ?? '').replace(/\n$/, '')
+}
+
 function MarkdownPre({ children }: { children?: ReactNode }) {
   const first = Children.toArray(children)[0]
   if (isMermaidNode(first)) return first
-  return <pre>{children}</pre>
+  return <CodeBlock text={fenceText(children)}>{children}</CodeBlock>
+}
+
+function CodeBlock({ text, children }: { text: string; children?: ReactNode }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), 1500)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+  return (
+    <div className="maia-code-block">
+      <div className="maia-code-toolbar">
+        <button
+          type="button"
+          className="maia-btn"
+          aria-label="Copy code"
+          onClick={() => {
+            const clipboard = globalThis.navigator?.clipboard
+            if (!clipboard) return
+            void copyText(text, clipboard).then((result) => {
+              if (result === 'copied') setCopied(true)
+            })
+          }}
+        >
+          Copy
+        </button>
+        {copied ? <span role="status">Copied</span> : null}
+      </div>
+      <pre>{children}</pre>
+    </div>
+  )
 }
 
 function isMermaidNode(node: ReactNode): boolean {

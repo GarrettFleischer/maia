@@ -84,4 +84,14 @@ describe('MarkdownMessage', () => {
     expect(screen.getByText(/graph TD/)).toBeInTheDocument()
     await waitFor(() => expect(renderDiagram).toHaveBeenCalled())
   })
+
+  it('copies a fenced code block when Copy is pressed', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    render(<MarkdownMessage text={'```ts\nconst n = 1\n```'} />)
+
+    await user.click(screen.getByRole('button', { name: 'Copy code' }))
+    expect(await navigator.clipboard.readText()).toBe('const n = 1')
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied')
+  })
 })
