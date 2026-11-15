@@ -177,12 +177,14 @@ fn plan_json_round_trips_loop_nudge_counts_and_steps_since_review() {
     let progress = PlanProgress {
         loop_nudges: nudges.clone(),
         steps_since_review: 7,
+        autonomous_retries: 2,
     };
     let list = list_from_contract(&contract());
     let json = plan_json_with_progress(&list, 1, Some("task-prev"), &progress);
     let restored = plan_progress_from_todo(&json);
     assert_eq!(restored.loop_nudges, nudges);
     assert_eq!(restored.steps_since_review, 7);
+    assert_eq!(restored.autonomous_retries, 2);
     let stored = parse_stored_plan(&contract_json(&contract()), &json).expect("plan");
     assert_eq!(stored.2, 1);
     assert_eq!(stored.3.as_deref(), Some("task-prev"));

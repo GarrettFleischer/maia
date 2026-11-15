@@ -42,6 +42,9 @@ pub mod bots;
 /// Loop detection and transcript compaction for long tasks.
 pub mod task_loop;
 
+/// Autonomous manager policy for long-running goals.
+pub mod manager;
+
 /// Published subagent tool catalog and call admission.
 pub mod agent_tools;
 

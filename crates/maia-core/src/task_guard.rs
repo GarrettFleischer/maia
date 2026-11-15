@@ -600,6 +600,8 @@ pub struct PlanProgress {
     pub loop_nudges: BTreeMap<String, u32>,
     /// Worker steps since the last goal check-in.
     pub steps_since_review: u32,
+    /// Autonomous manager recoveries already used on this goal.
+    pub autonomous_retries: u32,
 }
 
 /// JSON for the working list.
@@ -632,6 +634,7 @@ pub fn plan_json_with_progress(
         "handoff_of": handoff_of,
         "loop_nudges": Value::Object(nudges),
         "steps_since_review": progress.steps_since_review,
+        "autonomous_retries": progress.autonomous_retries,
     })
     .to_string()
 }
@@ -658,9 +661,15 @@ pub fn plan_progress_from_todo(todo_json: &str) -> PlanProgress {
         .and_then(Value::as_u64)
         .and_then(|raw| u32::try_from(raw).ok())
         .unwrap_or(0);
+    let autonomous_retries = todo
+        .get("autonomous_retries")
+        .and_then(Value::as_u64)
+        .and_then(|raw| u32::try_from(raw).ok())
+        .unwrap_or(0);
     PlanProgress {
         loop_nudges,
         steps_since_review,
+        autonomous_retries,
     }
 }
 
