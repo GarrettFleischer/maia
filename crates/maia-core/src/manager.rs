@@ -1,60 +1,18 @@
 //! Autonomous manager policy for long-running goals.
 //!
-//! These functions read only their arguments. Clocks, stores, and model calls
-//! stay at the daemon skin.
+//! Honest leaves only: wake fingerprints, cost caps, tool interpretation, and a
+//! restart-budget backstop. Strategy lives in the orchestrator prompt + tools.
 
 use std::collections::BTreeMap;
 
 /// Default wake heartbeat interval, in seconds (5 minutes).
 pub const DEFAULT_WAKE_INTERVAL_SECS: u64 = 300;
 
-/// How many autonomous recoveries one goal may take before escalating.
+/// How many automatic restarts one goal may take before the manager must ask.
 pub const DEFAULT_AUTONOMOUS_RETRY_BUDGET: u32 = 3;
 
 /// Model calls allowed on one wake when something changed.
 pub const MAX_MODEL_CALLS_PER_WAKE: u32 = 1;
-
-/// Why the CEO must decide.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CeoNeed {
-    /// Secrets, API keys, logins.
-    Credentials,
-    /// Spend or purchase.
-    Money,
-    /// Destructive or hard-to-undo action.
-    Irreversible,
-    /// Taste or policy choice with no safe default.
-    Preference,
-    /// Outside event the manager cannot drive.
-    External,
-}
-
-/// Whether the orchestrator can keep going alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockerClass {
-    /// Retry, re-plan, or pick a sensible default.
-    Autonomous,
-    /// Ask Garrett through the orchestrator.
-    NeedsCeo {
-        /// Kind of CEO decision.
-        kind: CeoNeed,
-    },
-}
-
-/// What the manager does after a worker failure or stuck pause.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RecoveryAction {
-    /// Retry the same goal with a different approach note.
-    RetryDifferentApproach {
-        /// Note injected into the next worker turn.
-        note: String,
-    },
-    /// Ask the CEO one clear question.
-    Escalate {
-        /// Orchestrator chat line.
-        question: String,
-    },
-}
 
 /// Observed work for one wake tick.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -89,7 +47,7 @@ pub enum WakePlan {
     },
 }
 
-/// One tool the wake model (or deterministic wake) may emit.
+/// One tool the wake model may emit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WakeToolCall {
     /// Tool name.
@@ -103,170 +61,34 @@ pub struct WakeToolCall {
 pub enum WakeAction {
     /// Do nothing visible.
     Silent,
-    /// Post one orchestrator chat line.
+    /// Post one useful CEO update (not a decision).
     MessageUser {
         /// Chat body.
         text: String,
     },
-    /// Retry a failed or stuck parent.
+    /// Ask the CEO one clear decision question.
+    AskUser {
+        /// Question body.
+        text: String,
+    },
+    /// Retry a failed or stuck parent with a new approach note.
     Recover {
         /// Parent task id.
         task_id: String,
         /// Approach note for the worker.
         note: String,
     },
-    /// Hold a task with one CEO question.
-    Escalate {
+    /// Stop a parent for good.
+    Cancel {
         /// Parent task id.
         task_id: String,
-        /// Question for the owner.
-        question: String,
     },
 }
 
-/// Classifies a worker failure or waiting message.
+/// True when automatic restarts are used up and the manager must ask the user.
 #[must_use]
-pub fn classify_blocker_text(text: &str) -> BlockerClass {
-    let folded = text.to_lowercase();
-    if contains_any(
-        &folded,
-        &[
-            "api key",
-            "apikey",
-            "credential",
-            "password",
-            "login",
-            "auth token",
-            "secret",
-            "sign in",
-            "authenticate",
-        ],
-    ) {
-        return BlockerClass::NeedsCeo {
-            kind: CeoNeed::Credentials,
-        };
-    }
-    if contains_any(
-        &folded,
-        &[
-            "cost $",
-            "costs $",
-            "pay $",
-            "purchase",
-            "billing",
-            "spend $",
-            "credit card",
-            "invoice",
-        ],
-    ) {
-        return BlockerClass::NeedsCeo {
-            kind: CeoNeed::Money,
-        };
-    }
-    if contains_any(
-        &folded,
-        &[
-            "delete",
-            "drop database",
-            "rm -rf",
-            "destroy",
-            "wipe",
-            "irreversible",
-            "cannot undo",
-            "permanently",
-        ],
-    ) {
-        return BlockerClass::NeedsCeo {
-            kind: CeoNeed::Irreversible,
-        };
-    }
-    if contains_any(
-        &folded,
-        &[
-            "which one",
-            "which city",
-            "which file",
-            "which option",
-            "do you prefer",
-            "your preference",
-            "should i choose",
-            "pick one",
-            "what should i",
-        ],
-    ) || folded.contains("which ")
-    {
-        return BlockerClass::NeedsCeo {
-            kind: CeoNeed::Preference,
-        };
-    }
-    if contains_any(
-        &folded,
-        &[
-            "waiting on you",
-            "need you to",
-            "outside",
-            "third party",
-            "human must",
-            "manual approval",
-        ],
-    ) {
-        return BlockerClass::NeedsCeo {
-            kind: CeoNeed::External,
-        };
-    }
-    BlockerClass::Autonomous
-}
-
-/// Picks retry or escalate from class and remaining budget.
-#[must_use]
-pub fn decide_recovery(
-    class: BlockerClass,
-    retries_used: u32,
-    budget: u32,
-    summary: &str,
-) -> RecoveryAction {
-    match class {
-        BlockerClass::NeedsCeo { .. } => RecoveryAction::Escalate {
-            question: format_ceo_question("", summary, class),
-        },
-        BlockerClass::Autonomous if retries_used >= budget => RecoveryAction::Escalate {
-            question: format!(
-                "I tried {budget} autonomous recoveries and I am still blocked: {}. What should I do next?",
-                trim_summary(summary)
-            ),
-        },
-        BlockerClass::Autonomous => RecoveryAction::RetryDifferentApproach {
-            note: format!(
-                "Previous approach failed: {}. Try a different approach. Do not repeat the same steps. Say in one line what you will try next.",
-                trim_summary(summary)
-            ),
-        },
-    }
-}
-
-/// One orchestrator question for the CEO. Never a bare "Needs you".
-#[must_use]
-pub fn format_ceo_question(goal: &str, summary: &str, class: BlockerClass) -> String {
-    let summary = trim_summary(summary);
-    let need = match class {
-        BlockerClass::Autonomous => "a decision".to_owned(),
-        BlockerClass::NeedsCeo { kind } => match kind {
-            CeoNeed::Credentials => "credentials (API key, login, or secret)".to_owned(),
-            CeoNeed::Money => "a spend decision".to_owned(),
-            CeoNeed::Irreversible => "approval for an irreversible action I cannot undo".to_owned(),
-            CeoNeed::Preference => "your preference".to_owned(),
-            CeoNeed::External => "something only you can do externally".to_owned(),
-        },
-    };
-    if goal.trim().is_empty() {
-        format!("I need {need}: {summary}")
-    } else {
-        format!(
-            "Goal \"{}\": I need {need}. {}",
-            goal.trim(),
-            summary
-        )
-    }
+pub fn restart_budget_exhausted(retries_used: u32, budget: u32) -> bool {
+    retries_used >= budget
 }
 
 /// Stable fingerprint of a wake snapshot.
@@ -333,65 +155,6 @@ pub fn plan_wake(
     WakePlan::Silent
 }
 
-/// Deterministic recoveries for failed tasks under budget (no model).
-#[must_use]
-pub fn wake_actions_for_failures(
-    snap: &WakeSnapshot,
-    retries_by_task: &[(String, u32)],
-    budget: u32,
-) -> Vec<WakeAction> {
-    let counts: BTreeMap<&str, u32> = retries_by_task
-        .iter()
-        .map(|(id, count)| (id.as_str(), *count))
-        .collect();
-    let mut actions = Vec::new();
-    for task_id in &snap.failed_task_ids {
-        let used = counts.get(task_id.as_str()).copied().unwrap_or(0);
-        match decide_recovery(
-            BlockerClass::Autonomous,
-            used,
-            budget,
-            "failed worker on wake",
-        ) {
-            RecoveryAction::RetryDifferentApproach { note } => {
-                actions.push(WakeAction::Recover {
-                    task_id: task_id.clone(),
-                    note,
-                });
-            }
-            RecoveryAction::Escalate { question } => {
-                actions.push(WakeAction::Escalate {
-                    task_id: task_id.clone(),
-                    question,
-                });
-            }
-        }
-    }
-    for task_id in &snap.stuck_task_ids {
-        let used = counts.get(task_id.as_str()).copied().unwrap_or(0);
-        match decide_recovery(
-            BlockerClass::Autonomous,
-            used,
-            budget,
-            "stuck worker on wake",
-        ) {
-            RecoveryAction::RetryDifferentApproach { note } => {
-                actions.push(WakeAction::Recover {
-                    task_id: task_id.clone(),
-                    note,
-                });
-            }
-            RecoveryAction::Escalate { question } => {
-                actions.push(WakeAction::Escalate {
-                    task_id: task_id.clone(),
-                    question,
-                });
-            }
-        }
-    }
-    actions
-}
-
 /// Maps wake tool calls into host actions. Unknown tools are ignored.
 #[must_use]
 pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
@@ -406,12 +169,28 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                     });
                 }
             }
-            "retry_task" | "recover_task" => {
+            "ask_user" => {
+                let text = call.message.trim();
+                if !text.is_empty() {
+                    actions.push(WakeAction::AskUser {
+                        text: text.to_owned(),
+                    });
+                }
+            }
+            "retry_task" | "recover_task" | "continue_task" => {
                 let task_id = call.message.trim();
                 if !task_id.is_empty() {
                     actions.push(WakeAction::Recover {
                         task_id: task_id.to_owned(),
-                        note: "Wake recovery: try a different approach.".to_owned(),
+                        note: "Manager: try a different approach.".to_owned(),
+                    });
+                }
+            }
+            "cancel_task" => {
+                let task_id = call.message.trim();
+                if !task_id.is_empty() {
+                    actions.push(WakeAction::Cancel {
+                        task_id: task_id.to_owned(),
                     });
                 }
             }
@@ -424,18 +203,35 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
     actions
 }
 
-fn contains_any(haystack: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| haystack.contains(needle))
-}
-
-fn trim_summary(summary: &str) -> String {
-    let trimmed = summary.trim();
-    if trimmed.chars().count() <= 280 {
-        return trimmed.to_owned();
-    }
-    let mut out = trimmed.chars().take(277).collect::<String>();
-    out.push('…');
-    out
+/// Safety backstop: recoveries past the restart budget become one ask_user.
+#[must_use]
+pub fn enforce_restart_budget(
+    actions: &[WakeAction],
+    retries_by_task: &[(String, u32)],
+    budget: u32,
+) -> Vec<WakeAction> {
+    let counts: BTreeMap<&str, u32> = retries_by_task
+        .iter()
+        .map(|(id, count)| (id.as_str(), *count))
+        .collect();
+    actions
+        .iter()
+        .map(|action| match action {
+            WakeAction::Recover { task_id, .. } => {
+                let used = counts.get(task_id.as_str()).copied().unwrap_or(0);
+                if restart_budget_exhausted(used, budget) {
+                    WakeAction::AskUser {
+                        text: format!(
+                            "Goal {task_id}: I have used {budget} automatic restarts and I am still blocked. What should I do next?"
+                        ),
+                    }
+                } else {
+                    action.clone()
+                }
+            }
+            other => other.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
