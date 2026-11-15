@@ -115,6 +115,16 @@ use maia_core::super_agent::narrow_child;
 use maia_core::super_agent::owner_text_is_new_work;
 use maia_core::super_agent::reduce_phase as reduce_phase_leaf;
 use maia_core::super_agent::seal_envelope;
+use maia_core::manager::BlockerClass;
+use maia_core::manager::DEFAULT_AUTONOMOUS_RETRY_BUDGET;
+use maia_core::manager::RecoveryAction;
+use maia_core::manager::WakeAction;
+use maia_core::manager::WakeSnapshot;
+use maia_core::manager::classify_blocker_text;
+use maia_core::manager::decide_recovery;
+use maia_core::manager::format_ceo_question;
+use maia_core::manager::snapshot_fingerprint;
+use maia_core::manager::wake_actions_for_failures;
 use maia_core::task_loop::COMPACTION_KEEP_TAIL;
 use maia_core::task_loop::DEFAULT_CONTEXT_TOKEN_BUDGET;
 use maia_core::task_loop::HistoryRole;
@@ -1754,10 +1764,12 @@ enum RouterStop {
 fn router_stop(response: &RouterResponse) -> RouterStop {
     match response.tool_calls.as_slice() {
         [call] => match call.name.as_str() {
-            "success" | "failure" | "waiting" => match terminal_sentence(&call.arguments_json) {
-                Some(sentence) => RouterStop::Done(sentence),
-                None => RouterStop::Repair,
-            },
+            "success" | "failure" | "waiting" | "message_user" => {
+                match terminal_sentence(&call.arguments_json) {
+                    Some(sentence) => RouterStop::Done(sentence),
+                    None => RouterStop::Repair,
+                }
+            }
             name if is_route_tool(name) => RouterStop::Work(call.clone()),
             _ => RouterStop::Repair,
         },
@@ -1950,6 +1962,10 @@ fn route_tools_json() -> String {
             "Try a failed or stopped subagent again.",
             RouteToolShape::Task,
             false,
+        ),
+        terminal_tool(
+            "message_user",
+            "Post one useful update or question to the owner chat. Most manager wakes stay silent; call this only when the CEO needs to know or decide something.",
         ),
     ];
     tools.extend(terminal_tools());
@@ -2497,6 +2513,7 @@ pub(crate) struct WorkerMachine {
     todos: maia_core::task_loop::TodoList,
     contract: maia_core::task_loop::GoalContract,
     steps_since_review: u32,
+    autonomous_retries: u32,
     review_at: std::time::Instant,
     review_now: bool,
     new_subgoal: bool,
@@ -2624,6 +2641,8 @@ pub struct Orchestrator<R> {
     turn_bot: String,
     /// Partial reply shown while a model call is open. Absent in tests that do not stream.
     live: Option<LiveReplyBoard>,
+    /// Approach notes for the next worker open after an autonomous recovery.
+    recovery_notes: BTreeMap<TaskId, String>,
 }
 
 /// One admitted tool plus the connection and hash that pin it.
@@ -3379,6 +3398,7 @@ impl<R: Router> Orchestrator<R> {
             next_bot: "maia".to_owned(),
             turn_bot: "maia".to_owned(),
             live: None,
+            recovery_notes: BTreeMap::new(),
         }
     }
 
@@ -3436,6 +3456,161 @@ impl<R: Router> Orchestrator<R> {
             .into_iter()
             .map(|event| event.label)
             .collect()
+    }
+
+    /// Snapshot of work the manager wake inspects.
+    pub fn wake_snapshot(&self) -> WakeSnapshot {
+        let mut failed_task_ids = Vec::new();
+        let mut stuck_task_ids = Vec::new();
+        let mut waiting = Vec::new();
+        let mut running_count = 0_u32;
+        let mut completed_unopened = 0_u32;
+        for (task, phase) in &self.phases {
+            match phase {
+                TaskPhase::Failed { .. } => failed_task_ids.push(task.0.clone()),
+                TaskPhase::WaitingForUser { reason } => {
+                    let question = self
+                        .latest_task_summary(task)
+                        .unwrap_or_else(|| format!("{reason:?}"));
+                    if question.to_lowercase().contains("stopped after")
+                        || question.to_lowercase().contains("stuck")
+                    {
+                        stuck_task_ids.push(task.0.clone());
+                    }
+                    waiting.push((task.0.clone(), question));
+                }
+                TaskPhase::Blocked { .. } => {
+                    stuck_task_ids.push(task.0.clone());
+                }
+                TaskPhase::Queued | TaskPhase::Running { .. } => {
+                    running_count = running_count.saturating_add(1);
+                }
+                TaskPhase::Completed { .. } => {
+                    completed_unopened = completed_unopened.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+        WakeSnapshot {
+            failed_task_ids,
+            stuck_task_ids,
+            waiting,
+            running_count,
+            completed_unopened,
+        }
+    }
+
+    /// Applies deterministic wake recoveries and optional chat lines. Returns whether any chat was posted.
+    pub fn apply_wake_actions(&mut self, actions: &[WakeAction]) -> bool {
+        let mut messaged = false;
+        for action in actions {
+            match action {
+                WakeAction::Silent => {}
+                WakeAction::MessageUser { text } => {
+                    if self.note_router(text).is_ok() {
+                        messaged = true;
+                    }
+                }
+                WakeAction::Recover { task_id, note } => {
+                    let task = TaskId(task_id.clone());
+                    self.recovery_notes.insert(task.clone(), note.clone());
+                    if let Ok(Some((_, todo_json, _, _))) = self.store.task_plan(&task.0) {
+                        let progress = maia_core::task_loop::plan_progress_from_todo(&todo_json);
+                        let used = progress.autonomous_retries;
+                        if let Ok(Some((goal_json, todo_json, count, handoff_of))) =
+                            self.store.task_plan(&task.0)
+                            && let Some((contract, list, _, _)) =
+                                maia_core::task_loop::parse_stored_plan(&goal_json, &todo_json)
+                        {
+                            let count = u32::try_from(count).unwrap_or(0);
+                            self.save_plan(
+                                &task,
+                                &contract,
+                                &list,
+                                count,
+                                handoff_of,
+                                &maia_core::task_loop::PlanProgress {
+                                    loop_nudges: progress.loop_nudges,
+                                    steps_since_review: progress.steps_since_review,
+                                    autonomous_retries: used.saturating_add(1),
+                                },
+                            );
+                        }
+                    }
+                    match self.phases.get(&task) {
+                        Some(TaskPhase::Failed { .. } | TaskPhase::Stopped { .. }) => {
+                            if self.retry_task(&task).is_ok() {
+                                let _ = self.maybe_work(&task, OwnerNotice::Hold);
+                            }
+                        }
+                        Some(TaskPhase::WaitingForUser { .. } | TaskPhase::Blocked { .. }) => {
+                            if self
+                                .continue_task(
+                                    &task,
+                                    ReplayGuard::Omit,
+                                    Some(b"Manager wake: try a different approach."),
+                                )
+                                .is_ok()
+                            {
+                                let _ = self.maybe_work(&task, OwnerNotice::Hold);
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.record_activity(
+                        format!("Wake recovery for {}", task.0),
+                        Some(&task),
+                    );
+                }
+                WakeAction::Escalate { task_id, question } => {
+                    let task = TaskId(task_id.clone());
+                    let _ = self.note_router(question);
+                    messaged = true;
+                    self.record_activity(
+                        format!("Wake escalation for {}", task.0),
+                        Some(&task),
+                    );
+                }
+            }
+        }
+        messaged
+    }
+
+    /// Runs one manager wake: recover failures under budget without a model when possible.
+    ///
+    /// Returns whether a chat message was posted. Silent wakes return false.
+    pub fn run_manager_wake(&mut self, previous_fingerprint: &str) -> (String, bool) {
+        let snap = self.wake_snapshot();
+        let fingerprint = snapshot_fingerprint(&snap);
+        let mut retries = Vec::new();
+        for task_id in snap
+            .failed_task_ids
+            .iter()
+            .chain(snap.stuck_task_ids.iter())
+        {
+            let used = self
+                .store
+                .task_plan(task_id)
+                .ok()
+                .flatten()
+                .map(|(_, todo, _, _)| {
+                    maia_core::task_loop::plan_progress_from_todo(&todo).autonomous_retries
+                })
+                .unwrap_or(0);
+            retries.push((task_id.clone(), used));
+        }
+        let actions = wake_actions_for_failures(&snap, &retries, DEFAULT_AUTONOMOUS_RETRY_BUDGET);
+        let messaged = if previous_fingerprint == fingerprint && actions.is_empty() {
+            false
+        } else {
+            self.apply_wake_actions(&actions)
+        };
+        (fingerprint, messaged)
+    }
+
+    /// Posts one CEO-facing line without starting a full owner turn.
+    pub fn message_user(&mut self, text: &str) -> Result<(), OrchestratorError> {
+        self.note_router(text)
     }
 
     /// Sets how many tokens a task transcript may approach before older steps are summarized.
@@ -5638,7 +5813,7 @@ impl<R: Router> Orchestrator<R> {
         {
             messages.push(ChatMessage::text(ChatRole::User, packed.bytes));
         }
-        Ok(WorkerMachine {
+        let mut machine = WorkerMachine {
             task: task.clone(),
             attempt,
             messages,
@@ -5654,10 +5829,17 @@ impl<R: Router> Orchestrator<R> {
             todos,
             contract: goal,
             steps_since_review: progress.steps_since_review,
+            autonomous_retries: progress.autonomous_retries,
             review_at: std::time::Instant::now(),
             review_now: false,
             new_subgoal: false,
-        })
+        };
+        if let Some(note) = self.recovery_notes.remove(task) {
+            machine
+                .messages
+                .push(ChatMessage::text(ChatRole::User, note));
+        }
+        Ok(machine)
     }
 
     /// Advances one parent worker by a single model boundary.
@@ -5741,11 +5923,10 @@ impl<R: Router> Orchestrator<R> {
                 WorkerDrive::Done(self.complete_worker(&task, &attempt, &text, notice))
             }
             AgentStop::Failure(text) => {
-                WorkerDrive::Done(self.fail_worker(&task, &attempt, &text, notice))
+                WorkerDrive::Done(self.recover_or_escalate(machine, &text))
             }
             AgentStop::Waiting(text) => {
-                self.record_activity("waiting for your approval", Some(&task));
-                WorkerDrive::Done(self.park_worker(&task, &attempt, &text, notice))
+                WorkerDrive::Done(self.route_worker_question(machine, &text))
             }
             AgentStop::Unfinished(text) => {
                 machine.messages.extend(unfinished_pair(&text));
@@ -5898,20 +6079,122 @@ impl<R: Router> Orchestrator<R> {
             }) => {
                 let task = machine.task.clone();
                 self.record_activity(activity, Some(&task));
-                WorkerDrive::Done(self.pause_stuck(machine, &owner_message))
+                WorkerDrive::Done(self.recover_or_escalate(machine, &owner_message))
             }
             None => self.issue_worker_request(machine),
         }
     }
 
     fn pause_stuck(&mut self, machine: &WorkerMachine, message: &str) -> WorkerFinish {
+        self.recover_or_escalate(machine, message)
+    }
+
+    /// Diagnoses a failed or stuck worker and retries or escalates once.
+    fn recover_or_escalate(&mut self, machine: &WorkerMachine, summary: &str) -> WorkerFinish {
         let task = machine.task.clone();
         let attempt = machine.attempt.clone();
         let notice = machine.notice;
-        if matches!(notice, OwnerNotice::Hold) {
-            let _ = self.note_router(message);
+        let goal = machine.contract.goal.clone();
+        let class = classify_blocker_text(summary);
+        let used = machine.autonomous_retries;
+        match decide_recovery(class, used, DEFAULT_AUTONOMOUS_RETRY_BUDGET, summary) {
+            RecoveryAction::RetryDifferentApproach { note } => {
+                self.record_activity(
+                    format!(
+                        "Manager recovery {}/{}: different approach",
+                        used.saturating_add(1),
+                        DEFAULT_AUTONOMOUS_RETRY_BUDGET
+                    ),
+                    Some(&task),
+                );
+                self.persist_autonomous_retries(&task, used.saturating_add(1), machine);
+                self.recovery_notes.insert(task.clone(), note);
+                self.release_worker(&task);
+                let _ = self.record_worker_report(&task, &attempt, "failure", summary);
+                if !matches!(self.phases.get(&task), Some(TaskPhase::Failed { .. })) {
+                    let _ = self.shift_phase(
+                        &task,
+                        PhaseEvent::Fail {
+                            kind: FailureKind::WorkerReported,
+                        },
+                    );
+                }
+                match self.retry_task(&task) {
+                    Ok(_) => self.maybe_work(&task, notice),
+                    Err(_) => self.escalate_ceo_question(
+                        &task,
+                        &attempt,
+                        &goal,
+                        summary,
+                        class,
+                        notice,
+                    ),
+                }
+            }
+            RecoveryAction::Escalate { question } => {
+                self.record_activity(
+                    format!(
+                        "Manager needs you: {}",
+                        question.chars().take(120).collect::<String>()
+                    ),
+                    Some(&task),
+                );
+                let _ = self.note_router(&question);
+                self.park_worker(&task, &attempt, &question, notice)
+            }
         }
-        self.park_worker(&task, &attempt, message, notice)
+    }
+
+    fn route_worker_question(&mut self, machine: &WorkerMachine, text: &str) -> WorkerFinish {
+        let class = classify_blocker_text(text);
+        match class {
+            BlockerClass::Autonomous => self.recover_or_escalate(machine, text),
+            BlockerClass::NeedsCeo { .. } => {
+                let task = machine.task.clone();
+                let attempt = machine.attempt.clone();
+                let notice = machine.notice;
+                let goal = machine.contract.goal.clone();
+                self.escalate_ceo_question(&task, &attempt, &goal, text, class, notice)
+            }
+        }
+    }
+
+    fn escalate_ceo_question(
+        &mut self,
+        task: &TaskId,
+        attempt: &AttemptId,
+        goal: &str,
+        summary: &str,
+        class: BlockerClass,
+        notice: OwnerNotice,
+    ) -> WorkerFinish {
+        let question = format_ceo_question(goal, summary, class);
+        self.record_activity(
+            format!("Manager needs you: {}", question.chars().take(120).collect::<String>()),
+            Some(task),
+        );
+        let _ = self.note_router(&question);
+        self.park_worker(task, attempt, &question, notice)
+    }
+
+    fn persist_autonomous_retries(
+        &mut self,
+        task: &TaskId,
+        retries: u32,
+        machine: &WorkerMachine,
+    ) {
+        self.save_plan(
+            task,
+            &machine.contract,
+            &machine.todos,
+            machine.loops.handoff_count(),
+            None,
+            &maia_core::task_loop::PlanProgress {
+                loop_nudges: machine.loops.nudge_map().clone(),
+                steps_since_review: machine.steps_since_review,
+                autonomous_retries: retries,
+            },
+        );
     }
 
     fn finish_worker_compaction(

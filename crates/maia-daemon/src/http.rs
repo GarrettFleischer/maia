@@ -1318,13 +1318,34 @@ fn actor_loop<R>(
     let mut inbox = restore_pending_inbox(&actor);
     let mut route = None;
     let mut workers = Vec::new();
+    let wake_path = crate::manager_wake::wake_path_beside(&actor.database);
+    let mut wake_state = crate::manager_wake::load_wake_state(&wake_path);
     loop {
         pump(&mut actor, &mut inbox, &mut route, &mut workers);
         let idle = route.is_none() && workers.is_empty() && inbox.is_empty();
         let call = if idle {
-            match commands.blocking_recv() {
+            // Poll with a short sleep so the manager wake can fire without a model burn
+            // when nothing changed. Interval is enforced inside run_scheduled_wake.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut next = None;
+            while Instant::now() < deadline {
+                match commands.try_recv() {
+                    Ok(call) => {
+                        next = Some(call);
+                        break;
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => return,
+                }
+            }
+            match next {
                 Some(call) => call,
-                None => break,
+                None => {
+                    run_scheduled_wake(&mut actor, &wake_path, &mut wake_state);
+                    continue;
+                }
             }
         } else {
             match commands.try_recv() {
@@ -1403,6 +1424,32 @@ fn staged_for_message<R: RouterPort>(
         ));
     }
     staged
+}
+
+fn run_scheduled_wake<R: RouterPort>(
+    actor: &mut Actor<R>,
+    wake_path: &FsPath,
+    wake_state: &mut crate::ManagerWakeState,
+) {
+    // Pick up settings saved from the UI without requiring a daemon restart.
+    let disk = crate::manager_wake::load_wake_state(wake_path);
+    wake_state.interval_secs = disk.interval_secs;
+    wake_state.max_model_calls_per_wake = disk.max_model_calls_per_wake;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    crate::manager_wake::roll_cost_day(wake_state, now);
+    if wake_state.interval_secs > 0
+        && now.saturating_sub(wake_state.last_wake_at) < wake_state.interval_secs
+    {
+        return;
+    }
+    let previous = wake_state.last_fingerprint.clone();
+    let (fingerprint, _messaged) = actor.host.run_manager_wake(&previous);
+    wake_state.last_wake_at = now;
+    wake_state.last_fingerprint = fingerprint;
+    let _ = crate::manager_wake::save_wake_state(wake_path, wake_state);
 }
 
 fn pump_wait(route: &Option<LiveRoute>) -> Duration {
@@ -2533,6 +2580,10 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
             get(get_model).put(put_model),
         )
         .route("/super-agent/model-connection/test", post(test_model))
+        .route(
+            "/super-agent/manager-wake",
+            get(get_manager_wake).put(put_manager_wake),
+        )
         .route("/super-agent/mcp", get(get_mcp).post(post_mcp))
         .route("/super-agent/mcp/{id}", put(put_mcp).delete(delete_mcp))
         .route("/super-agent/mcp/{id}/label", post(post_mcp_label))
@@ -3198,6 +3249,43 @@ async fn get_model(State(state): State<AppState>) -> Response {
     match read {
         Ok(value) => finish(value),
         Err(_) => error_response(ApiError::Session),
+    }
+}
+
+async fn get_manager_wake(State(state): State<AppState>) -> Response {
+    let path = crate::manager_wake::wake_path_beside(&state.database);
+    let wake = crate::manager_wake::load_wake_state(&path);
+    finish(Ok(serde_json::json!({
+        "interval_secs": wake.interval_secs,
+        "last_wake_at": wake.last_wake_at,
+        "max_model_calls_per_wake": wake.max_model_calls_per_wake,
+    })))
+}
+
+async fn put_manager_wake(State(state): State<AppState>, request: Request) -> Response {
+    let value = match read_json(request).await {
+        Ok(value) => value,
+        Err(error) => return error_response(error),
+    };
+    let path = crate::manager_wake::wake_path_beside(&state.database);
+    let mut wake = crate::manager_wake::load_wake_state(&path);
+    if let Some(secs) = value.get("interval_secs").and_then(Value::as_u64) {
+        wake.interval_secs = secs.clamp(30, 86_400);
+    }
+    if let Some(cap) = value
+        .get("max_model_calls_per_wake")
+        .and_then(Value::as_u64)
+        .and_then(|raw| u32::try_from(raw).ok())
+    {
+        wake.max_model_calls_per_wake = cap.clamp(1, 8);
+    }
+    match crate::manager_wake::save_wake_state(&path, &wake) {
+        Ok(()) => finish(Ok(serde_json::json!({
+            "interval_secs": wake.interval_secs,
+            "last_wake_at": wake.last_wake_at,
+            "max_model_calls_per_wake": wake.max_model_calls_per_wake,
+        }))),
+        Err(_) => error_response(ApiError::Store),
     }
 }
 

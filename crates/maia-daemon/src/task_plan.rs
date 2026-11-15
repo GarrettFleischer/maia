@@ -352,11 +352,12 @@ impl<R: Router> Orchestrator<R> {
             &PlanProgress {
                 loop_nudges: machine.loops.nudge_map().clone(),
                 steps_since_review: machine.steps_since_review,
+                autonomous_retries: machine.autonomous_retries,
             },
         );
     }
 
-    fn save_plan(
+    pub(super) fn save_plan(
         &mut self,
         task: &TaskId,
         contract: &GoalContract,

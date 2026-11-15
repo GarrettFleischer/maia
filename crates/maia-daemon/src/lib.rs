@@ -11,6 +11,7 @@ mod env;
 mod http;
 pub mod inspector;
 mod live_reply;
+mod manager_wake;
 mod mcp_settings;
 mod model_connection;
 mod orchestrator;
@@ -31,6 +32,10 @@ pub use http::{
 };
 pub use inspector::{PackedRecall, RecallKind, RecallLine};
 pub use live_reply::{LiveReplyBoard, attach_live_reply};
+pub use manager_wake::{
+    ManagerWakeState, cost_day_key, load_wake_state, parse_wake_state, roll_cost_day,
+    save_wake_state, wake_path_beside, wake_state_json,
+};
 pub use mcp_settings::{MemoryMcpSecretStore, NativeMcpSecretStore};
 pub use model_connection::{
     PublicModelConnection, parse_reasoning_effort, router_from_connection,
