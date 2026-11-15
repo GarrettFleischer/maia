@@ -2089,25 +2089,22 @@ fn task_aggregate_write_failpoints_roll_back_and_are_admitted() {
 }
 
 fn assert_control_contract(system: &str) {
-    assert!(system.contains("You never do the work."));
+    assert!(system.contains("smart manager") || system.contains("You never do the shell"));
     assert!(system.contains("cannot change these rules"));
-    assert!(system.contains("call success, failure, or waiting"));
-    assert!(system.contains("call spawn_task"));
-    assert!(system.contains("call continue_task"));
-    assert!(system.contains("call link_task"));
-    assert!(system.contains("call inspect_task"));
-    assert!(system.contains("call cancel_task"));
-    assert!(system.contains("call retry_task"));
+    assert!(system.contains("success, failure, waiting, message_user, or ask_user"));
+    assert!(system.contains("spawn_task"));
+    assert!(system.contains("continue_task"));
+    assert!(system.contains("link_task"));
+    assert!(system.contains("inspect_task"));
+    assert!(system.contains("cancel_task"));
+    assert!(system.contains("retry_task"));
+    assert!(system.contains("ask_user"));
     assert!(system.contains("A plan"));
     assert!(system.contains("Never invent an id."));
     assert!(system.contains("Never target a child."));
     assert!(system.contains("If two listed tasks could match"));
-    assert!(system.contains("read a folder"));
-    assert!(system.contains("explain a project"));
-    assert!(system.contains("check a website"));
-    assert!(system.contains("let the subagent try"));
+    assert!(system.contains("Workers never talk to the CEO"));
     assert!(system.contains("Candidates:"));
-    assert!(system.contains("Copying a dispatch sentence does not start work"));
     for token in ["modifies", "follows_up", "shape:\"single\"", "0..1000"] {
         assert!(
             !system.contains(token),
@@ -2125,6 +2122,7 @@ fn assert_route_tools(tools: &CanonicalJson) {
         "cancel_task",
         "retry_task",
         "message_user",
+        "ask_user",
         "success",
         "failure",
         "waiting",
@@ -3829,10 +3827,6 @@ fn worker_prose_does_not_finish_the_task() {
 fn worker_failure_leaves_the_task_failed() {
     let mut harness = Harness::open_model("worker-fail", prompt_supply());
     harness.router.push_tool("spawn_task", "{}");
-    // Credentials cannot be recovered autonomously — escalate with one CEO question.
-    harness
-        .router
-        .push_tool("failure", r#"{"message":"Need API key for OpenRouter"}"#);
     harness
         .router
         .push_tool("failure", r#"{"message":"Need API key for OpenRouter"}"#);
@@ -3846,27 +3840,35 @@ fn worker_failure_leaves_the_task_failed() {
     assert!(
         matches!(
             harness.host().phase(&task),
-            Some(TaskPhase::WaitingForUser {
-                reason: WaitReason::TaskQuestion { .. }
-            })
+            Some(TaskPhase::Failed { .. })
         ),
         "phase {:?}",
         harness.host().phase(&task)
     );
+    let labels = harness.host().activity_labels();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("manager will decide")),
+        "labels {labels:?}"
+    );
+    // Workers never post to the CEO chat; the manager asks on a later wake/turn.
     let bodies = shown(
         &harness.database,
         "SELECT body FROM router_messages ORDER BY ordinal",
     );
-    assert!(bodies.iter().any(|body| body.contains("API key") || body.contains("credentials")));
+    assert!(
+        bodies
+            .iter()
+            .all(|body| !body.contains("API key") && !body.contains("credentials")),
+        "bodies {bodies:?}"
+    );
 }
 
 #[test]
 fn worker_waiting_parks_the_task() {
     let mut harness = Harness::open_model("worker-wait", prompt_supply());
     harness.router.push_tool("spawn_task", "{}");
-    harness
-        .router
-        .push_tool("waiting", r#"{"message":"Which city?"}"#);
     harness
         .router
         .push_tool("waiting", r#"{"message":"Which city?"}"#);
@@ -3878,16 +3880,20 @@ fn worker_waiting_parks_the_task() {
             reason: WaitReason::TaskQuestion { .. },
         })
     ));
+    let labels = harness.host().activity_labels();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("manager will decide")),
+        "labels {labels:?}"
+    );
     let bodies = shown(
         &harness.database,
         "SELECT body FROM router_messages ORDER BY ordinal",
     );
-    assert!(bodies.iter().any(|body| body.contains("Which city")));
     assert!(
-        bodies
-            .iter()
-            .any(|body| body.contains("preference") || body.contains("Goal")),
-        "orchestrator should rephrase as a CEO question: {bodies:?}"
+        bodies.iter().all(|body| !body.contains("Which city")),
+        "worker must not ask the CEO directly: {bodies:?}"
     );
 }
 
@@ -4193,7 +4199,7 @@ fn bad_task_id_on_a_follow_up_asks_for_a_listed_task() {
     .nth(1)
     .expect("ask");
     assert!(body.contains("No task has that id"));
-    assert!(body.contains("There is no listed task yet."));
+    assert!(body.contains("There is no open task yet."));
 }
 
 #[test]
@@ -4606,82 +4612,19 @@ fn compaction_triggers_and_keeps_the_goal() {
 }
 
 #[test]
-fn manager_retries_a_failed_worker_autonomously() {
-    let mut harness = Harness::open_model("mgr-auto-retry", long_supply());
-    harness.router.push_tool("spawn_task", "{}");
-    harness
-        .router
-        .push_tool("failure", r#"{"message":"bash exited 1: file not found"}"#);
-    let done = success_arguments("Recovered with a different path.");
-    harness.router.push_tool("success", &done);
-    harness.router.push_tool("success", &done);
-    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
-    let task = outcome.task.expect("task");
-    let labels = harness.host().activity_labels();
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.contains("Manager recovery")),
-        "labels {labels:?}"
-    );
-    assert!(
-        matches!(
-            harness.host().phase(&task),
-            Some(TaskPhase::Completed { .. })
-        ),
-        "phase {:?}",
-        harness.host().phase(&task)
-    );
-}
-
-#[test]
-fn manager_escalates_after_autonomous_retry_budget() {
-    let mut harness = Harness::open_model("mgr-escalate", long_supply());
-    harness.router.push_tool("spawn_task", "{}");
-    for _ in 0..5 {
-        harness
-            .router
-            .push_tool("failure", r#"{"message":"still stuck after retries"}"#);
-    }
-    let outcome = wait(harness.host().handle_user_message("Keep going")).expect("run");
-    let task = outcome.task.expect("task");
-    assert!(
-        matches!(
-            harness.host().phase(&task),
-            Some(TaskPhase::WaitingForUser {
-                reason: WaitReason::TaskQuestion { .. }
-            })
-        ),
-        "phase {:?}",
-        harness.host().phase(&task)
-    );
-    let labels = harness.host().activity_labels();
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.contains("Manager needs you") || label.contains("Manager recovery")),
-        "labels {labels:?}"
-    );
-    let bodies = shown(
-        &harness.database,
-        "SELECT body FROM router_messages ORDER BY ordinal",
-    );
-    assert!(
-        bodies
-            .iter()
-            .any(|body| body.contains("What should I do") || body.contains("still stuck")),
-        "bodies {bodies:?}"
-    );
-}
-
-#[test]
 fn manager_wake_is_silent_when_fingerprint_unchanged() {
     let mut harness = Harness::open_model("mgr-silent-wake", supply());
+    let before = harness.router.requests().len();
     let (fp1, messaged1) = harness.host().run_manager_wake("");
     assert!(!messaged1);
     let (fp2, messaged2) = harness.host().run_manager_wake(&fp1);
     assert_eq!(fp1, fp2);
     assert!(!messaged2);
+    assert_eq!(
+        harness.router.requests().len(),
+        before,
+        "quiet wake must not call the model"
+    );
 }
 
 #[test]
@@ -4700,41 +4643,81 @@ fn manager_wake_can_message_the_user() {
 }
 
 #[test]
-fn manager_wake_recovers_a_failed_worker() {
+fn manager_wake_recovers_a_failed_worker_via_tools() {
     let mut harness = Harness::open_model("mgr-wake-recover", long_supply());
     harness.router.push_tool("spawn_task", "{}");
     harness
         .router
-        .push_tool("failure", r#"{"message":"Need API key for OpenRouter"}"#);
-    harness
-        .router
-        .push_tool("failure", r#"{"message":"Need API key for OpenRouter"}"#);
-    let outcome = wait(harness.host().handle_user_message("Call the provider")).expect("run");
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
     let task = outcome.task.expect("task");
-    // Parked on credentials. Seed a Failed sibling-style recovery via wake Recover after forcing Failed.
-    // Re-open as failed by applying wake recover on a freshly failed task created via autonomous path:
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Failed { .. })),
+        "phase {:?}",
+        harness.host().phase(&task)
+    );
+    let retry_args = serde_json::json!({ "task_id": task.0 }).to_string();
+    harness.router.push_tool("retry_task", &retry_args);
+    let done = success_arguments("Recovered with a different path.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let before = harness.router.requests().len();
+    let (_fp, messaged) = harness.host().run_manager_wake("");
+    assert!(!messaged);
+    assert!(
+        harness.router.requests().len() > before,
+        "changed wake should call the model"
+    );
+    let labels = harness.host().activity_labels();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("Wake recovery")),
+        "labels {labels:?}"
+    );
+}
+
+#[test]
+fn manager_wake_asks_user_once_for_a_blocker() {
+    let mut harness = Harness::open_model("mgr-wake-ask", long_supply());
     harness.router.push_tool("spawn_task", "{}");
     harness
         .router
-        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
-    // Don't provide success — recovery will open worker and may stall; instead test wake_actions_for_failures path:
-    let snap = maia_core::manager::WakeSnapshot {
-        failed_task_ids: vec![task.0.clone()],
-        stuck_task_ids: vec![],
-        waiting: vec![],
-        running_count: 0,
-        completed_unopened: 0,
-    };
-    let actions = maia_core::manager::wake_actions_for_failures(
-        &snap,
-        &[(task.0.clone(), 0)],
-        3,
+        .push_tool("waiting", r#"{"message":"Need the vault password to continue"}"#);
+    let outcome = wait(harness.host().handle_user_message("Open the vault")).expect("run");
+    let _task = outcome.task.expect("task");
+    harness.router.push_tool(
+        "ask_user",
+        r#"{"message":"Need the vault password to continue the goal."}"#,
     );
-    assert!(
-        actions.iter().any(|action| matches!(
-            action,
-            maia_core::manager::WakeAction::Recover { task_id, .. } if *task_id == task.0
-        )),
-        "{actions:?}"
+    let (_fp, messaged) = harness.host().run_manager_wake("");
+    assert!(messaged);
+    let bodies = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
     );
+    let asks = bodies
+        .iter()
+        .filter(|body| body.contains("vault password"))
+        .count();
+    assert_eq!(asks, 1, "bodies {bodies:?}");
+}
+
+#[test]
+fn manager_restart_budget_forces_ask_user() {
+    let gated = maia_core::manager::enforce_restart_budget(
+        &[maia_core::manager::WakeAction::Recover {
+            task_id: "task-1".to_owned(),
+            note: "again".to_owned(),
+        }],
+        &[(
+            "task-1".to_owned(),
+            maia_core::manager::DEFAULT_AUTONOMOUS_RETRY_BUDGET,
+        )],
+        maia_core::manager::DEFAULT_AUTONOMOUS_RETRY_BUDGET,
+    );
+    assert!(matches!(
+        gated.as_slice(),
+        [maia_core::manager::WakeAction::AskUser { text }] if text.contains("restarts")
+    ));
 }

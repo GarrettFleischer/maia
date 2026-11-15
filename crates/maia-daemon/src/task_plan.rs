@@ -333,9 +333,14 @@ impl<R: Router> Orchestrator<R> {
                 format!("Added to the plan: {}. {}", item.text, item.reason)
             }
             Addition::Asked(question) => {
-                if matches!(machine.notice, OwnerNotice::Hold) {
-                    let _ = self.note_router(&question);
-                }
+                // Workers never ask the CEO directly; the manager decides on wake/turn.
+                self.record_activity(
+                    format!(
+                        "Worker asked; manager will decide: {}",
+                        question.chars().take(120).collect::<String>()
+                    ),
+                    Some(&machine.task),
+                );
                 question
             }
             Addition::Skipped => "That step was already decided.".to_owned(),
