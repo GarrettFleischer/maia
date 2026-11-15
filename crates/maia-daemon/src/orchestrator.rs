@@ -253,6 +253,38 @@ fn provider_stall(error: &RouterError) -> bool {
     }
 }
 
+/// Short fixed reason for wake briefs / failure summaries. Never copies free text.
+fn short_router_reason(error: &RouterError) -> &'static str {
+    match error {
+        RouterError::Timeout => "timeout",
+        RouterError::Authentication => "authentication",
+        RouterError::RateLimited => "rate limited",
+        RouterError::Server { .. } => "server",
+        RouterError::Configuration(_) => "configuration",
+        RouterError::ResourceLimit { .. } => "resource limit",
+        RouterError::Cancelled => "cancelled",
+        RouterError::Protocol { detail }
+            if detail == "transport failure"
+                || detail == "router stopped"
+                || detail == "redirects are disabled" =>
+        {
+            "transport"
+        }
+        other if route_output_unreadable(other) => "unreadable reply",
+        _ => "provider error",
+    }
+}
+
+fn silent_worker_summary(error: Option<&RouterError>) -> String {
+    match error {
+        Some(error) => format!(
+            "Worker stopped answering ({}).",
+            short_router_reason(error)
+        ),
+        None => "Worker stopped answering.".to_owned(),
+    }
+}
+
 fn route_output_unreadable(error: &RouterError) -> bool {
     classify_router_failure(error).is_unreadable_model_output()
 }
@@ -274,7 +306,7 @@ Maia task worker. You are the subagent for this one task.\n\
 The next message is the owner's request. The sealed owner text wins if anything disagrees.\n\
 Call success when the goal is done. message is the result the owner can read.\n\
 Call failure when the goal cannot be done. message is the reason.\n\
-Call waiting when you need the owner or an outside event. message says what you are waiting for. The task stays alive.\n\
+Call waiting when you need a credential, secret, payment, CEO decision, or an outside event. message is one clear question. The task stays alive. Do not invent secrets or approvals.\n\
 A plan or a cut-off sentence is not finished. Call a tool.\n\
 Do not invent results. To read or list a file or folder, call bash. On Windows the command is PowerShell and a path looks like F:\\Development.\n\
 Stay inside this task. Do not start another task.\n\
@@ -1286,7 +1318,7 @@ Keep going until you call success, failure, waiting, message_user, or ask_user.\
 - success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory.\n\
 - failure: message is why this cannot be handled.\n\
 - waiting: message is one specific question while work stays alive. Prefer ask_user for CEO decisions.\n\
-- message_user: post one useful update only when the CEO genuinely needs to know. Most wakes stay silent. Never dump worker logs into chat.\n\
+- message_user: post one useful update only when the CEO genuinely needs to know. When a goal finishes, send one short useful close-out. Most wakes stay silent. Never dump worker logs into chat.\n\
 - ask_user: one clear CEO decision (credentials, money, irreversible or external action, real preference). Never spam. Never paste worker output.\n\
 Route tools do not finish the turn. After one of them, call success, failure, waiting, message_user, or ask_user.\n\
 - New work: spawn_task. Do not refuse a path yourself; hire a worker.\n\
@@ -1295,8 +1327,8 @@ Route tools do not finish the turn. After one of them, call success, failure, wa
 - Status: inspect_task for the same details as the wake brief.\n\
 - Stop for good: cancel_task.\n\
 - Failed or stopped work you choose to retry: retry_task.\n\
-Fixable worker failures (missing file, bad args, transient tool error, or \"Worker stopped answering\"): retry_task or continue_task with guidance. Do not ask_user.\n\
-If the wake brief or inspect_task shows a credential, vault, payment, or irreversible external blocker: ask_user once with one clear question. Do not retry blindly.\n\
+Fixable worker failures (missing file, bad args, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance. Do not ask_user.\n\
+If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: ask_user once with one clear question. Do not retry blindly. Do not paste the worker's wording into chat; restate the decision cleanly.\n\
 Workers never talk to the CEO. Their blockers and questions come to you; you decide.\n\
 A plan, a thought, or a cut-off sentence is not finished. Call a tool.\n\
 Use only a task_id from the candidate list or the wake brief. Never invent an id. Never target a child.\n\
@@ -2031,11 +2063,11 @@ fn route_tools_json() -> String {
         ),
         terminal_tool(
             "message_user",
-            "Post one useful update to the owner chat. Most manager wakes stay silent; call this only when the CEO genuinely needs to know something. Never dump raw worker logs.",
+            "Post one useful update to the owner chat. Most manager wakes stay silent. When a goal finishes, send one short useful close-out. Never dump raw worker logs.",
         ),
         terminal_tool(
             "ask_user",
-            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real preference). One question only. Never paste worker output into chat. Workers never ask the CEO directly.",
+            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real preference). Use when a worker is waiting on a CEO-only blocker. One question only. Never paste worker output into chat. Workers never ask the CEO directly.",
         ),
     ];
     tools.extend(terminal_tools());
@@ -2092,7 +2124,7 @@ fn terminal_tools() -> Vec<serde_json::Value> {
         ),
         terminal_tool(
             "waiting",
-            "You are blocked. message says what you are waiting for. The work stays alive. This ends the turn.",
+            "You are blocked on a credential, secret, CEO decision, or outside event. message is one clear question. The work stays alive. This ends the turn.",
         ),
     ]
 }
@@ -2274,7 +2306,48 @@ fn log_failure_class(class: RouterFailureClass) {
 
 fn log_router_failure(error: &OrchestratorError) {
     if let OrchestratorError::Router(router) = error {
-        log_failure_class(classify_router_failure(router));
+        let class = classify_router_failure(router);
+        log_failure_class(class);
+        // Fixed vocabulary from classify_protocol / status lines only.
+        if let RouterError::Protocol { detail } = router {
+            let safe = matches!(
+                detail.as_str(),
+                "unknown tool name"
+                    | "tool arguments must be a JSON object"
+                    | "tool arguments must be valid JSON object"
+                    | "duplicate tool call id"
+                    | "missing tool_calls array"
+                    | "tool call missing id"
+                    | "tool call missing function"
+                    | "tool call missing name"
+                    | "tool call missing arguments"
+                    | "tools_json must be an array"
+                    | "tools_json missing function names"
+                    | "tool calls unsupported for this provider"
+                    | "missing choices"
+                    | "missing choices array"
+                    | "missing choice object"
+                    | "unterminated choice object"
+                    | "missing message"
+                    | "missing message object"
+                    | "unterminated object"
+                    | "missing object"
+                    | "unterminated tool_calls array"
+                    | "transport failure"
+                    | "router stopped"
+                    | "redirects are disabled"
+                    | "invalid utf-8 in json body"
+                    | "invalid utf-8 in sse chunk"
+                    | "body must be a JSON object"
+                    | "failed to encode request"
+                    | "tools_json must be valid JSON"
+                    | "model thread stopped"
+            ) || detail.starts_with("unexpected status ");
+            if safe {
+                eprintln!("router_failure detail={detail}");
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+            }
+        }
     }
 }
 
@@ -2573,6 +2646,10 @@ pub(crate) struct WorkerMachine {
     messages: Vec<maia_core::thread_cache::ChatMessage>,
     tools_json: String,
     misses: u32,
+    /// How many unreadable model replies have been nudged on this attempt.
+    unreadable_repairs: u32,
+    /// Last router error seen on a miss or nudge; used when retries are exhausted.
+    last_router_error: Option<RouterError>,
     steps: u32,
     attempts: WorkerAttempts,
     notice: OwnerNotice,
@@ -2588,6 +2665,8 @@ pub(crate) struct WorkerMachine {
     review_now: bool,
     new_subgoal: bool,
 }
+
+const WORKER_UNREADABLE_REPAIR_LIMIT: u32 = 2;
 
 /// A tool call the HTTP pump runs off the actor thread.
 pub(crate) struct ToolJob {
@@ -3532,7 +3611,14 @@ impl<R: Router> Orchestrator<R> {
     }
 
     /// Snapshot of work the manager wake inspects.
+    ///
+    /// Only the selected bot's open tasks are included so deleted/other bots
+    /// cannot poison the wake fingerprint forever.
     pub fn wake_snapshot(&self) -> WakeSnapshot {
+        let selected = match self.store.bots(maia_store::BotRequest::Selected) {
+            Ok(maia_store::BotResponse::Text(bot)) => bot,
+            _ => self.turn_bot.clone(),
+        };
         let mut failed_task_ids = Vec::new();
         let mut stuck_task_ids = Vec::new();
         let mut waiting = Vec::new();
@@ -3540,6 +3626,9 @@ impl<R: Router> Orchestrator<R> {
         let mut completed_unopened = 0_u32;
         let mut workers = Vec::new();
         for (task, phase) in &self.phases {
+            if self.task_bot(task) != selected {
+                continue;
+            }
             match phase {
                 TaskPhase::Failed { .. } => failed_task_ids.push(task.0.clone()),
                 TaskPhase::WaitingForUser { reason } => {
@@ -3711,6 +3800,7 @@ impl<R: Router> Orchestrator<R> {
     /// Runs one manager wake: skip the model when nothing changed; otherwise one tool turn.
     ///
     /// Returns whether a chat message was posted. Silent wakes return false.
+    /// When the wake model call fails, the previous fingerprint is kept so the next wake can retry.
     pub fn run_manager_wake(&mut self, previous_fingerprint: &str) -> (String, bool) {
         let snap = self.wake_snapshot();
         let fingerprint = snapshot_fingerprint(&snap);
@@ -3732,16 +3822,27 @@ impl<R: Router> Orchestrator<R> {
             }
             maia_core::manager::WakePlan::RunModel { .. } => {}
         }
-        let actions = self.manager_wake_tool_actions(&snap);
+        let Some(actions) = self.manager_wake_tool_actions(&snap) else {
+            return (previous_fingerprint.to_owned(), false);
+        };
         let messaged = self.apply_wake_actions(&actions);
+        let acted = actions.iter().any(|action| !matches!(action, WakeAction::Silent));
+        let needs_attention = !snap.failed_task_ids.is_empty()
+            || !snap.stuck_task_ids.is_empty()
+            || !snap.waiting.is_empty();
+        // If the model produced no tools while work still needs attention, keep the
+        // previous fingerprint so the next wake can try again (same as a provider miss).
+        if needs_attention && !acted {
+            return (previous_fingerprint.to_owned(), messaged);
+        }
         (fingerprint, messaged)
     }
 
     /// Asks the model which wake tools to run, then applies the restart-budget backstop.
-    fn manager_wake_tool_actions(&mut self, snap: &WakeSnapshot) -> Vec<WakeAction> {
-        let Ok(request_id) = self.ids.pop_request() else {
-            return vec![WakeAction::Silent];
-        };
+    ///
+    /// Returns `None` when the model call fails so the wake fingerprint is not advanced.
+    fn manager_wake_tool_actions(&mut self, snap: &WakeSnapshot) -> Option<Vec<WakeAction>> {
+        let request_id = self.ids.pop_request().ok()?;
         let brief = format_wake_brief(snap);
         let tools_json = route_tools_json();
         let system = wake_system_prompt(snap);
@@ -3758,8 +3859,12 @@ impl<R: Router> Orchestrator<R> {
             reasoning_effort: self.turn.reasoning,
             prior_provider_tool_state: None,
         };
-        let Ok(response) = wait_router(self.router.complete(&request)) else {
-            return vec![WakeAction::Silent];
+        let response = match wait_router(self.router.complete(&request)) {
+            Ok(response) => response,
+            Err(error) => {
+                log_router_failure(&OrchestratorError::Router(error));
+                return None;
+            }
         };
         let calls = response
             .tool_calls
@@ -3771,7 +3876,11 @@ impl<R: Router> Orchestrator<R> {
             .collect::<Vec<_>>();
         let raw = interpret_wake_tools(&calls);
         let retries = self.restart_counts_for_snapshot(snap);
-        enforce_restart_budget(&raw, &retries, DEFAULT_AUTONOMOUS_RETRY_BUDGET)
+        Some(enforce_restart_budget(
+            &raw,
+            &retries,
+            DEFAULT_AUTONOMOUS_RETRY_BUDGET,
+        ))
     }
 
     fn restart_counts_for_snapshot(&self, snap: &WakeSnapshot) -> Vec<(String, u32)> {
@@ -5967,7 +6076,7 @@ impl<R: Router> Orchestrator<R> {
     ) -> Result<WorkerMachine, WorkerFinish> {
         let attempt = match self.begin_parent_attempt(task) {
             Ok(attempt) => attempt,
-            Err(_) => return Err(self.worker_silent(task, notice)),
+            Err(_) => return Err(self.worker_silent(task, notice, None)),
         };
         self.inflight_workers.insert(task.clone());
         self.record_activity("Working", Some(task));
@@ -6013,6 +6122,8 @@ impl<R: Router> Orchestrator<R> {
             messages,
             tools_json,
             misses: 0,
+            unreadable_repairs: 0,
+            last_router_error: None,
             steps: 0,
             attempts,
             notice,
@@ -6058,7 +6169,11 @@ impl<R: Router> Orchestrator<R> {
             return done;
         }
         if worker_gave_up(machine.misses, machine.attempts) {
-            return WorkerDrive::Done(self.worker_silent(&machine.task.clone(), machine.notice));
+            return WorkerDrive::Done(self.worker_silent(
+                &machine.task.clone(),
+                machine.notice,
+                machine.last_router_error.as_ref(),
+            ));
         }
         if !machine.compacting
             && let Some(request) =
@@ -6071,9 +6186,11 @@ impl<R: Router> Orchestrator<R> {
         let request_id = match self.ids.pop_request() {
             Ok(id) => RequestId(id),
             Err(_) => {
-                return WorkerDrive::Done(
-                    self.worker_silent(&machine.task.clone(), machine.notice),
-                );
+                return WorkerDrive::Done(self.worker_silent(
+                    &machine.task.clone(),
+                    machine.notice,
+                    None,
+                ));
             }
         };
         WorkerDrive::Await(parent_work_request(
@@ -6098,15 +6215,41 @@ impl<R: Router> Orchestrator<R> {
         let response = match result {
             Ok(response) => response,
             Err(error) if provider_stall(&error) => {
+                machine.last_router_error = Some(error.clone());
                 log_router_failure(&OrchestratorError::Router(error));
                 machine.misses = machine.misses.saturating_add(1);
                 self.record_activity("provider busy, retrying", Some(&machine.task.clone()));
                 return WorkerDrive::Pause(provider_backoff(machine.misses));
             }
-            Err(_) => {
-                return WorkerDrive::Done(
-                    self.worker_silent(&machine.task.clone(), machine.notice),
+            Err(error) if route_output_unreadable(&error) => {
+                machine.last_router_error = Some(error.clone());
+                log_router_failure(&OrchestratorError::Router(error.clone()));
+                if machine.unreadable_repairs >= WORKER_UNREADABLE_REPAIR_LIMIT {
+                    return WorkerDrive::Done(self.worker_silent(
+                        &machine.task.clone(),
+                        machine.notice,
+                        Some(&error),
+                    ));
+                }
+                machine.unreadable_repairs = machine.unreadable_repairs.saturating_add(1);
+                machine.messages.push(ChatMessage::text(
+                    ChatRole::User,
+                    UNFINISHED_NUDGE,
+                ));
+                self.record_activity(
+                    "unreadable model reply, retrying",
+                    Some(&machine.task.clone()),
                 );
+                return self.issue_worker_request(machine);
+            }
+            Err(error) => {
+                machine.last_router_error = Some(error.clone());
+                log_router_failure(&OrchestratorError::Router(error.clone()));
+                return WorkerDrive::Done(self.worker_silent(
+                    &machine.task.clone(),
+                    machine.notice,
+                    Some(&error),
+                ));
             }
         };
         let task = machine.task.clone();
@@ -6437,20 +6580,25 @@ impl<R: Router> Orchestrator<R> {
         })
     }
 
-    fn worker_silent(&mut self, task: &TaskId, notice: OwnerNotice) -> WorkerFinish {
+    fn worker_silent(
+        &mut self,
+        task: &TaskId,
+        notice: OwnerNotice,
+        error: Option<&RouterError>,
+    ) -> WorkerFinish {
         self.release_worker(task);
         // Leave a Failed phase so manager wakes can see the orphan. Do not call
         // fail_worker here: that helper falls back to worker_silent on store errors.
         if let Some(TaskPhase::Running { attempt }) = self.phases.get(task).cloned() {
-            let summary = "Worker stopped answering.";
-            let _ = self.record_worker_report(task, &attempt, "failure", summary);
+            let summary = silent_worker_summary(error);
+            let _ = self.record_worker_report(task, &attempt, "failure", &summary);
             let _ = self.shift_phase(
                 task,
                 PhaseEvent::Fail {
                     kind: FailureKind::WorkerReported,
                 },
             );
-            self.record_activity(summary, Some(task));
+            self.record_activity(&summary, Some(task));
         }
         match notice {
             OwnerNotice::Relay | OwnerNotice::Chat => {
@@ -6501,7 +6649,7 @@ impl<R: Router> Orchestrator<R> {
         self.release_worker(task);
         let report_id = match self.record_worker_report(task, attempt, REPORT_PROGRESS, text) {
             Ok(report_id) => report_id,
-            Err(_) => return self.worker_silent(task, notice),
+            Err(_) => return self.worker_silent(task, notice, None),
         };
         let running = self.phases.get(task).cloned();
         let completed = match running {
@@ -6528,7 +6676,7 @@ impl<R: Router> Orchestrator<R> {
             .record_worker_report(task, attempt, "failure", text)
             .is_err()
         {
-            return self.worker_silent(task, notice);
+            return self.worker_silent(task, notice, None);
         }
         if self
             .shift_phase(
@@ -6539,7 +6687,7 @@ impl<R: Router> Orchestrator<R> {
             )
             .is_err()
         {
-            return self.worker_silent(task, notice);
+            return self.worker_silent(task, notice, None);
         }
         self.relay_worker(WorkerFinish::Failure(text.to_owned()), notice)
     }
@@ -6554,7 +6702,7 @@ impl<R: Router> Orchestrator<R> {
         self.release_worker(task);
         let report_id = match self.record_worker_report(task, attempt, "waiting_question", text) {
             Ok(report_id) => report_id,
-            Err(_) => return self.worker_silent(task, notice),
+            Err(_) => return self.worker_silent(task, notice, None),
         };
         if self
             .shift_phase(
@@ -6567,7 +6715,7 @@ impl<R: Router> Orchestrator<R> {
             )
             .is_err()
         {
-            return self.worker_silent(task, notice);
+            return self.worker_silent(task, notice, None);
         }
         self.relay_worker(WorkerFinish::Waiting(text.to_owned()), notice)
     }

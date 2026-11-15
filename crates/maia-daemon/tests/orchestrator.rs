@@ -4857,3 +4857,170 @@ fn inspect_task_returns_worker_brief_details() {
         requests.len()
     );
 }
+
+#[test]
+fn wake_snapshot_ignores_failed_tasks_from_other_bots() {
+    let mut harness = Harness::open_model("wake-bot-filter", long_supply());
+    let other = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Create {
+            name: "other-wake".to_owned(),
+            instructions: String::new(),
+            now: NOW,
+        })
+        .expect("create bot")
+    {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("expected bot, got {other:?}"),
+    };
+    harness.host().set_next_bot(&other.bot_id);
+    harness
+        .host()
+        .store()
+        .bots(BotRequest::Select {
+            bot_id: other.bot_id.clone(),
+        })
+        .expect("select other");
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"other bot failed"}"#);
+    let other_outcome =
+        wait(harness.host().handle_user_message("Fail on the other bot")).expect("other");
+    let other_task = other_outcome.task.expect("other task");
+
+    harness
+        .host()
+        .store()
+        .bots(BotRequest::Select {
+            bot_id: "maia".to_owned(),
+        })
+        .expect("select maia");
+    harness.host().set_next_bot("maia");
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"maia bot failed"}"#);
+    let maia_outcome =
+        wait(harness.host().handle_user_message("Fail on maia")).expect("maia");
+    let maia_task = maia_outcome.task.expect("maia task");
+
+    let snap = harness.host().wake_snapshot();
+    assert!(
+        snap.failed_task_ids.iter().any(|id| id == &maia_task.0),
+        "selected bot failure must appear: {snap:?}"
+    );
+    assert!(
+        !snap.failed_task_ids.iter().any(|id| id == &other_task.0),
+        "other bot failure must not poison wake: {snap:?}"
+    );
+}
+
+#[test]
+fn manager_wake_silent_tools_with_failed_work_keep_previous_fingerprint() {
+    let mut harness = Harness::open_model("mgr-wake-silent-keep-fp", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let _task = outcome.task.expect("task");
+    let previous = "r=1;c=0;f=;s=;w=";
+    // Wake model returns no tools → interpret_wake_tools yields Silent.
+    harness.router.push_raw("{}".to_owned());
+    let (fp, messaged) = harness.host().run_manager_wake(previous);
+    assert!(!messaged);
+    assert_eq!(
+        fp, previous,
+        "silent no-op wake must not advance fingerprint while failed work remains"
+    );
+}
+
+#[test]
+fn manager_wake_model_failure_keeps_previous_fingerprint_so_next_wake_retries() {
+    let mut harness = Harness::open_model("mgr-wake-provider-fail", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let task = outcome.task.expect("task");
+    let previous = "r=1;c=0;f=;s=;w=";
+    harness.router.push_failure(RouterError::Timeout);
+    let (fp_after_fail, messaged) = harness.host().run_manager_wake(previous);
+    assert!(!messaged);
+    assert_eq!(
+        fp_after_fail, previous,
+        "provider failure must not advance the wake fingerprint"
+    );
+    let retry_args = serde_json::json!({ "task_id": task.0 }).to_string();
+    harness.router.push_tool("retry_task", &retry_args);
+    let done = success_arguments("Recovered after provider came back.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let before = harness.router.requests().len();
+    let (_fp, _) = harness.host().run_manager_wake(&fp_after_fail);
+    assert!(
+        harness.router.requests().len() > before,
+        "next wake must call the model again after a provider failure"
+    );
+    let labels = harness.host().activity_labels();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("Wake recovery")),
+        "retry wake should recover: {labels:?}"
+    );
+}
+
+#[test]
+fn silent_worker_records_router_reason_in_failure_summary() {
+    let mut harness = Harness::open_model("silent-reason-summary", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness.router.push_failure(RouterError::Authentication);
+    let outcome = wait(harness.host().handle_user_message(
+        "Do nothing useful; the worker will fail to answer.",
+    ))
+    .expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Failed { .. })
+    ));
+    let summaries = texts(&harness.database, "SELECT summary FROM task_reports");
+    assert!(
+        summaries.iter().any(|summary| {
+            summary.contains("Worker stopped answering")
+                && summary.to_ascii_lowercase().contains("auth")
+        }),
+        "failure summary must include the router reason: {summaries:?}"
+    );
+    let brief = maia_core::manager::format_wake_brief(&harness.host().wake_snapshot());
+    assert!(
+        brief.to_ascii_lowercase().contains("auth") || brief.contains("err:"),
+        "wake brief must surface the reason: {brief}"
+    );
+}
+
+#[test]
+fn unreadable_worker_reply_nudges_instead_of_going_silent() {
+    let mut harness = Harness::open_model("worker-unreadable-nudge", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness.router.push_failure(RouterError::Protocol {
+        detail: "missing tool_calls array".to_owned(),
+    });
+    harness
+        .router
+        .push_tool("success", &success_arguments("Recovered after a nudge."));
+    let outcome = wait(harness.host().handle_user_message(
+        "Finish after the model returns an unreadable reply once.",
+    ))
+    .expect("run");
+    let task = outcome.task.expect("task");
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Completed { .. })),
+        "unreadable reply should nudge, not silent-fail; phase {:?}",
+        harness.host().phase(&task)
+    );
+}
