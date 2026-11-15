@@ -38,10 +38,12 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 ## Wake heartbeat
 
 - Daemon actor polls and runs `run_manager_wake` even while background workers are busy (only an in-flight owner route defers the check). Long runners must not starve hire / recover / ask / close-out.
+- A worker entering failed / waiting / completed sets a one-shot wake nudge so the next check may run without waiting for the full interval (still throttled by the 1s disk-check gap).
 - Persisted as `manager_wake.json` beside the DB (interval, last wake, fingerprint, cost day counters).
 - Unchanged fingerprint → silent, no model call.
 - Changed failed/stuck/waiting/completed work → one model tool turn; `message_user` / `ask_user` only when the model chooses.
-- When the model is called, the wake user message is a compact brief: counts; `LEARNED` notes from the wake sidecar; `ATTENTION` (ordered concurrent goals: failed → waiting → close-out, leave healthy runners alone); plain `CEO_WAITING` (question + mandatory `ask_user`); `FINISHED` goals (mandatory `message_user` close-out when failed/waiting/stuck are clear — healthy runners do not block close-out); `RECENT_CEO_CHAT` for dedup; plus per open worker status, idle age, recent output, and last error. Default is silence; mandatory sections override it. `inspect_task` returns the same worker shape. Fingerprint ignores brief detail, CEO chat lines, and learned notes. On a wake the model may emit several manager tools when ATTENTION lists multiple goals.
+- When the model is called, the wake user message is a compact brief: counts; `LEARNED` notes from the wake sidecar; `ATTENTION` (ordered concurrent goals: failed → waiting → close-out, leave healthy runners alone); plain `CEO_WAITING` (question + mandatory `ask_user`); `FINISHED` goals with `outcome=` (mandatory `message_user` close-out that restates the outcome when failed/waiting/stuck are clear — healthy runners do not block close-out; one close-out marks one finished goal); `RECENT_CEO_CHAT` for dedup; plus per open worker status, idle age, recent output, and last error. Default is silence; mandatory sections override it. `inspect_task` returns the same worker shape. Fingerprint ignores brief detail, CEO chat lines, and learned notes. On a wake the model may emit several manager tools when ATTENTION lists multiple goals.
+- A CEO reply while exactly one worker is waiting remaps a mistaken `spawn_task` onto that worker **without** storing the spawn guidance (so hire text cannot push the worker to call `waiting` again).
 - Wake `ask_user` / `message_user` bind to the **selected** bot (not a stale turn bot).
 - Wake system prompt lists open task ids as usable candidates (the contract forbids inventing ids).
 - A worker that stops answering is marked `Failed` with summary `Worker stopped answering.` (plus a short router reason when known) so wakes can see it (not left as orphaned `Running`).
@@ -66,4 +68,5 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 6. ~~Owner/wake models reaching for worker tools~~ (done — manager-only tools + recoverable unknown-tool errors).
 7. ~~CEO ask_user + finished close-out dependable on wake~~ (done — plain brief sections + CEO-moment safety cap + selected-bot bind).
 8. ~~Concurrent-worker reliability~~ (done — wakes while busy; close-out not blocked by healthy runners; prompt for hire/cancel-by-idle).
-9. **General refinement** — settings knobs; richer completed-worker summary; real bugs / reliability.
+9. ~~Richer completed-worker summary + finish reliability~~ (done — `outcome=` FINISHED lines; one close-out per finished goal; wake nudge on fail/wait/complete; no spawn-guidance poison on sole-waiting remap).
+10. **General refinement** — settings knobs; real bugs / reliability; autonomy polish.
