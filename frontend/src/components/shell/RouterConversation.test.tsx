@@ -352,14 +352,14 @@ describe('RouterConversation', () => {
     expect(onDraftChange).toHaveBeenCalledWith('Owner body')
   })
 
-  it('filters the transcript when Find in chat matches', async () => {
+  it('keeps the full transcript and steps Find matches with Next', async () => {
     const user = userEvent.setup()
     render(
       <ReviewedRouterConversation
         messages={[
           { message_id: 'm-1', role: 'owner', text: 'Weather in Canby' },
           { message_id: 'm-2', role: 'router', text: 'It is raining' },
-          { message_id: 'm-3', role: 'owner', text: 'Thanks' },
+          { message_id: 'm-3', role: 'owner', text: 'Canby again' },
         ]}
         transcriptState={{ kind: 'ready' }}
         admission={{ kind: 'ready' }}
@@ -378,9 +378,15 @@ describe('RouterConversation', () => {
     await user.type(screen.getByRole('searchbox', { name: 'Find in chat' }), 'canby')
     const list = screen.getByRole('list', { name: 'Transcript messages' })
     expect(within(list).getByText('Weather in Canby')).toBeVisible()
-    expect(within(list).queryByText('It is raining')).not.toBeInTheDocument()
-    expect(within(list).queryByText('Thanks')).not.toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('1 match')
+    expect(within(list).getByText('It is raining')).toBeVisible()
+    expect(within(list).getByText('Canby again')).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent('1 of 2')
+    const firstHit = within(list).getByText('Weather in Canby').closest('li')
+    expect(firstHit).toHaveAttribute('data-find-active', 'true')
+    await user.click(screen.getByRole('button', { name: 'Next find match' }))
+    expect(screen.getByRole('status')).toHaveTextContent('2 of 2')
+    const secondHit = within(list).getByText('Canby again').closest('li')
+    expect(secondHit).toHaveAttribute('data-find-active', 'true')
   })
 
   it('keeps an ordinary admitted route out of the message', () => {

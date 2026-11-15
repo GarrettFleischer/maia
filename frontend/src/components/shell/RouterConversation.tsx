@@ -10,7 +10,12 @@ import type {
 } from '@/api/superAgentTypes'
 import { composerStatusText, routeFold } from '@/api/superAgentFormat'
 import { composerFieldPx } from '@/components/shell/composerField'
-import { findMatchLabel, messageMatchesFind } from '@/components/shell/transcriptFind'
+import {
+  findMatchIds,
+  findMatchLabel,
+  messageMatchesFind,
+  stepFindIndex,
+} from '@/components/shell/transcriptFind'
 import { useTranscriptPosition } from '@/components/shell/transcriptPosition'
 import { cursorAfterView, readSeenCursor, writeSeenCursor } from '@/components/shell/unseenMarker'
 import { copyText } from '@/lib/copyText'
@@ -90,8 +95,10 @@ export function RouterConversation({
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [composerKey, setComposerKey] = useState(0)
   const [findQuery, setFindQuery] = useState('')
+  const [findActive, setFindActive] = useState(0)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const fieldRef = useRef<HTMLTextAreaElement>(null)
+  const findHitRefs = useRef(new Map<string, HTMLElement>())
   const previousComposer = useRef({
     draft,
     sending: operation.kind === 'sending',
@@ -118,10 +125,11 @@ export function RouterConversation({
   }, [activity.length])
   const activityCards = latestActivity(activity)
   const visibleMessages = dedupeRouterMessages(messages)
-  const foundMessages = visibleMessages.filter((message) =>
-    messageMatchesFind(message.text, findQuery),
-  )
-  const findStatus = findMatchLabel(foundMessages.length, findQuery)
+  const matchIds = findMatchIds(visibleMessages, findQuery)
+  const activeFindIndex =
+    matchIds.length === 0 ? 0 : Math.min(findActive, matchIds.length - 1)
+  const activeMatchId = matchIds[activeFindIndex] ?? null
+  const findStatus = findMatchLabel(activeFindIndex, matchIds.length, findQuery)
   const messageIds = visibleMessages.map((message) => message.message_id)
   const messageKey = JSON.stringify(messageIds)
   const [seenId, setSeenId] = useState<string | null>(() => readCursor(botId))
@@ -188,6 +196,14 @@ export function RouterConversation({
     if (!transcript) return
     transcript.scrollTop = transcript.scrollHeight
   }, [engaged, liveReply?.dots, liveReply?.text, pinned, placed.unseenIndex, transcriptRef])
+
+  useLayoutEffect(() => {
+    if (!activeMatchId) return
+    const node = findHitRefs.current.get(activeMatchId)
+    if (!node || typeof node.scrollIntoView !== 'function') return
+    programmaticScroll.current = true
+    node.scrollIntoView({ block: 'nearest' })
+  }, [activeMatchId, findQuery])
 
   const onTranscriptScroll: UIEventHandler<HTMLDivElement> = (event) => {
     onScroll(event)
@@ -273,12 +289,57 @@ export function RouterConversation({
           aria-label="Find in chat"
           placeholder="Find in chat"
           value={findQuery}
-          onChange={(event) => setFindQuery(event.target.value)}
+          onChange={(event) => {
+            setFindQuery(event.target.value)
+            setFindActive(0)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              setFindQuery('')
+              setFindActive(0)
+              return
+            }
+            if (event.key === 'Enter' && matchIds.length > 0) {
+              event.preventDefault()
+              setFindActive((current) =>
+                stepFindIndex(
+                  current,
+                  matchIds.length,
+                  event.shiftKey ? 'prev' : 'next',
+                ),
+              )
+            }
+          }}
         />
         {findStatus ? (
           <p role="status" className="maia-transcript-find-status">
             {findStatus}
           </p>
+        ) : null}
+        {matchIds.length > 0 ? (
+          <div className="maia-transcript-find-nav">
+            <button
+              type="button"
+              className="maia-btn"
+              aria-label="Previous find match"
+              onClick={() =>
+                setFindActive((current) => stepFindIndex(current, matchIds.length, 'prev'))
+              }
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              className="maia-btn"
+              aria-label="Next find match"
+              onClick={() =>
+                setFindActive((current) => stepFindIndex(current, matchIds.length, 'next'))
+              }
+            >
+              Next
+            </button>
+          </div>
         ) : null}
       </div>
       <div
@@ -314,10 +375,11 @@ export function RouterConversation({
           </div>
         ) : null}
         <ol className="maia-transcript-list" aria-label="Transcript messages">
-          {foundMessages.map((message) => {
-            const index = visibleMessages.findIndex((item) => item.message_id === message.message_id)
+          {visibleMessages.map((message, index) => {
             const speaker = message.role === 'owner' ? 'You' : 'Maia'
             const fold = message.route ? routeFold(message.route) : null
+            const isMatch = messageMatchesFind(message.text, findQuery)
+            const isActiveMatch = message.message_id === activeMatchId
             return (
               <Fragment key={message.message_id}>
               {placed.unseenIndex === index ? (
@@ -325,7 +387,21 @@ export function RouterConversation({
                   New
                 </li>
               ) : null}
-              <li>
+              <li
+                ref={(node) => {
+                  if (node && isMatch) findHitRefs.current.set(message.message_id, node)
+                  else findHitRefs.current.delete(message.message_id)
+                }}
+                className={
+                  isActiveMatch
+                    ? 'maia-find-hit is-active'
+                    : isMatch
+                      ? 'maia-find-hit'
+                      : undefined
+                }
+                data-find-match={isMatch ? 'true' : undefined}
+                data-find-active={isActiveMatch ? 'true' : undefined}
+              >
                 <div role={message.message_id === admittedStatusMessageId ? 'status' : undefined}>
                   <article
                     className={message.role === 'owner' ? 'maia-run maia-run--you' : 'maia-run'}

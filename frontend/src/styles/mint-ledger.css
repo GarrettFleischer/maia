@@ -586,6 +586,22 @@ textarea {
   white-space: nowrap;
 }
 
+.maia-transcript-find-nav {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.maia-find-hit > div {
+  outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 10px;
+}
+
+.maia-find-hit.is-active > div {
+  outline: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .maia-transcript-body ul,
 .maia-transcript-body ol,
 .maia-fold-body ul,
