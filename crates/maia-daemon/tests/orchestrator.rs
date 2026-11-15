@@ -2099,6 +2099,8 @@ fn assert_control_contract(system: &str) {
     assert!(system.contains("cancel_task"));
     assert!(system.contains("retry_task"));
     assert!(system.contains("ask_user"));
+    assert!(system.contains("Never call bash") || system.contains("Do not call bash"));
+    assert!(system.contains("always spawn_task") || system.contains("New work: always spawn_task"));
     assert!(system.contains("A plan"));
     assert!(system.contains("Never invent an id."));
     assert!(system.contains("Never target a child."));
@@ -5182,5 +5184,200 @@ fn unreadable_worker_reply_nudges_instead_of_going_silent() {
         matches!(harness.host().phase(&task), Some(TaskPhase::Completed { .. })),
         "unreadable reply should nudge, not silent-fail; phase {:?}",
         harness.host().phase(&task)
+    );
+}
+
+#[test]
+fn owner_unknown_worker_tool_repairs_with_tool_error_then_spawns() {
+    let mut harness = open_harness("owner-unknown-bash-repair");
+    harness
+        .router
+        .push_tool("bash", r#"{"message":"ls F:/Development"}"#);
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Started."));
+    let outcome = wait(harness.host().handle_user_message(FOLDER_REQUEST)).expect("spawn");
+    assert!(matches!(
+        outcome.admitted,
+        AdmittedRoute::Admit(RouteDecision::CreateTask)
+    ));
+    assert_eq!(
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions"),
+        1
+    );
+    let bodies = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert!(
+        bodies.iter().all(|body| {
+            !body.contains("turn could not finish") && !body.contains("unknown tool name")
+        }),
+        "unknown worker tool must not post a processing failure: {bodies:?}"
+    );
+    let requests = harness.router.requests();
+    assert!(
+        requests.len() >= 2,
+        "owner must get a repair turn after bash: {requests:?}"
+    );
+    assert!(
+        requests[1].messages.iter().any(|message| {
+            message.content.contains("not a valid")
+                || message.content.contains("spawn_task")
+                || message.content.contains("not available")
+        }),
+        "repair must tell the model to use manager tools: {:?}",
+        requests[1].messages
+    );
+}
+
+#[test]
+fn wake_tools_are_manager_only_without_worker_stubs_or_owner_terminals() {
+    let mut harness = Harness::open_model("wake-tools-manager-only", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let task = outcome.task.expect("task");
+    let retry_args = serde_json::json!({ "task_id": task.0 }).to_string();
+    harness.router.push_tool("retry_task", &retry_args);
+    let done = success_arguments("Recovered.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let before = harness.router.requests().len();
+    let _ = harness.host().run_manager_wake("r=1;c=0;f=;s=;w=");
+    let wake = harness
+        .router
+        .requests()
+        .into_iter()
+        .skip(before)
+        .find(|request| request.tools_json.0.contains("retry_task"))
+        .expect("wake request");
+    for name in [
+        "spawn_task",
+        "continue_task",
+        "retry_task",
+        "cancel_task",
+        "message_user",
+        "ask_user",
+    ] {
+        assert!(
+            wake.tools_json.0.contains(name),
+            "wake missing manager tool {name}"
+        );
+    }
+    for forbidden in ["bash", "shell", "write_file", "read_file"] {
+        assert!(
+            !wake.tools_json.0.contains(&format!("\"name\":\"{forbidden}\"")),
+            "wake must not stub worker tool {forbidden}"
+        );
+    }
+    // Owner-turn terminals and unused wake no-ops stay off the wake schema.
+    for terminal in [
+        "\"name\":\"success\"",
+        "\"name\":\"failure\"",
+        "\"name\":\"waiting\"",
+        "\"name\":\"link_task\"",
+        "\"name\":\"inspect_task\"",
+    ] {
+        assert!(
+            !wake.tools_json.0.contains(terminal),
+            "wake must not offer {terminal}"
+        );
+    }
+}
+
+#[test]
+fn wake_spawn_task_hires_worker_without_posting_chat() {
+    use maia_core::manager::WakeAction;
+
+    let mut harness = Harness::open_model("wake-spawn-no-chat", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let failed = outcome.task.expect("task");
+    let transcript_before = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Transcript {
+            bot_id: "maia".to_owned(),
+        })
+        .expect("transcript")
+    {
+        BotResponse::Transcript(rows) => rows.into_iter().map(|row| row.body).collect::<Vec<_>>(),
+        other => panic!("transcript {other:?}"),
+    };
+    let sessions_before =
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions");
+    let done = success_arguments("Created config and finished.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let messaged = harness.host().apply_wake_actions(&[WakeAction::Spawn {
+        guidance: "Create the missing config then finish.".to_owned(),
+    }]);
+    assert!(!messaged, "wake spawn must not post into CEO chat");
+    assert!(
+        count(&harness.database, "SELECT COUNT(*) FROM task_sessions") > sessions_before,
+        "wake spawn must open a new task session"
+    );
+    let transcript_after = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Transcript {
+            bot_id: "maia".to_owned(),
+        })
+        .expect("transcript")
+    {
+        BotResponse::Transcript(rows) => rows.into_iter().map(|row| row.body).collect::<Vec<_>>(),
+        other => panic!("transcript {other:?}"),
+    };
+    assert_eq!(
+        transcript_after, transcript_before,
+        "wake spawn must not appear in the CEO transcript"
+    );
+    assert!(
+        matches!(
+            harness.host().phase(&failed),
+            Some(TaskPhase::Failed { .. })
+        ),
+        "original failed task remains for the next wake"
+    );
+    let labels = harness.host().activity_labels();
+    assert!(
+        labels.iter().any(|label| label.contains("Wake spawn")),
+        "labels {labels:?}"
+    );
+}
+
+#[test]
+fn wake_unknown_worker_tool_does_not_post_into_chat() {
+    let mut harness = Harness::open_model("wake-bash-no-chat", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let _task = outcome.task.expect("task");
+    let before = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    harness
+        .router
+        .push_tool("bash", r#"{"message":"cat config.toml"}"#);
+    let (fp, messaged) = harness.host().run_manager_wake("r=1;c=0;f=;s=;w=");
+    assert!(!messaged);
+    assert_eq!(fp, "r=1;c=0;f=;s=;w=");
+    let after = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert_eq!(
+        after, before,
+        "wake worker-tool mistake must not post into chat"
     );
 }

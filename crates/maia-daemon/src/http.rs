@@ -4671,11 +4671,13 @@ fn presented_by_message(connection: &Connection) -> BTreeMap<String, Vec<String>
 }
 
 fn transcript_value(connection: &Connection, bot: Option<&str>) -> Result<Value, ApiError> {
+    // When a bot is selected, require an explicit message_bots bind so unbound
+    // background/wake rows cannot default into Maia's chat.
     let mut statement = connection
         .prepare(
             "SELECT m.message_id, m.role, m.body FROM router_messages m \
              LEFT JOIN message_bots b ON b.message_id = m.message_id \
-             WHERE (?1 IS NULL OR COALESCE(b.bot_id, 'maia') = ?1) \
+             WHERE (?1 IS NULL OR b.bot_id = ?1) \
              ORDER BY m.ordinal, m.message_id",
         )
         .map_err(|_| ApiError::Store)?;
