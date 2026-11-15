@@ -48,8 +48,10 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 - JSON completions tolerate gateway quirks: null/missing `message` and tool_calls on the choice.
 - Worker success is not relayed raw into CEO chat; the manager posts one short `message_user` close-out on wake, then marks completed views closed.
 - A CEO reply while exactly one worker is `waiting_for_user` continues that worker (even if the model tried to spawn).
-- Wake tools include stubs for `bash`/`shell`/`write_file`/`read_file` so a mistaken worker-tool call does not abort the wake schema check.
+- Unknown tool names are not a schema abort: the host returns a normal tool error so the manager can recover with `spawn_task` (or another route tool). Wake offers only tools it applies (`spawn_task`, `continue_task`, `retry_task`, `cancel_task`, `message_user`, `ask_user`) — no worker stubs, no owner-turn terminals.
+- Wake `spawn_task` hires without binding into the CEO transcript; bot transcripts require an explicit `message_bots` bind (unbound rows no longer default to Maia).
 - Force-Wake / Settings edits reload fingerprint and `last_wake_at` from disk each tick.
+- Background and wake failures do not post into CEO chat unless the manager calls `message_user` or `ask_user`.
 
 ## Roadmap (prompt-first)
 
@@ -58,4 +60,5 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 3. Learning notes in the wake sidecar fed back into the prompt.
 4. Multi-goal attention scheduling via prompt + inspect tools.
 5. ~~Goal close-out digests via `message_user`~~ (done — wake `message_user`, raw success relay removed).
-6. **General refinement** — keep tightening live wake tool choice; owner-turn models still sometimes reach for worker tools instead of `spawn_task`.
+6. ~~Owner/wake models reaching for worker tools~~ (done — manager-only tools + recoverable unknown-tool errors).
+7. **General refinement** — prompt tightening, wake spawn/inspect wiring, learning notes.
