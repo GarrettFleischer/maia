@@ -27,6 +27,7 @@ Workers never talk to the CEO. Their failures and questions park for the manager
 | Knob | Default | Purpose |
 |------|---------|---------|
 | `autonomous_retries` per goal | cap `3` | After this many automatic restarts, recover tools are forced to `ask_user` |
+| CEO moment safety cap | always | If the wake model skips a waiting `ask_user` or finished close-out, host posts that one message unless `RECENT_CEO_CHAT` already covers it |
 | `wake_interval_secs` | 300 | Heartbeat cadence (Settings) |
 | `max_model_calls_per_wake` | 1 | Cost cap when something changed |
 | Skip model when fingerprint unchanged | always | Do not burn money on idle wakes |
@@ -39,7 +40,8 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 - Persisted as `manager_wake.json` beside the DB (interval, last wake, fingerprint, cost day counters).
 - Unchanged fingerprint → silent, no model call.
 - Changed failed/stuck/waiting/completed work → one model tool turn; `message_user` / `ask_user` only when the model chooses.
-- When the model is called, the wake user message is a compact brief: counts, plus per open (and completed) worker status, idle age, recent output tail, and last error (truncated). Waiting and completed-only briefs add a REQUIRED tool line. `inspect_task` returns the same shape. Fingerprint ignores brief detail.
+- When the model is called, the wake user message is a compact brief: counts; plain `CEO_WAITING` (question + mandatory `ask_user`); `FINISHED` goals (mandatory `message_user` close-out when nothing else needs attention); `RECENT_CEO_CHAT` for dedup; plus per open worker status, idle age, recent output, and last error. Default is silence; mandatory sections override it. `inspect_task` returns the same worker shape. Fingerprint ignores brief detail and CEO chat lines.
+- Wake `ask_user` / `message_user` bind to the **selected** bot (not a stale turn bot).
 - Wake system prompt lists open task ids as usable candidates (the contract forbids inventing ids).
 - A worker that stops answering is marked `Failed` with summary `Worker stopped answering.` (plus a short router reason when known) so wakes can see it (not left as orphaned `Running`).
 - Unreadable model replies nudge a couple of times instead of immediately failing silent.
@@ -61,4 +63,5 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 4. Multi-goal attention scheduling via prompt + inspect tools.
 5. ~~Goal close-out digests via `message_user`~~ (done — wake `message_user`, raw success relay removed).
 6. ~~Owner/wake models reaching for worker tools~~ (done — manager-only tools + recoverable unknown-tool errors).
-7. **General refinement** — prompt tightening, wake spawn/inspect wiring, learning notes.
+7. ~~CEO ask_user + finished close-out dependable on wake~~ (done — plain brief sections + CEO-moment safety cap + selected-bot bind).
+8. **General refinement** — settings knobs, learning notes, multi-goal attention.
