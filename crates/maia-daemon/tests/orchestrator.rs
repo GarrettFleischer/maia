@@ -2878,7 +2878,7 @@ fn model_worker_retries_a_running_parent_that_never_reported() {
     harness
         .router
         .push_tool("success", &success_arguments("It is 54 F in Canby."));
-    let (_fp, messaged) = harness.host().run_manager_wake("");
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
     assert!(!messaged);
     let labels = harness.host().activity_labels();
     assert!(
@@ -4612,9 +4612,9 @@ fn compaction_triggers_and_keeps_the_goal() {
 fn manager_wake_is_silent_when_fingerprint_unchanged() {
     let mut harness = Harness::open_model("mgr-silent-wake", supply());
     let before = harness.router.requests().len();
-    let (fp1, messaged1) = harness.host().run_manager_wake("");
+    let (fp1, messaged1, _) = harness.host().run_manager_wake("", &[]);
     assert!(!messaged1);
-    let (fp2, messaged2) = harness.host().run_manager_wake(&fp1);
+    let (fp2, messaged2, _) = harness.host().run_manager_wake(&fp1, &[]);
     assert_eq!(fp1, fp2);
     assert!(!messaged2);
     assert_eq!(
@@ -4627,7 +4627,7 @@ fn manager_wake_is_silent_when_fingerprint_unchanged() {
 #[test]
 fn manager_wake_can_message_the_user() {
     let mut harness = Harness::open_model("mgr-wake-msg", supply());
-    let messaged = harness.host().apply_wake_actions(&[
+    let (messaged, _) = harness.host().apply_wake_actions(&[
         maia_core::manager::WakeAction::MessageUser {
             text: "Release is blocked on your API key.".to_owned(),
         },
@@ -4659,7 +4659,7 @@ fn manager_wake_recovers_a_failed_worker_via_tools() {
     harness.router.push_tool("success", &done);
     harness.router.push_tool("success", &done);
     let before = harness.router.requests().len();
-    let (_fp, messaged) = harness.host().run_manager_wake("");
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
     assert!(!messaged);
     assert!(
         harness.router.requests().len() > before,
@@ -4687,7 +4687,7 @@ fn manager_wake_asks_user_once_for_a_blocker() {
         "ask_user",
         r#"{"message":"Need the vault password to continue the goal."}"#,
     );
-    let (_fp, messaged) = harness.host().run_manager_wake("");
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
     assert!(messaged);
     let bodies = shown(
         &harness.database,
@@ -4754,7 +4754,7 @@ fn manager_wake_ask_user_binds_to_selected_bot_not_stale_turn_bot() {
         "ask_user",
         r#"{"message":"Need RUN43_CEO_SECRET to continue."}"#,
     );
-    let (_fp, messaged) = harness.host().run_manager_wake("");
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
     assert!(messaged, "wake must post ask_user");
 
     let bound: Vec<(String, String)> = {
@@ -4796,7 +4796,7 @@ fn manager_wake_keeps_fingerprint_when_failed_without_retry() {
         "message_user",
         r#"{"message":"Still looking at the failure."}"#,
     );
-    let (fp, messaged) = harness.host().run_manager_wake(previous);
+    let (fp, messaged, _) = harness.host().run_manager_wake(previous, &[]);
     assert!(messaged);
     assert_eq!(
         fp, previous,
@@ -4819,7 +4819,7 @@ fn manager_wake_forces_ask_user_when_waiting_even_if_model_messages() {
         "message_user",
         r#"{"message":"Still working on the vault."}"#,
     );
-    let (fp, messaged) = harness.host().run_manager_wake(previous);
+    let (fp, messaged, _) = harness.host().run_manager_wake(previous, &[]);
     assert!(messaged);
     let bodies = shown(
         &harness.database,
@@ -4932,7 +4932,7 @@ fn manager_wake_close_out_uses_message_user_not_raw_success_relay() {
         r#"{"message":"Done — wrote DONE41 to the workspace file."}"#,
     );
     let before = harness.router.requests().len();
-    let (_fp, messaged) = harness.host().run_manager_wake("");
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
     assert!(messaged, "completed goal wake should message_user");
     assert!(
         harness.router.requests().len() > before,
@@ -5016,7 +5016,7 @@ fn manager_wake_system_prompt_lists_wake_task_ids_as_candidates() {
         .router
         .push_tool("success", &success_arguments("Recovered."));
     let before = harness.router.requests().len();
-    let (_fp, _messaged) = harness.host().run_manager_wake("");
+    let (_fp, _messaged, _) = harness.host().run_manager_wake("", &[]);
     let wake_requests = harness
         .router
         .requests()
@@ -5055,7 +5055,7 @@ fn manager_wake_brief_includes_worker_output_and_error() {
     harness.router.push_tool("success", &done);
     harness.router.push_tool("success", &done);
     let before = harness.router.requests().len();
-    let (_fp, _messaged) = harness.host().run_manager_wake("");
+    let (_fp, _messaged, _) = harness.host().run_manager_wake("", &[]);
     let wake_requests = harness
         .router
         .requests()
@@ -5181,7 +5181,7 @@ fn manager_wake_silent_tools_with_failed_work_keep_previous_fingerprint() {
     let previous = "r=1;c=0;f=;s=;w=";
     // Wake model returns no tools → interpret_wake_tools yields Silent.
     harness.router.push_raw("{}".to_owned());
-    let (fp, messaged) = harness.host().run_manager_wake(previous);
+    let (fp, messaged, _) = harness.host().run_manager_wake(previous, &[]);
     assert!(!messaged);
     assert_eq!(
         fp, previous,
@@ -5200,7 +5200,7 @@ fn manager_wake_model_failure_keeps_previous_fingerprint_so_next_wake_retries() 
     let task = outcome.task.expect("task");
     let previous = "r=1;c=0;f=;s=;w=";
     harness.router.push_failure(RouterError::Timeout);
-    let (fp_after_fail, messaged) = harness.host().run_manager_wake(previous);
+    let (fp_after_fail, messaged, _) = harness.host().run_manager_wake(previous, &[]);
     assert!(!messaged);
     assert_eq!(
         fp_after_fail, previous,
@@ -5212,7 +5212,7 @@ fn manager_wake_model_failure_keeps_previous_fingerprint_so_next_wake_retries() 
     harness.router.push_tool("success", &done);
     harness.router.push_tool("success", &done);
     let before = harness.router.requests().len();
-    let (_fp, _) = harness.host().run_manager_wake(&fp_after_fail);
+    let (_fp, _, _) = harness.host().run_manager_wake(&fp_after_fail, &[]);
     assert!(
         harness.router.requests().len() > before,
         "next wake must call the model again after a provider failure"
@@ -5337,7 +5337,7 @@ fn wake_tools_are_manager_only_without_worker_stubs_or_owner_terminals() {
     harness.router.push_tool("success", &done);
     harness.router.push_tool("success", &done);
     let before = harness.router.requests().len();
-    let _ = harness.host().run_manager_wake("r=1;c=0;f=;s=;w=");
+    let _ = harness.host().run_manager_wake("r=1;c=0;f=;s=;w=", &[]);
     let wake = harness
         .router
         .requests()
@@ -5352,6 +5352,7 @@ fn wake_tools_are_manager_only_without_worker_stubs_or_owner_terminals() {
         "cancel_task",
         "message_user",
         "ask_user",
+        "record_learning",
     ] {
         assert!(
             wake.tools_json.0.contains(name),
@@ -5406,7 +5407,7 @@ fn wake_spawn_task_hires_worker_without_posting_chat() {
     let done = success_arguments("Created config and finished.");
     harness.router.push_tool("success", &done);
     harness.router.push_tool("success", &done);
-    let messaged = harness.host().apply_wake_actions(&[WakeAction::Spawn {
+    let (messaged, _) = harness.host().apply_wake_actions(&[WakeAction::Spawn {
         guidance: "Create the missing config then finish.".to_owned(),
     }]);
     assert!(!messaged, "wake spawn must not post into CEO chat");
@@ -5459,7 +5460,7 @@ fn wake_unknown_worker_tool_does_not_post_into_chat() {
     harness
         .router
         .push_tool("bash", r#"{"message":"cat config.toml"}"#);
-    let (fp, messaged) = harness.host().run_manager_wake("r=1;c=0;f=;s=;w=");
+    let (fp, messaged, _) = harness.host().run_manager_wake("r=1;c=0;f=;s=;w=", &[]);
     assert!(!messaged);
     assert_eq!(fp, "r=1;c=0;f=;s=;w=");
     let after = shown(
@@ -5469,5 +5470,63 @@ fn wake_unknown_worker_tool_does_not_post_into_chat() {
     assert_eq!(
         after, before,
         "wake worker-tool mistake must not post into chat"
+    );
+}
+
+#[test]
+fn wake_brief_includes_learned_and_attention_for_multi_goal() {
+    let mut harness = Harness::open_model("wake-learned-attention", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let task = outcome.task.expect("task");
+    let retry_args = serde_json::json!({ "task_id": task.0 }).to_string();
+    harness.router.push_tool("retry_task", &retry_args);
+    let done = success_arguments("Recovered.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let before = harness.router.requests().len();
+    let learned = vec!["missing-file: create it then retry_task".to_owned()];
+    let _ = harness.host().run_manager_wake("", &learned);
+    let wake_requests = harness
+        .router
+        .requests()
+        .into_iter()
+        .skip(before)
+        .collect::<Vec<_>>();
+    assert!(!wake_requests.is_empty(), "wake should call the model");
+    let brief = request_text(&wake_requests[0]);
+    assert!(
+        brief.contains("LEARNED:") && brief.contains("missing-file: create it then retry_task"),
+        "wake brief must surface learned notes: {brief}"
+    );
+    assert!(
+        brief.contains("ATTENTION:") && brief.contains("retry/fix"),
+        "wake brief must order multi-goal attention: {brief}"
+    );
+    assert!(
+        wake_requests[0].messages.iter().any(|message| {
+            matches!(message.role, ChatRole::System)
+                && message.content.contains("record_learning")
+                && message.content.contains("ATTENTION")
+        }),
+        "wake system prompt must mention record_learning and ATTENTION"
+    );
+}
+
+#[test]
+fn wake_record_learning_returns_note_without_chat() {
+    use maia_core::manager::WakeAction;
+
+    let mut harness = Harness::open_model("wake-record-learning", long_supply());
+    let (messaged, notes) = harness.host().apply_wake_actions(&[WakeAction::RecordLearning {
+        note: "vault: ask_user once, never invent secrets".to_owned(),
+    }]);
+    assert!(!messaged);
+    assert_eq!(
+        notes,
+        vec!["vault: ask_user once, never invent secrets".to_owned()]
     );
 }

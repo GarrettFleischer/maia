@@ -512,3 +512,221 @@ fn fingerprint_ignores_worker_brief_detail() {
         "brief detail must not change wake fingerprint"
     );
 }
+
+#[test]
+fn wake_brief_orders_multi_goal_attention_and_leaves_healthy_alone() {
+    use maia_core::manager::WorkerBrief;
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        failed_task_ids: vec!["task-fail".to_owned()],
+        waiting: vec![(
+            "task-wait".to_owned(),
+            "Need RUN44_CEO_SECRET from the CEO".to_owned(),
+        )],
+        running_count: 1,
+        completed_unopened: 1,
+        workers: vec![
+            WorkerBrief {
+                task_id: "task-run".to_owned(),
+                title: "Healthy copy".to_owned(),
+                status: "running".to_owned(),
+                secs_since_progress: Some(3),
+                output_tail: "still writing".to_owned(),
+                last_error: String::new(),
+            },
+            WorkerBrief {
+                task_id: "task-fail".to_owned(),
+                title: "Missing file".to_owned(),
+                status: "failed".to_owned(),
+                secs_since_progress: Some(20),
+                output_tail: String::new(),
+                last_error: "bash exited 1: missing".to_owned(),
+            },
+            WorkerBrief {
+                task_id: "task-wait".to_owned(),
+                title: "Need secret".to_owned(),
+                status: "waiting".to_owned(),
+                secs_since_progress: Some(8),
+                output_tail: "Need RUN44_CEO_SECRET from the CEO".to_owned(),
+                last_error: String::new(),
+            },
+            WorkerBrief {
+                task_id: "task-done".to_owned(),
+                title: "Finished note".to_owned(),
+                status: "completed".to_owned(),
+                secs_since_progress: Some(1),
+                output_tail: "Wrote DONE44".to_owned(),
+                last_error: String::new(),
+            },
+        ],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    assert!(
+        brief.contains("ATTENTION:"),
+        "multi-goal brief must open an ATTENTION section: {brief}"
+    );
+    let fail_at = brief
+        .find("retry/fix task-fail")
+        .expect("ATTENTION must list failed work");
+    let wait_at = brief
+        .find("ask_user for task-wait")
+        .expect("ATTENTION must list CEO waiting");
+    let done_at = brief
+        .find("close-out finished goals")
+        .expect("ATTENTION must mention finished close-out");
+    assert!(
+        fail_at < wait_at && wait_at < done_at,
+        "ATTENTION order must be failed → waiting → close-out: {brief}"
+    );
+    assert!(
+        brief.contains("leave task-run alone (healthy)"),
+        "ATTENTION must tell the model to leave the healthy runner alone: {brief}"
+    );
+    assert!(
+        brief.contains("do not cross-talk"),
+        "multi-goal brief must forbid cross-talk / duplicate CEO noise: {brief}"
+    );
+}
+
+#[test]
+fn wake_brief_surfaces_learned_notes_for_later_wakes() {
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        failed_task_ids: vec!["task-1".to_owned()],
+        learned: vec![
+            "missing-file: create the file then retry_task".to_owned(),
+            "do not invent vault secrets".to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    assert!(
+        brief.contains("LEARNED:"),
+        "brief must surface LEARNED notes: {brief}"
+    );
+    assert!(
+        brief.contains("missing-file: create the file then retry_task"),
+        "brief must include prior learning: {brief}"
+    );
+    assert!(
+        brief.to_ascii_lowercase().contains("different approach")
+            || brief.to_ascii_lowercase().contains("do not repeat"),
+        "LEARNED section must nudge a different approach: {brief}"
+    );
+}
+
+#[test]
+fn fingerprint_ignores_learned_notes() {
+    let base = WakeSnapshot {
+        failed_task_ids: vec!["task-1".to_owned()],
+        ..WakeSnapshot::default()
+    };
+    let with_learned = WakeSnapshot {
+        learned: vec!["tried cat missing file".to_owned()],
+        ..base.clone()
+    };
+    assert_eq!(
+        snapshot_fingerprint(&base),
+        snapshot_fingerprint(&with_learned),
+        "learned notes must not change wake fingerprint"
+    );
+}
+
+#[test]
+fn record_learning_wake_tool_emits_note_action() {
+    let outcomes = interpret_wake_tools(&[WakeToolCall {
+        name: "record_learning".to_owned(),
+        message: "missing-file: create it then retry_task".to_owned(),
+    }]);
+    assert_eq!(
+        outcomes,
+        vec![WakeAction::RecordLearning {
+            note: "missing-file: create it then retry_task".to_owned()
+        }]
+    );
+}
+
+#[test]
+fn merge_learned_notes_dedups_and_caps() {
+    use maia_core::manager::MAX_LEARNED_NOTES;
+    use maia_core::manager::merge_learned_notes;
+
+    let existing = vec!["old note".to_owned(), "keep me".to_owned()];
+    let merged = merge_learned_notes(
+        &existing,
+        &["keep me".to_owned(), "new lesson".to_owned()],
+    );
+    assert_eq!(
+        merged,
+        vec![
+            "old note".to_owned(),
+            "keep me".to_owned(),
+            "new lesson".to_owned()
+        ]
+    );
+    let many: Vec<String> = (0..(MAX_LEARNED_NOTES + 3))
+        .map(|i| format!("note-{i}"))
+        .collect();
+    let capped = merge_learned_notes(&[], &many);
+    assert_eq!(capped.len(), MAX_LEARNED_NOTES);
+    assert_eq!(capped.first().map(String::as_str), Some("note-3"));
+    assert_eq!(
+        capped.last().map(String::as_str),
+        Some(&format!("note-{}", MAX_LEARNED_NOTES + 2)[..])
+    );
+}
+
+#[test]
+fn ceo_safety_cap_still_asks_when_model_only_retries_failed_among_multi_goals() {
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        failed_task_ids: vec!["task-fail".to_owned()],
+        waiting: vec![(
+            "task-wait".to_owned(),
+            "Need RUN44_CEO_SECRET from the CEO".to_owned(),
+        )],
+        running_count: 1,
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-done".to_owned(),
+            title: "Done".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "DONE44".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let forced = enforce_ceo_moments(
+        &[WakeAction::Recover {
+            task_id: "task-fail".to_owned(),
+            note: "create missing file then retry".to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::Recover { task_id, .. } if task_id == "task-fail"
+        )),
+        "recover must remain: {forced:?}"
+    );
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::AskUser { text } if text.contains("RUN44_CEO_SECRET")
+        )),
+        "safety cap must still force one ask while other goals exist: {forced:?}"
+    );
+    assert!(
+        !forced.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if maia_core::manager::looks_like_close_out(text)
+        )),
+        "must not close out while failed/waiting still need attention: {forced:?}"
+    );
+}

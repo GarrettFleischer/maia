@@ -1457,9 +1457,15 @@ fn run_scheduled_wake<R: RouterPort>(
         actor.host.set_next_bot(&selected);
     }
     let previous = wake_state.last_fingerprint.clone();
-    let (fingerprint, _messaged) = actor.host.run_manager_wake(&previous);
+    let learned = wake_state.learned.clone();
+    let (fingerprint, _messaged, new_learned) =
+        actor.host.run_manager_wake(&previous, &learned);
     wake_state.last_wake_at = now;
     wake_state.last_fingerprint = fingerprint;
+    if !new_learned.is_empty() {
+        wake_state.learned =
+            maia_core::manager::merge_learned_notes(&wake_state.learned, &new_learned);
+    }
     let _ = crate::manager_wake::save_wake_state(wake_path, wake_state);
 }
 

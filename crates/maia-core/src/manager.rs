@@ -24,6 +24,12 @@ pub const BRIEF_ERROR_CHARS: usize = 160;
 /// Max characters kept for a worker title in briefs.
 pub const BRIEF_TITLE_CHARS: usize = 80;
 
+/// Cap on durable learning notes kept in the wake sidecar / brief.
+pub const MAX_LEARNED_NOTES: usize = 16;
+
+/// Max characters kept for one learning note.
+pub const LEARNED_NOTE_CHARS: usize = 160;
+
 /// Compact per-worker facts for wake / inspect prompt context.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkerBrief {
@@ -58,6 +64,8 @@ pub struct WakeSnapshot {
     pub workers: Vec<WorkerBrief>,
     /// Recent selected-bot CEO chat lines for dedup. Ignored by fingerprint.
     pub recent_ceo_lines: Vec<String>,
+    /// Short notes from earlier wakes. Ignored by fingerprint.
+    pub learned: Vec<String>,
 }
 
 /// Whether a wake should spend a model call.
@@ -119,6 +127,11 @@ pub enum WakeAction {
         /// Goal text for the new worker.
         guidance: String,
     },
+    /// Persist a short lesson for later wakes (sidecar / brief). Does not post chat.
+    RecordLearning {
+        /// One short note about what worked or failed.
+        note: String,
+    },
 }
 
 /// True when automatic restarts are used up and the manager must ask the user.
@@ -166,6 +179,63 @@ pub fn format_worker_brief(worker: &WorkerBrief) -> String {
     lines.join("\n")
 }
 
+/// Merges new learning notes into the durable list (dedup, newest last, capped).
+#[must_use]
+pub fn merge_learned_notes(existing: &[String], additions: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = existing
+        .iter()
+        .map(|note| truncate_brief(note, LEARNED_NOTE_CHARS))
+        .filter(|note| !note.is_empty())
+        .collect();
+    for note in additions {
+        let clipped = truncate_brief(note, LEARNED_NOTE_CHARS);
+        if clipped.is_empty() {
+            continue;
+        }
+        out.retain(|prior| prior != &clipped);
+        out.push(clipped);
+    }
+    let excess = out.len().saturating_sub(MAX_LEARNED_NOTES);
+    if excess > 0 {
+        out.drain(0..excess);
+    }
+    out
+}
+
+/// Prompt-only ordered attention lines for concurrent goals. Empty when idle.
+#[must_use]
+pub fn attention_lines(snap: &WakeSnapshot) -> Vec<String> {
+    let mut lines = Vec::new();
+    for id in &snap.failed_task_ids {
+        lines.push(format!("retry/fix {id} (failed)"));
+    }
+    for id in &snap.stuck_task_ids {
+        if !snap.failed_task_ids.iter().any(|failed| failed == id) {
+            lines.push(format!("continue/fix {id} (stuck)"));
+        }
+    }
+    for (id, _) in &snap.waiting {
+        lines.push(format!("ask_user for {id} (CEO decision)"));
+    }
+    if snap.completed_unopened > 0 {
+        lines.push(
+            "close-out finished goals with message_user when other attention is clear".to_owned(),
+        );
+    }
+    for worker in &snap.workers {
+        if worker.status != "running" && worker.status != "queued" {
+            continue;
+        }
+        let busy = snap.failed_task_ids.iter().any(|id| id == &worker.task_id)
+            || snap.stuck_task_ids.iter().any(|id| id == &worker.task_id)
+            || snap.waiting.iter().any(|(id, _)| id == &worker.task_id);
+        if !busy {
+            lines.push(format!("leave {} alone (healthy)", worker.task_id));
+        }
+    }
+    lines
+}
+
 /// Prompt context for a manager wake that will call the model.
 #[must_use]
 pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
@@ -175,6 +245,28 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         format!("running={}", snap.running_count),
         format!("completed_unopened={}", snap.completed_unopened),
     ];
+    if !snap.learned.is_empty() {
+        lines.push(
+            "LEARNED: prior lessons. Prefer a different approach after a failure; do not repeat a failed tactic. Call record_learning with one short note when you learn something useful."
+                .to_owned(),
+        );
+        for note in &snap.learned {
+            let clipped = truncate_brief(note, LEARNED_NOTE_CHARS);
+            if !clipped.is_empty() {
+                lines.push(format!("- {clipped}"));
+            }
+        }
+    }
+    let attention = attention_lines(snap);
+    if !attention.is_empty() {
+        lines.push(
+            "ATTENTION: act on each item that needs you this wake (failed → waiting → close-out). Leave healthy runners alone. One clear ask_user per blocked goal; one close-out per finished goal when clear; do not cross-talk or duplicate CEO messages."
+                .to_owned(),
+        );
+        for item in attention {
+            lines.push(format!("- {item}"));
+        }
+    }
     if !snap.failed_task_ids.is_empty() {
         lines.push(format!("failed={}", snap.failed_task_ids.join(",")));
     }
@@ -387,6 +479,12 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                     actions.push(WakeAction::Spawn {
                         guidance: guidance.to_owned(),
                     });
+                }
+            }
+            "record_learning" => {
+                let note = truncate_brief(&call.message, LEARNED_NOTE_CHARS);
+                if !note.is_empty() {
+                    actions.push(WakeAction::RecordLearning { note });
                 }
             }
             _ => {}
