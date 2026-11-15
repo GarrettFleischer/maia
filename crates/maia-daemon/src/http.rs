@@ -1431,10 +1431,16 @@ fn run_scheduled_wake<R: RouterPort>(
     wake_path: &FsPath,
     wake_state: &mut crate::ManagerWakeState,
 ) {
-    // Pick up settings saved from the UI without requiring a daemon restart.
+    // Disk is source of truth so Settings and Force-Wake (cleared fingerprint /
+    // last_wake_at) apply without a daemon restart.
     let disk = crate::manager_wake::load_wake_state(wake_path);
     wake_state.interval_secs = disk.interval_secs;
     wake_state.max_model_calls_per_wake = disk.max_model_calls_per_wake;
+    wake_state.last_wake_at = disk.last_wake_at;
+    wake_state.last_fingerprint = disk.last_fingerprint;
+    wake_state.learned = disk.learned;
+    wake_state.cost_day = disk.cost_day;
+    wake_state.model_calls_today = disk.model_calls_today;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -1444,6 +1450,11 @@ fn run_scheduled_wake<R: RouterPort>(
         && now.saturating_sub(wake_state.last_wake_at) < wake_state.interval_secs
     {
         return;
+    }
+    if let Ok(maia_store::BotResponse::Text(selected)) =
+        actor.host.store().bots(maia_store::BotRequest::Selected)
+    {
+        actor.host.set_next_bot(&selected);
     }
     let previous = wake_state.last_fingerprint.clone();
     let (fingerprint, _messaged) = actor.host.run_manager_wake(&previous);
@@ -1618,7 +1629,7 @@ where
         let Ok(machine) =
             actor
                 .host
-                .open_worker(&task, WorkerAttempts::UntilAnswer, OwnerNotice::Chat)
+                .open_worker(&task, WorkerAttempts::UntilAnswer, OwnerNotice::Hold)
         else {
             continue;
         };

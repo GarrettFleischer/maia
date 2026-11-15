@@ -4699,6 +4699,166 @@ fn manager_wake_asks_user_once_for_a_blocker() {
 }
 
 #[test]
+fn manager_wake_keeps_fingerprint_when_failed_without_retry() {
+    let mut harness = Harness::open_model("mgr-wake-fail-keep-fp", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let _task = outcome.task.expect("task");
+    let previous = "keep-until-retry";
+    harness.router.push_tool(
+        "message_user",
+        r#"{"message":"Still looking at the failure."}"#,
+    );
+    let (fp, messaged) = harness.host().run_manager_wake(previous);
+    assert!(messaged);
+    assert_eq!(
+        fp, previous,
+        "wake must keep fingerprint until retry/ask handles failed work"
+    );
+}
+
+#[test]
+fn manager_wake_keeps_fingerprint_when_waiting_without_ask_user() {
+    let mut harness = Harness::open_model("mgr-wake-wait-keep-fp", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need the vault password to continue"}"#);
+    let outcome = wait(harness.host().handle_user_message("Open the vault")).expect("run");
+    let _task = outcome.task.expect("task");
+    let previous = "keep-until-ask";
+    // Wrong tool: message_user is not ask_user while a worker is waiting.
+    harness.router.push_tool(
+        "message_user",
+        r#"{"message":"Still working on the vault."}"#,
+    );
+    let (fp, messaged) = harness.host().run_manager_wake(previous);
+    assert!(messaged);
+    assert_eq!(
+        fp, previous,
+        "wake must keep fingerprint until ask_user handles the waiting worker"
+    );
+}
+
+#[test]
+fn ceo_reply_continues_sole_waiting_worker() {
+    let mut harness = Harness::open_model("ceo-reply-waiting", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need the vault password to continue"}"#);
+    let outcome = wait(harness.host().handle_user_message("Open the vault")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::WaitingForUser { .. })
+    ));
+    // Model wrongly tries to spawn; host should hand the CEO answer to the waiting worker.
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Opened with the password."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("Opened with the password."));
+    let continued = wait(harness.host().handle_user_message("password is hunter2")).expect("reply");
+    assert_eq!(
+        continued.task.as_ref().map(|id| id.0.as_str()),
+        Some(task.0.as_str()),
+        "CEO reply must resume the sole waiting worker"
+    );
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Completed { .. })),
+        "waiting worker should finish after CEO reply; phase {:?}",
+        harness.host().phase(&task)
+    );
+}
+
+#[test]
+fn wake_snapshot_counts_only_unopened_completed() {
+    let mut harness = Harness::open_model("wake-unopened-only", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("First goal done."));
+    let outcome = wait(harness.host().handle_user_message("Finish goal one")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+    let snap = harness.host().wake_snapshot();
+    assert!(
+        snap.completed_unopened >= 1,
+        "unopened completed must count: {snap:?}"
+    );
+    harness
+        .host()
+        .store()
+        .set_completion_view(&task.0, "closed_once")
+        .expect("close view");
+    let snap2 = harness.host().wake_snapshot();
+    assert_eq!(
+        snap2.completed_unopened, 0,
+        "closed completed must not keep waking: {snap2:?}"
+    );
+}
+
+#[test]
+fn manager_wake_close_out_uses_message_user_not_raw_success_relay() {
+    let mut harness = Harness::open_model("mgr-wake-closeout", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote DONE41 to the workspace file."));
+    let outcome = wait(harness.host().handle_user_message("Write DONE41 to a file")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+    let bodies_before = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert!(
+        !bodies_before
+            .iter()
+            .any(|body| body.contains("Wrote DONE41")),
+        "raw worker success must not land in CEO chat before manager close-out: {bodies_before:?}"
+    );
+    let snap = harness.host().wake_snapshot();
+    assert!(
+        snap.completed_unopened >= 1,
+        "completed goal must appear in wake snapshot: {snap:?}"
+    );
+    harness.router.push_tool(
+        "message_user",
+        r#"{"message":"Done — wrote DONE41 to the workspace file."}"#,
+    );
+    let before = harness.router.requests().len();
+    let (_fp, messaged) = harness.host().run_manager_wake("");
+    assert!(messaged, "completed goal wake should message_user");
+    assert!(
+        harness.router.requests().len() > before,
+        "completed goal must spend a wake model call"
+    );
+    let bodies = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("Done — wrote DONE41")),
+        "manager close-out must post message_user: {bodies:?}"
+    );
+}
+
+#[test]
 fn manager_restart_budget_forces_ask_user() {
     let gated = maia_core::manager::enforce_restart_budget(
         &[maia_core::manager::WakeAction::Recover {

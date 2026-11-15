@@ -634,10 +634,8 @@ pub enum ParentWork {
 pub(crate) enum OwnerNotice {
     /// The worker is the voice the owner hears.
     Relay,
-    /// The router will speak after the worker returns.
+    /// The router/manager will speak; do not dump worker text into CEO chat.
     Hold,
-    /// A background task posts one chat line that names the task.
-    Chat,
 }
 
 pub(crate) enum WorkerFinish {
@@ -1314,21 +1312,23 @@ Later messages are the owner's words, a silent wake brief, or worker status. The
 Call exactly one tool.\n\
 On every turn and every wake: check workers, diagnose failures yourself from the wake brief or inspect_task, retry or re-plan with new instructions, replace or hire workers, make sensible low-stakes calls yourself, and close out finished goals.\n\
 A wake brief lists each open worker with status, idle age, recent output, and last error. Use that before asking the CEO.\n\
+On a silent wake you have no bash, files, browser, network, or vault tools. Call only route tools: spawn_task, continue_task, link_task, inspect_task, cancel_task, retry_task, message_user, ask_user (or success/failure/waiting as aliases).\n\
 Keep going until you call success, failure, waiting, message_user, or ask_user.\n\
 - success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory.\n\
 - failure: message is why this cannot be handled.\n\
 - waiting: message is one specific question while work stays alive. Prefer ask_user for CEO decisions.\n\
-- message_user: post one useful update only when the CEO genuinely needs to know. When a goal finishes, send one short useful close-out. Most wakes stay silent. Never dump worker logs into chat.\n\
+- message_user: post one useful update only when the CEO genuinely needs to know. When a goal finishes, send one short useful close-out with message_user (do not rely on raw worker success text). Most wakes stay silent. Never dump worker logs into chat.\n\
 - ask_user: one clear CEO decision (credentials, money, irreversible or external action, real preference). Never spam. Never paste worker output.\n\
 Route tools do not finish the turn. After one of them, call success, failure, waiting, message_user, or ask_user.\n\
 - New work: spawn_task. Do not refuse a path yourself; hire a worker.\n\
-- Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text).\n\
+- Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text). When the CEO answers your ask_user about a waiting worker, continue_task with that task_id and their answer.\n\
 - Follow-up after a finished task: link_task.\n\
 - Status: inspect_task for the same details as the wake brief.\n\
 - Stop for good: cancel_task.\n\
 - Failed or stopped work you choose to retry: retry_task.\n\
-Fixable worker failures (missing file, bad args, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance. Do not ask_user.\n\
-If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: ask_user once with one clear question. Do not retry blindly. Do not paste the worker's wording into chat; restate the decision cleanly.\n\
+Fixable worker failures (missing file, bad args, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance. Do not ask_user. Do not call bash yourself.\n\
+If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: you MUST call ask_user once with one clear question. Do not stay silent. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate the decision cleanly. Do not ask the same question again later.\n\
+Shell, files, vault, and network work always go through spawn_task or continue_task. Do not ask_user about a secret until a worker is waiting on it.\n\
 Workers never talk to the CEO. Their blockers and questions come to you; you decide.\n\
 A plan, a thought, or a cut-off sentence is not finished. Call a tool.\n\
 Use only a task_id from the candidate list or the wake brief. Never invent an id. Never target a child.\n\
@@ -2063,14 +2063,28 @@ fn route_tools_json() -> String {
         ),
         terminal_tool(
             "message_user",
-            "Post one useful update to the owner chat. Most manager wakes stay silent. When a goal finishes, send one short useful close-out. Never dump raw worker logs.",
+            "Post one useful update to the owner chat. Most manager wakes stay silent. When completed_unopened > 0 and nothing else needs attention, you MUST send one short useful close-out. Never dump raw worker logs.",
         ),
         terminal_tool(
             "ask_user",
-            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real preference). Use when a worker is waiting on a CEO-only blocker. One question only. Never paste worker output into chat. Workers never ask the CEO directly.",
+            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real preference). When a worker is waiting on a CEO-only blocker, you MUST use this (not message_user, not silence). One question only; never repeat it. Never paste worker output into chat. Workers never ask the CEO directly.",
         ),
     ];
     tools.extend(terminal_tools());
+    serde_json::Value::Array(tools).to_string()
+}
+
+/// Wake tool list: route tools plus stubs for common mistakes so validation does not
+/// fail the whole wake when the model reaches for worker tools like `bash`.
+fn wake_tools_json() -> String {
+    let mut tools: Vec<serde_json::Value> =
+        serde_json::from_str(&route_tools_json()).unwrap_or_default();
+    for name in ["bash", "shell", "write_file", "read_file"] {
+        tools.push(terminal_tool(
+            name,
+            "Unavailable on manager wake. Call retry_task, continue_task, ask_user, or message_user instead.",
+        ));
+    }
     serde_json::Value::Array(tools).to_string()
 }
 
@@ -2310,10 +2324,10 @@ fn log_router_failure(error: &OrchestratorError) {
         log_failure_class(class);
         // Fixed vocabulary from classify_protocol / status lines only.
         if let RouterError::Protocol { detail } = router {
-            let safe = matches!(
+            let safe = detail.starts_with("unknown tool name")
+                || matches!(
                 detail.as_str(),
-                "unknown tool name"
-                    | "tool arguments must be a JSON object"
+                "tool arguments must be a JSON object"
                     | "tool arguments must be valid JSON object"
                     | "duplicate tool call id"
                     | "missing tool_calls array"
@@ -3649,19 +3663,23 @@ impl<R: Router> Orchestrator<R> {
                     running_count = running_count.saturating_add(1);
                 }
                 TaskPhase::Completed { .. } => {
-                    completed_unopened = completed_unopened.saturating_add(1);
+                    if self.task_completion_unopened(task) {
+                        completed_unopened = completed_unopened.saturating_add(1);
+                    }
                 }
                 _ => {}
             }
-            if matches!(
-                phase,
+            let include_worker = match phase {
                 TaskPhase::Queued
-                    | TaskPhase::Running { .. }
-                    | TaskPhase::WaitingForUser { .. }
-                    | TaskPhase::Blocked { .. }
-                    | TaskPhase::Failed { .. }
-                    | TaskPhase::Stopped { .. }
-            ) {
+                | TaskPhase::Running { .. }
+                | TaskPhase::WaitingForUser { .. }
+                | TaskPhase::Blocked { .. }
+                | TaskPhase::Failed { .. }
+                | TaskPhase::Stopped { .. } => true,
+                TaskPhase::Completed { .. } => self.task_completion_unopened(task),
+                _ => false,
+            };
+            if include_worker {
                 workers.push(self.worker_brief_for(task, phase));
             }
         }
@@ -3672,6 +3690,40 @@ impl<R: Router> Orchestrator<R> {
             running_count,
             completed_unopened,
             workers,
+        }
+    }
+
+    fn task_completion_unopened(&self, task: &TaskId) -> bool {
+        self.store
+            .task_inspection(&task.0)
+            .ok()
+            .map(|view| view.completion_view == VIEW_UNOPENED)
+            .unwrap_or(false)
+    }
+
+    /// After a wake close-out, drop completed goals from the next wake brief.
+    fn close_unopened_completed_for_wake(&mut self) {
+        let selected = match self.store.bots(maia_store::BotRequest::Selected) {
+            Ok(maia_store::BotResponse::Text(bot)) => bot,
+            _ => self.turn_bot.clone(),
+        };
+        let done: Vec<TaskId> = self
+            .phases
+            .iter()
+            .filter_map(|(task, phase)| {
+                if self.task_bot(task) != selected {
+                    return None;
+                }
+                match phase {
+                    TaskPhase::Completed { .. } if self.task_completion_unopened(task) => {
+                        Some(task.clone())
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        for task in done {
+            let _ = self.store.set_completion_view(&task.0, "closed_once");
         }
     }
 
@@ -3726,6 +3778,9 @@ impl<R: Router> Orchestrator<R> {
                 WakeAction::MessageUser { text } | WakeAction::AskUser { text } => {
                     if self.note_router(text).is_ok() {
                         messaged = true;
+                        if matches!(action, WakeAction::MessageUser { .. }) {
+                            self.close_unopened_completed_for_wake();
+                        }
                     }
                 }
                 WakeAction::Recover { task_id, note } => {
@@ -3826,13 +3881,33 @@ impl<R: Router> Orchestrator<R> {
             return (previous_fingerprint.to_owned(), false);
         };
         let messaged = self.apply_wake_actions(&actions);
-        let acted = actions.iter().any(|action| !matches!(action, WakeAction::Silent));
-        let needs_attention = !snap.failed_task_ids.is_empty()
-            || !snap.stuck_task_ids.is_empty()
-            || !snap.waiting.is_empty();
-        // If the model produced no tools while work still needs attention, keep the
-        // previous fingerprint so the next wake can try again (same as a provider miss).
-        if needs_attention && !acted {
+        let asked = actions
+            .iter()
+            .any(|action| matches!(action, WakeAction::AskUser { .. }));
+        let closed_out = actions
+            .iter()
+            .any(|action| matches!(action, WakeAction::MessageUser { .. }));
+        let recovered_or_cancelled = actions.iter().any(|action| {
+            matches!(
+                action,
+                WakeAction::Recover { .. } | WakeAction::Cancel { .. }
+            )
+        });
+        let failed_or_stuck =
+            !snap.failed_task_ids.is_empty() || !snap.stuck_task_ids.is_empty();
+        // Keep the fingerprint until attention is actually handled. message_user alone
+        // does not clear failed/waiting work.
+        if failed_or_stuck && !recovered_or_cancelled && !asked {
+            return (previous_fingerprint.to_owned(), messaged);
+        }
+        if !snap.waiting.is_empty() && !asked && !recovered_or_cancelled {
+            return (previous_fingerprint.to_owned(), messaged);
+        }
+        if snap.completed_unopened > 0
+            && !failed_or_stuck
+            && snap.waiting.is_empty()
+            && !closed_out
+        {
             return (previous_fingerprint.to_owned(), messaged);
         }
         (fingerprint, messaged)
@@ -3844,7 +3919,7 @@ impl<R: Router> Orchestrator<R> {
     fn manager_wake_tool_actions(&mut self, snap: &WakeSnapshot) -> Option<Vec<WakeAction>> {
         let request_id = self.ids.pop_request().ok()?;
         let brief = format_wake_brief(snap);
-        let tools_json = route_tools_json();
+        let tools_json = wake_tools_json();
         let system = wake_system_prompt(snap);
         let request = RouterRequest {
             request_id: RequestId(request_id),
@@ -5608,7 +5683,9 @@ impl<R: Router> Orchestrator<R> {
             task_id: task.0.clone(),
         }) {
             Ok(maia_store::BotResponse::Text(bot)) => bot,
-            _ => self.turn_bot.clone(),
+            // Do not fall back to turn_bot: that can attribute another bot's tasks to the
+            // selected wake bot and poison fingerprints / hide real failures.
+            _ => String::new(),
         }
     }
 
@@ -5672,7 +5749,10 @@ impl<R: Router> Orchestrator<R> {
         } else {
             admitted
         };
-        let admitted = if let Some(task) = self.matching_live_task(text) {
+        let admitted = if let Some(task) = self
+            .matching_live_task(text)
+            .or_else(|| self.sole_waiting_task())
+        {
             match admitted {
                 AdmittedRoute::Admit(RouteDecision::CreateTask) | AdmittedRoute::AskUser { .. } => {
                     AdmittedRoute::Admit(RouteDecision::Continue { task })
@@ -6026,6 +6106,28 @@ impl<R: Router> Orchestrator<R> {
                 None
             }
         })
+    }
+
+    /// When exactly one selected-bot worker is waiting on the CEO, hand the reply to it.
+    fn sole_waiting_task(&self) -> Option<TaskId> {
+        let selected = match self.store.bots(maia_store::BotRequest::Selected) {
+            Ok(maia_store::BotResponse::Text(bot)) => bot,
+            _ => self.turn_bot.clone(),
+        };
+        let mut waiting = self.phases.iter().filter_map(|(task, phase)| {
+            if self.task_bot(task) != selected {
+                return None;
+            }
+            match phase {
+                TaskPhase::WaitingForUser { .. } => Some(task.clone()),
+                _ => None,
+            }
+        });
+        let first = waiting.next()?;
+        if waiting.next().is_some() {
+            return None;
+        }
+        Some(first)
     }
 
     fn work_parent(
@@ -6601,7 +6703,7 @@ impl<R: Router> Orchestrator<R> {
             self.record_activity(&summary, Some(task));
         }
         match notice {
-            OwnerNotice::Relay | OwnerNotice::Chat => {
+            OwnerNotice::Relay => {
                 let _ = self.note_router(WORKER_SILENT);
             }
             OwnerNotice::Hold => {}
@@ -6610,9 +6712,13 @@ impl<R: Router> Orchestrator<R> {
     }
 
     fn relay_worker(&mut self, finish: WorkerFinish, notice: OwnerNotice) -> WorkerFinish {
+        // Success close-out belongs to the manager wake (message_user), not raw worker text.
+        if matches!(finish, WorkerFinish::Success(_)) {
+            return finish;
+        }
         if let Some(sentence) = finish.sentence() {
             match notice {
-                OwnerNotice::Relay | OwnerNotice::Chat => {
+                OwnerNotice::Relay => {
                     let _ = self.note_router(sentence);
                 }
                 OwnerNotice::Hold => {}
@@ -7466,7 +7572,10 @@ fn route_effect(
     finish: WorkerFinish,
 ) -> RouteEffect {
     let result = match &finish {
-        WorkerFinish::Success(text) => format!("The subagent finished: {text}"),
+        // Success close-out is a wake message_user; keep the owner turn free of raw worker text.
+        WorkerFinish::Success(_) => {
+            "A worker finished. I will send a short close-out.".to_owned()
+        }
         // Failures and waits stay with the manager; do not dump worker text into CEO chat.
         WorkerFinish::Failure(_) => "A worker failed. I will decide what to do next.".to_owned(),
         WorkerFinish::Waiting(_) => "A worker is waiting. I will decide what to do next.".to_owned(),
