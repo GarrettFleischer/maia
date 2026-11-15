@@ -2793,29 +2793,19 @@ fn deferred_boot_queues_a_running_parent_without_another_model_call() {
     );
     let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
     let task = outcome.task.expect("task");
-    assert!(matches!(
-        harness.host().phase(&task),
-        Some(TaskPhase::Running { .. })
-    ));
-    harness
-        .router
-        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Failed { .. })),
+        "silent worker becomes failed, got {:?}",
+        harness.host().phase(&task)
+    );
     harness.host().defer_model_work();
     let before = harness.router.requests().len();
     harness.host().work_queued_parents();
     assert_eq!(harness.router.requests().len(), before);
     assert!(
-        harness
-            .host()
-            .take_background_tasks()
-            .iter()
-            .any(|queued| queued == &task),
-        "a restart should hand the running parent to the background pump"
+        harness.host().take_background_tasks().is_empty(),
+        "failed parents are not re-queued as running background work"
     );
-    assert!(matches!(
-        harness.host().phase(&task),
-        Some(TaskPhase::Running { .. })
-    ));
 }
 
 #[test]
@@ -2856,11 +2846,10 @@ fn model_worker_retries_a_running_parent_that_never_reported() {
     );
     let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
     let task = outcome.task.expect("task");
-    assert_eq!(
-        harness.host().phase(&task),
-        Some(&TaskPhase::Running {
-            attempt: AttemptId("attempt-1".to_owned()),
-        })
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Failed { .. })),
+        "silent worker becomes failed for manager recovery, got {:?}",
+        harness.host().phase(&task)
     );
     assert!(
         texts(
@@ -2872,21 +2861,27 @@ fn model_worker_retries_a_running_parent_that_never_reported() {
             present_router_body(body).text == "The task started, but the worker did not answer."
         })
     );
+    assert!(
+        texts(&harness.database, "SELECT summary FROM task_reports")
+            .iter()
+            .any(|summary| summary.contains("stopped answering")),
+        "expected failure report, got {:?}",
+        texts(&harness.database, "SELECT summary FROM task_reports")
+    );
+    let retry_args = serde_json::json!({ "task_id": task.0 }).to_string();
+    harness.router.push_tool("retry_task", &retry_args);
     harness
         .router
         .push_tool("success", &success_arguments("It is 54 F in Canby."));
-    harness.host().work_queued_parents();
-    assert_eq!(
-        texts(&harness.database, "SELECT summary FROM task_reports"),
-        vec!["It is 54 F in Canby.".to_owned()]
-    );
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    let (_fp, messaged) = harness.host().run_manager_wake("");
+    assert!(!messaged);
+    let labels = harness.host().activity_labels();
     assert!(
-        texts(
-            &harness.database,
-            "SELECT body FROM router_messages ORDER BY ordinal"
-        )
-        .iter()
-        .any(|body| present_router_body(body).text == "It is 54 F in Canby.")
+        labels.iter().any(|label| label.contains("Wake recovery")),
+        "manager wake should retry the silent failure, labels {labels:?}"
     );
 }
 
@@ -4720,4 +4715,145 @@ fn manager_restart_budget_forces_ask_user() {
         gated.as_slice(),
         [maia_core::manager::WakeAction::AskUser { text }] if text.contains("restarts")
     ));
+}
+
+#[test]
+fn silent_worker_marks_task_failed_so_manager_wake_can_see_it() {
+    let mut harness = Harness::open_model("silent-marks-failed", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness.router.push_failure(RouterError::Protocol {
+        detail: "stop".to_owned(),
+    });
+    let outcome = wait(harness.host().handle_user_message(
+        "Do nothing useful; the worker will fail to answer.",
+    ))
+    .expect("run");
+    let task = outcome.task.expect("task");
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Failed { .. })),
+        "silent worker must become failed for manager wake, got {:?}",
+        harness.host().phase(&task)
+    );
+    let snap = harness.host().wake_snapshot();
+    assert!(
+        snap.failed_task_ids.iter().any(|id| id == &task.0),
+        "wake snapshot must list the failed task: {snap:?}"
+    );
+    let brief = maia_core::manager::format_wake_brief(&snap);
+    assert!(
+        brief.contains("status=failed") || brief.contains(&task.0),
+        "brief should describe the failed worker: {brief}"
+    );
+}
+
+#[test]
+fn manager_wake_system_prompt_lists_wake_task_ids_as_candidates() {
+    let mut harness = Harness::open_model("mgr-wake-candidates", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config.toml"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let task = outcome.task.expect("task");
+    let retry_args = serde_json::json!({ "task_id": task.0 }).to_string();
+    harness.router.push_tool("retry_task", &retry_args);
+    harness
+        .router
+        .push_tool("success", &success_arguments("Recovered."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("Recovered."));
+    let before = harness.router.requests().len();
+    let (_fp, _messaged) = harness.host().run_manager_wake("");
+    let wake_requests = harness
+        .router
+        .requests()
+        .into_iter()
+        .skip(before)
+        .collect::<Vec<_>>();
+    assert!(!wake_requests.is_empty(), "wake should call the model");
+    let system = wake_requests[0]
+        .messages
+        .iter()
+        .find(|message| matches!(message.role, ChatRole::System))
+        .map(|message| message.content.as_str())
+        .unwrap_or("");
+    assert!(
+        system.contains(&task.0),
+        "wake system prompt must list the failed task id as a candidate: {system}"
+    );
+    assert!(
+        system.contains("Wake task ids") || system.contains("Candidates:"),
+        "wake system prompt should mark usable task ids: {system}"
+    );
+}
+
+#[test]
+fn manager_wake_brief_includes_worker_output_and_error() {
+    let mut harness = Harness::open_model("mgr-wake-brief", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config.toml"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let task = outcome.task.expect("task");
+    let retry_args = serde_json::json!({ "task_id": task.0 }).to_string();
+    harness.router.push_tool("retry_task", &retry_args);
+    let done = success_arguments("Recovered.");
+    harness.router.push_tool("success", &done);
+    harness.router.push_tool("success", &done);
+    let before = harness.router.requests().len();
+    let (_fp, _messaged) = harness.host().run_manager_wake("");
+    let wake_requests = harness
+        .router
+        .requests()
+        .into_iter()
+        .skip(before)
+        .collect::<Vec<_>>();
+    assert!(
+        !wake_requests.is_empty(),
+        "changed wake should call the model"
+    );
+    let brief = request_text(&wake_requests[0]);
+    assert!(
+        brief.contains("status=failed") || brief.contains(&task.0),
+        "brief should name the failed worker: {brief}"
+    );
+    assert!(
+        brief.contains("missing config") || brief.contains("out:") || brief.contains("err:"),
+        "brief should include recent output/error: {brief}"
+    );
+    assert!(
+        brief.contains("idle="),
+        "brief should include idle age: {brief}"
+    );
+}
+
+#[test]
+fn inspect_task_returns_worker_brief_details() {
+    let mut harness = Harness::open_model("mgr-inspect-brief", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config.toml"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let task = outcome.task.expect("task");
+    let inspect_args = serde_json::json!({ "task_id": task.0 }).to_string();
+    harness.router.push_tool("inspect_task", &inspect_args);
+    harness
+        .router
+        .push_tool("success", &success_arguments("Checked the worker."));
+    let _ = wait(harness.host().handle_user_message("What is that task doing?")).expect("inspect");
+    let requests = harness.router.requests();
+    let inspect_exchange = requests.iter().rev().find(|request| {
+        request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("status=failed") || message.content.contains("err:"))
+    });
+    assert!(
+        inspect_exchange.is_some(),
+        "inspect_task result should include worker brief details; requests={}",
+        requests.len()
+    );
 }
