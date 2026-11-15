@@ -38,14 +38,18 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 - Idle daemon actor polls and runs `run_manager_wake`.
 - Persisted as `manager_wake.json` beside the DB (interval, last wake, fingerprint, cost day counters).
 - Unchanged fingerprint → silent, no model call.
-- Changed failed/stuck/waiting work → one model tool turn; `message_user` / `ask_user` only when the model chooses.
-- When the model is called, the wake user message is a compact brief: counts, plus per open worker status, idle age, recent output tail, and last error (truncated). `inspect_task` returns the same shape. Fingerprint ignores brief detail.
+- Changed failed/stuck/waiting/completed work → one model tool turn; `message_user` / `ask_user` only when the model chooses.
+- When the model is called, the wake user message is a compact brief: counts, plus per open (and completed) worker status, idle age, recent output tail, and last error (truncated). Waiting and completed-only briefs add a REQUIRED tool line. `inspect_task` returns the same shape. Fingerprint ignores brief detail.
 - Wake system prompt lists open task ids as usable candidates (the contract forbids inventing ids).
 - A worker that stops answering is marked `Failed` with summary `Worker stopped answering.` (plus a short router reason when known) so wakes can see it (not left as orphaned `Running`).
 - Unreadable model replies nudge a couple of times instead of immediately failing silent.
-- If the wake model call fails, or returns no tools while failed/waiting work remains, the fingerprint is **not** advanced so the next wake can retry.
+- If the wake model call fails, or returns no tools / the wrong tool while failed/waiting/completed work still needs attention, the fingerprint is **not** advanced so the next wake can retry.
 - Wake snapshots are scoped to the selected bot so deleted bots cannot poison the fingerprint.
 - JSON completions tolerate gateway quirks: null/missing `message` and tool_calls on the choice.
+- Worker success is not relayed raw into CEO chat; the manager posts one short `message_user` close-out on wake, then marks completed views closed.
+- A CEO reply while exactly one worker is `waiting_for_user` continues that worker (even if the model tried to spawn).
+- Wake tools include stubs for `bash`/`shell`/`write_file`/`read_file` so a mistaken worker-tool call does not abort the wake schema check.
+- Force-Wake / Settings edits reload fingerprint and `last_wake_at` from disk each tick.
 
 ## Roadmap (prompt-first)
 
@@ -53,5 +57,5 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 2. Settings for restart budget and mute wake messages.
 3. Learning notes in the wake sidecar fed back into the prompt.
 4. Multi-goal attention scheduling via prompt + inspect tools.
-5. ~~Goal close-out digests via `message_user`~~ (prompt + tool wording).
-6. **General refinement** — real bugs, reliability, clearer design (autonomy is solid enough live to move here).
+5. ~~Goal close-out digests via `message_user`~~ (done — wake `message_user`, raw success relay removed).
+6. **General refinement** — keep tightening live wake tool choice; owner-turn models still sometimes reach for worker tools instead of `spawn_task`.
