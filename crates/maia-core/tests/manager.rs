@@ -345,6 +345,32 @@ fn wake_recover_is_forced_to_ask_user_when_restart_budget_is_exhausted() {
 }
 
 #[test]
+fn glanceable_task_title_keeps_first_line_head_for_tasks_rail() {
+    use maia_core::manager::glanceable_task_title;
+    use maia_core::manager::BRIEF_TITLE_CHARS;
+
+    let multi = "Research newest workspace files\n1) List five files\n2) Write a brief";
+    assert_eq!(
+        glanceable_task_title(multi),
+        "Research newest workspace files",
+        "Tasks rail must show the first line, not the whole CEO brief"
+    );
+
+    let long = "A".repeat(BRIEF_TITLE_CHARS + 20);
+    let clipped = glanceable_task_title(&long);
+    assert!(
+        clipped.chars().count() <= BRIEF_TITLE_CHARS,
+        "title must fit the brief title budget: {clipped}"
+    );
+    assert!(
+        clipped.starts_with('A'),
+        "truncate the head for glanceability, not the tail: {clipped}"
+    );
+    assert_eq!(glanceable_task_title("  pin control  "), "pin control");
+    assert_eq!(glanceable_task_title(""), "");
+}
+
+#[test]
 fn frame_ceo_waiting_answer_marks_reply_as_finish_not_reask() {
     use maia_core::manager::frame_ceo_waiting_answer;
     use maia_core::manager::is_framed_ceo_waiting_answer;

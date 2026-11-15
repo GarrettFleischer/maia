@@ -1326,6 +1326,8 @@ fn actor_loop<R>(
         .checked_sub(wake_check_gap)
         .unwrap_or_else(Instant::now);
     loop {
+        // Keep IdSupply.now on wall time so task ages and idle briefs stay honest.
+        actor.host.sync_clock(unix_now());
         pump(&mut actor, &mut inbox, &mut route, &mut workers);
         let now = Instant::now();
         // Wakes must not wait for live workers — only an owner route mid-flight defers them.

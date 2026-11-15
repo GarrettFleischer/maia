@@ -5728,3 +5728,36 @@ fn wake_record_learning_returns_note_without_chat() {
         vec!["vault: ask_user once, never invent secrets".to_owned()]
     );
 }
+
+#[test]
+fn sync_clock_stamps_new_tasks_and_keeps_titles_glanceable() {
+    use maia_core::manager::WakeAction;
+
+    let mut harness = Harness::open_model("sync-clock", long_supply());
+    let _ = harness.host().apply_wake_actions(&[WakeAction::Spawn {
+        guidance: "First worker goal\nwith extra detail lines".to_owned(),
+    }]);
+    harness.host().sync_clock(NOW + 120);
+    let _ = harness.host().apply_wake_actions(&[WakeAction::Spawn {
+        guidance: "Second worker goal\nwith extra detail lines".to_owned(),
+    }]);
+    assert_eq!(
+        integers(
+            &harness.database,
+            "SELECT created_at FROM task_sessions ORDER BY task_id"
+        ),
+        vec![NOW, NOW + 120],
+        "task created_at must follow sync_clock, not the boot-frozen IdSupply stamp"
+    );
+    assert_eq!(
+        texts(
+            &harness.database,
+            "SELECT title FROM task_sessions ORDER BY task_id"
+        ),
+        vec![
+            "First worker goal".to_owned(),
+            "Second worker goal".to_owned()
+        ],
+        "stored titles must be glanceable first lines"
+    );
+}

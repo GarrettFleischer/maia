@@ -156,6 +156,27 @@ pub fn truncate_brief(text: &str, max_chars: usize) -> String {
     format!("…{tail}")
 }
 
+/// Short Tasks-rail title: first non-empty line, head-clipped to [`BRIEF_TITLE_CHARS`].
+///
+/// Full goal text still lives on the worker prompt; only the sidebar label is shortened.
+#[must_use]
+pub fn glanceable_task_title(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    if line.is_empty() || BRIEF_TITLE_CHARS == 0 {
+        return String::new();
+    }
+    let count = line.chars().count();
+    if count <= BRIEF_TITLE_CHARS {
+        return line.to_owned();
+    }
+    let head: String = line.chars().take(BRIEF_TITLE_CHARS.saturating_sub(1)).collect();
+    format!("{head}…")
+}
+
 /// One worker line for wake briefs and `inspect_task` results.
 #[must_use]
 pub fn format_worker_brief(worker: &WorkerBrief) -> String {
@@ -462,7 +483,7 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                     });
                 }
             }
-            "retry_task" | "recover_task" | "continue_task" => {
+            "retry_task" | "continue_task" => {
                 let (task_id, note) = split_task_and_note(&call.message);
                 if !task_id.is_empty() {
                     actions.push(WakeAction::Recover { task_id, note });

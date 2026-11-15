@@ -2058,7 +2058,7 @@ fn route_tools_json() -> String {
     let mut tools = vec![
         route_tool(
             "spawn_task",
-            "REQUIRED for any new work that needs shell, files, browser, network, or vault. Hire one worker. You never run that work yourself. Optional guidance is advice for that worker.",
+            "REQUIRED for any new work that needs shell, files, browser, network, or vault. Hire one worker. You never run that work yourself. Optional guidance is the worker brief (details + steps). Prefer a short first line so the Tasks rail stays glanceable. When the CEO names separate workers, hire them one at a time (follow up on a later wake for the next part) rather than stuffing every part into one mega-title.",
             RouteToolShape::Spawn,
             true,
         ),
@@ -2534,7 +2534,7 @@ fn build_parent_plan(
     let task_write = TaskWrite {
         task_id: task.0.clone(),
         phase: canonical_phase(&TaskPhase::Queued),
-        title: text.to_owned(),
+        title: maia_core::manager::glanceable_task_title(text),
         pin: PIN_UNPINNED.to_owned(),
         completion_view: VIEW_UNOPENED.to_owned(),
         prior_task_id: prior.map(|id| id.0.clone()),
@@ -3648,6 +3648,14 @@ impl<R: Router> Orchestrator<R> {
         self.mute_nonessential_wake_messages = mute_nonessential_wake_messages;
     }
 
+    /// Refresh the host clock used for `created_at`, idle age, and approval expiry.
+    ///
+    /// `IdSupply::now` is injected once at boot for tests; production must call this
+    /// on each actor tick so Tasks elapsed time and wake idle ages stay honest.
+    pub fn sync_clock(&mut self, now: i64) {
+        self.ids.now = now;
+    }
+
     /// True when a parent just entered failed / waiting / completed (take clears it).
     pub fn take_wake_nudge(&mut self) -> bool {
         std::mem::take(&mut self.wake_nudge)
@@ -3738,11 +3746,8 @@ impl<R: Router> Orchestrator<R> {
                     let question = self
                         .latest_task_summary(task)
                         .unwrap_or_else(|| format!("{reason:?}"));
-                    if question.to_lowercase().contains("stopped after")
-                        || question.to_lowercase().contains("stuck")
-                    {
-                        stuck_task_ids.push(task.0.clone());
-                    }
+                    // Loop exhaustion already becomes Failed via hold_failed_for_manager.
+                    // Do not re-classify waiting CEO questions by substring.
                     waiting.push((task.0.clone(), question));
                 }
                 TaskPhase::Blocked { .. } => {
