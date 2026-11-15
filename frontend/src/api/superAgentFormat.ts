@@ -196,8 +196,10 @@ export function taskCardMeta(
   criteriaTotal: number,
 ): string {
   const parts: string[] = []
-  if (Number.isFinite(elapsedMs) && elapsedMs > 0) parts.push(formatElapsed(elapsedMs))
-  else {
+  // Terminal cards keep growing "elapsed" from created_at→now; that is age, not work time.
+  if (!TERMINAL_PHASES.has(phase) && Number.isFinite(elapsedMs) && elapsedMs > 0) {
+    parts.push(formatElapsed(elapsedMs))
+  } else if (!TERMINAL_PHASES.has(phase)) {
     const status = UNMEASURED_CARD_STATUS[phase]
     if (status) parts.push(status)
   }

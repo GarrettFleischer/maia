@@ -97,7 +97,7 @@ describe('TaskRail', () => {
     const onOpen = vi.fn()
     render(<TaskRail rows={rows} onOpen={onOpen} />)
     expect(screen.getByRole('region', { name: 'Completed' })).toHaveTextContent('Pin control')
-    expect(screen.getByRole('region', { name: 'Completed' })).toHaveTextContent('1s')
+    expect(screen.getByRole('region', { name: 'Completed' })).not.toHaveTextContent('1s')
     expect(screen.getByRole('region', { name: 'Completed' })).toHaveTextContent('1/1')
     expect(screen.queryByRole('listitem', { name: 'Write the control' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Expand Pin control' }))

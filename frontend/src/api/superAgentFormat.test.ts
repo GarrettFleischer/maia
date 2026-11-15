@@ -133,6 +133,13 @@ describe('countActivity', () => {
     expect(taskCardMeta('cancelled', 0, 0, 0)).toBe('')
   })
 
+  it('does not treat wall-clock-since-create as work time on finished tasks', () => {
+    expect(taskCardMeta('completed', 9 * 86_400_000, 1, 1)).toBe('1/1 criteria')
+    expect(taskCardMeta('completed', 9 * 86_400_000, 1, 1)).not.toContain('d')
+    expect(taskCardMeta('cancelled', 90_000, 0, 1)).toBe('0/1 criteria')
+    expect(taskCardMeta('abandoned', 3_600_000, 0, 1)).toBe('0/1 criteria')
+  })
+
   it('formats long waits as days and hours, not only minutes', () => {
     expect(formatElapsed(500)).toBe('500 ms')
     expect(formatElapsed(45_000)).toBe('45s')

@@ -176,6 +176,10 @@ export function RouterConversation({
     setSeenId(readCursor(botId))
     setEngaged(false)
     gapOnArrival.current = null
+    setPendingFiles([])
+    setFindQuery('')
+    setFindActive(0)
+    setRejection(null)
   }, [botId])
 
   useEffect(() => {

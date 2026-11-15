@@ -35,6 +35,7 @@ export function ManagerWakeSection({
       : 'Loading manager wake schedule.',
   )
   const [busy, setBusy] = useState(false)
+  const [loaded, setLoaded] = useState(source !== 'live')
   const canEdit = editable && source === 'live'
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export function ManagerWakeSection({
       const result = await loadWake(window.location.origin)
       if (cancel) return
       if (!result.ok) {
+        setLoaded(false)
         setStatus(result.message)
         return
       }
@@ -51,6 +53,7 @@ export function ManagerWakeSection({
       setMinutes(String(Math.max(1, Math.round(result.view.interval_secs / 60))))
       setBudget(String(result.view.restart_budget))
       setMute(result.view.mute_nonessential_wake_messages)
+      setLoaded(true)
       setStatus('Maia checks on workers on this schedule. Most wakes stay silent.')
     })()
     return () => {
@@ -59,7 +62,7 @@ export function ManagerWakeSection({
   }, [source])
 
   async function save() {
-    if (!canEdit || busy) return
+    if (!canEdit || busy || !loaded) return
     const parsed = Number.parseInt(minutes, 10)
     if (!Number.isFinite(parsed) || parsed < 1) {
       setStatus('Enter minutes as a whole number of at least 1.')
@@ -134,7 +137,7 @@ export function ManagerWakeSection({
         Keeps decision questions and finished-goal close-outs; drops optional status chatter.
       </p>
       {canEdit ? (
-        <button type="button" disabled={busy} onClick={() => void save()}>
+        <button type="button" disabled={busy || !loaded} onClick={() => void save()}>
           Save wake schedule
         </button>
       ) : null}

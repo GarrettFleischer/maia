@@ -389,6 +389,50 @@ describe('RouterConversation', () => {
     expect(secondHit).toHaveAttribute('data-find-active', 'true')
   })
 
+  it('clears Find when switching Super Agents', async () => {
+    const user = userEvent.setup()
+    const view = render(
+      <ReviewedRouterConversation
+        botId="maia"
+        messages={[
+          { message_id: 'm-1', role: 'owner', text: 'Weather in Canby' },
+          { message_id: 'm-2', role: 'router', text: 'It is raining' },
+        ]}
+        transcriptState={{ kind: 'ready' }}
+        admission={{ kind: 'ready' }}
+        operation={{ kind: 'idle' }}
+        announcement={null}
+        draft=""
+        notice={{ kind: 'idle' }}
+        disabled={false}
+        onDraftChange={vi.fn()}
+        onRetryTranscript={vi.fn()}
+        onAnnouncementAcknowledged={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    )
+    await user.type(screen.getByRole('searchbox', { name: 'Find in chat' }), 'canby')
+    expect(screen.getByRole('searchbox', { name: 'Find in chat' })).toHaveValue('canby')
+    view.rerender(
+      <ReviewedRouterConversation
+        botId="coding"
+        messages={[{ message_id: 'c-1', role: 'owner', text: 'Ship the list' }]}
+        transcriptState={{ kind: 'ready' }}
+        admission={{ kind: 'ready' }}
+        operation={{ kind: 'idle' }}
+        announcement={null}
+        draft=""
+        notice={{ kind: 'idle' }}
+        disabled={false}
+        onDraftChange={vi.fn()}
+        onRetryTranscript={vi.fn()}
+        onAnnouncementAcknowledged={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('searchbox', { name: 'Find in chat' })).toHaveValue('')
+  })
+
   it('keeps an ordinary admitted route out of the message', () => {
     render(
       <ReviewedRouterConversation

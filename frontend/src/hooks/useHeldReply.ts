@@ -24,6 +24,13 @@ export function useHeldReply(client: SuperAgentClient, onConnected: () => void):
   }, [client])
 
   useEffect(() => {
+    // Switching Super Agents must not keep another bot's streaming/interrupted partial.
+    setHeld(null)
+    dismissed.current = new Set()
+    link.current = 'connected'
+  }, [client.botId])
+
+  useEffect(() => {
     const stopLive = client.subscribeLive?.((frame: LiveFrame) => {
       applyLive(frame.kind === 'cleared' ? null : frame.reply)
     })
