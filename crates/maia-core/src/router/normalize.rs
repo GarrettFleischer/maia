@@ -29,7 +29,18 @@ pub fn normalize_router_json(
         return Err(protocol("body must be a JSON object"));
     }
     let choice = first_choice_object(trimmed)?;
-    let message = message_object(&choice)?;
+    // FreeLLMAPI and similar gateways sometimes omit `message` and attach
+    // `tool_calls` on the choice, or send an empty choice. Fall back to the
+    // choice body so workers get a nudge instead of a schema hard-fail.
+    let message = match message_object(&choice) {
+        Ok(message) => message,
+        Err(RouterError::Protocol { detail })
+            if detail == "missing message" || detail == "missing message object" =>
+        {
+            choice.clone()
+        }
+        Err(error) => return Err(error),
+    };
     let finish = parse_finish_reason(&choice)?;
     let reasoning = if capabilities.readable_reasoning {
         read_reasoning_text(&message)

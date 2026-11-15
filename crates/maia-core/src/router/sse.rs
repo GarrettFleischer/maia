@@ -177,7 +177,15 @@ impl RouterSseAssembler {
                 .ok_or_else(|| protocol("missing delta"))?;
             extract_balanced_object(&choice[delta_start..])?
         } else {
-            crate::router::json::message_object(&choice)?
+            match crate::router::json::message_object(&choice) {
+                Ok(message) => message,
+                Err(RouterError::Protocol { detail })
+                    if detail == "missing message" || detail == "missing message object" =>
+                {
+                    choice.clone()
+                }
+                Err(error) => return Err(error),
+            }
         };
         if self.capabilities.readable_reasoning
             && let Some(delta_reason) = crate::router::json::read_reasoning_text(&delta_or_message)

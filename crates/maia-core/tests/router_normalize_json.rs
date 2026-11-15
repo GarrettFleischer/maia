@@ -140,3 +140,48 @@ fn incomplete_tool_arguments_never_execute() {
     let error = normalize_router_json(body, RequestId(4), &caps()).unwrap_err();
     assert!(matches!(error, RouterError::Protocol { .. }));
 }
+
+#[test]
+fn null_message_is_treated_as_empty_assistant_turn() {
+    let body = r#"{
+        "choices": [{
+            "finish_reason": "stop",
+            "message": null
+        }]
+    }"#;
+    let response = normalize_router_json(body, RequestId(20), &caps()).expect("normalize");
+    assert!(response.reply.is_none());
+    assert!(response.tool_calls.is_empty());
+    assert_eq!(response.finish, FinishReason::Stop);
+}
+
+#[test]
+fn tool_calls_on_choice_without_message_still_normalize() {
+    let body = r#"{
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "tool_calls": [{
+                "id": "call_choice",
+                "type": "function",
+                "function": {"name": "success", "arguments": "{\"message\":\"hi\"}"}
+            }]
+        }]
+    }"#;
+    let response = normalize_router_json(body, RequestId(21), &caps()).expect("normalize");
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].name.as_str(), "success");
+    assert_eq!(response.finish, FinishReason::ToolCalls);
+}
+
+#[test]
+fn choice_without_message_becomes_empty_turn_not_schema_error() {
+    let body = r#"{
+        "choices": [{
+            "finish_reason": "stop",
+            "index": 0
+        }]
+    }"#;
+    let response = normalize_router_json(body, RequestId(22), &caps()).expect("normalize");
+    assert!(response.reply.is_none());
+    assert!(response.tool_calls.is_empty());
+}

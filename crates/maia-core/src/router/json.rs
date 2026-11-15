@@ -181,15 +181,26 @@ pub fn first_choice_object(body: &str) -> Result<String, RouterError> {
 }
 
 /// Reads `"message":{...}` from a choice object.
+///
+/// Some gateways send `"message": null`. That is treated as an empty object so
+/// the caller can still finish the turn (or find tool calls on the choice).
 pub fn message_object(choice: &str) -> Result<String, RouterError> {
     let key = choice
         .find("\"message\"")
         .ok_or_else(|| protocol("missing message"))?;
-    let after = &choice[key..];
-    let start = after
+    let after = &choice[key + "\"message\"".len()..];
+    let after_colon = after
+        .trim_start()
+        .strip_prefix(':')
+        .map(str::trim_start)
+        .ok_or_else(|| protocol("missing message object"))?;
+    if after_colon.starts_with("null") {
+        return Ok("{}".to_owned());
+    }
+    let start = after_colon
         .find('{')
         .ok_or_else(|| protocol("missing message object"))?;
-    extract_balanced_object(&after[start..])
+    extract_balanced_object(&after_colon[start..])
 }
 
 fn extract_balanced_object(text: &str) -> Result<String, RouterError> {
