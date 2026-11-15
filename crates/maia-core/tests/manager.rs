@@ -180,6 +180,69 @@ fn looks_like_close_out_rejects_status_chatter() {
 }
 
 #[test]
+fn close_out_only_wake_drops_spawn_inspired_by_learned() {
+    // Shared LEARNED notes from another bot must not invent new work on a
+    // close-out-only wake (run44 left a Done close-out on Maia's real chat).
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        learned: vec![
+            "missing-file: create the missing file then retry_task; do not invent contents"
+                .to_owned(),
+        ],
+        workers: vec![WorkerBrief {
+            task_id: "task-done".to_owned(),
+            title: "Write DONE47".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Wrote DONE47.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let gated = enforce_ceo_moments(
+        &[WakeAction::Spawn {
+            guidance: "Create an empty file at run44_multi_missing.txt then verify it exists."
+                .to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        !gated
+            .iter()
+            .any(|action| matches!(action, WakeAction::Spawn { .. })),
+        "close-out-only wake must drop spawn_task (LEARNED must not invent work): {gated:?}"
+    );
+    assert!(
+        gated.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.starts_with("Done")
+        )),
+        "close-out-only wake must still force close-out: {gated:?}"
+    );
+
+    let with_failure = WakeSnapshot {
+        failed_task_ids: vec!["task-fail".to_owned()],
+        completed_unopened: 0,
+        learned: snap.learned.clone(),
+        ..WakeSnapshot::default()
+    };
+    let allowed = enforce_ceo_moments(
+        &[WakeAction::Spawn {
+            guidance: "Replace the failed worker with a clearer plan.".to_owned(),
+        }],
+        &with_failure,
+    );
+    assert!(
+        allowed
+            .iter()
+            .any(|action| matches!(action, WakeAction::Spawn { .. })),
+        "spawn_task remains allowed when ATTENTION has a failure: {allowed:?}"
+    );
+}
+
+#[test]
 fn forced_close_out_includes_title_when_outcome_omits_goal_marker() {
     use maia_core::manager::WorkerBrief;
 
@@ -651,6 +714,11 @@ fn wake_brief_surfaces_learned_notes_for_later_wakes() {
         brief.to_ascii_lowercase().contains("different approach")
             || brief.to_ascii_lowercase().contains("do not repeat"),
         "LEARNED section must nudge a different approach: {brief}"
+    );
+    assert!(
+        brief.to_ascii_lowercase().contains("never spawn_task from learned")
+            || brief.to_ascii_lowercase().contains("not invent new work"),
+        "LEARNED must forbid inventing work absent from ATTENTION: {brief}"
     );
 }
 

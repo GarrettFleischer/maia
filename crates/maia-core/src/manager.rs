@@ -247,7 +247,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     ];
     if !snap.learned.is_empty() {
         lines.push(
-            "LEARNED: prior lessons. Prefer a different approach after a failure; do not repeat a failed tactic. Call record_learning with one short note when you learn something useful."
+            "LEARNED: prior lessons for ATTENTION items only (how to retry/fix a listed failure). Prefer a different approach after a failure; do not repeat a failed tactic. Never spawn_task from LEARNED alone — do not invent new work that is not in ATTENTION. Call record_learning with one short note when you learn something useful."
                 .to_owned(),
         );
         for note in &snap.learned {
@@ -590,11 +590,22 @@ pub fn distinctive_token(text: &str) -> String {
 }
 
 /// Safety cap: waiting → one ask_user; finished-only → one close-out; skip if already in chat.
+///
+/// Also drops `spawn_task` when ATTENTION has no failed/stuck/waiting work. LEARNED notes are
+/// shared across bots; a close-out-only wake must not invent new goals from them.
 #[must_use]
 pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<WakeAction> {
+    // Failed / stuck / waiting block close-out; healthy runners do not.
+    let attention_clear = snap.failed_task_ids.is_empty()
+        && snap.stuck_task_ids.is_empty()
+        && snap.waiting.is_empty();
     let mut out: Vec<WakeAction> = actions
         .iter()
         .filter(|action| !matches!(action, WakeAction::Silent))
+        .filter(|action| {
+            // No failed/stuck/waiting → nothing to hire for on this wake.
+            !(attention_clear && matches!(action, WakeAction::Spawn { .. }))
+        })
         .cloned()
         .collect();
     let asked = out
@@ -618,10 +629,6 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         }
     }
 
-    // Failed / stuck / waiting block close-out; healthy runners do not.
-    let attention_clear = snap.failed_task_ids.is_empty()
-        && snap.stuck_task_ids.is_empty()
-        && snap.waiting.is_empty();
     if snap.completed_unopened > 0 && attention_clear && !closed_out {
         let finished = snap
             .workers
