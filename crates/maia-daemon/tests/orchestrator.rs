@@ -4870,6 +4870,114 @@ fn ceo_reply_continues_sole_waiting_worker() {
 }
 
 #[test]
+fn ceo_reply_remap_does_not_poison_waiting_worker_with_spawn_guidance() {
+    let mut harness = Harness::open_model("ceo-reply-no-poison", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need RUN46_CEO_SECRET from the CEO"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fetch the secret")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::WaitingForUser { .. })
+    ));
+    let before = harness
+        .host()
+        .store()
+        .task_guidance(&task.0)
+        .expect("guidance read");
+    // Remapped spawn_task must not overwrite waiting-worker guidance with hire text that
+    // tells the worker to call waiting again (live pass2 (e) re-wait after CEO reply).
+    harness.router.push_tool(
+        "spawn_task",
+        r#"{"guidance":"Call waiting with Need RUN46_CEO_SECRET from the CEO again"}"#,
+    );
+    harness
+        .router
+        .push_tool("success", &success_arguments("Received the secret."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("Received the secret."));
+    let _ = wait(harness.host().handle_user_message("The secret is run46-ok")).expect("reply");
+    let after = harness
+        .host()
+        .store()
+        .task_guidance(&task.0)
+        .expect("guidance read");
+    assert_eq!(
+        after, before,
+        "sole-waiting remap must not store spawn guidance on the waiting worker: before={before:?} after={after:?}"
+    );
+    assert!(
+        after
+            .as_deref()
+            .map(|text| !text.to_ascii_lowercase().contains("call waiting"))
+            .unwrap_or(true),
+        "waiting worker must not be poisoned with spawn hire text: {after:?}"
+    );
+}
+
+#[test]
+fn worker_attention_phases_set_wake_nudge() {
+    let mut harness = Harness::open_model("wake-nudge-complete", long_supply());
+    assert!(
+        !harness.host().take_wake_nudge(),
+        "fresh host must not already be nudged"
+    );
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote NUDGE46."));
+    let _ = wait(harness.host().handle_user_message("Write nudge file")).expect("run");
+    assert!(
+        harness.host().take_wake_nudge(),
+        "completed worker must request an immediate manager wake check"
+    );
+    assert!(
+        !harness.host().take_wake_nudge(),
+        "nudge must be one-shot"
+    );
+}
+
+#[test]
+fn wake_close_out_marks_only_one_finished_goal() {
+    let mut harness = Harness::open_model("close-one-finished", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote SECRET_DONE."));
+    let first = wait(harness.host().handle_user_message("Write secret done")).expect("run");
+    let task_a = first.task.expect("task a");
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote FILE_DONE."));
+    let second = wait(harness.host().handle_user_message("Write file done")).expect("run");
+    let task_b = second.task.expect("task b");
+    let snap = harness.host().wake_snapshot();
+    assert!(
+        snap.completed_unopened >= 2,
+        "both finished goals must stay unopened: {snap:?}"
+    );
+    let (messaged, _) = harness.host().apply_wake_actions(&[
+        maia_core::manager::WakeAction::MessageUser {
+            text: "Done — Wrote SECRET_DONE.".to_owned(),
+        },
+    ]);
+    assert!(messaged, "close-out must post");
+    let snap2 = harness.host().wake_snapshot();
+    let left = snap2.completed_unopened;
+    let phase_a = format!("{:?}", harness.host().phase(&task_a));
+    let phase_b = format!("{:?}", harness.host().phase(&task_b));
+    assert_eq!(
+        left,
+        snap.completed_unopened.saturating_sub(1),
+        "one close-out must close exactly one finished goal (left {left}: a={phase_a} b={phase_b})"
+    );
+}
+
+#[test]
 fn wake_snapshot_counts_only_unopened_completed() {
     let mut harness = Harness::open_model("wake-unopened-only", long_supply());
     harness.router.push_tool("spawn_task", "{}");

@@ -180,6 +180,33 @@ fn looks_like_close_out_rejects_status_chatter() {
 }
 
 #[test]
+fn forced_close_out_includes_title_when_outcome_omits_goal_marker() {
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-done".to_owned(),
+            title: "Hire a worker to write exactly DONE46 into the file".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Wrote the workspace file.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text }
+                if text.starts_with("Done") && text.contains("DONE46")
+        )),
+        "forced close-out must keep the goal marker from the title when outcome omits it: {forced:?}"
+    );
+}
+
+#[test]
 fn wake_finished_without_close_out_is_forced_once_unless_already_in_chat() {
     use maia_core::manager::WorkerBrief;
 
@@ -364,6 +391,15 @@ fn wake_brief_lists_finished_goals_for_one_close_out() {
     assert!(
         brief.contains("task-done") && brief.contains("DONE43"),
         "finished section must name the goal result: {brief}"
+    );
+    assert!(
+        brief.contains("outcome="),
+        "finished lines must label the worker outcome for useful close-out text: {brief}"
+    );
+    assert!(
+        brief.to_ascii_lowercase().contains("restate")
+            || brief.to_ascii_lowercase().contains("what the worker"),
+        "FINISHED header must tell the manager to restate the outcome: {brief}"
     );
     assert!(
         brief.to_ascii_lowercase().contains("message_user"),

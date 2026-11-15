@@ -1387,6 +1387,23 @@ fn should_run_scheduled_wake(
     now.saturating_duration_since(last_wake_check) >= min_check_gap
 }
 
+/// Whether the persisted wake interval allows a model wake right now.
+///
+/// `attention_nudge` is set when a worker just failed, waited, or completed so
+/// close-out / ask / recover do not wait for the full heartbeat.
+#[must_use]
+fn wake_interval_allows(
+    interval_secs: u64,
+    last_wake_at: u64,
+    now: u64,
+    attention_nudge: bool,
+) -> bool {
+    if attention_nudge || interval_secs == 0 {
+        return true;
+    }
+    now.saturating_sub(last_wake_at) >= interval_secs
+}
+
 fn restore_pending_inbox<R: RouterPort>(actor: &Actor<R>) -> VecDeque<QueuedChat> {
     let Ok(pending) = actor.host.store().pending_submissions() else {
         return VecDeque::new();
@@ -1455,9 +1472,13 @@ fn run_scheduled_wake<R: RouterPort>(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     crate::manager_wake::roll_cost_day(wake_state, now);
-    if wake_state.interval_secs > 0
-        && now.saturating_sub(wake_state.last_wake_at) < wake_state.interval_secs
-    {
+    let attention_nudge = actor.host.take_wake_nudge();
+    if !wake_interval_allows(
+        wake_state.interval_secs,
+        wake_state.last_wake_at,
+        now,
+        attention_nudge,
+    ) {
         return;
     }
     if let Ok(maia_store::BotResponse::Text(selected)) =
@@ -5177,6 +5198,27 @@ mod scheduled_wake_tests {
         assert!(
             !should_run_scheduled_wake(false, start, start + Duration::from_millis(200), Duration::from_secs(1)),
             "check gap must throttle disk wake checks while workers pump"
+        );
+    }
+
+    #[test]
+    fn attention_nudge_bypasses_wake_interval() {
+        use super::wake_interval_allows;
+        assert!(
+            !wake_interval_allows(300, 100, 150, false),
+            "without nudge, interval must still gate"
+        );
+        assert!(
+            wake_interval_allows(300, 100, 150, true),
+            "failed/waiting/completed nudge must allow an immediate wake check"
+        );
+        assert!(
+            wake_interval_allows(300, 100, 450, false),
+            "elapsed interval still allows a wake"
+        );
+        assert!(
+            wake_interval_allows(0, 100, 101, false),
+            "interval 0 means wakes are always allowed"
         );
     }
 }

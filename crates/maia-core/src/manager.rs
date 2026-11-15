@@ -296,7 +296,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): goals whose work just finished. When nothing else needs attention, call message_user once with one short useful close-out. Do not dump worker logs. Skip if RECENT_CEO_CHAT already closed this out."
+            "FINISHED (close-out): goals whose work just finished. When nothing else needs attention, call message_user once with one short useful close-out that restates what the worker accomplished (use each outcome= line). One close-out per finished goal. Do not dump worker logs. Skip if RECENT_CEO_CHAT already closed this out."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -314,9 +314,12 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             let title = truncate_brief(&worker.title, BRIEF_TITLE_CHARS);
             let out = truncate_brief(&worker.output_tail, BRIEF_TAIL_CHARS);
             if out.is_empty() {
-                lines.push(format!("- {}: title={title}", worker.task_id));
+                lines.push(format!("- {}: title={title} outcome=(no summary)", worker.task_id));
             } else {
-                lines.push(format!("- {}: title={title} result={out}", worker.task_id));
+                lines.push(format!(
+                    "- {}: title={title} outcome={out}",
+                    worker.task_id
+                ));
             }
         }
     }
@@ -626,11 +629,13 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
             .find(|worker| worker.status == "completed");
         let summary = finished
             .map(|worker| {
+                let title = truncate_brief(&worker.title, BRIEF_TITLE_CHARS);
                 let out = truncate_brief(&worker.output_tail, BRIEF_TAIL_CHARS);
-                if out.is_empty() {
-                    truncate_brief(&worker.title, BRIEF_TITLE_CHARS)
-                } else {
-                    out
+                match (title.is_empty(), out.is_empty()) {
+                    (false, false) => format!("{title} — {out}"),
+                    (false, true) => title,
+                    (true, false) => out,
+                    (true, true) => String::new(),
                 }
             })
             .filter(|text| !text.is_empty())
