@@ -36,6 +36,10 @@ pub fn registered_tool_names(tools_json: &str) -> Result<BTreeSet<String>, Route
 }
 
 /// Validates normalized tool calls against canonical tools JSON.
+///
+/// Unknown tool *names* are allowed through so the host can answer with a normal
+/// tool error and the model can recover. Duplicate ids and non-object arguments
+/// still fail the completion.
 pub fn validate_tool_calls(
     tools_json: &str,
     calls: &[NormalizedToolCall],
@@ -43,17 +47,12 @@ pub fn validate_tool_calls(
     if calls.is_empty() {
         return Ok(());
     }
-    let allowed = registered_tool_names(tools_json)?;
+    // Ensure tools_json is well-formed even when we do not reject unknown names.
+    let _allowed = registered_tool_names(tools_json)?;
     let mut seen_ids = BTreeSet::new();
     for call in calls {
         if !seen_ids.insert(call.id.as_str()) {
             return Err(protocol("duplicate tool call id"));
-        }
-        if !allowed.contains(call.name.as_str()) {
-            return Err(protocol(format!(
-                "unknown tool name: {}",
-                call.name.as_str()
-            )));
         }
         if !is_json_object(&call.arguments_json) {
             return Err(protocol("tool arguments must be a JSON object"));

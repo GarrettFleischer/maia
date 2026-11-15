@@ -1,20 +1,18 @@
 //! Tool-call validation against canonical tools JSON.
 
-use maia_core::router::{
-    NormalizedToolCall, RouterError, ToolCallId, ToolCallName, validate_tool_calls,
-};
+use maia_core::router::{NormalizedToolCall, ToolCallId, ToolCallName, validate_tool_calls};
 
 #[test]
-fn unknown_tool_name_is_protocol_error() {
+fn unknown_tool_name_is_allowed_for_host_repair() {
     let tools_json =
         r#"[{"type":"function","function":{"name":"search","parameters":{"type":"object"}}}]"#;
     let calls = vec![NormalizedToolCall {
         id: ToolCallId::new("call_1"),
-        name: ToolCallName::new("delete_all"),
+        name: ToolCallName::new("bash"),
         arguments_json: "{}".to_owned(),
     }];
-    let error = validate_tool_calls(tools_json, &calls).unwrap_err();
-    assert!(matches!(error, RouterError::Protocol { .. }));
+    // Host returns a normal tool error so the model can recover; do not abort the turn.
+    validate_tool_calls(tools_json, &calls).expect("unknown name stays readable");
 }
 
 #[test]

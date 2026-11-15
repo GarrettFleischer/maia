@@ -112,6 +112,11 @@ pub enum WakeAction {
         /// Parent task id.
         task_id: String,
     },
+    /// Hire a new worker from a wake (goal text / guidance). Does not post chat.
+    Spawn {
+        /// Goal text for the new worker.
+        guidance: String,
+    },
 }
 
 /// True when automatic restarts are used up and the manager must ask the user.
@@ -163,7 +168,7 @@ pub fn format_worker_brief(worker: &WorkerBrief) -> String {
 #[must_use]
 pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     let mut lines = vec![
-        "Silent manager wake. Review workers and act with route tools only (no bash). Stay silent unless ask_user or message_user is truly needed.".to_owned(),
+        "Silent manager wake. Review workers and act with manager route tools only. Never call bash, shell, write_file, read_file, success, failure, or waiting. Stay silent unless ask_user or message_user is truly needed.".to_owned(),
         format!("running={}", snap.running_count),
         format!("completed_unopened={}", snap.completed_unopened),
     ];
@@ -308,9 +313,7 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
     let mut actions = Vec::new();
     for call in calls {
         match call.name.as_str() {
-            // Live models sometimes emit owner-turn terminals on a wake; treat them as the
-            // manager chat tools so close-out / CEO questions are not silent no-ops.
-            "message_user" | "success" => {
+            "message_user" => {
                 let text = call.message.trim();
                 if !text.is_empty() {
                     actions.push(WakeAction::MessageUser {
@@ -318,7 +321,7 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                     });
                 }
             }
-            "ask_user" | "waiting" => {
+            "ask_user" => {
                 let text = call.message.trim();
                 if !text.is_empty() {
                     actions.push(WakeAction::AskUser {
@@ -337,6 +340,14 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                 if !task_id.is_empty() {
                     actions.push(WakeAction::Cancel {
                         task_id: task_id.to_owned(),
+                    });
+                }
+            }
+            "spawn_task" => {
+                let guidance = call.message.trim();
+                if !guidance.is_empty() {
+                    actions.push(WakeAction::Spawn {
+                        guidance: guidance.to_owned(),
                     });
                 }
             }

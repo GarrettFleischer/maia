@@ -77,25 +77,35 @@ fn wake_tool_ask_user_is_one_ceo_question() {
 }
 
 #[test]
-fn wake_success_aliases_to_message_user_and_waiting_to_ask_user() {
+fn wake_owner_terminals_are_not_aliased_use_message_user_and_ask_user() {
+    // Wake offers message_user / ask_user directly; success/waiting are owner-turn tools.
     let close = interpret_wake_tools(&[WakeToolCall {
         name: "success".to_owned(),
         message: "Shipped the release notes.".to_owned(),
     }]);
-    assert_eq!(
-        close,
-        vec![WakeAction::MessageUser {
-            text: "Shipped the release notes.".to_owned()
-        }]
-    );
+    assert_eq!(close, vec![WakeAction::Silent]);
     let ask = interpret_wake_tools(&[WakeToolCall {
         name: "waiting".to_owned(),
         message: "Need the vault password.".to_owned(),
     }]);
+    assert_eq!(ask, vec![WakeAction::Silent]);
+    let workerish = interpret_wake_tools(&[WakeToolCall {
+        name: "bash".to_owned(),
+        message: "ls".to_owned(),
+    }]);
+    assert_eq!(workerish, vec![WakeAction::Silent]);
+}
+
+#[test]
+fn wake_spawn_task_hires_a_worker_without_chat_alias() {
+    let outcomes = interpret_wake_tools(&[WakeToolCall {
+        name: "spawn_task".to_owned(),
+        message: "Rewrite the config and retry the deploy.".to_owned(),
+    }]);
     assert_eq!(
-        ask,
-        vec![WakeAction::AskUser {
-            text: "Need the vault password.".to_owned()
+        outcomes,
+        vec![WakeAction::Spawn {
+            guidance: "Rewrite the config and retry the deploy.".to_owned()
         }]
     );
 }
