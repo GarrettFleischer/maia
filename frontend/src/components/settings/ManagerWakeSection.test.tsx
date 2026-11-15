@@ -1,0 +1,11 @@
+import { render, screen } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
+import { ManagerWakeSection } from '@/components/settings/ManagerWakeSection'
+
+describe('ManagerWakeSection', () => {
+  it('explains the silent wake schedule in fixture mode', () => {
+    render(<ManagerWakeSection source="fixture" editable />)
+    expect(screen.getByLabelText('Manager wake')).toBeVisible()
+    expect(screen.getByText(/Preview only/i)).toBeVisible()
+  })
+})

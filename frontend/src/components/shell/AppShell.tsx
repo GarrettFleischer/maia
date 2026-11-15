@@ -15,6 +15,7 @@ import { clearBotDraft, readBotDraft, writeBotDraft } from '@/components/shell/b
 import { ConversationPane, type ConversationLayout } from '@/components/shell/ConversationPane'
 import { StopAllButton } from '@/components/shell/StopAllButton'
 import { McpServersSection } from '@/components/settings/McpServersSection'
+import { ManagerWakeSection } from '@/components/settings/ManagerWakeSection'
 import { ModelConnectionSection } from '@/components/settings/ModelConnectionSection'
 import { PhoneAccessSection } from '@/components/settings/PhoneAccessSection'
 import { SecuritySettingsPage } from '@/components/settings/SecuritySettingsPage'
@@ -525,6 +526,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
             <div className="maia-main-body">
               <ThemeControl />
               <ModelConnectionSection source={dataSource} editable={viewport !== 'phone'} />
+              <ManagerWakeSection source={dataSource} editable={viewport !== 'phone'} />
               <McpServersSection source={dataSource} editable={viewport !== 'phone'} />
               {dataSource === 'live' ? <PhoneAccessSection origin={window.location.origin} /> : null}
               <InstallSettings
