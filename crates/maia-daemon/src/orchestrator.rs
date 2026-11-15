@@ -1315,7 +1315,7 @@ Later messages are the owner's words, a silent wake brief, or worker status. The
 Call manager tools only. Never call bash, shell, write_file, read_file, or any other worker tool — if you need those, spawn_task or continue_task so a worker runs them. Each model step may call tools; on an owner turn keep going across steps until a terminal. On a wake, when ATTENTION lists several goals, you may emit several manager tools in one response (one action per goal that needs you); otherwise call one tool.\n\
 On every turn and every wake: check workers, diagnose failures yourself from the wake brief or inspect_task, retry or re-plan with new instructions, replace or hire workers, make sensible low-stakes calls yourself, and close out finished goals. When several goals are open, follow ATTENTION order, leave healthy runners alone, and do not cross-talk between goals.\n\
 You may hire, recover, ask, and close out while other workers are still running — do not wait for healthy runners to finish. If a worker's idle age looks hung with no useful progress, cancel_task and hire or retry with a clearer plan rather than waiting forever.\n\
-A wake brief lists LEARNED notes (prefer a different approach after failures), ATTENTION (ordered concurrent goals), CEO_WAITING (with the question), FINISHED goals (with outcome= for close-out), RECENT_CEO_CHAT, and each open worker with status, idle age, recent output, and last error. Use that before asking the CEO.\n\
+A wake brief lists LEARNED notes (hints for how to retry ATTENTION failures only — never spawn_task from LEARNED alone or invent work absent from ATTENTION), ATTENTION (ordered concurrent goals), CEO_WAITING (with the question), FINISHED goals (with outcome= for close-out), RECENT_CEO_CHAT, and each open worker with status, idle age, recent output, and last error. Use that before asking the CEO.\n\
 On a silent wake call only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, record_learning. On a wake do not call success, failure, waiting, link_task, or inspect_task (use the wake brief instead of inspect).\n\
 On an owner turn keep going until you call success, failure, waiting, message_user, or ask_user.\n\
 - success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory. Owner turns only.\n\
@@ -1325,12 +1325,13 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - ask_user: one clear CEO decision (credentials, money, irreversible or external action, real preference). When the wake brief shows CEO_WAITING, you MUST ask_user once (not silence, not message_user). If RECENT_CEO_CHAT already asked, do not ask again — continue_task with the CEO's answer instead. Never paste worker output.\n\
 Route tools do not finish an owner turn. After one of them, call success, failure, waiting, message_user, or ask_user.\n\
 - New work: always spawn_task first before any terminal. Do not answer a hire request with only message_user, waiting, ask_user, success, or failure — that leaves no worker. Do not refuse a path yourself; hire a worker. Do not try to run the work with bash or files yourself.\n\
-- Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text). When the CEO answers your ask_user about a waiting worker, continue_task with that task_id and their answer so the worker can finish — do not spawn a new worker for the same answer.\n\
+- Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text). When the CEO answers your ask_user about a waiting worker, continue_task with that task_id and their answer so the worker can finish — do not spawn a new worker for the same answer. When the CEO asks to hire new work while another worker is waiting or running, still spawn_task for the new work — do not treat a hire request as the answer to the waiter.\n\
+- After a waiting worker receives the CEO's answer, finish promptly (success) unless the goal still requires tools; do not re-wait for the same question and do not run long shell work that blocks other workers unless the goal needs it.\n\
 - Follow-up after a finished task: link_task.\n\
 - Status: inspect_task for the same details as the wake brief.\n\
 - Stop for good: cancel_task.\n\
 - Failed or stopped work you choose to retry: retry_task.\n\
-- After a useful lesson (what worked or failed): record_learning with one short note. It appears under LEARNED on later wakes — use it; do not repeat a failed tactic.\n\
+- After a useful lesson (what worked or failed): record_learning with one short note. It appears under LEARNED on later wakes — use it only when ATTENTION already lists matching failed/stuck work; do not spawn new goals from LEARNED alone; do not repeat a failed tactic.\n\
 Fixable worker failures (missing file, bad args, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance. Do not ask_user. Do not call bash yourself.\n\
 If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: you MUST call ask_user once with one clear question. Do not stay silent. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate the decision cleanly. Do not ask the same question again later.\n\
 Shell, files, vault, and network work always go through spawn_task or continue_task. Do not ask_user about a secret until a worker is waiting on it.\n\
@@ -1636,6 +1637,18 @@ fn dispatch_note(text: &str) -> String {
     } else {
         format!("Dispatched as one new task: {title}.")
     }
+}
+
+/// True when the CEO is asking to hire new work (not answering a waiting worker).
+fn looks_like_hire_request(text: &str) -> bool {
+    let folded = text.to_ascii_lowercase();
+    folded.contains("hire ")
+        || folded.contains("hire\n")
+        || folded.contains("hire a worker")
+        || folded.contains("hire one worker")
+        || folded.contains("hire worker")
+        || folded.contains("spawn_task")
+        || folded.contains("new worker")
 }
 
 fn windows_paths(text: &str) -> Vec<String> {
@@ -2762,6 +2775,18 @@ pub(crate) enum ToolParcel {
         host: maia_tools::SubagentHost,
         reply: McpToolReply,
     },
+    /// One-shot shell host used when the primary subagent is already borrowed.
+    Ephemeral {
+        reply: McpToolReply,
+    },
+}
+
+/// True when a shell tool may run on an ephemeral host while the primary is busy.
+///
+/// Long HEALTHY `bash sleep` held the only SubagentHost and stalled other workers'
+/// shell calls (finish_lag spikes under load). Desktop/MCP stay exclusive.
+fn use_ephemeral_shell(subagent_borrowed: bool, connection_id: &str) -> bool {
+    subagent_borrowed && connection_id == "shell"
 }
 
 /// What the worker pump should do next.
@@ -4235,6 +4260,38 @@ impl<R: Router> Orchestrator<R> {
                 }
             }
             ToolJobKind::Subagent => {
+                if use_ephemeral_shell(self.subagent_borrowed, &job.connection_id) {
+                    let connection = job.connection_id.clone();
+                    let call = job.call.clone();
+                    if std::thread::Builder::new()
+                        .name("maia-tool-ephemeral".to_owned())
+                        .spawn(move || {
+                            let opened = maia_tools::SubagentHost::open(&[]);
+                            let mut host = opened.host;
+                            let receipt = host.execute(
+                                &connection,
+                                &call.server_tool,
+                                &call.arguments_json,
+                            );
+                            let reply = McpToolReply {
+                                sent: receipt.sent,
+                                completed: receipt.completed,
+                                text: receipt.text,
+                                image_png_base64: receipt.image_png_base64,
+                            };
+                            let _ = sender.send(ToolParcel::Ephemeral { reply });
+                        })
+                        .is_err()
+                    {
+                        return ToolStart::Done(McpToolReply {
+                            sent: false,
+                            completed: false,
+                            text: "The tool is not connected.".to_owned(),
+                            image_png_base64: None,
+                        });
+                    }
+                    return ToolStart::Started(receiver);
+                }
                 if self.subagent_borrowed {
                     return ToolStart::Busy;
                 }
@@ -4290,6 +4347,7 @@ impl<R: Router> Orchestrator<R> {
                 self.subagent_borrowed = false;
                 reply
             }
+            ToolParcel::Ephemeral { reply } => reply,
         }
     }
 
@@ -5880,7 +5938,15 @@ impl<R: Router> Orchestrator<R> {
             .or_else(|| self.sole_waiting_task())
         {
             match admitted {
-                AdmittedRoute::Admit(RouteDecision::CreateTask) | AdmittedRoute::AskUser { .. } => {
+                // New hire requests must spawn even when another worker is waiting —
+                // remapping every CreateTask onto the waiter is the under-load hire miss.
+                AdmittedRoute::Admit(RouteDecision::CreateTask)
+                    if looks_like_hire_request(text) =>
+                {
+                    AdmittedRoute::Admit(RouteDecision::CreateTask)
+                }
+                AdmittedRoute::Admit(RouteDecision::CreateTask)
+                | AdmittedRoute::AskUser { .. } => {
                     // CEO reply remapped onto the waiting worker: keep the reply text as
                     // continue input, but do not store spawn/ask guidance that can tell the
                     // worker to call waiting again.
@@ -6225,12 +6291,14 @@ impl<R: Router> Orchestrator<R> {
             if !shares {
                 return None;
             }
+            // Require an explicit follow-up confirm. Path overlap alone must not
+            // remap a new hire onto a live worker that merely shares a workspace path.
             let confirms = folded.contains("like i told you")
                 || folded.contains("like i said")
                 || folded.contains("i told you")
                 || folded.trim_start().starts_with("yes")
                 || folded.contains("again");
-            if confirms || shares {
+            if confirms {
                 Some(task.clone())
             } else {
                 None
@@ -8274,6 +8342,19 @@ fn required_text(id: String) -> Result<String, ProposalParseError> {
         Err(ProposalParseError::Target)
     } else {
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod ephemeral_shell_tests {
+    use super::use_ephemeral_shell;
+
+    #[test]
+    fn ephemeral_shell_only_when_primary_borrowed_for_shell() {
+        assert!(use_ephemeral_shell(true, "shell"));
+        assert!(!use_ephemeral_shell(false, "shell"));
+        assert!(!use_ephemeral_shell(true, "desktop"));
+        assert!(!use_ephemeral_shell(true, "mcp-1"));
     }
 }
 

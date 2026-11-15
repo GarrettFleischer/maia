@@ -4870,6 +4870,48 @@ fn ceo_reply_continues_sole_waiting_worker() {
 }
 
 #[test]
+fn hire_request_while_sole_waiting_still_spawns_new_worker() {
+    // Under load the CEO often hires the next goal while another worker is waiting.
+    // Remapping every spawn_task onto the waiter leaves no new task (hire miss).
+    let mut harness = Harness::open_model("hire-while-waiting", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need RUN47_WAIT_SECRET from the CEO"}"#);
+    let waiting = wait(harness.host().handle_user_message("Park on the secret")).expect("wait");
+    let wait_id = waiting.task.expect("waiting task");
+    assert!(matches!(
+        harness.host().phase(&wait_id),
+        Some(TaskPhase::WaitingForUser { .. })
+    ));
+
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Hired the file worker."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote the file."));
+    let hired = wait(harness.host().handle_user_message(
+        "Hire one worker NOW while the other is waiting. Worker must write RUN47 into a file then success.",
+    ))
+    .expect("hire");
+    let new_id = hired.task.expect("new task");
+    assert_ne!(
+        new_id.0, wait_id.0,
+        "hire while a sole waiter exists must spawn a new worker, not remap onto the waiter"
+    );
+    assert!(
+        matches!(
+            harness.host().phase(&wait_id),
+            Some(TaskPhase::WaitingForUser { .. })
+        ),
+        "original waiter must stay waiting; phase {:?}",
+        harness.host().phase(&wait_id)
+    );
+}
+
+#[test]
 fn ceo_reply_remap_does_not_poison_waiting_worker_with_spawn_guidance() {
     let mut harness = Harness::open_model("ceo-reply-no-poison", long_supply());
     harness.router.push_tool("spawn_task", "{}");
