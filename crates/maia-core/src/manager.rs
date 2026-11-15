@@ -163,7 +163,7 @@ pub fn format_worker_brief(worker: &WorkerBrief) -> String {
 #[must_use]
 pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     let mut lines = vec![
-        "Silent manager wake. Review workers and act with tools. Stay silent unless ask_user or message_user is truly needed.".to_owned(),
+        "Silent manager wake. Review workers and act with route tools only (no bash). Stay silent unless ask_user or message_user is truly needed.".to_owned(),
         format!("running={}", snap.running_count),
         format!("completed_unopened={}", snap.completed_unopened),
     ];
@@ -172,6 +172,29 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     }
     if !snap.stuck_task_ids.is_empty() {
         lines.push(format!("stuck={}", snap.stuck_task_ids.join(",")));
+    }
+    if !snap.failed_task_ids.is_empty() || !snap.stuck_task_ids.is_empty() {
+        lines.push(
+            "REQUIRED: call retry_task or continue_task with the failed/stuck task_id (and guidance). Do not call bash. Do not ask_user for a fixable missing-file or tool error."
+                .to_owned(),
+        );
+    }
+    if !snap.waiting.is_empty() {
+        lines.push(
+            "REQUIRED: call ask_user once with one clear CEO question for the waiting worker. Do not stay silent. Do not call bash. Do not paste worker wording; restate cleanly. Do not ask again if that question is already in chat."
+                .to_owned(),
+        );
+    }
+    if snap.completed_unopened > 0
+        && snap.failed_task_ids.is_empty()
+        && snap.stuck_task_ids.is_empty()
+        && snap.waiting.is_empty()
+        && snap.running_count == 0
+    {
+        lines.push(
+            "REQUIRED: call message_user once with one short useful close-out for the finished goal. Do not dump worker logs. Do not call bash."
+                .to_owned(),
+        );
     }
     for (id, question) in &snap.waiting {
         let q = truncate_brief(question, BRIEF_TAIL_CHARS);
@@ -250,7 +273,8 @@ pub fn plan_wake(
     let idle = snap.failed_task_ids.is_empty()
         && snap.stuck_task_ids.is_empty()
         && snap.waiting.is_empty()
-        && snap.running_count == 0;
+        && snap.running_count == 0
+        && snap.completed_unopened == 0;
     if idle {
         return WakePlan::Silent;
     }
@@ -270,6 +294,11 @@ pub fn plan_wake(
             reason: "waiting tasks may need a CEO question".to_owned(),
         };
     }
+    if snap.completed_unopened > 0 {
+        return WakePlan::RunModel {
+            reason: "finished goals need a short close-out".to_owned(),
+        };
+    }
     WakePlan::Silent
 }
 
@@ -279,7 +308,9 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
     let mut actions = Vec::new();
     for call in calls {
         match call.name.as_str() {
-            "message_user" => {
+            // Live models sometimes emit owner-turn terminals on a wake; treat them as the
+            // manager chat tools so close-out / CEO questions are not silent no-ops.
+            "message_user" | "success" => {
                 let text = call.message.trim();
                 if !text.is_empty() {
                     actions.push(WakeAction::MessageUser {
@@ -287,7 +318,7 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                     });
                 }
             }
-            "ask_user" => {
+            "ask_user" | "waiting" => {
                 let text = call.message.trim();
                 if !text.is_empty() {
                     actions.push(WakeAction::AskUser {

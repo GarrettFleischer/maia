@@ -77,6 +77,30 @@ fn wake_tool_ask_user_is_one_ceo_question() {
 }
 
 #[test]
+fn wake_success_aliases_to_message_user_and_waiting_to_ask_user() {
+    let close = interpret_wake_tools(&[WakeToolCall {
+        name: "success".to_owned(),
+        message: "Shipped the release notes.".to_owned(),
+    }]);
+    assert_eq!(
+        close,
+        vec![WakeAction::MessageUser {
+            text: "Shipped the release notes.".to_owned()
+        }]
+    );
+    let ask = interpret_wake_tools(&[WakeToolCall {
+        name: "waiting".to_owned(),
+        message: "Need the vault password.".to_owned(),
+    }]);
+    assert_eq!(
+        ask,
+        vec![WakeAction::AskUser {
+            text: "Need the vault password.".to_owned()
+        }]
+    );
+}
+
+#[test]
 fn wake_tool_retry_becomes_recover() {
     let outcomes = interpret_wake_tools(&[WakeToolCall {
         name: "retry_task".to_owned(),
@@ -137,6 +161,52 @@ fn failed_work_plans_a_model_call() {
     assert!(
         matches!(plan, maia_core::manager::WakePlan::RunModel { .. }),
         "expected RunModel, got {plan:?}"
+    );
+}
+
+#[test]
+fn completed_work_plans_a_model_call_for_close_out() {
+    let snap = WakeSnapshot {
+        failed_task_ids: vec![],
+        stuck_task_ids: vec![],
+        waiting: vec![],
+        running_count: 0,
+        completed_unopened: 1,
+        ..WakeSnapshot::default()
+    };
+    let plan = plan_wake(
+        1_000,
+        0,
+        DEFAULT_WAKE_INTERVAL_SECS,
+        "",
+        &snap,
+        0,
+        MAX_MODEL_CALLS_PER_WAKE,
+    );
+    assert!(
+        matches!(plan, maia_core::manager::WakePlan::RunModel { ref reason } if reason.contains("close")),
+        "expected RunModel for completed close-out, got {plan:?}"
+    );
+}
+
+#[test]
+fn wake_brief_requires_ask_user_when_a_worker_is_waiting() {
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        waiting: vec![("task-wait".to_owned(), "Need the vault password".to_owned())],
+        running_count: 0,
+        completed_unopened: 0,
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    assert!(
+        brief.to_ascii_lowercase().contains("ask_user"),
+        "waiting brief must require ask_user: {brief}"
+    );
+    assert!(
+        brief.contains("waiting task-wait"),
+        "brief must name the waiting worker: {brief}"
     );
 }
 

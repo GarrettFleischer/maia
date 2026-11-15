@@ -50,7 +50,10 @@ pub fn validate_tool_calls(
             return Err(protocol("duplicate tool call id"));
         }
         if !allowed.contains(call.name.as_str()) {
-            return Err(protocol("unknown tool name"));
+            return Err(protocol(format!(
+                "unknown tool name: {}",
+                call.name.as_str()
+            )));
         }
         if !is_json_object(&call.arguments_json) {
             return Err(protocol("tool arguments must be a JSON object"));

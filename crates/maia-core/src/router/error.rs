@@ -206,8 +206,10 @@ fn classify_protocol(detail: &str) -> RouterFailureClass {
         | "tool calls unsupported for this provider"
         | "tools_json must be an array"
         | "tools_json missing function names"
-        | "duplicate tool call id"
-        | "unknown tool name" => RouterFailureClass::schema(),
+        | "duplicate tool call id" => RouterFailureClass::schema(),
+        detail if detail == "unknown tool name" || detail.starts_with("unknown tool name:") => {
+            RouterFailureClass::schema()
+        }
         _ => unclassified(None),
     }
 }
