@@ -680,6 +680,49 @@ fn merge_learned_notes_dedups_and_caps() {
 }
 
 #[test]
+fn close_out_is_forced_while_a_healthy_runner_is_still_busy() {
+    use maia_core::manager::WorkerBrief;
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        running_count: 1,
+        completed_unopened: 1,
+        workers: vec![
+            WorkerBrief {
+                task_id: "task-run".to_owned(),
+                title: "Healthy long copy".to_owned(),
+                status: "running".to_owned(),
+                secs_since_progress: Some(12),
+                output_tail: "still writing".to_owned(),
+                last_error: String::new(),
+            },
+            WorkerBrief {
+                task_id: "task-done".to_owned(),
+                title: "Write DONE45".to_owned(),
+                status: "completed".to_owned(),
+                secs_since_progress: Some(1),
+                output_tail: "Wrote DONE45".to_owned(),
+                last_error: String::new(),
+            },
+        ],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    assert!(
+        brief.contains("REQUIRED: call message_user once now for the finished goal."),
+        "healthy runners must not defer close-out REQUIRED: {brief}"
+    );
+    let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.contains("DONE45") && text.starts_with("Done")
+        )),
+        "safety cap must close out finished work while a healthy runner is busy: {forced:?}"
+    );
+}
+
+#[test]
 fn ceo_safety_cap_still_asks_when_model_only_retries_failed_among_multi_goals() {
     use maia_core::manager::WorkerBrief;
 

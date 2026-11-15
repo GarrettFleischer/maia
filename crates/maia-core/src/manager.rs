@@ -299,11 +299,11 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             "FINISHED (close-out): goals whose work just finished. When nothing else needs attention, call message_user once with one short useful close-out. Do not dump worker logs. Skip if RECENT_CEO_CHAT already closed this out."
                 .to_owned(),
         );
+        // Healthy runners are not "attention" — close out finished goals while they keep working.
         if snap.completed_unopened > 0
             && snap.failed_task_ids.is_empty()
             && snap.stuck_task_ids.is_empty()
             && snap.waiting.is_empty()
-            && snap.running_count == 0
         {
             lines.push(
                 "REQUIRED: call message_user once now for the finished goal."
@@ -615,10 +615,10 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         }
     }
 
+    // Failed / stuck / waiting block close-out; healthy runners do not.
     let attention_clear = snap.failed_task_ids.is_empty()
         && snap.stuck_task_ids.is_empty()
-        && snap.waiting.is_empty()
-        && snap.running_count == 0;
+        && snap.waiting.is_empty();
     if snap.completed_unopened > 0 && attention_clear && !closed_out {
         let finished = snap
             .workers
