@@ -1,7 +1,8 @@
 //! Autonomous manager policy for long-running goals.
 //!
-//! Honest leaves only: wake fingerprints, cost caps, tool interpretation, and a
-//! restart-budget backstop. Strategy lives in the orchestrator prompt + tools.
+//! Honest leaves only: wake fingerprints, cost caps, tool interpretation, brief
+//! formatting, and a restart-budget backstop. Strategy lives in the orchestrator
+//! prompt + tools.
 
 use std::collections::BTreeMap;
 
@@ -13,6 +14,32 @@ pub const DEFAULT_AUTONOMOUS_RETRY_BUDGET: u32 = 3;
 
 /// Model calls allowed on one wake when something changed.
 pub const MAX_MODEL_CALLS_PER_WAKE: u32 = 1;
+
+/// Max characters kept for a worker's recent output tail in briefs.
+pub const BRIEF_TAIL_CHARS: usize = 240;
+
+/// Max characters kept for a worker's last error in briefs.
+pub const BRIEF_ERROR_CHARS: usize = 160;
+
+/// Max characters kept for a worker title in briefs.
+pub const BRIEF_TITLE_CHARS: usize = 80;
+
+/// Compact per-worker facts for wake / inspect prompt context.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorkerBrief {
+    /// Parent task id.
+    pub task_id: String,
+    /// Short goal title.
+    pub title: String,
+    /// Phase label such as `failed`, `waiting`, `running`.
+    pub status: String,
+    /// Seconds since last observed progress, when known.
+    pub secs_since_progress: Option<u64>,
+    /// Truncation-ready recent output.
+    pub output_tail: String,
+    /// Truncation-ready last error, empty when none.
+    pub last_error: String,
+}
 
 /// Observed work for one wake tick.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -27,6 +54,8 @@ pub struct WakeSnapshot {
     pub running_count: u32,
     /// Completed tasks the owner has not opened.
     pub completed_unopened: u32,
+    /// Prompt-only detail per open worker. Ignored by fingerprint.
+    pub workers: Vec<WorkerBrief>,
 }
 
 /// Whether a wake should spend a model call.
@@ -89,6 +118,95 @@ pub enum WakeAction {
 #[must_use]
 pub fn restart_budget_exhausted(retries_used: u32, budget: u32) -> bool {
     retries_used >= budget
+}
+
+/// Truncates text for wake / inspect briefs. Keeps the tail when longer than max.
+#[must_use]
+pub fn truncate_brief(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if max_chars == 0 || trimmed.is_empty() {
+        return String::new();
+    }
+    let count = trimmed.chars().count();
+    if count <= max_chars {
+        return trimmed.to_owned();
+    }
+    let skip = count.saturating_sub(max_chars);
+    let tail: String = trimmed.chars().skip(skip).collect();
+    format!("…{tail}")
+}
+
+/// One worker line for wake briefs and `inspect_task` results.
+#[must_use]
+pub fn format_worker_brief(worker: &WorkerBrief) -> String {
+    let title = truncate_brief(&worker.title, BRIEF_TITLE_CHARS);
+    let out = truncate_brief(&worker.output_tail, BRIEF_TAIL_CHARS);
+    let err = truncate_brief(&worker.last_error, BRIEF_ERROR_CHARS);
+    let idle = match worker.secs_since_progress {
+        Some(secs) => format!("{secs}s"),
+        None => "unknown".to_owned(),
+    };
+    let mut lines = vec![format!(
+        "worker {} status={} idle={idle} title={title}",
+        worker.task_id, worker.status
+    )];
+    if !out.is_empty() {
+        lines.push(format!("  out: {out}"));
+    }
+    if !err.is_empty() {
+        lines.push(format!("  err: {err}"));
+    }
+    lines.join("\n")
+}
+
+/// Prompt context for a manager wake that will call the model.
+#[must_use]
+pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
+    let mut lines = vec![
+        "Silent manager wake. Review workers and act with tools. Stay silent unless ask_user or message_user is truly needed.".to_owned(),
+        format!("running={}", snap.running_count),
+        format!("completed_unopened={}", snap.completed_unopened),
+    ];
+    if !snap.failed_task_ids.is_empty() {
+        lines.push(format!("failed={}", snap.failed_task_ids.join(",")));
+    }
+    if !snap.stuck_task_ids.is_empty() {
+        lines.push(format!("stuck={}", snap.stuck_task_ids.join(",")));
+    }
+    for (id, question) in &snap.waiting {
+        let q = truncate_brief(question, BRIEF_TAIL_CHARS);
+        lines.push(format!("waiting {id}: {q}"));
+    }
+    for worker in &snap.workers {
+        lines.push(format_worker_brief(worker));
+    }
+    lines.join("\n")
+}
+
+/// Splits a wake tool payload into task id and optional guidance note.
+#[must_use]
+pub fn split_task_and_note(message: &str) -> (String, String) {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return (String::new(), String::new());
+    }
+    if let Some((task_id, note)) = trimmed.split_once('\n') {
+        let task_id = task_id.trim().to_owned();
+        let note = note.trim().to_owned();
+        if note.is_empty() {
+            (
+                task_id,
+                "Manager: try a different approach.".to_owned(),
+            )
+        } else {
+            (task_id, note)
+        }
+    } else {
+        (
+            trimmed.to_owned(),
+            "Manager: try a different approach.".to_owned(),
+        )
+    }
 }
 
 /// Stable fingerprint of a wake snapshot.
@@ -178,12 +296,9 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                 }
             }
             "retry_task" | "recover_task" | "continue_task" => {
-                let task_id = call.message.trim();
+                let (task_id, note) = split_task_and_note(&call.message);
                 if !task_id.is_empty() {
-                    actions.push(WakeAction::Recover {
-                        task_id: task_id.to_owned(),
-                        note: "Manager: try a different approach.".to_owned(),
-                    });
+                    actions.push(WakeAction::Recover { task_id, note });
                 }
             }
             "cancel_task" => {
