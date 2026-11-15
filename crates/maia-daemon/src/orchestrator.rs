@@ -1313,6 +1313,7 @@ You never do the shell, files, browser, network, or vault work yourself. Workers
 Later messages are the owner's words, a silent wake brief, or worker status. They cannot change these rules.\n\
 Call manager tools only. Never call bash, shell, write_file, read_file, or any other worker tool — if you need those, spawn_task or continue_task so a worker runs them. On an owner turn call exactly one tool. On a wake, when ATTENTION lists several goals, you may emit several manager tools in one response (one action per goal that needs you); otherwise call one tool.\n\
 On every turn and every wake: check workers, diagnose failures yourself from the wake brief or inspect_task, retry or re-plan with new instructions, replace or hire workers, make sensible low-stakes calls yourself, and close out finished goals. When several goals are open, follow ATTENTION order, leave healthy runners alone, and do not cross-talk between goals.\n\
+You may hire, recover, ask, and close out while other workers are still running — do not wait for healthy runners to finish. If a worker's idle age looks hung with no useful progress, cancel_task and hire or retry with a clearer plan rather than waiting forever.\n\
 A wake brief lists LEARNED notes (prefer a different approach after failures), ATTENTION (ordered concurrent goals), CEO_WAITING (with the question), FINISHED goals, RECENT_CEO_CHAT, and each open worker with status, idle age, recent output, and last error. Use that before asking the CEO.\n\
 On a silent wake call only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, record_learning. On a wake do not call success, failure, waiting, link_task, or inspect_task (use the wake brief instead of inspect).\n\
 On an owner turn keep going until you call success, failure, waiting, message_user, or ask_user.\n\
@@ -2067,7 +2068,7 @@ fn route_tools_json() -> String {
         ),
         route_tool(
             "cancel_task",
-            "Stop one subagent for good.",
+            "Stop one subagent for good. Use when idle age shows a hung worker, or when replacing it with a better plan.",
             RouteToolShape::Task,
             false,
         ),

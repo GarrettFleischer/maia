@@ -1320,42 +1320,33 @@ fn actor_loop<R>(
     let mut workers = Vec::new();
     let wake_path = crate::manager_wake::wake_path_beside(&actor.database);
     let mut wake_state = crate::manager_wake::load_wake_state(&wake_path);
+    // Throttle disk wake checks while workers pump; interval still enforced inside.
+    let wake_check_gap = Duration::from_secs(1);
+    let mut last_wake_check = Instant::now()
+        .checked_sub(wake_check_gap)
+        .unwrap_or_else(Instant::now);
     loop {
         pump(&mut actor, &mut inbox, &mut route, &mut workers);
-        let idle = route.is_none() && workers.is_empty() && inbox.is_empty();
-        let call = if idle {
-            // Poll with a short sleep so the manager wake can fire without a model burn
-            // when nothing changed. Interval is enforced inside run_scheduled_wake.
-            let deadline = Instant::now() + Duration::from_secs(5);
-            let mut next = None;
-            while Instant::now() < deadline {
-                match commands.try_recv() {
-                    Ok(call) => {
-                        next = Some(call);
-                        break;
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {
-                        std::thread::sleep(Duration::from_millis(50));
-                    }
-                    Err(mpsc::error::TryRecvError::Disconnected) => return,
-                }
+        let now = Instant::now();
+        // Wakes must not wait for live workers — only an owner route mid-flight defers them.
+        if should_run_scheduled_wake(route.is_some(), last_wake_check, now, wake_check_gap) {
+            last_wake_check = now;
+            run_scheduled_wake(&mut actor, &wake_path, &mut wake_state);
+            // Pick up workers hired on this wake without waiting for the next idle tick.
+            pump(&mut actor, &mut inbox, &mut route, &mut workers);
+        }
+        let call = match commands.try_recv() {
+            Ok(call) => call,
+            Err(mpsc::error::TryRecvError::Empty) => {
+                let idle = route.is_none() && workers.is_empty() && inbox.is_empty();
+                std::thread::sleep(if idle {
+                    Duration::from_millis(50)
+                } else {
+                    pump_wait(&route)
+                });
+                continue;
             }
-            match next {
-                Some(call) => call,
-                None => {
-                    run_scheduled_wake(&mut actor, &wake_path, &mut wake_state);
-                    continue;
-                }
-            }
-        } else {
-            match commands.try_recv() {
-                Ok(call) => call,
-                Err(mpsc::error::TryRecvError::Empty) => {
-                    std::thread::sleep(pump_wait(&route));
-                    continue;
-                }
-                Err(mpsc::error::TryRecvError::Disconnected) => break,
-            }
+            Err(mpsc::error::TryRecvError::Disconnected) => break,
         };
         match call {
             ActorCall::Message {
@@ -1376,6 +1367,24 @@ fn actor_loop<R>(
             other => dispatch(&mut actor, other),
         }
     }
+}
+
+/// Whether the actor should attempt a scheduled manager wake check this tick.
+///
+/// Busy background workers must not starve wakes (hire / recover / ask / close-out).
+/// An in-flight owner route still defers the check so chat turns stay coherent.
+/// `min_check_gap` throttles disk reloads while the pump spins.
+#[must_use]
+fn should_run_scheduled_wake(
+    owner_route_live: bool,
+    last_wake_check: Instant,
+    now: Instant,
+    min_check_gap: Duration,
+) -> bool {
+    if owner_route_live {
+        return false;
+    }
+    now.saturating_duration_since(last_wake_check) >= min_check_gap
 }
 
 fn restore_pending_inbox<R: RouterPort>(actor: &Actor<R>) -> VecDeque<QueuedChat> {
@@ -5143,5 +5152,31 @@ mod elapsed_ms_tests {
         assert_eq!(elapsed_ms_since(100, 99), 0);
         assert_eq!(elapsed_ms_since(100, 102), 2_000);
         assert_eq!(elapsed_ms_since(0, 86_400), 86_400_000);
+    }
+}
+
+#[cfg(test)]
+mod scheduled_wake_tests {
+    use super::should_run_scheduled_wake;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    #[test]
+    fn scheduled_wake_runs_while_workers_are_busy_once_check_gap_elapses() {
+        let start = Instant::now();
+        // Workers are intentionally absent from the signature: busy live workers must
+        // not starve manager wakes (hire / recover / ask / close-out).
+        assert!(
+            should_run_scheduled_wake(false, start, start + Duration::from_secs(1), Duration::from_secs(1)),
+            "wake check must run with no owner route once the gap elapses"
+        );
+        assert!(
+            !should_run_scheduled_wake(true, start, start + Duration::from_secs(5), Duration::from_secs(1)),
+            "owner route mid-flight still defers the wake check"
+        );
+        assert!(
+            !should_run_scheduled_wake(false, start, start + Duration::from_millis(200), Duration::from_secs(1)),
+            "check gap must throttle disk wake checks while workers pump"
+        );
     }
 }
