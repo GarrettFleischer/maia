@@ -41,7 +41,11 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 - Changed failed/stuck/waiting work → one model tool turn; `message_user` / `ask_user` only when the model chooses.
 - When the model is called, the wake user message is a compact brief: counts, plus per open worker status, idle age, recent output tail, and last error (truncated). `inspect_task` returns the same shape. Fingerprint ignores brief detail.
 - Wake system prompt lists open task ids as usable candidates (the contract forbids inventing ids).
-- A worker that stops answering is marked `Failed` with summary `Worker stopped answering.` so wakes can see it (not left as orphaned `Running`).
+- A worker that stops answering is marked `Failed` with summary `Worker stopped answering.` (plus a short router reason when known) so wakes can see it (not left as orphaned `Running`).
+- Unreadable model replies nudge a couple of times instead of immediately failing silent.
+- If the wake model call fails, or returns no tools while failed/waiting work remains, the fingerprint is **not** advanced so the next wake can retry.
+- Wake snapshots are scoped to the selected bot so deleted bots cannot poison the fingerprint.
+- JSON completions tolerate gateway quirks: null/missing `message` and tool_calls on the choice.
 
 ## Roadmap (prompt-first)
 
@@ -49,5 +53,5 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 2. Settings for restart budget and mute wake messages.
 3. Learning notes in the wake sidecar fed back into the prompt.
 4. Multi-goal attention scheduling via prompt + inspect tools.
-5. Goal close-out digests via `message_user` on a cadence.
-6. General refinement (real bugs, reliability, clearer design) — next when autonomy looks solid.
+5. ~~Goal close-out digests via `message_user`~~ (prompt + tool wording).
+6. **General refinement** — real bugs, reliability, clearer design (autonomy is solid enough live to move here).
