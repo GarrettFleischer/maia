@@ -509,7 +509,7 @@ export function RouterConversation({
                 </div>
                 {liveReply.phase === 'interrupted' ? (
                   <div className="maia-live-interrupted">
-                    <p role="status">Interrupted · not a saved reply</p>
+                    <p role="status">Interrupted · partial kept · not a saved reply</p>
                     {onDismissLiveReply ? (
                       <button type="button" className="maia-btn" onClick={onDismissLiveReply}>
                         Dismiss

@@ -20,7 +20,8 @@ export function useHeldReply(client: SuperAgentClient, onConnected: () => void):
       if (current?.phase === 'interrupted') dismissed.current.add(current.stream_id)
       return null
     })
-  }, [])
+    void client.dismissLiveReply?.(client.botId).catch(() => undefined)
+  }, [client])
 
   useEffect(() => {
     const stopLive = client.subscribeLive?.((frame: LiveFrame) => {

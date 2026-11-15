@@ -175,6 +175,16 @@ describe('liveSuperAgentClient', () => {
     expect(JSON.stringify(sidebar)).not.toContain('API_KEY')
   })
 
+  it('dismisses an interrupted live reply for the scoped bot', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ cleared: true, bot_id: 'maia' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = liveSuperAgentClient('http://127.0.0.1:9')
+    await client.dismissLiveReply?.('maia')
+    const [url, init] = recordedCall(fetchMock)
+    expect(String(url)).toBe('http://127.0.0.1:9/api/super-agent/live/dismiss?bot=maia')
+    expect(init.method).toBe('POST')
+  })
+
   it.each([
     ['negative', -1],
     ['fractional', 0.5],

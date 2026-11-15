@@ -252,6 +252,7 @@ export interface SuperAgentClient {
   subscribeSidebar?(onRows: (rows: SidebarRow[], approvals?: LiveApproval[]) => void): () => void
   subscribeConnection?(onChange: (snapshot: ConnectionSnapshot) => void): () => void
   subscribeLive?(onFrame: (frame: LiveFrame) => void): () => void
+  dismissLiveReply?(botId?: string): Promise<void>
   dispose?(): void
   inspector?(): Promise<InspectorSnapshot>
 }

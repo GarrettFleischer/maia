@@ -226,7 +226,8 @@ fn boot() -> Result<(), BootError> {
         },
         _ => connection_from_env(&runtime)?,
     };
-    let live_replies = LiveReplyBoard::new();
+    let live_replies = LiveReplyBoard::new().beside_database(&database);
+    live_replies.restore_beside(&database);
     let progress: Arc<dyn ReplyProgress> = Arc::new(live_replies.clone());
     let router = streaming_router_from_connection(&chosen.base_url, &chosen.api_key, &chosen.model)
         .map_err(|_| BootError::Router)?

@@ -2518,6 +2518,7 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
         .route("/bots/{bot_id}/delete", post(post_bot_delete))
         .route("/super-agent/inspector", get(inspector))
         .route("/super-agent/messages", post(post_message))
+        .route("/super-agent/live/dismiss", post(dismiss_live_reply))
         .route("/super-agent/tasks/{task_id}", get(task))
         .route("/super-agent/tasks/{task_id}/pin", post(post_pin))
         .route("/super-agent/tasks/{task_id}/detail", post(post_detail))
@@ -2670,6 +2671,22 @@ async fn transcript(State(state): State<AppState>, Query(query): Query<BotScope>
         Ok(value) => finish(value),
         Err(_) => error_response(ApiError::Session),
     }
+}
+
+async fn dismiss_live_reply(
+    State(state): State<AppState>,
+    Query(query): Query<BotScope>,
+) -> Response {
+    let bot_id = query
+        .bot
+        .as_deref()
+        .map(str::trim)
+        .filter(|bot| !bot.is_empty())
+        .unwrap_or("maia");
+    if let Some(live) = state.live.as_ref() {
+        live.settle(bot_id);
+    }
+    finish(Ok(serde_json::json!({ "cleared": true, "bot_id": bot_id })))
 }
 
 async fn get_bots(State(state): State<AppState>) -> Response {

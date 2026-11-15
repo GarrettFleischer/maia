@@ -299,6 +299,13 @@ export function liveSuperAgentClient(
         { method: 'POST', body: JSON.stringify(command) },
         readPhase,
       ),
+    dismissLiveReply: (botId?: string) =>
+      readJson(
+        root,
+        withBot('/api/super-agent/live/dismiss', botId),
+        { method: 'POST', body: JSON.stringify({}) },
+        (value) => value,
+      ).then(() => undefined),
     subscribeSidebar(onRows) {
       if (disposed) return () => undefined
       listeners.add(onRows)

@@ -10,6 +10,11 @@ export function scopeSuperAgentClient(client: SuperAgentClient, botId: string): 
     sidebar: () => client.sidebar(id),
     transcript: () => client.transcript(id),
     send: (operationId, text, attachmentIds) => client.send(operationId, text, attachmentIds, id),
+    ...(client.dismissLiveReply
+      ? {
+          dismissLiveReply: () => client.dismissLiveReply?.(id) ?? Promise.resolve(),
+        }
+      : {}),
     ...(client.subscribeLive
       ? {
           subscribeLive: (onFrame: (frame: LiveFrame) => void) =>

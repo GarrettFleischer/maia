@@ -69,8 +69,11 @@ describe('live reply', () => {
     const live = screen.getByTestId('live-reply')
     expect(live).toHaveAttribute('aria-busy', 'false')
     expect(screen.getByLabelText('Reply interrupted')).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Interrupted · partial kept · not a saved reply',
+    )
     expect(screen.queryByTestId('stream-dots')).not.toBeInTheDocument()
-    expect(screen.getByText('Interrupted · not a saved reply')).toBeVisible()
+    expect(screen.getByText('Interrupted · partial kept · not a saved reply')).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(onDismissLiveReply).toHaveBeenCalledOnce()
   })

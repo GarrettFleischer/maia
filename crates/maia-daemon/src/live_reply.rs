@@ -1,8 +1,11 @@
 //! In-memory partial reply shared by every connected browser.
 //!
 //! The text is not a transcript row. A finished turn stores its own message,
-//! and that stored message is the answer.
+//! and that stored message is the answer. Mid-turn text is also mirrored to a
+//! sidecar file so a daemon restart can report the interrupted partial cleanly.
 
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -48,6 +51,7 @@ struct LiveState {
 pub struct LiveReplyBoard {
     inner: Arc<Mutex<LiveState>>,
     updates: watch::Sender<String>,
+    database: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl LiveReplyBoard {
@@ -63,7 +67,17 @@ impl LiveReplyBoard {
                 current: None,
             })),
             updates,
+            database: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Mirrors partials beside this SQLite path across daemon restarts.
+    #[must_use]
+    pub fn beside_database(self, database: &Path) -> Self {
+        if let Ok(mut slot) = self.database.lock() {
+            *slot = Some(database.to_path_buf());
+        }
+        self
     }
 
     /// Subscribes to partial frames. Empty frames are not a reply.
@@ -101,6 +115,7 @@ impl LiveReplyBoard {
             cleared_frame(bot_id)
         };
         self.updates.send_replace(frame);
+        self.flush_durable();
     }
 
     /// The partial for one bot, when it still has text.
@@ -112,6 +127,61 @@ impl LiveReplyBoard {
             .current
             .clone()
             .filter(|view| view.bot_id == bot_id && !view.text.is_empty())
+    }
+
+    /// Current partial for durable storage, when any bot still has text.
+    #[must_use]
+    pub fn durable_snapshot(&self) -> Option<LiveView> {
+        let Ok(state) = self.inner.lock() else {
+            return None;
+        };
+        state
+            .current
+            .clone()
+            .filter(|view| !view.text.is_empty())
+    }
+
+    /// Puts a previously saved partial back on the board as interrupted.
+    pub fn restore_interrupted(&self, mut view: LiveView) {
+        if view.text.is_empty() {
+            return;
+        }
+        view.phase = LivePhase::Interrupted;
+        let frame = {
+            let Ok(mut state) = self.inner.lock() else {
+                return;
+            };
+            state.next_stream = state.next_stream.max(view.stream_id);
+            state.active_stream = view.stream_id;
+            state.active_request = None;
+            state.active_bot = view.bot_id.clone();
+            let frame = live_frame(&view);
+            state.current = Some(view);
+            frame
+        };
+        self.updates.send_replace(frame);
+        self.flush_durable();
+    }
+
+    /// Loads a sidecar partial and restores it as interrupted.
+    pub fn restore_beside(&self, database: &Path) {
+        let Ok(Some(view)) = read_live_reply(&live_reply_path(database)) else {
+            return;
+        };
+        self.restore_interrupted(view);
+    }
+
+    fn flush_durable(&self) {
+        let Ok(slot) = self.database.lock() else {
+            return;
+        };
+        let Some(database) = slot.as_ref() else {
+            return;
+        };
+        let _ = write_live_reply(
+            &live_reply_path(database),
+            self.durable_snapshot().as_ref(),
+        );
     }
 }
 
@@ -159,6 +229,7 @@ impl ReplyProgress for LiveReplyBoard {
             frame
         };
         self.updates.send_replace(frame);
+        self.flush_durable();
     }
 
     fn on_reply_interrupted(&self, request_id: &str) {
@@ -177,6 +248,7 @@ impl ReplyProgress for LiveReplyBoard {
             live_frame(view)
         };
         self.updates.send_replace(frame);
+        self.flush_durable();
     }
 }
 
@@ -226,6 +298,76 @@ fn phase_name(phase: LivePhase) -> &'static str {
     match phase {
         LivePhase::Streaming => "streaming",
         LivePhase::Interrupted => "interrupted",
+    }
+}
+
+/// Sidecar path for the in-flight owner reply beside `database`.
+#[must_use]
+pub fn live_reply_path(database: &Path) -> PathBuf {
+    database
+        .parent()
+        .map_or_else(|| PathBuf::from("live_reply.json"), |dir| dir.join("live_reply.json"))
+}
+
+/// JSON for one durable live partial. `None` when there is nothing to keep.
+#[must_use]
+pub fn durable_live_json(live: Option<&LiveView>) -> Option<String> {
+    live.filter(|view| !view.text.is_empty())
+        .map(|view| live_json(view).to_string())
+}
+
+/// Reads one durable live partial from JSON.
+#[must_use]
+pub fn parse_durable_live(raw: &str) -> Option<LiveView> {
+    let value: Value = serde_json::from_str(raw).ok()?;
+    let bot_id = value.get("bot_id")?.as_str()?.to_owned();
+    let text = value.get("text")?.as_str()?.to_owned();
+    if text.is_empty() {
+        return None;
+    }
+    let stream_id = value
+        .get("stream_id")
+        .and_then(|item| {
+            item.as_u64()
+                .or_else(|| item.as_str().and_then(|text| text.parse().ok()))
+        })
+        .unwrap_or(1);
+    let revision = value
+        .get("revision")
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
+    Some(LiveView {
+        bot_id,
+        stream_id,
+        revision,
+        text,
+        phase: LivePhase::Interrupted,
+    })
+}
+
+/// Writes or clears the sidecar live partial.
+pub fn write_live_reply(path: &Path, live: Option<&LiveView>) -> std::io::Result<()> {
+    match durable_live_json(live) {
+        Some(json) => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, json)
+        }
+        None => match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        },
+    }
+}
+
+/// Loads the sidecar live partial when the file exists.
+pub fn read_live_reply(path: &Path) -> std::io::Result<Option<LiveView>> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => Ok(parse_durable_live(&raw)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -300,5 +442,54 @@ mod tests {
         board.watch("maia", "11");
         board.on_visible_reply("11", "Hello");
         assert!(board.snapshot("other").is_none());
+    }
+
+    #[test]
+    fn durable_snapshot_round_trips_and_restore_marks_interrupted() {
+        let board = LiveReplyBoard::new();
+        board.watch("maia", "11");
+        board.on_visible_reply("11", "The pin is");
+        let json = durable_live_json(board.durable_snapshot().as_ref()).expect("json");
+        let restored = parse_durable_live(&json).expect("parse");
+        assert_eq!(restored.text, "The pin is");
+        assert_eq!(restored.bot_id, "maia");
+
+        let cold = LiveReplyBoard::new();
+        cold.restore_interrupted(restored);
+        let view = cold.snapshot("maia").expect("restored");
+        assert_eq!(view.text, "The pin is");
+        assert_eq!(view.phase, LivePhase::Interrupted);
+        assert!(durable_live_json(None).is_none());
+    }
+
+    #[test]
+    fn disk_path_is_beside_the_database_and_survives_a_rewrite() {
+        let dir = std::env::temp_dir().join(format!(
+            "maia-live-reply-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let database = dir.join("maia.sqlite");
+        let path = live_reply_path(&database);
+        assert_eq!(path, dir.join("live_reply.json"));
+
+        let view = LiveView {
+            bot_id: "maia".to_owned(),
+            stream_id: 9,
+            revision: 3,
+            text: "Halfway".to_owned(),
+            phase: LivePhase::Streaming,
+        };
+        write_live_reply(&path, Some(&view)).expect("write");
+        let loaded = read_live_reply(&path).expect("read").expect("present");
+        assert_eq!(loaded.text, "Halfway");
+        assert_eq!(loaded.bot_id, "maia");
+        write_live_reply(&path, None).expect("clear");
+        assert!(read_live_reply(&path).expect("read clear").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
