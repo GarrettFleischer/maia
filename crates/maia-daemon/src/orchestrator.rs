@@ -5619,7 +5619,7 @@ impl<R: Router> Orchestrator<R> {
         } else {
             "[]".to_owned()
         });
-        let (goal, todos, handoffs) = self.ensure_plan(task, &prompt);
+        let (goal, todos, handoffs, progress) = self.ensure_plan(task, &prompt);
         let mut messages = Vec::new();
         messages.push(ChatMessage::text(ChatRole::System, contract));
         for turn in self.worker_turns(task, &prompt) {
@@ -5648,12 +5648,12 @@ impl<R: Router> Orchestrator<R> {
             attempts,
             notice,
             pending_tool: None,
-            loops: LoopTracker::with_handoffs(handoffs),
+            loops: LoopTracker::with_progress(handoffs, progress.loop_nudges),
             compacting: false,
             compaction_burst: 0,
             todos,
             contract: goal,
-            steps_since_review: 0,
+            steps_since_review: progress.steps_since_review,
             review_at: std::time::Instant::now(),
             review_now: false,
             new_subgoal: false,
@@ -5869,7 +5869,9 @@ impl<R: Router> Orchestrator<R> {
 
     fn follow_loop(&mut self, machine: &mut WorkerMachine, step: StepObservation) -> WorkerDrive {
         machine.steps_since_review = machine.steps_since_review.saturating_add(1);
-        match machine.loops.observe(&step) {
+        let signal = machine.loops.observe(&step);
+        self.save_worker_progress(machine);
+        match signal {
             Some(LoopSignal::Nudge { activity, note, .. }) => {
                 let task = machine.task.clone();
                 machine.review_now = true;

@@ -35,8 +35,10 @@ use maia_core::task_loop::inherit_list;
 use maia_core::task_loop::list_from_contract;
 use maia_core::task_loop::owner_decision;
 use maia_core::task_loop::parse_review;
+use maia_core::task_loop::PlanProgress;
 use maia_core::task_loop::parse_stored_plan;
-use maia_core::task_loop::plan_json;
+use maia_core::task_loop::plan_json_with_progress;
+use maia_core::task_loop::plan_progress_from_todo;
 use maia_core::task_loop::propose_addition;
 use maia_core::task_loop::review_is_due;
 use maia_core::task_loop::review_prompt;
@@ -82,26 +84,27 @@ impl<R: Router> Orchestrator<R> {
         &mut self,
         task: &TaskId,
         prompt: &str,
-    ) -> (GoalContract, TodoList, u32) {
+    ) -> (GoalContract, TodoList, u32, PlanProgress) {
         if let Ok(Some((goal_json, todo_json, count, _))) = self.store.task_plan(&task.0)
             && let Some((contract, list, _, _)) = parse_stored_plan(&goal_json, &todo_json)
         {
             let handoffs = u32::try_from(count).unwrap_or(0);
-            return (contract, list, handoffs);
+            let progress = plan_progress_from_todo(&todo_json);
+            return (contract, list, handoffs, progress);
         }
         let model = self.ask_model(&goal_prompt(prompt));
         let contract = model
             .map(|text| contract_from_model(prompt, &text))
             .unwrap_or_else(|_| deterministic_contract(prompt));
         let list = list_from_contract(&contract);
-        self.save_plan(task, &contract, &list, 0, None);
+        self.save_plan(task, &contract, &list, 0, None, &PlanProgress::default());
         let first = list
             .items
             .first()
             .map(|item| item.text.clone())
             .unwrap_or_default();
         self.record_activity(format!("Plan: {first}"), Some(task));
-        (contract, list, 0)
+        (contract, list, 0, PlanProgress::default())
     }
 
     pub(super) fn maybe_review(&mut self, machine: &mut WorkerMachine) -> Option<WorkerDrive> {
@@ -122,6 +125,7 @@ impl<R: Router> Orchestrator<R> {
         machine.review_now = false;
         machine.new_subgoal = false;
         machine.review_at = Instant::now();
+        self.save_worker_progress(machine);
         let digest = bound_digest(&recent_lines(&machine.messages), 12_000);
         let (system, user) = review_prompt(&machine.contract, &digest, &list_lines(&machine.todos));
         let raw = if let Some(reviewer) = self.reviewer.as_mut() {
@@ -214,6 +218,7 @@ impl<R: Router> Orchestrator<R> {
             &carried,
             handoff_number,
             Some(task.0.clone()),
+            &PlanProgress::default(),
         );
         if let Ok(command) = self.ids.next_command() {
             let command = CommandId(command);
@@ -276,13 +281,7 @@ impl<R: Router> Orchestrator<R> {
             "todo_add" | "ask_owner" => self.add_or_ask(machine, &message),
             _ => String::new(),
         };
-        self.save_plan(
-            &machine.task.clone(),
-            &machine.contract.clone(),
-            &machine.todos.clone(),
-            machine.loops.handoff_count(),
-            None,
-        );
+        self.save_worker_progress(machine);
         self.record_activity(output.clone(), Some(&machine.task.clone()));
         push_tool_exchange(&mut machine.messages, response, call, &output);
         Some(self.follow_loop(
@@ -313,9 +312,10 @@ impl<R: Router> Orchestrator<R> {
             if list.proposed.is_empty() {
                 continue;
             }
+            let progress = plan_progress_from_todo(&todo_json);
             let _ = answer_proposal(&mut list, &mut contract, yes);
             let count = u32::try_from(count).unwrap_or(0);
-            self.save_plan(&task, &contract, &list, count, handoff_of);
+            self.save_plan(&task, &contract, &list, count, handoff_of, &progress);
             let line = if yes {
                 "Added the approved step to the plan.".to_owned()
             } else {
@@ -342,6 +342,20 @@ impl<R: Router> Orchestrator<R> {
         }
     }
 
+    pub(super) fn save_worker_progress(&mut self, machine: &WorkerMachine) {
+        self.save_plan(
+            &machine.task,
+            &machine.contract,
+            &machine.todos,
+            machine.loops.handoff_count(),
+            None,
+            &PlanProgress {
+                loop_nudges: machine.loops.nudge_map().clone(),
+                steps_since_review: machine.steps_since_review,
+            },
+        );
+    }
+
     fn save_plan(
         &mut self,
         task: &TaskId,
@@ -349,11 +363,18 @@ impl<R: Router> Orchestrator<R> {
         list: &TodoList,
         handoff_count: u32,
         handoff_of: Option<String>,
+        progress: &PlanProgress,
     ) {
+        let todos_json = plan_json_with_progress(
+            list,
+            handoff_count,
+            handoff_of.as_deref(),
+            progress,
+        );
         let _ = self.store.put_task_plan(
             task.0.clone(),
             contract_json(contract),
-            plan_json(list, handoff_count, handoff_of.as_deref()),
+            todos_json.clone(),
             i64::from(handoff_count),
             handoff_of.clone(),
         );
@@ -374,7 +395,7 @@ impl<R: Router> Orchestrator<R> {
         let _ = self.store.bots(maia_store::BotRequest::UpsertWork {
             bot_id,
             goal: contract.goal.clone(),
-            todos_json: plan_json(list, handoff_count, handoff_of.as_deref()),
+            todos_json,
             activity,
             now: self.ids.now,
         });

@@ -162,3 +162,32 @@ fn a_handoff_brief_keeps_the_goal_and_the_list_carries_over() {
     assert_eq!(stored.2, 1);
     assert_eq!(stored.3.as_deref(), Some("task-1"));
 }
+
+#[test]
+fn plan_json_round_trips_loop_nudge_counts_and_steps_since_review() {
+    use std::collections::BTreeMap;
+
+    use maia_core::task_loop::PlanProgress;
+    use maia_core::task_loop::plan_json_with_progress;
+    use maia_core::task_loop::plan_progress_from_todo;
+
+    let mut nudges = BTreeMap::new();
+    nudges.insert("unfinished:(reply)".to_owned(), 2);
+    nudges.insert("fail:bash:{\"command\":\"x\"}".to_owned(), 1);
+    let progress = PlanProgress {
+        loop_nudges: nudges.clone(),
+        steps_since_review: 7,
+    };
+    let list = list_from_contract(&contract());
+    let json = plan_json_with_progress(&list, 1, Some("task-prev"), &progress);
+    let restored = plan_progress_from_todo(&json);
+    assert_eq!(restored.loop_nudges, nudges);
+    assert_eq!(restored.steps_since_review, 7);
+    let stored = parse_stored_plan(&contract_json(&contract()), &json).expect("plan");
+    assert_eq!(stored.2, 1);
+    assert_eq!(stored.3.as_deref(), Some("task-prev"));
+    assert_eq!(
+        plan_progress_from_todo(&plan_json(&list, 0, None)),
+        PlanProgress::default()
+    );
+}

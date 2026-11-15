@@ -274,6 +274,46 @@ fn the_same_signature_hands_off_after_three_nudges() {
 }
 
 #[test]
+fn restored_nudge_counts_continue_toward_handoff_after_rebuild() {
+    let call = done("bash", r#"{"command":"Get-Content a.txt"}"#, "nope");
+    let mut first = LoopTracker::default();
+    let mut nudges = 0u32;
+    for _ in 0..8 {
+        match first.observe(&call) {
+            Some(LoopSignal::Nudge { .. }) => {
+                nudges += 1;
+                if nudges == 3 {
+                    break;
+                }
+            }
+            Some(LoopSignal::Handoff { .. }) | Some(LoopSignal::Pause { .. }) => {
+                panic!("first tracker should stop after three nudges")
+            }
+            None => {}
+        }
+    }
+    assert_eq!(nudges, 3);
+    let saved = first.nudge_map().clone();
+    assert!(!saved.is_empty());
+
+    let mut rebuilt = LoopTracker::with_progress(0, saved);
+    let mut handed = false;
+    for _ in 0..8 {
+        match rebuilt.observe(&call) {
+            Some(LoopSignal::Handoff { handoff_number, .. }) => {
+                assert_eq!(handoff_number, 1);
+                handed = true;
+                break;
+            }
+            Some(LoopSignal::Pause { .. }) => panic!("first rebuild should hand off"),
+            Some(LoopSignal::Nudge { .. }) => panic!("restored nudges should skip more nudges"),
+            None => {}
+        }
+    }
+    assert!(handed);
+}
+
+#[test]
 fn a_second_fresh_start_hands_off_again_and_the_third_tells_the_owner() {
     let call = done("bash", r#"{"command":"Get-Content a.txt"}"#, "nope");
     let mut second = LoopTracker::with_handoffs(1);

@@ -16,14 +16,14 @@ use sha2::Sha256;
 mod task_guard;
 
 pub use task_guard::{
-    Addition, AdditionClass, GoalContract, HandoffNotes, ReviewEffect, ReviewVerdict, TodoItem,
-    TodoList, TodoStatus,     accept_model_brief, answer_proposal, bound_digest, classify_addition, complete_item,
-    contract_from_model, contract_json, deterministic_brief, deterministic_contract, effect_of,
-    gate_tool, goal_prompt,
-    handoff_chat_line, handoff_prompt, inherit_list, list_from_contract, owner_decision, start_item,
-    owner_question, parse_review, parse_stored_plan, plan_json, propose_addition, review_is_due,
-    review_prompt, GOAL_CONTRACT_PREFACE, HANDOFF_LIMIT, HANDOFF_PREFACE, REVIEW_INTERVAL_MS,
-    REVIEW_PREFACE, REVIEW_STEP_CADENCE,
+    Addition, AdditionClass, GoalContract, HandoffNotes, PlanProgress, ReviewEffect, ReviewVerdict,
+    TodoItem, TodoList, TodoStatus, accept_model_brief, answer_proposal, bound_digest,
+    classify_addition, complete_item, contract_from_model, contract_json, deterministic_brief,
+    deterministic_contract, effect_of, gate_tool, goal_prompt, handoff_chat_line, handoff_prompt,
+    inherit_list, list_from_contract, owner_decision, owner_question, parse_review,
+    parse_stored_plan, plan_json, plan_json_with_progress, plan_progress_from_todo,
+    propose_addition, review_is_due, review_prompt, start_item, GOAL_CONTRACT_PREFACE,
+    HANDOFF_LIMIT, HANDOFF_PREFACE, REVIEW_INTERVAL_MS, REVIEW_PREFACE, REVIEW_STEP_CADENCE,
 };
 
 /// Recent steps kept for loop checks.
@@ -137,10 +137,26 @@ impl LoopTracker {
         }
     }
 
+    /// Restores handoff and nudge counts after a worker rebuild.
+    #[must_use]
+    pub fn with_progress(handoffs: u32, nudges: BTreeMap<String, u32>) -> Self {
+        Self {
+            handoffs,
+            nudges,
+            ..Self::default()
+        }
+    }
+
     /// How many fresh starts this goal has already used.
     #[must_use]
     pub const fn handoff_count(&self) -> u32 {
         self.handoffs
+    }
+
+    /// Nudge counts keyed by loop signature. Survives a rebuild when stored.
+    #[must_use]
+    pub const fn nudge_map(&self) -> &BTreeMap<String, u32> {
+        &self.nudges
     }
 
     /// Records one step. `Some` when this step continues a loop.

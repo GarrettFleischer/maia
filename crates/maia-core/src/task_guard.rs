@@ -2,6 +2,9 @@
 //!
 //! Every function here reads only its arguments.
 
+use std::collections::BTreeMap;
+
+use serde_json::Map;
 use serde_json::Value;
 
 /// First line of a goal-contract model call.
@@ -590,9 +593,33 @@ pub fn contract_json(contract: &GoalContract) -> String {
     .to_string()
 }
 
+/// Loop and check-in counters that must survive a worker rebuild.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanProgress {
+    /// Nudge counts keyed by loop signature.
+    pub loop_nudges: BTreeMap<String, u32>,
+    /// Worker steps since the last goal check-in.
+    pub steps_since_review: u32,
+}
+
 /// JSON for the working list.
 #[must_use]
 pub fn plan_json(list: &TodoList, handoff_count: u32, handoff_of: Option<&str>) -> String {
+    plan_json_with_progress(list, handoff_count, handoff_of, &PlanProgress::default())
+}
+
+/// JSON for the working list plus durable loop / check-in progress.
+#[must_use]
+pub fn plan_json_with_progress(
+    list: &TodoList,
+    handoff_count: u32,
+    handoff_of: Option<&str>,
+    progress: &PlanProgress,
+) -> String {
+    let mut nudges = Map::new();
+    for (signature, count) in &progress.loop_nudges {
+        nudges.insert(signature.clone(), Value::from(*count));
+    }
     serde_json::json!({
         "items": list.items.iter().map(item_json).collect::<Vec<_>>(),
         "proposed": list.proposed.iter().map(|item| serde_json::json!({
@@ -603,8 +630,38 @@ pub fn plan_json(list: &TodoList, handoff_count: u32, handoff_of: Option<&str>) 
         "rejected": list.rejected,
         "handoff_count": handoff_count,
         "handoff_of": handoff_of,
+        "loop_nudges": Value::Object(nudges),
+        "steps_since_review": progress.steps_since_review,
     })
     .to_string()
+}
+
+/// Reads loop and check-in counters from stored plan JSON.
+#[must_use]
+pub fn plan_progress_from_todo(todo_json: &str) -> PlanProgress {
+    let Ok(todo) = serde_json::from_str::<Value>(todo_json) else {
+        return PlanProgress::default();
+    };
+    let mut loop_nudges = BTreeMap::new();
+    if let Some(map) = todo.get("loop_nudges").and_then(Value::as_object) {
+        for (signature, value) in map {
+            if let Some(count) = value
+                .as_u64()
+                .and_then(|raw| u32::try_from(raw).ok())
+            {
+                loop_nudges.insert(signature.clone(), count);
+            }
+        }
+    }
+    let steps_since_review = todo
+        .get("steps_since_review")
+        .and_then(Value::as_u64)
+        .and_then(|raw| u32::try_from(raw).ok())
+        .unwrap_or(0);
+    PlanProgress {
+        loop_nudges,
+        steps_since_review,
+    }
 }
 
 /// Reads a stored contract and list. `None` when the JSON is unusable.
