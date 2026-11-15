@@ -200,6 +200,41 @@ describe('AppShell layout', () => {
     expect(screen.queryByRole('heading', { name: 'Coding' })).not.toBeInTheDocument()
   })
 
+  it('keeps composer drafts per bot when switching chats', async () => {
+    window.innerWidth = 1440
+    window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
+      initialState: {
+        ...defaultFixtureState(),
+        onboarding_complete: true,
+        pending_approval: null,
+      },
+    })
+    expect(await screen.findByText('Can I open this from my phone?')).toBeVisible()
+    const composer = screen.getByRole('textbox', { name: 'Message' })
+    expect(composer).toBeEnabled()
+    await user.type(composer, 'Draft for Maia only')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Draft for Maia only')
+    await user.click(screen.getByRole('button', { name: 'New bot' }))
+    await user.type(screen.getByRole('textbox', { name: 'Bot name' }), 'Coding')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Coding' })).toBeVisible()
+    })
+    expect(await screen.findByText('This chat is empty. Say what you want done.')).toBeVisible()
+    const codingComposer = screen.getByRole('textbox', { name: 'Message' })
+    expect(codingComposer).toHaveValue('')
+    await user.type(codingComposer, 'Draft for Coding')
+    expect(codingComposer).toHaveValue('Draft for Coding')
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
+    expect(await screen.findByText('Can I open this from my phone?')).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Draft for Maia only')
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Coding' }))
+    expect(await screen.findByText('This chat is empty. Say what you want done.')).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Draft for Coding')
+  })
+
   it('stores a light theme from Settings and can follow the system', async () => {
     window.innerWidth = 1440
     window.dispatchEvent(new Event('resize'))

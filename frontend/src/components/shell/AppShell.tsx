@@ -11,6 +11,7 @@ import { InspectorPanel } from '@/components/inspector/InspectorPanel'
 import { UnrestrictedBanner } from '@/components/security/UnrestrictedBanner'
 import { BotList } from '@/components/shell/BotList'
 import { withClearedUnread } from '@/components/shell/botCatalog'
+import { clearBotDraft, readBotDraft, writeBotDraft } from '@/components/shell/botDrafts'
 import { ConversationPane, type ConversationLayout } from '@/components/shell/ConversationPane'
 import { StopAllButton } from '@/components/shell/StopAllButton'
 import { McpServersSection } from '@/components/settings/McpServersSection'
@@ -146,7 +147,42 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
   }, [client])
   const scoped = useMemo(() => scopeSuperAgentClient(client, selectedId), [client, selectedId])
   const agent = useSuperAgent(scoped)
+  const [botDrafts, setBotDrafts] = useState<Record<string, string>>({})
+  const clearDraftAfterSend = useRef(false)
   const selected = bots.find((bot) => bot.bot_id === selectedId) ?? bots[0] ?? FALLBACK_BOT
+  const composerDraft = readBotDraft(botDrafts, selectedId)
+  const setComposerDraft = (text: string) => {
+    setBotDrafts((current) => writeBotDraft(current, selectedId, text))
+    agent.setDraft(text)
+  }
+  useEffect(() => {
+    const saved = readBotDraft(botDrafts, selectedId)
+    if (saved.length > 0) agent.setDraft(saved)
+    else agent.setDraft('')
+    // Restore only when the selected bot (and its scoped agent) changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- botDrafts is the store we read once per switch
+  }, [selectedId, agent.setDraft])
+  useEffect(() => {
+    if (!clearDraftAfterSend.current) return
+    if (agent.draft.length > 0) return
+    clearDraftAfterSend.current = false
+    setBotDrafts((current) => clearBotDraft(current, selectedId))
+  }, [agent.draft, selectedId])
+  const router = useMemo(
+    () => ({
+      ...agent,
+      draft: composerDraft,
+      setDraft: setComposerDraft,
+      submit: async () => {
+        clearDraftAfterSend.current = true
+        agent.setDraft(composerDraft)
+        await agent.submit()
+      },
+    }),
+    // setComposerDraft closes over selectedId + agent; rebuild when those move.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [agent, composerDraft, selectedId],
+  )
   const remember = (id: string) => {
     picked.current = true
     setSelectedId(id)
@@ -532,7 +568,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
                 inspectToggle
               )
             }
-            router={agent}
+            router={router}
             title={selected.name}
             botId={selected.bot_id}
             onBack={viewport === 'phone' ? closePhoneChat : undefined}
