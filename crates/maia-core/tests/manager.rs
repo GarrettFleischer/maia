@@ -6,6 +6,7 @@ use maia_core::manager::MAX_MODEL_CALLS_PER_WAKE;
 use maia_core::manager::WakeAction;
 use maia_core::manager::WakeSnapshot;
 use maia_core::manager::WakeToolCall;
+use maia_core::manager::enforce_ceo_moments;
 use maia_core::manager::enforce_restart_budget;
 use maia_core::manager::interpret_wake_tools;
 use maia_core::manager::plan_wake;
@@ -126,6 +127,115 @@ fn wake_tool_retry_becomes_recover() {
 }
 
 #[test]
+fn wake_waiting_without_ask_user_is_forced_once_unless_already_in_chat() {
+    let snap = WakeSnapshot {
+        waiting: vec![("task-wait".to_owned(), "Need RUN43_CEO_SECRET from the vault".to_owned())],
+        ..WakeSnapshot::default()
+    };
+    let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::AskUser { text } if text.contains("RUN43_CEO_SECRET")
+        )),
+        "waiting without ask_user must force one ask: {forced:?}"
+    );
+
+    let chatter = WakeSnapshot {
+        recent_ceo_lines: vec![
+            "assistant: Waiting for the worker to call waiting with RUN43_CEO_SECRET.".to_owned(),
+        ],
+        ..snap.clone()
+    };
+    let still = enforce_ceo_moments(&[WakeAction::Silent], &chatter);
+    assert!(
+        still.iter().any(|action| matches!(action, WakeAction::AskUser { .. })),
+        "status chatter must not suppress the real ask: {still:?}"
+    );
+
+    let already = WakeSnapshot {
+        recent_ceo_lines: vec![
+            "assistant: Need your decision for task-wait: Need RUN43_CEO_SECRET from the vault?".to_owned(),
+        ],
+        ..snap.clone()
+    };
+    let skipped = enforce_ceo_moments(&[WakeAction::Silent], &already);
+    assert!(
+        !skipped.iter().any(|action| matches!(action, WakeAction::AskUser { .. })),
+        "must not duplicate an ask already in CEO chat: {skipped:?}"
+    );
+}
+
+#[test]
+fn looks_like_close_out_rejects_status_chatter() {
+    assert!(maia_core::manager::looks_like_close_out(
+        "Done — wrote DONE43 to the workspace file."
+    ));
+    assert!(!maia_core::manager::looks_like_close_out(
+        "I've hired a worker to write DONE43. I'll notify you once it's complete."
+    ));
+    assert!(!maia_core::manager::looks_like_close_out(
+        "Worker hired to write DONE43. On the next wake, I'll message_user with the close-out."
+    ));
+}
+
+#[test]
+fn wake_finished_without_close_out_is_forced_once_unless_already_in_chat() {
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-done".to_owned(),
+            title: "Write DONE43".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Wrote DONE43 to the workspace file.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.contains("DONE43") && text.starts_with("Done")
+        )),
+        "finished goal without close-out must force one message_user: {forced:?}"
+    );
+
+    let chatter = enforce_ceo_moments(
+        &[WakeAction::MessageUser {
+            text: "I've hired a worker to write DONE43. I'll notify you once it's complete."
+                .to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        chatter.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.starts_with("Done")
+        )),
+        "status message_user must not prevent the real close-out: {chatter:?}"
+    );
+
+    let already = WakeSnapshot {
+        recent_ceo_lines: vec![
+            "assistant: Done — wrote DONE43 to the workspace file.".to_owned(),
+        ],
+        ..snap.clone()
+    };
+    let skipped = enforce_ceo_moments(&[WakeAction::Silent], &already);
+    assert!(
+        !skipped.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.starts_with("Done")
+        )),
+        "must not duplicate a close-out already in CEO chat: {skipped:?}"
+    );
+}
+
+#[test]
 fn wake_recover_is_forced_to_ask_user_when_restart_budget_is_exhausted() {
     let gated = enforce_restart_budget(
         &[WakeAction::Recover {
@@ -211,12 +321,93 @@ fn wake_brief_requires_ask_user_when_a_worker_is_waiting() {
     };
     let brief = format_wake_brief(&snap);
     assert!(
+        brief.contains("CEO_WAITING"),
+        "waiting workers must be a plain CEO_WAITING section: {brief}"
+    );
+    assert!(
         brief.to_ascii_lowercase().contains("ask_user"),
         "waiting brief must require ask_user: {brief}"
     );
     assert!(
-        brief.contains("waiting task-wait"),
-        "brief must name the waiting worker: {brief}"
+        brief.contains("task-wait") && brief.contains("Need the vault password"),
+        "brief must name the waiting worker and question: {brief}"
+    );
+    assert!(
+        !brief.to_ascii_lowercase().contains("stay silent unless"),
+        "silence bias must not contradict a mandatory ask: {brief}"
+    );
+}
+
+#[test]
+fn wake_brief_lists_finished_goals_for_one_close_out() {
+    use maia_core::manager::WorkerBrief;
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        running_count: 0,
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-done".to_owned(),
+            title: "Write DONE43".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(2),
+            output_tail: "Wrote DONE43 to the workspace file.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    assert!(
+        brief.contains("FINISHED"),
+        "finished goals must be a plain FINISHED section: {brief}"
+    );
+    assert!(
+        brief.contains("task-done") && brief.contains("DONE43"),
+        "finished section must name the goal result: {brief}"
+    );
+    assert!(
+        brief.to_ascii_lowercase().contains("message_user"),
+        "finished brief must require message_user close-out: {brief}"
+    );
+}
+
+#[test]
+fn wake_brief_includes_recent_ceo_chat_so_model_can_skip_duplicates() {
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        waiting: vec![("task-wait".to_owned(), "Need RUN43_CEO_SECRET".to_owned())],
+        recent_ceo_lines: vec![
+            "assistant: Need the vault secret RUN43_CEO_SECRET to continue.".to_owned(),
+            "user: the secret is run43-ok".to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    assert!(
+        brief.contains("RECENT_CEO_CHAT"),
+        "brief must surface recent CEO chat for dedup: {brief}"
+    );
+    assert!(
+        brief.contains("RUN43_CEO_SECRET") && brief.contains("run43-ok"),
+        "brief must include the prior ask and reply: {brief}"
+    );
+}
+
+#[test]
+fn fingerprint_ignores_recent_ceo_chat() {
+    let base = WakeSnapshot {
+        waiting: vec![("task-wait".to_owned(), "Need the vault password".to_owned())],
+        ..WakeSnapshot::default()
+    };
+    let with_chat = WakeSnapshot {
+        recent_ceo_lines: vec!["assistant: already asked".to_owned()],
+        ..base.clone()
+    };
+    assert_eq!(
+        snapshot_fingerprint(&base),
+        snapshot_fingerprint(&with_chat),
+        "CEO chat context must not change wake fingerprint"
     );
 }
 
@@ -242,7 +433,7 @@ fn wake_brief_includes_per_worker_status_idle_output_and_error() {
         ..WakeSnapshot::default()
     };
     let brief = format_wake_brief(&snap);
-    assert!(brief.contains("Silent manager wake"));
+    assert!(brief.contains("Manager wake"));
     assert!(brief.contains("failed=task-1"));
     assert!(brief.contains("worker task-1"));
     assert!(brief.contains("status=failed"));

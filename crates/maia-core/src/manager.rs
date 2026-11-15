@@ -56,6 +56,8 @@ pub struct WakeSnapshot {
     pub completed_unopened: u32,
     /// Prompt-only detail per open worker. Ignored by fingerprint.
     pub workers: Vec<WorkerBrief>,
+    /// Recent selected-bot CEO chat lines for dedup. Ignored by fingerprint.
+    pub recent_ceo_lines: Vec<String>,
 }
 
 /// Whether a wake should spend a model call.
@@ -168,7 +170,8 @@ pub fn format_worker_brief(worker: &WorkerBrief) -> String {
 #[must_use]
 pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     let mut lines = vec![
-        "Silent manager wake. Review workers and act with manager route tools only. Never call bash, shell, write_file, read_file, success, failure, or waiting. Stay silent unless ask_user or message_user is truly needed.".to_owned(),
+        "Manager wake. Use manager route tools only. Never call bash, shell, write_file, read_file, success, failure, or waiting.".to_owned(),
+        "Default: stay silent. Mandatory exceptions below override silence.".to_owned(),
         format!("running={}", snap.running_count),
         format!("completed_unopened={}", snap.completed_unopened),
     ];
@@ -186,26 +189,61 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     }
     if !snap.waiting.is_empty() {
         lines.push(
-            "REQUIRED: call ask_user once with one clear CEO question for the waiting worker. Do not stay silent. Do not call bash. Do not paste worker wording; restate cleanly. Do not ask again if that question is already in chat."
+            "CEO_WAITING (mandatory): call ask_user once with one clear CEO question. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
                 .to_owned(),
         );
+        for (id, question) in &snap.waiting {
+            let q = truncate_brief(question, BRIEF_TAIL_CHARS);
+            lines.push(format!("- {id}: {q}"));
+        }
     }
-    if snap.completed_unopened > 0
-        && snap.failed_task_ids.is_empty()
-        && snap.stuck_task_ids.is_empty()
-        && snap.waiting.is_empty()
-        && snap.running_count == 0
-    {
+    let finished: Vec<&WorkerBrief> = snap
+        .workers
+        .iter()
+        .filter(|worker| worker.status == "completed")
+        .collect();
+    if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "REQUIRED: call message_user once with one short useful close-out for the finished goal. Do not dump worker logs. Do not call bash."
+            "FINISHED (close-out): goals whose work just finished. When nothing else needs attention, call message_user once with one short useful close-out. Do not dump worker logs. Skip if RECENT_CEO_CHAT already closed this out."
                 .to_owned(),
         );
+        if snap.completed_unopened > 0
+            && snap.failed_task_ids.is_empty()
+            && snap.stuck_task_ids.is_empty()
+            && snap.waiting.is_empty()
+            && snap.running_count == 0
+        {
+            lines.push(
+                "REQUIRED: call message_user once now for the finished goal."
+                    .to_owned(),
+            );
+        }
+        for worker in finished {
+            let title = truncate_brief(&worker.title, BRIEF_TITLE_CHARS);
+            let out = truncate_brief(&worker.output_tail, BRIEF_TAIL_CHARS);
+            if out.is_empty() {
+                lines.push(format!("- {}: title={title}", worker.task_id));
+            } else {
+                lines.push(format!("- {}: title={title} result={out}", worker.task_id));
+            }
+        }
     }
-    for (id, question) in &snap.waiting {
-        let q = truncate_brief(question, BRIEF_TAIL_CHARS);
-        lines.push(format!("waiting {id}: {q}"));
+    if !snap.recent_ceo_lines.is_empty() {
+        lines.push(
+            "RECENT_CEO_CHAT (durable signal — do not repeat an ask_user or close-out already here):"
+                .to_owned(),
+        );
+        for line in &snap.recent_ceo_lines {
+            let clipped = truncate_brief(line, BRIEF_TAIL_CHARS);
+            if !clipped.is_empty() {
+                lines.push(format!("- {clipped}"));
+            }
+        }
     }
     for worker in &snap.workers {
+        if worker.status == "completed" {
+            continue;
+        }
         lines.push(format_worker_brief(worker));
     }
     lines.join("\n")
@@ -389,6 +427,127 @@ pub fn enforce_restart_budget(
             other => other.clone(),
         })
         .collect()
+}
+
+/// What kind of CEO-facing line we are trying not to duplicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CeoCoverKind {
+    /// An ask_user decision question.
+    Ask,
+    /// A finished-goal close-out.
+    CloseOut,
+}
+
+/// True when recent CEO assistant chat already covers `text` for this kind of moment.
+#[must_use]
+pub fn recent_ceo_covers(snap: &WakeSnapshot, text: &str, kind: CeoCoverKind) -> bool {
+    let key = distinctive_token(text);
+    if key.is_empty() {
+        return false;
+    }
+    snap.recent_ceo_lines.iter().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        if !lower.starts_with("assistant:") || !lower.contains(key.as_str()) {
+            return false;
+        }
+        match kind {
+            // Status chatter that merely mentions the secret must not suppress a real ask.
+            CeoCoverKind::Ask => {
+                lower.contains('?')
+                    || lower.contains("need your decision")
+                    || lower.contains("what should")
+                    || lower.contains("provide")
+                    || lower.contains("password")
+            }
+            CeoCoverKind::CloseOut => {
+                let body = lower.strip_prefix("assistant:").unwrap_or(lower.as_str()).trim();
+                looks_like_close_out(body)
+            }
+        }
+    })
+}
+
+/// True when a message_user body is a finished-goal close-out (not status chatter).
+#[must_use]
+pub fn looks_like_close_out(text: &str) -> bool {
+    let trimmed = text.trim().to_ascii_lowercase();
+    // Require a clear done lead-in. Planning text like "I'll send a close-out" must not match.
+    trimmed.starts_with("done")
+        || trimmed.starts_with("finished —")
+        || trimmed.starts_with("finished -")
+        || trimmed.starts_with("all done")
+}
+
+/// Longest alphanumeric token of length >= 6, lowercased. Empty when none.
+#[must_use]
+pub fn distinctive_token(text: &str) -> String {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .map(|part| part.to_ascii_lowercase())
+        .filter(|part| part.chars().count() >= 6)
+        .max_by_key(|part| part.chars().count())
+        .unwrap_or_default()
+}
+
+/// Safety cap: waiting → one ask_user; finished-only → one close-out; skip if already in chat.
+#[must_use]
+pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<WakeAction> {
+    let mut out: Vec<WakeAction> = actions
+        .iter()
+        .filter(|action| !matches!(action, WakeAction::Silent))
+        .cloned()
+        .collect();
+    let asked = out
+        .iter()
+        .any(|action| matches!(action, WakeAction::AskUser { .. }));
+    let closed_out = out.iter().any(|action| match action {
+        WakeAction::MessageUser { text } => looks_like_close_out(text),
+        _ => false,
+    });
+
+    if !snap.waiting.is_empty() && !asked {
+        if let Some((task_id, question)) = snap.waiting.first() {
+            let question = truncate_brief(question, BRIEF_TAIL_CHARS);
+            if !question.is_empty()
+                && !recent_ceo_covers(snap, &question, CeoCoverKind::Ask)
+            {
+                out.push(WakeAction::AskUser {
+                    text: format!("Need your decision for {task_id}: {question}"),
+                });
+            }
+        }
+    }
+
+    let attention_clear = snap.failed_task_ids.is_empty()
+        && snap.stuck_task_ids.is_empty()
+        && snap.waiting.is_empty()
+        && snap.running_count == 0;
+    if snap.completed_unopened > 0 && attention_clear && !closed_out {
+        let finished = snap
+            .workers
+            .iter()
+            .find(|worker| worker.status == "completed");
+        let summary = finished
+            .map(|worker| {
+                let out = truncate_brief(&worker.output_tail, BRIEF_TAIL_CHARS);
+                if out.is_empty() {
+                    truncate_brief(&worker.title, BRIEF_TITLE_CHARS)
+                } else {
+                    out
+                }
+            })
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| "the goal".to_owned());
+        if !recent_ceo_covers(snap, &summary, CeoCoverKind::CloseOut) {
+            out.push(WakeAction::MessageUser {
+                text: format!("Done — {summary}"),
+            });
+        }
+    }
+
+    if out.is_empty() {
+        out.push(WakeAction::Silent);
+    }
+    out
 }
 
 #[cfg(test)]

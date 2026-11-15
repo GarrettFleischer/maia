@@ -4701,6 +4701,88 @@ fn manager_wake_asks_user_once_for_a_blocker() {
 }
 
 #[test]
+fn manager_wake_ask_user_binds_to_selected_bot_not_stale_turn_bot() {
+    let mut harness = Harness::open_model("mgr-wake-ask-selected", long_supply());
+    let other = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Create {
+            name: "wake-ask-bot".to_owned(),
+            instructions: String::new(),
+            now: NOW,
+        })
+        .expect("create bot")
+    {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("expected bot, got {other:?}"),
+    };
+    harness
+        .host()
+        .store()
+        .bots(BotRequest::Select {
+            bot_id: other.bot_id.clone(),
+        })
+        .expect("select other");
+    harness.host().set_next_bot(&other.bot_id);
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need RUN43_CEO_SECRET from the vault"}"#);
+    let outcome = wait(harness.host().handle_user_message("Read the vault secret")).expect("run");
+    let _task = outcome.task.expect("task");
+
+    // Stale turn_bot: talk on Maia, then re-select the waiting bot without a new owner turn.
+    harness
+        .host()
+        .store()
+        .bots(BotRequest::Select {
+            bot_id: "maia".to_owned(),
+        })
+        .expect("select maia");
+    harness.host().set_next_bot("maia");
+    harness.router.push_tool("success", &success_arguments("Noted."));
+    let _ = wait(harness.host().handle_user_message("hi")).expect("maia turn");
+    harness
+        .host()
+        .store()
+        .bots(BotRequest::Select {
+            bot_id: other.bot_id.clone(),
+        })
+        .expect("re-select other");
+
+    harness.router.push_tool(
+        "ask_user",
+        r#"{"message":"Need RUN43_CEO_SECRET to continue."}"#,
+    );
+    let (_fp, messaged) = harness.host().run_manager_wake("");
+    assert!(messaged, "wake must post ask_user");
+
+    let bound: Vec<(String, String)> = {
+        let conn = Connection::open(&harness.database).expect("db");
+        let mut stmt = conn
+            .prepare(
+                "SELECT b.bot_id, m.body FROM router_messages m \
+                 JOIN message_bots b ON b.message_id = m.message_id \
+                 WHERE m.body LIKE '%RUN43_CEO_SECRET%' \
+                 ORDER BY m.ordinal",
+            )
+            .expect("prep");
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .expect("query");
+        rows.map(|row| row.expect("row")).collect()
+    };
+    assert!(
+        bound.iter().any(|(bot, _)| bot == &other.bot_id),
+        "ask_user must bind to selected waiting bot, got {bound:?}"
+    );
+    assert!(
+        !bound.iter().any(|(bot, _)| bot == "maia"),
+        "ask_user must not bind to stale turn_bot maia: {bound:?}"
+    );
+}
+
+#[test]
 fn manager_wake_keeps_fingerprint_when_failed_without_retry() {
     let mut harness = Harness::open_model("mgr-wake-fail-keep-fp", long_supply());
     harness.router.push_tool("spawn_task", "{}");
@@ -4723,8 +4805,8 @@ fn manager_wake_keeps_fingerprint_when_failed_without_retry() {
 }
 
 #[test]
-fn manager_wake_keeps_fingerprint_when_waiting_without_ask_user() {
-    let mut harness = Harness::open_model("mgr-wake-wait-keep-fp", long_supply());
+fn manager_wake_forces_ask_user_when_waiting_even_if_model_messages() {
+    let mut harness = Harness::open_model("mgr-wake-wait-force-ask", long_supply());
     harness.router.push_tool("spawn_task", "{}");
     harness
         .router
@@ -4732,16 +4814,24 @@ fn manager_wake_keeps_fingerprint_when_waiting_without_ask_user() {
     let outcome = wait(harness.host().handle_user_message("Open the vault")).expect("run");
     let _task = outcome.task.expect("task");
     let previous = "keep-until-ask";
-    // Wrong tool: message_user is not ask_user while a worker is waiting.
+    // Wrong tool alone is not enough; safety cap still posts ask_user once.
     harness.router.push_tool(
         "message_user",
         r#"{"message":"Still working on the vault."}"#,
     );
     let (fp, messaged) = harness.host().run_manager_wake(previous);
     assert!(messaged);
-    assert_eq!(
+    let bodies = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert!(
+        bodies.iter().any(|body| body.contains("vault password")),
+        "safety cap must ask_user for waiting worker: {bodies:?}"
+    );
+    assert_ne!(
         fp, previous,
-        "wake must keep fingerprint until ask_user handles the waiting worker"
+        "after forced ask_user the fingerprint may advance"
     );
 }
 
