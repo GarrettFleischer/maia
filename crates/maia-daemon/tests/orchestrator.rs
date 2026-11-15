@@ -4961,6 +4961,54 @@ fn ceo_reply_remap_does_not_poison_waiting_worker_with_spawn_guidance() {
 }
 
 #[test]
+fn ceo_reply_frames_waiting_resume_so_worker_sees_finish_contract() {
+    // Cold resume used to hand the worker only raw CEO text, so the model often
+    // re-called waiting. The stored continue input must frame the answer.
+    let mut harness = Harness::open_model("ceo-reply-framed", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need RUN48_FINISH_SECRET from the CEO"}"#);
+    let outcome = wait(harness.host().handle_user_message("Park for the secret")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::WaitingForUser { .. })
+    ));
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Got the secret."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("Got the secret."));
+    let _ = wait(harness.host().handle_user_message("The secret is run48-ok")).expect("reply");
+    let snapshot = harness
+        .host()
+        .store()
+        .runtime_snapshot()
+        .expect("snapshot");
+    let row = snapshot
+        .tasks
+        .iter()
+        .find(|row| row.task_id == task.0)
+        .expect("task row");
+    let last = row
+        .inputs
+        .last()
+        .map(|input| String::from_utf8_lossy(&input.prompt).into_owned())
+        .expect("continue input");
+    assert!(
+        maia_core::manager::is_framed_ceo_waiting_answer(&last),
+        "waiting resume must frame the CEO answer: {last}"
+    );
+    assert!(
+        last.contains("run48-ok"),
+        "framed resume must keep the CEO answer: {last}"
+    );
+}
+
+#[test]
 fn worker_attention_phases_set_wake_nudge() {
     let mut harness = Harness::open_model("wake-nudge-complete", long_supply());
     assert!(

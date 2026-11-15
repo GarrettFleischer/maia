@@ -308,8 +308,8 @@ Maia task worker. You are the subagent for this one task.\n\
 The next message is the owner's request. The sealed owner text wins if anything disagrees.\n\
 Call success when the goal is done. message is the result the owner can read.\n\
 Call failure when the goal cannot be done. message is the reason.\n\
-Call waiting when you need a credential, secret, payment, CEO decision, or an outside event. message is one clear question. The task stays alive. Do not invent secrets or approvals.\n\
-When a later message answers your waiting question (secret, password, approval, or decision), call success or keep working with that answer. Do not call waiting again for the same question.\n\
+Call waiting when you need a credential, secret, payment, CEO decision, or an outside event you do not already have. message is one clear question. The task stays alive. Do not invent secrets or approvals.\n\
+When a later message answers your waiting question (secret, password, approval, or decision), or starts with \"CEO answered your waiting question\", use that answer immediately: call success if the goal is done, or keep working with tools. Do not call waiting again for the same question. Do not re-ask the CEO.\n\
 A plan or a cut-off sentence is not finished. Call a tool.\n\
 Do not invent results. To read or list a file or folder, call bash. On Windows the command is PowerShell and a path looks like F:\\Development.\n\
 Stay inside this task. Do not start another task.\n\
@@ -1326,7 +1326,7 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 Route tools do not finish an owner turn. After one of them, call success, failure, waiting, message_user, or ask_user.\n\
 - New work: always spawn_task first before any terminal. Do not answer a hire request with only message_user, waiting, ask_user, success, or failure — that leaves no worker. Do not refuse a path yourself; hire a worker. Do not try to run the work with bash or files yourself.\n\
 - Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text). When the CEO answers your ask_user about a waiting worker, continue_task with that task_id and their answer so the worker can finish — do not spawn a new worker for the same answer. When the CEO asks to hire new work while another worker is waiting or running, still spawn_task for the new work — do not treat a hire request as the answer to the waiter.\n\
-- After a waiting worker receives the CEO's answer, finish promptly (success) unless the goal still requires tools; do not re-wait for the same question and do not run long shell work that blocks other workers unless the goal needs it.\n\
+- After a waiting worker receives the CEO's answer, continue_task with their answer so the worker sees it framed as the answer; the worker must finish promptly (success) unless the goal still requires tools. Do not re-wait for the same question and do not run long shell work that blocks other workers unless the goal needs it.\n\
 - Follow-up after a finished task: link_task.\n\
 - Status: inspect_task for the same details as the wake brief.\n\
 - Stop for good: cancel_task.\n\
@@ -2186,7 +2186,7 @@ fn terminal_tools() -> Vec<serde_json::Value> {
         ),
         terminal_tool(
             "waiting",
-            "You are blocked on a credential, secret, CEO decision, or outside event. message is one clear question. The work stays alive. This ends the turn.",
+            "You are blocked on a credential, secret, CEO decision, or outside event you do not already have. message is one clear question. The work stays alive. This ends the turn. Do not call waiting again after the CEO has answered the same question.",
         ),
     ]
 }
@@ -2871,6 +2871,10 @@ pub struct Orchestrator<R> {
     /// Set when a parent enters failed / waiting / completed so the actor can
     /// run a manager wake without waiting for the full interval.
     wake_nudge: bool,
+    /// Owner restart-budget safety cap (Settings). Used only as the recover backstop.
+    restart_budget: u32,
+    /// When true, drop non-essential wake `message_user` chatter (keep ask + close-out).
+    mute_nonessential_wake_messages: bool,
 }
 
 /// One admitted tool plus the connection and hash that pin it.
@@ -3629,7 +3633,19 @@ impl<R: Router> Orchestrator<R> {
             live: None,
             recovery_notes: BTreeMap::new(),
             wake_nudge: false,
+            restart_budget: DEFAULT_AUTONOMOUS_RETRY_BUDGET,
+            mute_nonessential_wake_messages: false,
         }
+    }
+
+    /// Applies owner Settings for the restart-budget backstop and mute wake chatter.
+    pub fn configure_manager_wake_policy(
+        &mut self,
+        restart_budget: u32,
+        mute_nonessential_wake_messages: bool,
+    ) {
+        self.restart_budget = restart_budget.max(1);
+        self.mute_nonessential_wake_messages = mute_nonessential_wake_messages;
     }
 
     /// True when a parent just entered failed / waiting / completed (take clears it).
@@ -4101,12 +4117,12 @@ impl<R: Router> Orchestrator<R> {
             .collect::<Vec<_>>();
         let raw = interpret_wake_tools(&calls);
         let retries = self.restart_counts_for_snapshot(snap);
-        let gated = enforce_restart_budget(
-            &raw,
-            &retries,
-            DEFAULT_AUTONOMOUS_RETRY_BUDGET,
-        );
-        Some(enforce_ceo_moments(&gated, snap))
+        let gated = enforce_restart_budget(&raw, &retries, self.restart_budget);
+        let moments = enforce_ceo_moments(&gated, snap);
+        Some(maia_core::manager::filter_muted_wake_messages(
+            &moments,
+            self.mute_nonessential_wake_messages,
+        ))
     }
 
     fn restart_counts_for_snapshot(&self, snap: &WakeSnapshot) -> Vec<(String, u32)> {
@@ -6235,7 +6251,17 @@ impl<R: Router> Orchestrator<R> {
             Some(call) => ReplayGuard::Exact(call),
             None => ReplayGuard::Omit,
         };
-        self.continue_task(task, guard, Some(text.as_bytes()))?;
+        // Cold resume rebuilds a fresh worker transcript without the prior waiting
+        // exchange. Frame the CEO answer so the model finishes instead of re-asking.
+        let framed = if matches!(
+            self.phases.get(task),
+            Some(TaskPhase::WaitingForUser { .. })
+        ) {
+            maia_core::manager::frame_ceo_waiting_answer(text)
+        } else {
+            text.to_owned()
+        };
+        self.continue_task(task, guard, Some(framed.as_bytes()))?;
         Ok(())
     }
 

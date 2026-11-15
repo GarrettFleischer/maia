@@ -345,6 +345,82 @@ fn wake_recover_is_forced_to_ask_user_when_restart_budget_is_exhausted() {
 }
 
 #[test]
+fn frame_ceo_waiting_answer_marks_reply_as_finish_not_reask() {
+    use maia_core::manager::frame_ceo_waiting_answer;
+    use maia_core::manager::is_framed_ceo_waiting_answer;
+
+    let framed = frame_ceo_waiting_answer("password is hunter2");
+    assert!(
+        is_framed_ceo_waiting_answer(&framed),
+        "framed resume must be detectable: {framed}"
+    );
+    assert!(
+        framed.contains("password is hunter2"),
+        "CEO answer body must remain: {framed}"
+    );
+    assert!(
+        framed.to_ascii_lowercase().contains("do not call waiting again"),
+        "resume must tell the worker not to re-wait: {framed}"
+    );
+    assert!(
+        framed.to_ascii_lowercase().contains("finish")
+            || framed.to_ascii_lowercase().contains("success"),
+        "resume must push finish/success: {framed}"
+    );
+    // Idempotent: already-framed text is not wrapped again.
+    assert_eq!(frame_ceo_waiting_answer(&framed), framed);
+}
+
+#[test]
+fn mute_nonessential_wake_messages_keeps_ask_and_close_out() {
+    use maia_core::manager::filter_muted_wake_messages;
+
+    let actions = vec![
+        WakeAction::MessageUser {
+            text: "Still working on the deploy.".to_owned(),
+        },
+        WakeAction::MessageUser {
+            text: "Done — wrote the release notes.".to_owned(),
+        },
+        WakeAction::AskUser {
+            text: "Need the vault password.".to_owned(),
+        },
+        WakeAction::Recover {
+            task_id: "task-1".to_owned(),
+            note: "retry".to_owned(),
+        },
+    ];
+    let muted = filter_muted_wake_messages(&actions, true);
+    assert!(
+        !muted.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.contains("Still working")
+        )),
+        "status chatter must drop when mute is on: {muted:?}"
+    );
+    assert!(
+        muted.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.starts_with("Done")
+        )),
+        "close-out must survive mute: {muted:?}"
+    );
+    assert!(
+        muted
+            .iter()
+            .any(|action| matches!(action, WakeAction::AskUser { .. })),
+        "ask_user must survive mute: {muted:?}"
+    );
+    assert!(
+        muted
+            .iter()
+            .any(|action| matches!(action, WakeAction::Recover { .. })),
+        "recover must survive mute: {muted:?}"
+    );
+    assert_eq!(filter_muted_wake_messages(&actions, false), actions);
+}
+
+#[test]
 fn wake_interval_default_is_five_minutes() {
     assert_eq!(DEFAULT_WAKE_INTERVAL_SECS, 300);
 }

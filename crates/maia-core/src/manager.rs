@@ -499,6 +499,56 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
     actions
 }
 
+/// Lead-in stored on a waiting-worker continue so cold resume is not raw CEO chat.
+pub const CEO_WAITING_ANSWER_PREFIX: &str = "CEO answered your waiting question.";
+
+/// Frames a CEO reply so a resumed waiting worker finishes instead of re-asking.
+///
+/// Honest leaf: text in, framed text out. Idempotent when already framed.
+#[must_use]
+pub fn frame_ceo_waiting_answer(answer: &str) -> String {
+    let trimmed = answer.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if is_framed_ceo_waiting_answer(trimmed) {
+        return trimmed.to_owned();
+    }
+    format!(
+        "{CEO_WAITING_ANSWER_PREFIX} Use this answer now: finish with success if the goal is done, or keep working with tools. Do not call waiting again for the same question.\n\nAnswer:\n{trimmed}"
+    )
+}
+
+/// True when `text` is already a framed CEO waiting answer.
+#[must_use]
+pub fn is_framed_ceo_waiting_answer(text: &str) -> bool {
+    text.trim_start()
+        .starts_with(CEO_WAITING_ANSWER_PREFIX)
+}
+
+/// Drops optional wake status chatter when the owner muted non-essential messages.
+///
+/// Keeps `ask_user`, recover/cancel/spawn/learn, and finished-goal close-outs.
+#[must_use]
+pub fn filter_muted_wake_messages(actions: &[WakeAction], mute_nonessential: bool) -> Vec<WakeAction> {
+    if !mute_nonessential {
+        return actions.to_vec();
+    }
+    let muted: Vec<WakeAction> = actions
+        .iter()
+        .filter(|action| match action {
+            WakeAction::MessageUser { text } => looks_like_close_out(text),
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    if muted.is_empty() {
+        vec![WakeAction::Silent]
+    } else {
+        muted
+    }
+}
+
 /// Safety backstop: recoveries past the restart budget become one ask_user.
 #[must_use]
 pub fn enforce_restart_budget(

@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use maia_core::manager::DEFAULT_AUTONOMOUS_RETRY_BUDGET;
 use maia_core::manager::DEFAULT_WAKE_INTERVAL_SECS;
 use maia_core::manager::MAX_MODEL_CALLS_PER_WAKE;
 use serde_json::Value;
@@ -27,6 +28,10 @@ pub struct ManagerWakeState {
     pub cost_day: String,
     /// Cap on model calls per individual wake.
     pub max_model_calls_per_wake: u32,
+    /// Automatic recoveries per goal before the host forces ask_user.
+    pub restart_budget: u32,
+    /// When true, drop non-essential wake status chatter (keep ask + close-out).
+    pub mute_nonessential_wake_messages: bool,
     /// Short notes the manager recorded.
     pub learned: Vec<String>,
 }
@@ -40,6 +45,8 @@ impl Default for ManagerWakeState {
             model_calls_today: 0,
             cost_day: String::new(),
             max_model_calls_per_wake: MAX_MODEL_CALLS_PER_WAKE,
+            restart_budget: DEFAULT_AUTONOMOUS_RETRY_BUDGET,
+            mute_nonessential_wake_messages: false,
             learned: Vec::new(),
         }
     }
@@ -108,6 +115,16 @@ pub fn parse_wake_state(text: &str) -> ManagerWakeState {
             .and_then(|raw| u32::try_from(raw).ok())
             .unwrap_or(MAX_MODEL_CALLS_PER_WAKE)
             .max(1),
+        restart_budget: value
+            .get("restart_budget")
+            .and_then(Value::as_u64)
+            .and_then(|raw| u32::try_from(raw).ok())
+            .unwrap_or(DEFAULT_AUTONOMOUS_RETRY_BUDGET)
+            .clamp(1, 20),
+        mute_nonessential_wake_messages: value
+            .get("mute_nonessential_wake_messages")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         learned: value
             .get("learned")
             .and_then(Value::as_array)
@@ -131,6 +148,8 @@ pub fn wake_state_json(state: &ManagerWakeState) -> String {
         "model_calls_today": state.model_calls_today,
         "cost_day": state.cost_day,
         "max_model_calls_per_wake": state.max_model_calls_per_wake,
+        "restart_budget": state.restart_budget,
+        "mute_nonessential_wake_messages": state.mute_nonessential_wake_messages,
         "learned": state.learned,
     })
     .to_string()
@@ -166,9 +185,18 @@ mod tests {
             model_calls_today: 2,
             cost_day: "day-1".to_owned(),
             max_model_calls_per_wake: 1,
+            restart_budget: 5,
+            mute_nonessential_wake_messages: true,
             learned: vec!["tried bash twice".to_owned()],
         };
         let restored = parse_wake_state(&wake_state_json(&state));
         assert_eq!(restored, state);
+    }
+
+    #[test]
+    fn missing_owner_knobs_default_safely() {
+        let restored = parse_wake_state(r#"{"interval_secs":300}"#);
+        assert_eq!(restored.restart_budget, DEFAULT_AUTONOMOUS_RETRY_BUDGET);
+        assert!(!restored.mute_nonessential_wake_messages);
     }
 }

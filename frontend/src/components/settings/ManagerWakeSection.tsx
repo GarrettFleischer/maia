@@ -6,12 +6,16 @@ interface WakeView {
   interval_secs: number
   last_wake_at: number
   max_model_calls_per_wake: number
+  restart_budget: number
+  mute_nonessential_wake_messages: boolean
 }
 
 const DEFAULT_VIEW: WakeView = {
   interval_secs: 300,
   last_wake_at: 0,
   max_model_calls_per_wake: 1,
+  restart_budget: 3,
+  mute_nonessential_wake_messages: false,
 }
 
 export function ManagerWakeSection({
@@ -23,6 +27,8 @@ export function ManagerWakeSection({
 }) {
   const [view, setView] = useState<WakeView>(DEFAULT_VIEW)
   const [minutes, setMinutes] = useState('5')
+  const [budget, setBudget] = useState('3')
+  const [mute, setMute] = useState(false)
   const [status, setStatus] = useState(
     source === 'fixture'
       ? 'Preview only — wake schedule is not saved here.'
@@ -43,6 +49,8 @@ export function ManagerWakeSection({
       }
       setView(result.view)
       setMinutes(String(Math.max(1, Math.round(result.view.interval_secs / 60))))
+      setBudget(String(result.view.restart_budget))
+      setMute(result.view.mute_nonessential_wake_messages)
       setStatus('Maia checks on workers on this schedule. Most wakes stay silent.')
     })()
     return () => {
@@ -57,10 +65,17 @@ export function ManagerWakeSection({
       setStatus('Enter minutes as a whole number of at least 1.')
       return
     }
+    const parsedBudget = Number.parseInt(budget, 10)
+    if (!Number.isFinite(parsedBudget) || parsedBudget < 1) {
+      setStatus('Enter a restart budget of at least 1.')
+      return
+    }
     setBusy(true)
     const result = await saveWake(window.location.origin, {
       interval_secs: parsed * 60,
       max_model_calls_per_wake: view.max_model_calls_per_wake,
+      restart_budget: parsedBudget,
+      mute_nonessential_wake_messages: mute,
     })
     setBusy(false)
     if (!result.ok) {
@@ -69,7 +84,9 @@ export function ManagerWakeSection({
     }
     setView(result.view)
     setMinutes(String(Math.max(1, Math.round(result.view.interval_secs / 60))))
-    setStatus('Saved. The manager wake uses this interval.')
+    setBudget(String(result.view.restart_budget))
+    setMute(result.view.mute_nonessential_wake_messages)
+    setStatus('Saved. The manager wake uses these settings.')
   }
 
   return (
@@ -90,6 +107,32 @@ export function ManagerWakeSection({
           onChange={(event) => setMinutes(event.target.value)}
         />
       </label>
+      <label className="maia-field">
+        <span>Restart budget (per goal)</span>
+        <input
+          type="number"
+          min={1}
+          max={20}
+          value={budget}
+          disabled={!canEdit || busy}
+          onChange={(event) => setBudget(event.target.value)}
+        />
+      </label>
+      <p className="maia-field-help">
+        After this many automatic recoveries on one goal, Maia asks you what to do next.
+      </p>
+      <label className="maia-choice">
+        <input
+          type="checkbox"
+          checked={mute}
+          disabled={!canEdit || busy}
+          onChange={(event) => setMute(event.target.checked)}
+        />
+        <span>Mute non-essential wake messages</span>
+      </label>
+      <p className="maia-field-help">
+        Keeps decision questions and finished-goal close-outs; drops optional status chatter.
+      </p>
       {canEdit ? (
         <button type="button" disabled={busy} onClick={() => void save()}>
           Save wake schedule
@@ -115,6 +158,8 @@ async function loadWake(
         interval_secs: Number(body.interval_secs) || 300,
         last_wake_at: Number(body.last_wake_at) || 0,
         max_model_calls_per_wake: Number(body.max_model_calls_per_wake) || 1,
+        restart_budget: Number(body.restart_budget) || 3,
+        mute_nonessential_wake_messages: Boolean(body.mute_nonessential_wake_messages),
       },
     }
   } catch {
@@ -124,7 +169,12 @@ async function loadWake(
 
 async function saveWake(
   origin: string,
-  body: { interval_secs: number; max_model_calls_per_wake: number },
+  body: {
+    interval_secs: number
+    max_model_calls_per_wake: number
+    restart_budget: number
+    mute_nonessential_wake_messages: boolean
+  },
 ): Promise<{ ok: true; view: WakeView } | { ok: false; message: string }> {
   try {
     const response = await fetch(`${origin}/api/super-agent/manager-wake`, {
@@ -141,6 +191,11 @@ async function saveWake(
         last_wake_at: Number(saved.last_wake_at) || 0,
         max_model_calls_per_wake:
           Number(saved.max_model_calls_per_wake) || body.max_model_calls_per_wake,
+        restart_budget: Number(saved.restart_budget) || body.restart_budget,
+        mute_nonessential_wake_messages:
+          typeof saved.mute_nonessential_wake_messages === 'boolean'
+            ? saved.mute_nonessential_wake_messages
+            : body.mute_nonessential_wake_messages,
       },
     }
   } catch {

@@ -1462,6 +1462,8 @@ fn run_scheduled_wake<R: RouterPort>(
     let disk = crate::manager_wake::load_wake_state(wake_path);
     wake_state.interval_secs = disk.interval_secs;
     wake_state.max_model_calls_per_wake = disk.max_model_calls_per_wake;
+    wake_state.restart_budget = disk.restart_budget;
+    wake_state.mute_nonessential_wake_messages = disk.mute_nonessential_wake_messages;
     wake_state.last_wake_at = disk.last_wake_at;
     wake_state.last_fingerprint = disk.last_fingerprint;
     wake_state.learned = disk.learned;
@@ -1486,6 +1488,10 @@ fn run_scheduled_wake<R: RouterPort>(
     {
         actor.host.set_next_bot(&selected);
     }
+    actor.host.configure_manager_wake_policy(
+        wake_state.restart_budget,
+        wake_state.mute_nonessential_wake_messages,
+    );
     let previous = wake_state.last_fingerprint.clone();
     let learned = wake_state.learned.clone();
     let (fingerprint, _messaged, new_learned) =
@@ -3306,6 +3312,8 @@ async fn get_manager_wake(State(state): State<AppState>) -> Response {
         "interval_secs": wake.interval_secs,
         "last_wake_at": wake.last_wake_at,
         "max_model_calls_per_wake": wake.max_model_calls_per_wake,
+        "restart_budget": wake.restart_budget,
+        "mute_nonessential_wake_messages": wake.mute_nonessential_wake_messages,
     })))
 }
 
@@ -3326,11 +3334,26 @@ async fn put_manager_wake(State(state): State<AppState>, request: Request) -> Re
     {
         wake.max_model_calls_per_wake = cap.clamp(1, 8);
     }
+    if let Some(budget) = value
+        .get("restart_budget")
+        .and_then(Value::as_u64)
+        .and_then(|raw| u32::try_from(raw).ok())
+    {
+        wake.restart_budget = budget.clamp(1, 20);
+    }
+    if let Some(mute) = value
+        .get("mute_nonessential_wake_messages")
+        .and_then(Value::as_bool)
+    {
+        wake.mute_nonessential_wake_messages = mute;
+    }
     match crate::manager_wake::save_wake_state(&path, &wake) {
         Ok(()) => finish(Ok(serde_json::json!({
             "interval_secs": wake.interval_secs,
             "last_wake_at": wake.last_wake_at,
             "max_model_calls_per_wake": wake.max_model_calls_per_wake,
+            "restart_budget": wake.restart_budget,
+            "mute_nonessential_wake_messages": wake.mute_nonessential_wake_messages,
         }))),
         Err(_) => error_response(ApiError::Store),
     }
