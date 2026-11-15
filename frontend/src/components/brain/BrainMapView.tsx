@@ -471,6 +471,7 @@ function TagEditor({
   const [name, setName] = useState(tag.name)
   const [keepId, setKeepId] = useState('')
   const [open, setOpen] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
   const others = catalog.filter((item) => item.id !== tag.id)
   return (
     <div className={open ? 'maia-tag-edit is-open' : 'maia-tag-edit'}>
@@ -478,7 +479,10 @@ function TagEditor({
         type="button"
         className="maia-tag-edit-toggle"
         aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          setOpen((current) => !current)
+          setConfirmRemove(false)
+        }}
       >
         {`Edit ${tag.name}`}
       </button>
@@ -515,9 +519,28 @@ function TagEditor({
               </button>
             </form>
           ) : null}
-          <button type="button" className="maia-btn" onClick={() => onRemove(tag)}>
-            {`Remove ${tag.name}`}
-          </button>
+          {confirmRemove ? (
+            <div className="maia-tag-remove-confirm" role="group" aria-label={`Confirm remove ${tag.name}`}>
+              <p>{`Remove ${tag.name}? Facts keep their other tags.`}</p>
+              <button
+                type="button"
+                className="maia-btn"
+                onClick={() => {
+                  setConfirmRemove(false)
+                  onRemove(tag)
+                }}
+              >
+                {`Confirm remove ${tag.name}`}
+              </button>
+              <button type="button" className="maia-btn" onClick={() => setConfirmRemove(false)}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button type="button" className="maia-btn" onClick={() => setConfirmRemove(true)}>
+              {`Remove ${tag.name}`}
+            </button>
+          )}
         </>
       ) : null}
     </div>
