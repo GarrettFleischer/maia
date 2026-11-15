@@ -27,9 +27,10 @@ Workers never talk to the CEO. Their failures and questions park for the manager
 
 | Knob | Default | Purpose |
 |------|---------|---------|
-| `autonomous_retries` per goal | cap `3` | After this many automatic restarts, recover tools are forced to `ask_user` |
+| `autonomous_retries` per goal | cap `3` (Settings) | After this many automatic restarts, recover tools are forced to `ask_user` |
 | CEO moment safety cap | always | If the wake model skips a waiting `ask_user` or finished close-out, host posts that one message unless `RECENT_CEO_CHAT` already covers it; close-out-only wakes drop `spawn_task` so shared LEARNED notes cannot invent work on the selected bot |
 | `wake_interval_secs` | 300 | Heartbeat cadence (Settings) |
+| `mute_nonessential_wake_messages` | false (Settings) | Drop optional wake status chatter; keep ask_user and finished close-outs |
 | `max_model_calls_per_wake` | 1 | Cost cap when something changed |
 | Skip model when fingerprint unchanged | always | Do not burn money on idle wakes |
 
@@ -43,7 +44,7 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 - Unchanged fingerprint → silent, no model call.
 - Changed failed/stuck/waiting/completed work → one model tool turn; `message_user` / `ask_user` only when the model chooses.
 - When the model is called, the wake user message is a compact brief: counts; `LEARNED` notes from the wake sidecar; `ATTENTION` (ordered concurrent goals: failed → waiting → close-out, leave healthy runners alone); plain `CEO_WAITING` (question + mandatory `ask_user`); `FINISHED` goals with `outcome=` (mandatory `message_user` close-out that restates the outcome when failed/waiting/stuck are clear — healthy runners do not block close-out; one close-out marks one finished goal); `RECENT_CEO_CHAT` for dedup; plus per open worker status, idle age, recent output, and last error. Default is silence; mandatory sections override it. `inspect_task` returns the same worker shape. Fingerprint ignores brief detail, CEO chat lines, and learned notes. On a wake the model may emit several manager tools when ATTENTION lists multiple goals.
-- A CEO reply while exactly one worker is waiting remaps a mistaken `spawn_task` onto that worker **without** storing the spawn guidance (so hire text cannot push the worker to call `waiting` again). Explicit hire requests (`Hire …`) still spawn a new worker even when another is waiting.
+- A CEO reply while exactly one worker is waiting remaps a mistaken `spawn_task` onto that worker **without** storing the spawn guidance (so hire text cannot push the worker to call `waiting` again). The continue input is framed (`CEO answered your waiting question…`) so a cold worker resume finishes instead of re-asking. Explicit hire requests (`Hire …`) still spawn a new worker even when another is waiting.
 - LEARNED notes apply only to ATTENTION failures — never invent new goals from LEARNED alone. Close-out-only wakes drop `spawn_task`.
 - While the primary subagent host is busy with a long shell call, additional `bash` jobs may run on an ephemeral shell so healthy sleep does not stall other workers.
 - Wake `ask_user` / `message_user` bind to the **selected** bot (not a stale turn bot).
@@ -63,7 +64,7 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 ## Roadmap (prompt-first)
 
 1. ~~Richer wake brief (recent worker output/errors) as prompt context~~ (done).
-2. Settings for restart budget and mute wake messages.
+2. ~~Settings for restart budget and mute wake messages~~ (done — Manager wake Settings).
 3. ~~Learning notes in the wake sidecar fed back into the prompt~~ (done — `record_learning` + `LEARNED` brief).
 4. ~~Multi-goal attention scheduling via prompt + inspect tools~~ (done — `ATTENTION` brief + multi-tool wake).
 5. ~~Goal close-out digests via `message_user`~~ (done — wake `message_user`, raw success relay removed).
