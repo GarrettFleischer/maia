@@ -28,7 +28,7 @@ Workers never talk to the CEO. Their failures and questions park for the manager
 | Knob | Default | Purpose |
 |------|---------|---------|
 | `autonomous_retries` per goal | cap `3` | After this many automatic restarts, recover tools are forced to `ask_user` |
-| CEO moment safety cap | always | If the wake model skips a waiting `ask_user` or finished close-out, host posts that one message unless `RECENT_CEO_CHAT` already covers it |
+| CEO moment safety cap | always | If the wake model skips a waiting `ask_user` or finished close-out, host posts that one message unless `RECENT_CEO_CHAT` already covers it; close-out-only wakes drop `spawn_task` so shared LEARNED notes cannot invent work on the selected bot |
 | `wake_interval_secs` | 300 | Heartbeat cadence (Settings) |
 | `max_model_calls_per_wake` | 1 | Cost cap when something changed |
 | Skip model when fingerprint unchanged | always | Do not burn money on idle wakes |
@@ -43,7 +43,9 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 - Unchanged fingerprint → silent, no model call.
 - Changed failed/stuck/waiting/completed work → one model tool turn; `message_user` / `ask_user` only when the model chooses.
 - When the model is called, the wake user message is a compact brief: counts; `LEARNED` notes from the wake sidecar; `ATTENTION` (ordered concurrent goals: failed → waiting → close-out, leave healthy runners alone); plain `CEO_WAITING` (question + mandatory `ask_user`); `FINISHED` goals with `outcome=` (mandatory `message_user` close-out that restates the outcome when failed/waiting/stuck are clear — healthy runners do not block close-out; one close-out marks one finished goal); `RECENT_CEO_CHAT` for dedup; plus per open worker status, idle age, recent output, and last error. Default is silence; mandatory sections override it. `inspect_task` returns the same worker shape. Fingerprint ignores brief detail, CEO chat lines, and learned notes. On a wake the model may emit several manager tools when ATTENTION lists multiple goals.
-- A CEO reply while exactly one worker is waiting remaps a mistaken `spawn_task` onto that worker **without** storing the spawn guidance (so hire text cannot push the worker to call `waiting` again).
+- A CEO reply while exactly one worker is waiting remaps a mistaken `spawn_task` onto that worker **without** storing the spawn guidance (so hire text cannot push the worker to call `waiting` again). Explicit hire requests (`Hire …`) still spawn a new worker even when another is waiting.
+- LEARNED notes apply only to ATTENTION failures — never invent new goals from LEARNED alone. Close-out-only wakes drop `spawn_task`.
+- While the primary subagent host is busy with a long shell call, additional `bash` jobs may run on an ephemeral shell so healthy sleep does not stall other workers.
 - Wake `ask_user` / `message_user` bind to the **selected** bot (not a stale turn bot).
 - Wake system prompt lists open task ids as usable candidates (the contract forbids inventing ids).
 - A worker that stops answering is marked `Failed` with summary `Worker stopped answering.` (plus a short router reason when known) so wakes can see it (not left as orphaned `Running`).
@@ -69,4 +71,5 @@ No failure classifiers, fixed recovery strategies, or state-machine “retry vs 
 7. ~~CEO ask_user + finished close-out dependable on wake~~ (done — plain brief sections + CEO-moment safety cap + selected-bot bind).
 8. ~~Concurrent-worker reliability~~ (done — wakes while busy; close-out not blocked by healthy runners; prompt for hire/cancel-by-idle).
 9. ~~Richer completed-worker summary + finish reliability~~ (done — `outcome=` FINISHED lines; one close-out per finished goal; wake nudge on fail/wait/complete; no spawn-guidance poison on sole-waiting remap).
-10. **General refinement** — settings knobs; real bugs / reliability; autonomy polish.
+10. ~~Hire-under-load remap + LEARNED cross-bot spawn + shell contention~~ (done — hire requests not remapped onto waiters; close-out-only wakes drop spawn; ephemeral parallel bash).
+11. **General refinement** — settings knobs; real bugs / reliability; autonomy polish.
