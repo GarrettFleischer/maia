@@ -1007,11 +1007,12 @@ fn provenance(
 }
 
 fn transcript(connection: &Connection, bot_id: &str) -> Result<Vec<BotTranscriptRow>, StoreError> {
+    // Require an explicit message_bots bind. Unbound rows must not default into Maia's chat.
     let mut statement = connection.prepare(
         "SELECT m.message_id, m.role, m.body \
          FROM router_messages m \
-         LEFT JOIN message_bots b ON b.message_id = m.message_id \
-         WHERE COALESCE(b.bot_id, 'maia') = ?1 \
+         INNER JOIN message_bots b ON b.message_id = m.message_id \
+         WHERE b.bot_id = ?1 \
          ORDER BY m.ordinal, m.message_id",
     )?;
     let mapped = statement.query_map(params![bot_id], |row| {

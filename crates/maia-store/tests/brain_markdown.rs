@@ -1,4 +1,4 @@
-//! Markdown round trip, keyword recall, and model-free links on temp databases.
+﻿//! Markdown round trip, keyword recall, and model-free links on temp databases.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -167,7 +167,7 @@ fn consolidate(owner: &SqliteOwner, sentence: &str) {
 
 #[test]
 fn schema_version_is_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 19);
+    assert_eq!(LATEST_SCHEMA_VERSION, 20);
 }
 
 #[test]

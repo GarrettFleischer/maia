@@ -30,9 +30,10 @@ use crate::sql::MIGRATION_V16;
 use crate::sql::MIGRATION_V17;
 use crate::sql::MIGRATION_V18;
 use crate::sql::MIGRATION_V19;
+use crate::sql::MIGRATION_V20;
 
 /// Highest `user_version` this binary can open.
-pub const LATEST_SCHEMA_VERSION: i64 = 19;
+pub const LATEST_SCHEMA_VERSION: i64 = 20;
 
 /// How long a second opener waits for the migration writer. This is SQLite's
 /// lock wait, not a process-global path mutex.
@@ -161,6 +162,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 19,
         name: "session_summaries",
         statements: MIGRATION_V19,
+    },
+    Migration {
+        version: 20,
+        name: "bind_unbound_messages_to_maia",
+        statements: MIGRATION_V20,
     },
 ];
 

@@ -220,6 +220,19 @@ pub(crate) const MIGRATION_V19: &[&str] = &[
      )",
 ];
 
+/// Migration 20 binds legacy unbound router messages to Maia.
+///
+/// Transcripts no longer COALESCE unbound rows to Maia. Bind the historical
+/// rows once so Maia's conversation stays visible; new unbound rows stay out.
+pub(crate) const MIGRATION_V20: &[&str] = &[
+    "INSERT INTO message_bots (message_id, bot_id) \
+     SELECT m.message_id, 'maia' \
+     FROM router_messages m \
+     WHERE NOT EXISTS ( \
+       SELECT 1 FROM message_bots b WHERE b.message_id = m.message_id \
+     )",
+];
+
 /// Migration 17 drops tasks whose owner-message source was already deleted.
 ///
 /// A deleted bot used to remove chat rows while leaving the task. Restore then

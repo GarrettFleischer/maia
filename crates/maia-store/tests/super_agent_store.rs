@@ -1,4 +1,4 @@
-//! Super Agent migration v3 and store round-trip contracts.
+﻿//! Super Agent migration v3 and store round-trip contracts.
 
 use std::fs;
 use std::path::PathBuf;
@@ -865,10 +865,10 @@ fn closed_detail_high_water_survives_restart() {
 
 #[test]
 fn fresh_open_is_schema_version_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 19);
+    assert_eq!(LATEST_SCHEMA_VERSION, 20);
     let db = TestDb::open("version", 1);
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 19);
+    assert_eq!(settings.user_version, 20);
     let rows = must(db.owner().migrations());
     assert_eq!(rows.len(), 19);
     assert_eq!(rows.last().map(|row| row.version), Some(19));
@@ -2382,5 +2382,35 @@ fn deleting_a_bot_archives_finished_tasks_and_purges_running_ones() {
             .iter()
             .all(|task| task.task_id != "task-live"),
         "purged running tasks must stay gone after reopen"
+    );
+}
+
+#[test]
+fn unbound_router_messages_do_not_appear_in_maia_transcript() {
+    let db = TestDb::open("unbound-not-maia", 10);
+    must(db.owner().insert_router_message(RouterMessageWrite {
+        message_id: "m-bound".to_owned(),
+        role: "assistant".to_owned(),
+        body: "bound to maia".to_owned(),
+        created_at: 11,
+    }));
+    must(db.owner().bots(BotRequest::BindMessage {
+        message_id: "m-bound".to_owned(),
+        bot_id: "maia".to_owned(),
+        preview: "bound to maia".to_owned(),
+        now: 11,
+        from_owner: false,
+    }));
+    must(db.owner().insert_router_message(RouterMessageWrite {
+        message_id: "m-orphan".to_owned(),
+        role: "assistant".to_owned(),
+        body: "turn could not finish orphan".to_owned(),
+        created_at: 12,
+    }));
+    let lines = transcript_bodies(&db, "maia");
+    assert_eq!(lines, vec!["bound to maia".to_owned()]);
+    assert!(
+        !lines.iter().any(|body| body.contains("orphan")),
+        "unbound router rows must not default into Maia's chat: {lines:?}"
     );
 }
