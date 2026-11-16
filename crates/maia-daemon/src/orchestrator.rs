@@ -1321,7 +1321,7 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory. Owner turns only.\n\
 - failure: message is why this cannot be handled. Owner turns only.\n\
 - waiting: message is one specific question while work stays alive. Prefer ask_user for CEO decisions. Owner turns only. Never use waiting instead of hiring a worker the CEO asked you to hire.\n\
-- message_user: post one useful update only when the CEO genuinely needs to know. When the wake brief shows FINISHED goals and nothing else needs attention, you MUST send exactly one short useful close-out with message_user that restates the FINISHED outcome= (do not rely on raw worker success text). If RECENT_CEO_CHAT already has that close-out, stay silent. Never dump worker logs into chat.\n\
+- message_user: post one useful update only when the CEO genuinely needs to know. When the wake brief shows FINISHED goals (goal_state=needs_close_out) and nothing else needs attention, you MUST send exactly one short Done close-out with message_user — start with Done —, restate the FINISHED outcome= and where it landed, then stay silent on later wakes. Prior status chatter (hired / working / will notify) does not count as close-out. If RECENT_CEO_CHAT already has that Done close-out, stay silent. Never dump worker logs into chat.\n\
 - ask_user: one clear CEO decision (credentials, money, irreversible or external action, real preference). When the wake brief shows CEO_WAITING, you MUST ask_user once (not silence, not message_user). If RECENT_CEO_CHAT already asked, do not ask again — continue_task with the CEO's answer instead. Never paste worker output.\n\
 Route tools do not finish an owner turn. After one of them, call success, failure, waiting, message_user, or ask_user.\n\
 - New work: always spawn_task first before any terminal. Do not answer a hire request with only message_user, waiting, ask_user, success, or failure — that leaves no worker. Do not refuse a path yourself; hire a worker. Do not try to run the work with bash or files yourself.\n\
@@ -2094,7 +2094,7 @@ fn route_tools_json() -> String {
         ),
         terminal_tool(
             "message_user",
-            "Post one useful update to the owner chat. Default silent. When the wake brief shows FINISHED and REQUIRED close-out, you MUST send one short useful close-out that restates the FINISHED outcome=. One close-out per finished goal. Skip if RECENT_CEO_CHAT already closed it out. Never dump raw worker logs.",
+            "Post one useful update to the owner chat. Default silent. When the wake brief shows FINISHED goal_state=needs_close_out, you MUST send one short close-out that starts with Done — and restates the FINISHED outcome= (what was delivered and where). One close-out per finished goal; then stay silent. Status chatter does not close a goal. Skip if RECENT_CEO_CHAT already has that Done close-out. Never dump raw worker logs.",
         ),
         terminal_tool(
             "ask_user",
@@ -3661,6 +3661,11 @@ impl<R: Router> Orchestrator<R> {
         std::mem::take(&mut self.wake_nudge)
     }
 
+    /// Empties unused router message ids so a later `note_router` fails (test harnesses).
+    pub fn drain_router_message_ids(&mut self) {
+        self.ids.messages.clear();
+    }
+
     fn request_wake_nudge(&mut self) {
         self.wake_nudge = true;
     }
@@ -4077,6 +4082,8 @@ impl<R: Router> Orchestrator<R> {
             !snap.failed_task_ids.is_empty() || !snap.stuck_task_ids.is_empty();
         // Keep the fingerprint until attention is actually handled. message_user alone
         // does not clear failed/waiting work. Status chatter does not count as close-out.
+        // A close-out that was intended but never posted must not advance either — otherwise
+        // the next wake SkipModel-forever and the CEO never gets Done.
         if failed_or_stuck && !recovered_or_cancelled && !asked {
             return (previous_fingerprint.to_owned(), messaged, new_learned);
         }
@@ -4086,7 +4093,7 @@ impl<R: Router> Orchestrator<R> {
         if snap.completed_unopened > 0
             && !failed_or_stuck
             && snap.waiting.is_empty()
-            && !closed_out
+            && !(closed_out && messaged)
         {
             return (previous_fingerprint.to_owned(), messaged, new_learned);
         }

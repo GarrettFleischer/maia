@@ -5149,6 +5149,42 @@ fn manager_wake_close_out_uses_message_user_not_raw_success_relay() {
 }
 
 #[test]
+fn manager_wake_keeps_fingerprint_when_close_out_message_fails_to_post() {
+    // Run50 flake path: wake intends a Done close-out but note_router fails (e.g. id
+    // exhaustion). Advancing the fingerprint then SkipModel-forever hides the unfinished
+    // goal. Keep the previous fingerprint until a close-out is actually posted.
+    let mut harness = Harness::open_model("mgr-wake-closeout-post-fail", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote CLOSE51 to the workspace file."));
+    let outcome = wait(harness.host().handle_user_message("Write CLOSE51 to a file")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+    let previous = "r=0;c=0;f=;s=;w=";
+    // Leave request ids for the wake model call, but no message ids for note_router.
+    harness.host().drain_router_message_ids();
+    harness.router.push_raw("{}".to_owned());
+    let (fp, messaged, _) = harness.host().run_manager_wake(previous, &[]);
+    assert!(
+        !messaged,
+        "close-out must not claim success when note_router cannot post"
+    );
+    assert_eq!(
+        fp, previous,
+        "failed close-out post must not advance fingerprint (was {fp})"
+    );
+    let snap = harness.host().wake_snapshot();
+    assert!(
+        snap.completed_unopened >= 1,
+        "finished goal must stay unopened for the next wake: {snap:?}"
+    );
+}
+
+#[test]
 fn manager_restart_budget_forces_ask_user() {
     let gated = maia_core::manager::enforce_restart_budget(
         &[maia_core::manager::WakeAction::Recover {
