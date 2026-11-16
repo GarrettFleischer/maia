@@ -402,7 +402,7 @@ describe('RouterConversation', () => {
     expect(send).not.toHaveTextContent('Send')
   })
 
-  it('keeps the full transcript and steps Find matches with Next', async () => {
+  it('keeps Find collapsed until opened, then steps matches with Next', async () => {
     const user = userEvent.setup()
     render(
       <ReviewedRouterConversation
@@ -425,6 +425,10 @@ describe('RouterConversation', () => {
       />,
     )
 
+    expect(screen.queryByRole('searchbox', { name: 'Find in chat' })).toBeNull()
+    const openFind = screen.getByRole('button', { name: 'Find in chat' })
+    expect(openFind).toHaveClass('maia-icon-btn')
+    await user.click(openFind)
     await user.type(screen.getByRole('searchbox', { name: 'Find in chat' }), 'canby')
     const list = screen.getByRole('list', { name: 'Transcript messages' })
     expect(within(list).getByText('Weather in Canby')).toBeVisible()
@@ -461,6 +465,7 @@ describe('RouterConversation', () => {
         onSubmit={vi.fn()}
       />,
     )
+    await user.click(screen.getByRole('button', { name: 'Find in chat' }))
     await user.type(screen.getByRole('searchbox', { name: 'Find in chat' }), 'canby')
     expect(screen.getByRole('searchbox', { name: 'Find in chat' })).toHaveValue('canby')
     view.rerender(
@@ -480,7 +485,8 @@ describe('RouterConversation', () => {
         onSubmit={vi.fn()}
       />,
     )
-    expect(screen.getByRole('searchbox', { name: 'Find in chat' })).toHaveValue('')
+    expect(screen.queryByRole('searchbox', { name: 'Find in chat' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Find in chat' })).toBeVisible()
   })
 
   it('keeps an ordinary admitted route out of the message', () => {

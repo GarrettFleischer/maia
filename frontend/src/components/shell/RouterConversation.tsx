@@ -95,6 +95,7 @@ export function RouterConversation({
   const [rejection, setRejection] = useState<string | null>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [composerKey, setComposerKey] = useState(0)
+  const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
   const [findActive, setFindActive] = useState(0)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -184,6 +185,7 @@ export function RouterConversation({
     setEngaged(false)
     gapOnArrival.current = null
     setPendingFiles([])
+    setFindOpen(false)
     setFindQuery('')
     setFindActive(0)
     setRejection(null)
@@ -294,66 +296,82 @@ export function RouterConversation({
           </span>
         ) : null}
       </div>
-      <div className="maia-transcript-find">
-        <input
-          type="search"
-          aria-label="Find in chat"
-          placeholder="Find in chat"
-          value={findQuery}
-          onChange={(event) => {
-            setFindQuery(event.target.value)
-            setFindActive(0)
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              setFindQuery('')
-              setFindActive(0)
-              return
-            }
-            if (event.key === 'Enter' && matchIds.length > 0) {
-              event.preventDefault()
-              setFindActive((current) =>
-                stepFindIndex(
-                  current,
-                  matchIds.length,
-                  event.shiftKey ? 'prev' : 'next',
-                ),
-              )
-            }
-          }}
-        />
-        {findStatus ? (
-          <p role="status" className="maia-transcript-find-status">
-            {findStatus}
-          </p>
-        ) : null}
-        {matchIds.length > 0 ? (
-          <div className="maia-transcript-find-nav">
-            <button
-              type="button"
-              className="maia-icon-btn"
-              aria-label="Previous find match"
-              title="Previous find match"
-              onClick={() =>
-                setFindActive((current) => stepFindIndex(current, matchIds.length, 'prev'))
-              }
-            >
-              <span className="maia-find-prev-icon" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="maia-icon-btn"
-              aria-label="Next find match"
-              title="Next find match"
-              onClick={() =>
-                setFindActive((current) => stepFindIndex(current, matchIds.length, 'next'))
-              }
-            >
-              <span className="maia-find-next-icon" aria-hidden="true" />
-            </button>
-          </div>
-        ) : null}
+      <div className={findOpen ? 'maia-transcript-find maia-transcript-find--open' : 'maia-transcript-find'}>
+        {findOpen ? (
+          <>
+            <input
+              type="search"
+              aria-label="Find in chat"
+              placeholder="Find in chat"
+              value={findQuery}
+              autoFocus
+              onChange={(event) => {
+                setFindQuery(event.target.value)
+                setFindActive(0)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  setFindOpen(false)
+                  setFindQuery('')
+                  setFindActive(0)
+                  return
+                }
+                if (event.key === 'Enter' && matchIds.length > 0) {
+                  event.preventDefault()
+                  setFindActive((current) =>
+                    stepFindIndex(
+                      current,
+                      matchIds.length,
+                      event.shiftKey ? 'prev' : 'next',
+                    ),
+                  )
+                }
+              }}
+            />
+            {findStatus ? (
+              <p role="status" className="maia-transcript-find-status">
+                {findStatus}
+              </p>
+            ) : null}
+            {matchIds.length > 0 ? (
+              <div className="maia-transcript-find-nav">
+                <button
+                  type="button"
+                  className="maia-icon-btn"
+                  aria-label="Previous find match"
+                  title="Previous find match"
+                  onClick={() =>
+                    setFindActive((current) => stepFindIndex(current, matchIds.length, 'prev'))
+                  }
+                >
+                  <span className="maia-find-prev-icon" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="maia-icon-btn"
+                  aria-label="Next find match"
+                  title="Next find match"
+                  onClick={() =>
+                    setFindActive((current) => stepFindIndex(current, matchIds.length, 'next'))
+                  }
+                >
+                  <span className="maia-find-next-icon" aria-hidden="true" />
+                </button>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <button
+            type="button"
+            className="maia-icon-btn"
+            aria-label="Find in chat"
+            title="Find in chat"
+            onClick={() => setFindOpen(true)}
+          >
+            <span className="maia-find-icon" aria-hidden="true" />
+          </button>
+        )}
       </div>
       <div
         ref={transcriptRef}

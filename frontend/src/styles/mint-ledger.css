@@ -593,7 +593,7 @@ textarea {
 .maia-transcript {
   flex: 1;
   overflow: auto;
-  padding: 24px;
+  padding: 16px 20px;
 }
 
 .maia-transcript-list {
@@ -672,7 +672,7 @@ textarea {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 
 .maia-speaker {
@@ -687,9 +687,10 @@ textarea {
 }
 
 .maia-run {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
 .maia-run--you {
@@ -819,7 +820,9 @@ textarea {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 32px;
+  min-height: 20px;
+  padding-right: 72px;
+  box-sizing: border-box;
 }
 
 .maia-run-head .maia-speaker {
@@ -828,12 +831,16 @@ textarea {
 }
 
 .maia-message-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
   flex: none;
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .maia-message-actions .maia-btn {
@@ -870,8 +877,37 @@ textarea {
 .maia-transcript-find {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
-  padding: 0 0 8px;
+  padding: 4px 20px 0;
+}
+
+.maia-transcript-find--open {
+  justify-content: flex-start;
+  padding: 0 20px 8px;
+}
+
+.maia-find-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  position: relative;
+}
+
+.maia-find-icon::after {
+  content: '';
+  position: absolute;
+  width: 6px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 1px;
+  right: -4px;
+  bottom: -1px;
+  transform: rotate(45deg);
+  transform-origin: left center;
 }
 
 .maia-transcript-find input[type='search'] {
@@ -1468,6 +1504,28 @@ textarea {
   .maia-composer {
     padding-left: calc(12px + env(safe-area-inset-left, 0px));
     padding-right: calc(12px + env(safe-area-inset-right, 0px));
+  }
+  .maia-composer-hint {
+    display: none;
+  }
+  .maia-transcript {
+    padding: 12px;
+  }
+  .maia-transcript-list {
+    gap: 12px;
+  }
+  .maia-transcript-find {
+    padding: 2px 12px 0;
+  }
+  .maia-transcript-find--open {
+    padding: 0 12px 6px;
+  }
+  .maia-run-head {
+    min-height: 0;
+    padding-right: 68px;
+  }
+  .maia-run--you .maia-speaker {
+    font-size: 12px;
   }
   .maia-dialog {
     padding-top: max(16px, env(safe-area-inset-top, 0px));
