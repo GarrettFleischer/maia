@@ -6563,14 +6563,14 @@ impl<R: Router> Orchestrator<R> {
         })
     }
 
-    /// When exactly one selected-bot worker is waiting on the CEO, hand the reply to it.
+    /// When exactly one worker on this turn's bot is waiting on the CEO, hand the reply to it.
+    ///
+    /// Uses `turn_bot` (the message's Super Agent), not UI `Selected` — selection must not
+    /// steal CEO answers from a waiting throwaway while Maia is highlighted.
     fn sole_waiting_task(&self) -> Option<TaskId> {
-        let selected = match self.store.bots(maia_store::BotRequest::Selected) {
-            Ok(maia_store::BotResponse::Text(bot)) => bot,
-            _ => self.turn_bot.clone(),
-        };
+        let bot = self.turn_bot.clone();
         let mut waiting = self.phases.iter().filter_map(|(task, phase)| {
-            if self.task_bot(task) != selected {
+            if self.task_bot(task) != bot {
                 return None;
             }
             match phase {

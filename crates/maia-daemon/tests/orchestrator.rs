@@ -4996,6 +4996,71 @@ fn ceo_reply_continues_sole_waiting_worker() {
 }
 
 #[test]
+fn ceo_reply_continues_sole_waiting_on_turn_bot_not_ui_selection() {
+    let mut harness = Harness::open_model("ceo-reply-turn-bot", long_supply());
+    let other = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Create {
+            name: "ceo-reply-bot".to_owned(),
+            instructions: String::new(),
+            now: NOW,
+        })
+        .expect("create bot")
+    {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("expected bot, got {other:?}"),
+    };
+    harness
+        .host()
+        .store()
+        .bots(BotRequest::Select {
+            bot_id: other.bot_id.clone(),
+        })
+        .expect("select other");
+    harness.host().set_next_bot(&other.bot_id);
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need RUN63_TURN_SECRET to continue"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fetch the turn secret")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::WaitingForUser { .. })
+    ));
+
+    // UI selection stolen to Maia; CEO answer still targets the waiting bot via turn_bot.
+    harness
+        .host()
+        .store()
+        .bots(BotRequest::Select {
+            bot_id: "maia".to_owned(),
+        })
+        .expect("select maia");
+    harness.host().set_next_bot(&other.bot_id);
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Got RUN63_TURN_SECRET."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("Got RUN63_TURN_SECRET."));
+    let continued =
+        wait(harness.host().handle_user_message("RUN63_TURN_SECRET is turn-ok")).expect("reply");
+    assert_eq!(
+        continued.task.as_ref().map(|id| id.0.as_str()),
+        Some(task.0.as_str()),
+        "CEO reply must resume waiting worker on turn_bot even when Selected is Maia"
+    );
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Completed { .. })),
+        "waiting worker should finish; phase {:?}",
+        harness.host().phase(&task)
+    );
+}
+
+#[test]
 fn hire_request_while_sole_waiting_still_spawns_new_worker() {
     // Under load the CEO often hires the next goal while another worker is waiting.
     // Remapping every spawn_task onto the waiter leaves no new task (hire miss).
