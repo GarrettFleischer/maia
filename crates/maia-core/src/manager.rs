@@ -252,7 +252,7 @@ pub fn attention_lines(snap: &WakeSnapshot) -> Vec<String> {
     }
     if snap.completed_unopened > 0 {
         lines.push(
-            "close-out finished goals with message_user when other attention is clear".to_owned(),
+            "close-out finished goals with message_user immediately (do not wait for healthy runners)".to_owned(),
         );
     }
     for worker in &snap.workers {
@@ -321,12 +321,12 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         } else if snap.waiting.iter().any(|(_, q)| recent_ceo_covers(snap, q, CeoCoverKind::Ask))
         {
             lines.push(
-                "CEO_WAITING (CEO answered): RECENT_CEO_CHAT has the owner's answer. continue_task with that task_id and their answer so the worker can finish. Do not ask_user again."
+                "CEO_WAITING (CEO answered): RECENT_CEO_CHAT has the owner's answer. continue_task immediately this wake with that task_id and their answer so the worker can finish. Do not wait for a later wake. Do not ask_user again."
                     .to_owned(),
             );
         } else {
             lines.push(
-                "CEO_WAITING (mandatory): call ask_user once with one clear CEO question. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
+                "CEO_WAITING (mandatory): call ask_user immediately this wake with one clear CEO question. Do not defer. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
                     .to_owned(),
             );
         }
@@ -342,7 +342,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If a check fails, spawn_task with a corrected brief — do not continue_task or retry_task on a completed worker, do not ask_user, and do not Done yet. When verification passes, send one Done message_user that starts with Done — and restates each outcome=. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
+            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If a check fails, spawn_task with a corrected brief — do not continue_task or retry_task on a completed worker, do not ask_user, and do not Done yet. When verification passes, send one Done message_user immediately this wake that starts with Done — and restates each outcome=. Do not defer close-out. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -352,7 +352,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             && snap.waiting.is_empty()
         {
             lines.push(
-                "REQUIRED: verify the finished goal; if the check fails spawn_task once (do not continue_task on completed); otherwise message_user once (Done — …)."
+                "REQUIRED: verify the finished goal; if the check fails spawn_task once (do not continue_task on completed); otherwise message_user immediately (Done — …)."
                     .to_owned(),
             );
         }

@@ -359,6 +359,10 @@ fn wake_brief_after_ceo_answer_points_at_continue_not_silence() {
         "after the CEO answers, brief must push continue_task: {brief}"
     );
     assert!(
+        lower.contains("immediately"),
+        "after the CEO answers, brief must urge continue_task immediately: {brief}"
+    );
+    assert!(
         !lower.contains("ceo_waiting (already asked)"),
         "answered asks must not tell the model to stay silent: {brief}"
     );
@@ -373,6 +377,29 @@ fn wake_brief_after_ceo_answer_points_at_continue_not_silence() {
             .iter()
             .any(|action| matches!(action, WakeAction::AskUser { .. })),
         "even after an answer, do not re-ask the covered secret: {dropped:?}"
+    );
+}
+
+#[test]
+fn wake_brief_mandatory_ask_urges_immediate_ask_user() {
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        waiting: vec![(
+            "task-wait".to_owned(),
+            "Need RUN64_CEO_SECRET from the vault".to_owned(),
+        )],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    let lower = brief.to_ascii_lowercase();
+    assert!(
+        lower.contains("ceo_waiting (mandatory)"),
+        "brief must mandate ask_user: {brief}"
+    );
+    assert!(
+        lower.contains("immediately"),
+        "mandatory ask must say ask_user immediately this wake: {brief}"
     );
 }
 

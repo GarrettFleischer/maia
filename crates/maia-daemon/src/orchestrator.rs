@@ -308,7 +308,7 @@ Maia task worker. You are the subagent for this one task.\n\
 The next message is the owner's request. The sealed owner text wins if anything disagrees.\n\
 Call success when the goal is done. message is the result the owner can read.\n\
 Call failure when the goal cannot be done. message is the reason.\n\
-Call waiting when you need a credential, secret, payment, CEO decision, or an outside event you do not already have. message is one clear question. The task stays alive. Do not invent secrets or approvals.\n\
+Call waiting as soon as you know you need a credential, secret, payment, CEO decision, or an outside event you do not already have — do not keep retrying tools or inventing values first. message is one clear question. The task stays alive. Do not invent secrets or approvals.\n\
 When a later message answers your waiting question (secret, password, approval, or decision), or starts with \"CEO answered your waiting question\", use that answer immediately: call success if the goal is done, or keep working with tools. Do not call waiting again for the same question. Do not re-ask the CEO.\n\
 A plan or a cut-off sentence is not finished. Call a tool.\n\
 Do not invent results. To read or list a file or folder, call bash. On Windows the command is PowerShell and a path looks like F:\\Development.\n\
@@ -1323,10 +1323,10 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - failure: message is why this cannot be handled. Owner turns only.\n\
 - waiting: message is one specific question while work stays alive. Prefer ask_user for CEO decisions. Owner turns only. Never use waiting instead of hiring a worker the CEO asked you to hire.\n\
 - message_user: post one useful update only when the CEO genuinely needs to know. Never announce a hire, that you are standing by, or that work is in progress — after hiring or continuing a worker the turn ends silent until a Done close-out or ask_user. When the wake brief shows FINISHED goals (goal_state=needs_close_out) and nothing else needs attention, you MUST send exactly one short Done close-out with message_user — start with Done —, restate the FINISHED outcome= and where it landed, then stay silent on later wakes. Prior status chatter (hired / working / will notify / standing by) does not count as close-out. If RECENT_CEO_CHAT already has that Done close-out, stay silent. Never dump worker logs into chat. Never put a secret value, password, token, or vault contents into Done or message_user — name the secret, do not echo its value.\n\
-- ask_user: one clear CEO decision (credentials, money, irreversible or external action, or a real owner preference between options you cannot choose). Do the work you can first; ask only when stuck on that decision. When the wake brief shows CEO_WAITING (mandatory), you MUST ask_user once (not silence, not message_user). When it shows CEO_WAITING (already asked), stay silent — the owner has the question and has not answered yet; do not rephrase, do not ask again, do not message_user that you are waiting. After the CEO answers, continue_task with their answer. Never paste worker output. Never ask about things you can decide yourself. Never put a secret value into the question text.\n\
+- ask_user: one clear CEO decision (credentials, money, irreversible or external action, or a real owner preference between options you cannot choose). Do the work you can first; ask as soon as that decision blocks progress — do not defer. When the wake brief shows CEO_WAITING (mandatory), you MUST ask_user immediately this wake (not silence, not message_user, not a later wake). When it shows CEO_WAITING (already asked), stay silent — the owner has the question and has not answered yet; do not rephrase, do not ask again, do not message_user that you are waiting. After the CEO answers (owner turn or CEO_WAITING answered), continue_task immediately with their answer in that same turn — do not wait for a wake. Never paste worker output. Never ask about things you can decide yourself. Never put a secret value into the question text.\n\
 - New work: always spawn_task first. Do not answer a hire request with only message_user, waiting, ask_user, success, or failure — that leaves no worker. Do not refuse a path yourself; hire a worker. Do not try to run the work with bash or files yourself.\n\
 - After spawn_task, link_task, continue_task, or retry_task the owner turn is already finished silently — do not follow with success or message_user just to acknowledge.\n\
-- Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text). When the CEO answers your ask_user about a waiting worker, continue_task with that task_id and their answer so the worker can finish — do not spawn a new worker for the same answer. When the CEO asks to hire new work while another worker is waiting or running, still spawn_task for the new work — do not treat a hire request as the answer to the waiter.\n\
+- Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text). When the CEO answers your ask_user about a waiting worker, continue_task immediately in that same owner turn with that task_id and their answer so the worker can finish — do not wait for a wake and do not spawn a new worker for the same answer. When the CEO asks to hire new work while another worker is waiting or running, still spawn_task for the new work — do not treat a hire request as the answer to the waiter.\n\
 - After a waiting worker receives the CEO's answer, continue_task with their answer so the worker sees it framed as the answer; the worker must finish promptly (success) unless the goal still requires tools. Do not re-wait for the same question and do not run long shell work that blocks other workers unless the goal needs it.\n\
 - Follow-up after a finished task: link_task.\n\
 - Status: inspect_task for the same details as the wake brief.\n\
@@ -1334,7 +1334,7 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - Failed or stopped work you choose to retry: retry_task.\n\
 - After a useful lesson (what worked or failed): record_learning with one short note. It appears under LEARNED on later wakes — use it only when ATTENTION already lists matching failed/stuck work; do not spawn new goals from LEARNED alone; do not repeat a failed tactic.\n\
 Fixable worker failures (missing file, bad args, wrong/incomplete output vs the goal check, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance that tries a different approach. Do not ask_user. Do not call bash yourself. Prefer a second hire with a corrected brief when the first approach was wrong.\n\
-If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: call ask_user once with one clear question unless CEO_WAITING (already asked) or RECENT_CEO_CHAT already has that unanswered ask. Do not stay silent on the first ask. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate the decision cleanly. Do not rephrase or ask the same decision again later.\n\
+If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: call ask_user immediately with one clear question unless CEO_WAITING (already asked) or RECENT_CEO_CHAT already has that unanswered ask. Do not defer to a later wake. Do not stay silent on the first ask. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate the decision cleanly. Do not rephrase or ask the same decision again later.\n\
 Shell, files, vault, and network work always go through spawn_task or continue_task. Do not ask_user about a secret until a worker is waiting on it.\n\
 Workers never talk to the CEO. Their blockers and questions come to you; you decide.\n\
 A plan, a thought, or a cut-off sentence is not finished. Call a tool.\n\
@@ -2073,7 +2073,7 @@ fn route_tools_json() -> String {
         ),
         route_tool(
             "continue_task",
-            "Hand new instructions to an open subagent. Use guidance to re-plan after a fixable failure, a failed goal check, or a waiting worker. Prefer a different approach than the one that failed. Do not ask the CEO for fixable worker issues.",
+            "Hand new instructions to an open subagent. Use guidance to re-plan after a fixable failure, a failed goal check, or a waiting worker. Prefer a different approach than the one that failed. When the CEO just answered your ask_user, call this immediately in that same turn with their answer — do not wait for a wake. Do not ask the CEO for fixable worker issues.",
             RouteToolShape::Task,
             true,
         ),
@@ -2103,11 +2103,11 @@ fn route_tools_json() -> String {
         ),
         terminal_tool(
             "message_user",
-            "Post one useful update to the owner chat. Default silent. Never use this to announce a hire, standing by, or in-progress status. When the wake brief shows FINISHED goal_state=needs_close_out, verify the outcome against the goal checks. If a check fails, spawn_task with a corrected brief in the same wake when you can; when the check already passes (or the outcome already matches), MUST send one short close-out that starts with Done — and restates the FINISHED outcome= (what was delivered and where). Do not keep verifying forever. One close-out per finished goal; then stay silent. Status chatter does not close a goal. Skip if RECENT_CEO_CHAT already has that Done close-out. Never dump raw worker logs. Never put a secret value, password, token, or vault contents into Done — name the secret, do not echo its value.",
+            "Post one useful update to the owner chat. Default silent. Never use this to announce a hire, standing by, or in-progress status. When the wake brief shows FINISHED goal_state=needs_close_out, verify the outcome against the goal checks. If a check fails, spawn_task with a corrected brief in the same wake when you can; when the check already passes (or the outcome already matches), MUST send one short Done close-out immediately this wake that starts with Done — and restates the FINISHED outcome= (what was delivered and where). Do not defer close-out. Do not keep verifying forever. One close-out per finished goal; then stay silent. Status chatter does not close a goal. Skip if RECENT_CEO_CHAT already has that Done close-out. Never dump raw worker logs. Never put a secret value, password, token, or vault contents into Done — name the secret, do not echo its value.",
         ),
         terminal_tool(
             "ask_user",
-            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real owner preference you cannot choose). Do what you can first; ask only when that decision blocks progress. When the wake brief shows CEO_WAITING, you MUST use this (not message_user, not silence). One question only; skip if RECENT_CEO_CHAT already asked. Never ask about things you can decide yourself. Never paste worker output into chat. Workers never ask the CEO directly.",
+            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real owner preference you cannot choose). Do what you can first; as soon as that decision blocks progress, ask immediately — do not defer. When the wake brief shows CEO_WAITING, you MUST use this in the same wake (not message_user, not silence, not a later wake). One question only; skip if RECENT_CEO_CHAT already asked. Never ask about things you can decide yourself. Never paste worker output into chat. Workers never ask the CEO directly.",
         ),
         terminal_tool(
             "record_learning",
@@ -4175,6 +4175,8 @@ impl<R: Router> Orchestrator<R> {
             maia_core::manager::WakePlan::RunModel { .. } => {}
         }
         let Some(actions) = self.manager_wake_tool_actions(&snap) else {
+            // Model miss must not burn the wake interval while attention remains.
+            self.request_wake_nudge();
             return (previous_fingerprint.to_owned(), false, Vec::new());
         };
         let (mut messaged, mut new_learned) = self.apply_wake_actions(&actions);

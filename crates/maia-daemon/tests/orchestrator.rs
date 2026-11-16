@@ -5200,6 +5200,33 @@ fn ceo_reply_frames_waiting_resume_so_worker_sees_finish_contract() {
 }
 
 #[test]
+fn manager_wake_renudges_when_model_fails_while_waiting() {
+    let mut harness = Harness::open_model("mgr-wake-renudge-fail", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need the vault password to continue"}"#);
+    let outcome = wait(harness.host().handle_user_message("Open the vault")).expect("run");
+    let _task = outcome.task.expect("task");
+    assert!(
+        harness.host().take_wake_nudge(),
+        "park must nudge once"
+    );
+    harness
+        .router
+        .push_failure(RouterError::Server { code: 503 });
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
+    assert!(
+        !messaged,
+        "failed model wake must not pretend to ask"
+    );
+    assert!(
+        harness.host().take_wake_nudge(),
+        "failed wake with waiting work must re-nudge so the full interval is not burned"
+    );
+}
+
+#[test]
 fn worker_attention_phases_set_wake_nudge() {
     let mut harness = Harness::open_model("wake-nudge-complete", long_supply());
     assert!(
