@@ -323,24 +323,52 @@ textarea {
   background: var(--surface);
 }
 
-.maia-edit-icon {
-  width: 10px;
-  height: 10px;
-  border-left: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(-45deg);
-  position: relative;
+.maia-edit-icon,
+.maia-attach-icon,
+.maia-send-icon,
+.maia-back-icon,
+.maia-inspect-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
 }
 
-.maia-edit-icon::after {
-  content: '';
-  position: absolute;
-  top: -3px;
-  right: -1px;
-  width: 3px;
-  height: 3px;
-  border-top: 1.5px solid currentColor;
-  border-right: 1.5px solid currentColor;
+.maia-edit-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M11.2 2.4l2.4 2.4L5.2 13.2H2.8v-2.4L11.2 2.4z'/%3E%3Cpath d='M9.6 4l2.4 2.4'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M11.2 2.4l2.4 2.4L5.2 13.2H2.8v-2.4L11.2 2.4z'/%3E%3Cpath d='M9.6 4l2.4 2.4'/%3E%3C/svg%3E");
+}
+
+.maia-attach-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.2 4.4v5.2a2.2 2.2 0 1 1-4.4 0V3.8a3 3 0 0 1 6 0v5.6a1.4 1.4 0 1 1-2.8 0V4.4'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.2 4.4v5.2a2.2 2.2 0 1 1-4.4 0V3.8a3 3 0 0 1 6 0v5.6a1.4 1.4 0 1 1-2.8 0V4.4'/%3E%3C/svg%3E");
+}
+
+.maia-send-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8h9'/%3E%3Cpath d='M8 3.5L12.5 8 8 12.5'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8h9'/%3E%3Cpath d='M8 3.5L12.5 8 8 12.5'/%3E%3C/svg%3E");
+}
+
+.maia-back-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 3.5L5.5 8 10 12.5'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 3.5L5.5 8 10 12.5'/%3E%3C/svg%3E");
+}
+
+.maia-inspect-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7' cy='7' r='3.5'/%3E%3Cpath d='M12.5 12.5L9.7 9.7'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7' cy='7' r='3.5'/%3E%3Cpath d='M12.5 12.5L9.7 9.7'/%3E%3C/svg%3E");
+}
+
+.maia-icon-btn--primary {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  color: var(--text);
+}
+
+.maia-icon-btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 32%, var(--surface));
 }
 
 .maia-remove-icon {
@@ -746,14 +774,18 @@ textarea {
 
 .maia-code-block pre {
   margin: 0;
+  padding-top: 36px;
 }
 
 .maia-code-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  justify-content: flex-end;
-  margin-bottom: 4px;
+  gap: 6px;
+  margin: 0;
 }
 
 .maia-code-toolbar .maia-btn {
@@ -764,11 +796,26 @@ textarea {
   font-size: 13px;
 }
 
+.maia-run-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+}
+
+.maia-run-head .maia-speaker {
+  flex: 1;
+  min-width: 0;
+}
+
 .maia-message-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  flex: none;
+  margin-left: auto;
 }
 
 .maia-message-actions .maia-btn {
@@ -789,9 +836,18 @@ textarea {
   flex: none;
 }
 
-.maia-run--you .maia-message-actions {
+.maia-run--you .maia-run-head {
   justify-content: flex-end;
 }
+
+.maia-run--you .maia-run-head .maia-speaker {
+  flex: 0 1 auto;
+}
+
+.maia-run--you .maia-message-actions {
+  margin-left: 0;
+}
+
 
 .maia-transcript-find {
   display: flex;
@@ -1366,6 +1422,7 @@ textarea {
   .maia-brain-list button,
   .maia-inspector-tabs [role='tab'],
   .maia-phone-header .maia-btn,
+  .maia-phone-header .maia-icon-btn,
   .maia-phone-nav button,
   .maia-fold summary {
     min-height: 44px;
@@ -1376,6 +1433,10 @@ textarea {
     height: 32px;
     min-width: 32px;
     min-height: 32px;
+  }
+  .maia-phone-header .maia-icon-btn {
+    width: 44px;
+    height: 44px;
   }
   .maia-field input:not([type='checkbox']):not([type='radio']),
   .maia-field select,
@@ -1704,6 +1765,15 @@ textarea {
   background: transparent;
   color: var(--muted, #9aa39c);
   font-size: 13px;
+}
+
+.maia-icon-btn.maia-inspect-quiet {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
 }
 .maia-task-strip {
   display: flex;

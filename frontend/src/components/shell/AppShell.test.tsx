@@ -172,10 +172,33 @@ describe('AppShell layout', () => {
     })
     const inspect = screen.getByRole('button', { name: 'Inspect' })
     expect(inspect.closest('.maia-conv-head')).not.toBeNull()
+    expect(inspect).toHaveClass('maia-icon-btn')
+    expect(inspect.querySelector('.maia-inspect-icon')).not.toBeNull()
+    expect(inspect).not.toHaveTextContent('Inspect')
     expect(inspect).toHaveAttribute('aria-pressed', 'false')
     expect(inspect.getAttribute('style')).toBeNull()
     await user.click(inspect)
     expect(inspect).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('uses compact Back and Inspect icons on the phone chat header', async () => {
+    window.innerWidth = 412
+    window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
+      initialState: { ...defaultFixtureState(), onboarding_complete: true },
+    })
+    await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
+    const header = document.querySelector('.maia-phone-header')
+    expect(header).not.toBeNull()
+    const back = within(header as HTMLElement).getByRole('button', { name: 'Back' })
+    expect(back).toHaveClass('maia-icon-btn')
+    expect(back.querySelector('.maia-back-icon')).not.toBeNull()
+    expect(back).not.toHaveTextContent('Back')
+    const inspect = within(header as HTMLElement).getByRole('button', { name: 'Inspect' })
+    expect(inspect).toHaveClass('maia-icon-btn')
+    expect(inspect.querySelector('.maia-inspect-icon')).not.toBeNull()
+    expect(inspect).not.toHaveTextContent('Inspect')
   })
 
   it('returns from phone settings to the chat and skips to the conversation', async () => {

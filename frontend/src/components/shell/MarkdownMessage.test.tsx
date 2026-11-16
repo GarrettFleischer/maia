@@ -90,8 +90,11 @@ describe('MarkdownMessage', () => {
     const user = userEvent.setup()
     render(<MarkdownMessage text={'```ts\nconst n = 1\n```'} />)
 
-    const copy = screen.getByRole('button', { name: 'Copy code' })
+    const copies = screen.getAllByRole('button', { name: 'Copy code' })
+    expect(copies).toHaveLength(1)
+    const copy = copies[0]!
     expect(copy).toHaveClass('maia-icon-btn')
+    expect(copy.closest('.maia-code-toolbar')?.closest('.maia-code-block')).not.toBeNull()
     await user.click(copy)
     expect(await navigator.clipboard.readText()).toBe('const n = 1')
     expect(await screen.findByRole('status')).toHaveTextContent('Copied')

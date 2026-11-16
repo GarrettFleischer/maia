@@ -349,15 +349,57 @@ describe('RouterConversation', () => {
     const router = screen.getByRole('article', { name: 'Message from Maia' })
     const copy = within(router).getByRole('button', { name: 'Copy message' })
     expect(copy).toHaveClass('maia-icon-btn')
+    expect(copy.querySelector('.maia-copy-icon')).not.toBeNull()
+    const routerActions = within(router).getByRole('group', {
+      name: 'Actions for message from Maia',
+    })
+    expect(routerActions.closest('.maia-run-head')).not.toBeNull()
+    expect(routerActions.closest('.maia-run-head')?.querySelector('.maia-speaker')).not.toBeNull()
+    const routerBody = router.querySelector('.maia-transcript-body')
+    expect(routerBody).not.toBeNull()
+    expect(
+      routerActions.compareDocumentPosition(routerBody!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
     await user.click(copy)
     expect(await navigator.clipboard.readText()).toBe('Router body')
     expect(within(router).getByRole('status')).toHaveTextContent('Copied')
     const edit = within(owner).getByRole('button', { name: 'Edit message' })
     expect(edit).toHaveClass('maia-icon-btn')
+    expect(edit.querySelector('.maia-edit-icon')).not.toBeNull()
     expect(edit).toBeVisible()
+    expect(within(owner).getByRole('group', { name: 'Actions for message from You' }).closest('.maia-run-head')).not.toBeNull()
     expect(within(router).queryByRole('button', { name: 'Edit message' })).toBeNull()
     await user.click(edit)
     expect(onDraftChange).toHaveBeenCalledWith('Owner body')
+  })
+
+  it('uses compact Attach and Send icon buttons in the composer', () => {
+    render(
+      <ReviewedRouterConversation
+        messages={[]}
+        transcriptState={{ kind: 'ready' }}
+        admission={{ kind: 'ready' }}
+        operation={{ kind: 'idle' }}
+        announcement={null}
+        draft=""
+        notice={{ kind: 'idle' }}
+        disabled={false}
+        canAttach
+        onDraftChange={vi.fn()}
+        onRetryTranscript={vi.fn()}
+        onAnnouncementAcknowledged={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    )
+
+    const attach = screen.getByLabelText('Attach')
+    expect(attach.closest('label')).toHaveClass('maia-icon-btn')
+    expect(attach.closest('label')?.querySelector('.maia-attach-icon')).not.toBeNull()
+    expect(screen.queryByText('Attach')).toBeNull()
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toHaveClass('maia-icon-btn')
+    expect(send.querySelector('.maia-send-icon')).not.toBeNull()
+    expect(send).not.toHaveTextContent('Send')
   })
 
   it('keeps the full transcript and steps Find matches with Next', async () => {

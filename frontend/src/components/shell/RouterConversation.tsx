@@ -413,7 +413,47 @@ export function RouterConversation({
                     className={message.role === 'owner' ? 'maia-run maia-run--you' : 'maia-run'}
                     aria-label={`Message from ${speaker}`}
                   >
-                    <p className="maia-speaker">{speaker}</p>
+                    <div className="maia-run-head">
+                      <p className="maia-speaker">{speaker}</p>
+                      <div
+                        className="maia-message-actions"
+                        role="group"
+                        aria-label={`Actions for message from ${speaker}`}
+                      >
+                        <button
+                          type="button"
+                          className="maia-icon-btn"
+                          aria-label="Copy message"
+                          title="Copy message"
+                          onClick={() => {
+                            const clipboard = globalThis.navigator?.clipboard
+                            if (!clipboard) return
+                            void copyText(message.text, clipboard).then((result) => {
+                              if (result === 'copied') setCopiedMessageId(message.message_id)
+                            })
+                          }}
+                        >
+                          <span className="maia-copy-icon" aria-hidden="true" />
+                        </button>
+                        {message.role === 'owner' ? (
+                          <button
+                            type="button"
+                            className="maia-icon-btn"
+                            aria-label="Edit message"
+                            title="Edit message"
+                            onClick={() => {
+                              onDraftChange(message.text)
+                              fieldRef.current?.focus()
+                            }}
+                          >
+                            <span className="maia-edit-icon" aria-hidden="true" />
+                          </button>
+                        ) : null}
+                        {copiedMessageId === message.message_id ? (
+                          <span role="status">Copied</span>
+                        ) : null}
+                      </div>
+                    </div>
                     {fold ? (
                       <details className="maia-fold">
                         <summary>{fold.summary}</summary>
@@ -431,44 +471,6 @@ export function RouterConversation({
                         )
                       }
                     />
-                    <div
-                      className="maia-message-actions"
-                      role="group"
-                      aria-label={`Actions for message from ${speaker}`}
-                    >
-                      <button
-                        type="button"
-                        className="maia-icon-btn"
-                        aria-label="Copy message"
-                        title="Copy message"
-                        onClick={() => {
-                          const clipboard = globalThis.navigator?.clipboard
-                          if (!clipboard) return
-                          void copyText(message.text, clipboard).then((result) => {
-                            if (result === 'copied') setCopiedMessageId(message.message_id)
-                          })
-                        }}
-                      >
-                        <span className="maia-copy-icon" aria-hidden="true" />
-                      </button>
-                      {message.role === 'owner' ? (
-                        <button
-                          type="button"
-                          className="maia-icon-btn"
-                          aria-label="Edit message"
-                          title="Edit message"
-                          onClick={() => {
-                            onDraftChange(message.text)
-                            fieldRef.current?.focus()
-                          }}
-                        >
-                          <span className="maia-edit-icon" aria-hidden="true" />
-                        </button>
-                      ) : null}
-                      {copiedMessageId === message.message_id ? (
-                        <span role="status">Copied</span>
-                      ) : null}
-                    </div>
                   </article>
                 </div>
               </li>
@@ -671,10 +673,11 @@ export function RouterConversation({
             </span>
           )}
           {canAttach ? (
-            <label className="maia-btn">
-              Attach
+            <label className="maia-icon-btn" title="Attach">
+              <span className="maia-attach-icon" aria-hidden="true" />
               <input
                 type="file"
+                aria-label="Attach"
                 accept="image/png,image/jpeg,image/gif,image/webp,text/plain,application/pdf"
                 multiple
                 hidden
@@ -685,8 +688,14 @@ export function RouterConversation({
               />
             </label>
           ) : null}
-          <button type="submit" className="maia-btn maia-btn--primary" disabled={busy}>
-            Send
+          <button
+            type="submit"
+            className="maia-icon-btn maia-icon-btn--primary"
+            aria-label="Send"
+            title="Send"
+            disabled={busy}
+          >
+            <span className="maia-send-icon" aria-hidden="true" />
           </button>
         </div>
         </div>

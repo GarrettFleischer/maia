@@ -97,8 +97,15 @@ function useLiveConnection(client: SuperAgentClient): ConnectionSnapshot | null 
 
 function InspectToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
-    <button type="button" className="maia-btn" aria-pressed={open} onClick={onToggle}>
-      Inspect
+    <button
+      type="button"
+      className="maia-icon-btn"
+      aria-label="Inspect"
+      title="Inspect"
+      aria-pressed={open}
+      onClick={onToggle}
+    >
+      <span className="maia-inspect-icon" aria-hidden="true" />
     </button>
   )
 }
@@ -438,8 +445,14 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
       ) : (
         <header className="maia-phone-header">
           {phoneChat && centerView === 'conversation' ? (
-            <button type="button" className="maia-btn" onClick={closePhoneChat}>
-              Back
+            <button
+              type="button"
+              className="maia-icon-btn"
+              aria-label="Back"
+              title="Back"
+              onClick={closePhoneChat}
+            >
+              <span className="maia-back-icon" aria-hidden="true" />
             </button>
           ) : null}
           <div className="maia-phone-title">
@@ -450,11 +463,13 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
           </div>
           <button
             type="button"
-            className="maia-inspect-quiet"
+            className="maia-icon-btn maia-inspect-quiet"
+            aria-label="Inspect"
+            title="Inspect"
             aria-pressed={inspectorOpen}
             onClick={() => setInspectorOpen((open) => !open)}
           >
-            Inspect
+            <span className="maia-inspect-icon" aria-hidden="true" />
           </button>
         </header>
       )}
@@ -584,11 +599,13 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
               viewport === 'phone' ? (
                 <button
                   type="button"
-                  className="maia-inspect-quiet"
+                  className="maia-icon-btn maia-inspect-quiet"
+                  aria-label="Inspect"
+                  title="Inspect"
                   aria-pressed={inspectorOpen}
                   onClick={() => setInspectorOpen((open) => !open)}
                 >
-                  Inspect
+                  <span className="maia-inspect-icon" aria-hidden="true" />
                 </button>
               ) : (
                 inspectToggle

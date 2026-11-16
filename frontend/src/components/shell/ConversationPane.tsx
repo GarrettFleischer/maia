@@ -131,11 +131,12 @@ export function ConversationPane({
               {onBack ? (
                 <button
                   type="button"
-                  className="maia-btn"
-                  style={{ minHeight: 44, minWidth: 44 }}
+                  className="maia-icon-btn"
+                  aria-label="Back"
+                  title="Back"
                   onClick={onBack}
                 >
-                  Back
+                  <span className="maia-back-icon" aria-hidden="true" />
                 </button>
               ) : null}
               <div>
