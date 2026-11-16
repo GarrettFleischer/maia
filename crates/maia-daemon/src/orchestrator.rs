@@ -2058,7 +2058,7 @@ fn route_tools_json() -> String {
     let mut tools = vec![
         route_tool(
             "spawn_task",
-            "REQUIRED for any new work that needs shell, files, browser, network, or vault. Hire one worker. You never run that work yourself. Optional guidance is the worker brief (details + steps). Prefer a short first line so the Tasks rail stays glanceable. When the CEO names separate workers, hire them one at a time (follow up on a later wake for the next part) rather than stuffing every part into one mega-title.",
+            "REQUIRED for any new work that needs shell, files, browser, network, or vault. Hire one worker. You never run that work yourself. Optional guidance is the worker brief (details + steps). Prefer a short first line so the Tasks rail stays glanceable. When the CEO names two workers (for example RESEARCH then WRITE), spawn only the first now; hire the next on a later wake after that one finishes — do not fold both into one mega-title.",
             RouteToolShape::Spawn,
             true,
         ),
