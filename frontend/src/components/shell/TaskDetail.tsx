@@ -74,18 +74,30 @@ export function TaskDetail({
       if (marker?.maiaOverlay === detail.task_id) window.history.back()
     }
   }, [detail.task_id])
-  const closeStyle = { minHeight: 44, minWidth: 44 }
   const acceptance = shownAcceptanceContext(detail.acceptance_context)
   return (
       <article className="maia-task-detail" aria-label="Task conversation">
         <div className="maia-task-detail-bar">
           <h2 id="task-detail-title">{detail.title}</h2>
           <div className="maia-task-detail-close">
-            <button ref={backRef} type="button" className="maia-btn" style={closeStyle} onClick={onClose}>
-              Back to chat
+            <button
+              ref={backRef}
+              type="button"
+              className="maia-icon-btn"
+              aria-label="Back to chat"
+              title="Back to chat"
+              onClick={onClose}
+            >
+              <span className="maia-back-icon" aria-hidden="true" />
             </button>
-            <button type="button" className="maia-btn" style={closeStyle} aria-label="Close" onClick={onClose}>
-              ×
+            <button
+              type="button"
+              className="maia-icon-btn"
+              aria-label="Close"
+              title="Close"
+              onClick={onClose}
+            >
+              <span className="maia-remove-icon" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -117,11 +129,13 @@ export function TaskDetail({
           <div className="maia-task-actions">
             <button
               type="button"
-              className="maia-btn"
+              className="maia-icon-btn"
+              aria-label="Quote task"
+              title="Quote task"
               disabled={operation.kind === 'sending'}
               onClick={() => onQuote(detail.task_id)}
             >
-              Quote task
+              <span className="maia-quote-icon" aria-hidden="true" />
             </button>
             <button
               type="button"

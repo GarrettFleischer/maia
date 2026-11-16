@@ -24,6 +24,7 @@ import {
   type AdmissionState,
   type RouterAnnouncement,
 } from '@/state/superAgentSession'
+import { activityLineKey, pruneActivityStartedKeys } from '@/components/shell/activityStarted'
 
 function latestActivity(lines: readonly ActivityLine[]): ActivityLine[] {
   const router = lines.filter((line) => line.task_id === undefined).slice(-1)
@@ -124,6 +125,12 @@ export function RouterConversation({
     return () => window.clearInterval(timer)
   }, [activity.length])
   const activityCards = latestActivity(activity)
+  useEffect(() => {
+    pruneActivityStartedKeys(
+      activityStarted.current,
+      new Set(latestActivity(activity).map((line) => activityLineKey(line))),
+    )
+  }, [activity])
   const visibleMessages = dedupeRouterMessages(messages)
   const matchIds = findMatchIds(visibleMessages, findQuery)
   const activeFindIndex =
@@ -547,7 +554,7 @@ export function RouterConversation({
       {activityCards.length > 0 ? (
         <ul className="maia-activity" aria-label="Working">
           {activityCards.map((line) => {
-            const key = line.task_id ?? `router-${line.seq}`
+            const key = activityLineKey(line)
             if (!activityStarted.current.has(key)) activityStarted.current.set(key, clock)
             const elapsed = Math.max(
               0,

@@ -337,7 +337,11 @@ describe('TaskDetail', () => {
         onCancel={vi.fn()}
       />,
     )
-    await user.click(screen.getByRole('button', { name: 'Quote task' }))
+    const quote = screen.getByRole('button', { name: 'Quote task' })
+    expect(quote).toHaveClass('maia-icon-btn')
+    expect(quote).not.toHaveTextContent('Quote task')
+    expect(quote.querySelector('.maia-quote-icon')).not.toBeNull()
+    await user.click(quote)
     expect(onQuote).toHaveBeenCalledWith('task-1')
     const pin = screen.getByRole('button', { name: 'Pin this task' })
     expect(pin).toHaveClass('maia-icon-btn')
@@ -345,7 +349,10 @@ describe('TaskDetail', () => {
     await user.click(pin)
     expect(onPin).toHaveBeenCalledWith('task-1', 'pinned')
     expect(screen.queryByRole('button', { name: 'Stop this task' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Back to chat' }))
+    const back = screen.getByRole('button', { name: 'Back to chat' })
+    expect(back).toHaveClass('maia-icon-btn')
+    expect(back.querySelector('.maia-back-icon')).not.toBeNull()
+    await user.click(back)
     expect(onClose).toHaveBeenCalledOnce()
   })
 

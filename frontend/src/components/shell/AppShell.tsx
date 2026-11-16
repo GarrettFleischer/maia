@@ -542,14 +542,15 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
               {viewport === 'phone' ? (
                 <button
                   type="button"
-                  className="maia-btn"
-                  style={{ minHeight: 44, minWidth: 44 }}
+                  className="maia-icon-btn"
+                  aria-label="Back to chat"
+                  title="Back to chat"
                   onClick={() => {
                     setCenterView('conversation')
                     setPhoneChat(returnToChat.current)
                   }}
                 >
-                  Back to chat
+                  <span className="maia-back-icon" aria-hidden="true" />
                 </button>
               ) : null}
               <div>

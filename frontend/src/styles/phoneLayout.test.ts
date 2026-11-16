@@ -268,8 +268,8 @@ describe('phone layout at 390px', () => {
               <div class="maia-task-detail-bar">
                 <h2>I want you to investigate it and ideally fix the chat on it to be a live chat that streams the tokens to my phone rather than looking like nothing is happening</h2>
                 <div class="maia-task-detail-close">
-                  <button class="maia-btn" type="button">Back to chat</button>
-                  <button class="maia-btn" type="button" aria-label="Close">×</button>
+                  <button class="maia-icon-btn" type="button" aria-label="Back to chat" title="Back to chat"><span class="maia-back-icon" aria-hidden="true"></span></button>
+                  <button class="maia-icon-btn" type="button" aria-label="Close" title="Close"><span class="maia-remove-icon" aria-hidden="true"></span></button>
                 </div>
               </div>
             </article>

@@ -33,14 +33,16 @@ function renderDetail(onClose = vi.fn()) {
 }
 
 describe('TaskDetail close controls', () => {
-  it('keeps Back and Close in the top bar at a 44px target', () => {
+  it('keeps Back and Close as compact icon buttons in the top bar', () => {
     renderDetail()
     const back = screen.getByRole('button', { name: 'Back to chat' })
     const close = screen.getByRole('button', { name: 'Close' })
     expect(back.closest('.maia-task-detail-bar')).not.toBeNull()
     expect(close.closest('.maia-task-detail-bar')).not.toBeNull()
-    expect(back).toHaveStyle({ minHeight: '44px', minWidth: '44px' })
-    expect(close).toHaveStyle({ minHeight: '44px', minWidth: '44px' })
+    expect(back).toHaveClass('maia-icon-btn')
+    expect(close).toHaveClass('maia-icon-btn')
+    expect(back.querySelector('.maia-back-icon')).not.toBeNull()
+    expect(close.querySelector('.maia-remove-icon')).not.toBeNull()
   })
 
   it('closes on Escape', () => {

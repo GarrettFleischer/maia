@@ -327,7 +327,10 @@ textarea {
 .maia-attach-icon,
 .maia-send-icon,
 .maia-back-icon,
-.maia-inspect-icon {
+.maia-inspect-icon,
+.maia-quote-icon,
+.maia-tag-icon,
+.maia-source-icon {
   display: block;
   width: 14px;
   height: 14px;
@@ -359,6 +362,21 @@ textarea {
 .maia-inspect-icon {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7' cy='7' r='3.5'/%3E%3Cpath d='M12.5 12.5L9.7 9.7'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7' cy='7' r='3.5'/%3E%3Cpath d='M12.5 12.5L9.7 9.7'/%3E%3C/svg%3E");
+}
+
+.maia-quote-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 12.5V8.2C3.5 5.8 5 4.2 7.2 3.5'/%3E%3Cpath d='M3.5 8.5h3.2v4H3.5z'/%3E%3Cpath d='M9 12.5V8.2C9 5.8 10.5 4.2 12.7 3.5'/%3E%3Cpath d='M9 8.5h3.2v4H9z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 12.5V8.2C3.5 5.8 5 4.2 7.2 3.5'/%3E%3Cpath d='M3.5 8.5h3.2v4H3.5z'/%3E%3Cpath d='M9 12.5V8.2C9 5.8 10.5 4.2 12.7 3.5'/%3E%3Cpath d='M9 8.5h3.2v4H9z'/%3E%3C/svg%3E");
+}
+
+.maia-tag-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 8.2V3.5H7.2l6.3 6.3-4.7 4.7L2.5 8.2z'/%3E%3Ccircle cx='5.2' cy='5.2' r='0.9' fill='black' stroke='none'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 8.2V3.5H7.2l6.3 6.3-4.7 4.7L2.5 8.2z'/%3E%3Ccircle cx='5.2' cy='5.2' r='0.9' fill='black' stroke='none'/%3E%3C/svg%3E");
+}
+
+.maia-source-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 3.5h5.2L12.5 6v6.5h-8v-9z'/%3E%3Cpath d='M9.5 3.5V6H12'/%3E%3Cpath d='M6 9h4.5M6 11.2h3'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 3.5h5.2L12.5 6v6.5h-8v-9z'/%3E%3Cpath d='M9.5 3.5V6H12'/%3E%3Cpath d='M6 9h4.5M6 11.2h3'/%3E%3C/svg%3E");
 }
 
 .maia-icon-btn--primary {

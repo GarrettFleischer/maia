@@ -164,15 +164,16 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
                 <li key={episodeId}>
                   <button
                     type="button"
-                    className="maia-btn"
+                    className="maia-icon-btn"
                     aria-label={`Dismiss stuck note ${episodeId}`}
+                    title={`Dismiss stuck note ${episodeId}`}
                     onClick={() => {
                       void client.dismissQuarantinedEpisode?.(episodeId).then(reload, () =>
                         setError('That stuck note could not be dismissed.'),
                       )
                     }}
                   >
-                    Dismiss
+                    <span className="maia-remove-icon" aria-hidden="true" />
                   </button>
                 </li>
               ))}
@@ -418,8 +419,14 @@ function MemoryList({
                           Save sentence
                         </button>
                       ) : null}
-                      <button type="button" className="maia-btn" onClick={() => onRetagStart(node)}>
-                        Tags
+                      <button
+                        type="button"
+                        className="maia-icon-btn"
+                        aria-label="Tags"
+                        title="Tags"
+                        onClick={() => onRetagStart(node)}
+                      >
+                        <span className="maia-tag-icon" aria-hidden="true" />
                       </button>
                       <button
                         type="button"
@@ -432,10 +439,12 @@ function MemoryList({
                       </button>
                       <button
                         type="button"
-                        className="maia-btn"
+                        className="maia-icon-btn"
+                        aria-label="View source"
+                        title="View source"
                         onClick={() => onSource(node.source_episode ?? node.id)}
                       >
-                        View source
+                        <span className="maia-source-icon" aria-hidden="true" />
                       </button>
                     </div>
                     {retagId === node.id ? (
@@ -602,11 +611,12 @@ function SearchResults({
                   ) : (
                     <button
                       type="button"
-                      className="maia-btn"
+                      className="maia-icon-btn"
                       aria-label="View source"
+                      title="View source"
                       onClick={() => onViewSource(hit.id)}
                     >
-                      View source
+                      <span className="maia-source-icon" aria-hidden="true" />
                     </button>
                   )}
                 </li>
