@@ -25,9 +25,11 @@ describe('AppShell layout', () => {
     expect(screen.getByRole('navigation', { name: 'Chats' })).toBeVisible()
     expect(screen.getByRole('heading', { name: 'Maia' })).toBeVisible()
     expect(screen.getByText(/One conversation/)).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Stop all running threads' })).toHaveTextContent(
-      'Stop all running threads',
-    )
+    const stopAll = screen.getByRole('button', { name: 'Stop all running threads' })
+    expect(stopAll).toHaveClass('maia-icon-btn')
+    expect(stopAll).toHaveAttribute('title', 'Stop all running threads')
+    expect(stopAll).not.toHaveTextContent('Stop all running threads')
+    expect(stopAll.querySelector('.maia-stop-icon')).not.toBeNull()
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute('placeholder', 'Message Maia')
     expect(await screen.findByRole('button', { name: /Tasks/ })).toBeVisible()
     expect(screen.queryByRole('region', { name: 'Completed' })).not.toBeInTheDocument()

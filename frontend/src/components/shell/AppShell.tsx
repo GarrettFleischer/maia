@@ -478,11 +478,12 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
             className={viewport === 'phone' ? 'maia-conversation maia-phone-screen' : 'maia-conversation'}
             aria-label="Tasks"
           >
-            <header className="maia-conv-head">
+            <header className="maia-conv-head maia-conv-head--split">
               <div>
                 <h1>Tasks</h1>
                 <p>{taskStripLabel(agent.rows)}</p>
               </div>
+              {activity.running > 0 ? <StopAllButton onStop={stopAll} /> : null}
             </header>
             <div className="maia-main-body">
               <TaskRail
@@ -493,7 +494,6 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
                   void agent.pin(taskId, mark)
                 }}
               />
-              {activity.running > 0 ? <StopAllButton onStop={stopAll} /> : null}
             </div>
           </section>
         ) : centerView === 'brain' ? (

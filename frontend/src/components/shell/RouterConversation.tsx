@@ -544,10 +544,12 @@ export function RouterConversation({
                 {line.task_id ? (
                   <button
                     type="button"
-                    className="maia-btn"
+                    className="maia-icon-btn"
+                    aria-label="Stop"
+                    title="Stop"
                     onClick={() => onStopTask?.(line.task_id ?? '')}
                   >
-                    Stop
+                    <span className="maia-stop-icon" aria-hidden="true" />
                   </button>
                 ) : null}
               </li>

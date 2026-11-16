@@ -570,8 +570,9 @@ describe('single global stop', () => {
     const rail = screen.getByRole('navigation', { name: 'Chats' })
     const stopAll = within(rail).getByRole('button', { name: 'Stop all running threads' })
 
-    expect(stopAll).toHaveClass('maia-btn')
+    expect(stopAll).toHaveClass('maia-icon-btn')
     expect(stopAll).not.toHaveClass('maia-btn--danger')
+    expect(stopAll).not.toHaveTextContent('Stop all running threads')
     expect(within(rail).queryByRole('button', { name: 'Panic' })).not.toBeInTheDocument()
   })
 
@@ -584,8 +585,9 @@ describe('single global stop', () => {
     expect(screen.queryByRole('button', { name: 'Panic' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: (value: string) => value === 'Maia' }))
     const stopAll = await screen.findByRole('button', { name: 'Stop all running threads' })
-    expect(stopAll).toHaveClass('maia-btn')
+    expect(stopAll).toHaveClass('maia-icon-btn')
     expect(stopAll).not.toHaveClass('maia-btn--danger')
+    expect(stopAll).not.toHaveTextContent('Stop all running threads')
   })
 })
 

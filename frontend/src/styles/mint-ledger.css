@@ -198,10 +198,21 @@ textarea {
 }
 
 .maia-nav-footer {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   padding: 12px 16px 14px;
   border-top: 1px solid var(--border);
+}
+
+.maia-nav-footer .maia-rail-count {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
+.maia-nav-footer .maia-icon-btn {
+  margin-left: auto;
 }
 
 .maia-quiet {
@@ -219,6 +230,103 @@ textarea {
   width: 10px;
   height: 10px;
   background: currentColor;
+}
+
+.maia-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.maia-icon-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.maia-icon-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 6%, var(--surface));
+}
+
+.maia-pin-icon {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-radius: 1px 1px 0 0;
+  border-bottom: 0;
+  position: relative;
+}
+
+.maia-pin-icon::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  width: 1.5px;
+  height: 4px;
+  background: currentColor;
+  transform: translateX(-50%);
+}
+
+.maia-pin-icon--on {
+  background: currentColor;
+}
+
+.maia-retry-icon {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  border-left-color: transparent;
+  position: relative;
+}
+
+.maia-retry-icon::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: 0;
+  border: 3px solid transparent;
+  border-bottom-color: currentColor;
+  transform: rotate(-30deg);
+}
+
+.maia-activity {
+  list-style: none;
+  margin: 0;
+  padding: 8px 24px 12px;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.maia-activity li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.maia-activity li > p {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .maia-foot-link {
@@ -1139,6 +1247,12 @@ textarea {
     min-height: 44px;
     min-width: 44px;
   }
+  .maia-icon-btn {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+  }
   .maia-field input:not([type='checkbox']):not([type='radio']),
   .maia-field select,
   .maia-settings-section input:not([type='checkbox']):not([type='radio']),
@@ -1208,6 +1322,12 @@ textarea {
   }
   .maia-phone-stop span {
     white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .maia-phone-screen .maia-activity {
+    padding: 8px 12px 10px;
   }
 }
 

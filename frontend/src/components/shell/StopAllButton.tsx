@@ -8,12 +8,12 @@ export function StopAllButton({
   return (
     <button
       type="button"
-      className={className ?? 'maia-btn maia-quiet'}
+      className={className ?? 'maia-icon-btn'}
       aria-label="Stop all running threads"
+      title="Stop all running threads"
       onClick={onStop}
     >
       <span className="maia-stop-icon" aria-hidden="true" />
-      Stop all running threads
     </button>
   )
 }

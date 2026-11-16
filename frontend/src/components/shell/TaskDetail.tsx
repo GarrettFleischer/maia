@@ -123,27 +123,37 @@ export function TaskDetail({
             >
               Quote task
             </button>
-            <button type="button" className="maia-btn" onClick={() => onPin(detail.task_id, nextPin)}>
-              {pin === 'pinned' ? 'Unpin this task' : 'Pin this task'}
+            <button
+              type="button"
+              className="maia-icon-btn"
+              aria-label={pin === 'pinned' ? 'Unpin this task' : 'Pin this task'}
+              title={pin === 'pinned' ? 'Unpin this task' : 'Pin this task'}
+              onClick={() => onPin(detail.task_id, nextPin)}
+            >
+              <span className={pin === 'pinned' ? 'maia-pin-icon maia-pin-icon--on' : 'maia-pin-icon'} aria-hidden="true" />
             </button>
             {showRetry ? (
               <button
                 type="button"
-                className="maia-btn"
+                className="maia-icon-btn"
+                aria-label="Retry task"
+                title="Retry task"
                 disabled={operation.kind === 'sending'}
                 onClick={() => onRetry(detail.task_id)}
               >
-                Retry task
+                <span className="maia-retry-icon" aria-hidden="true" />
               </button>
             ) : null}
             {showCancel ? (
               <button
                 type="button"
-                className="maia-btn"
+                className="maia-icon-btn"
+                aria-label="Cancel task"
+                title="Cancel task"
                 disabled={operation.kind === 'sending'}
                 onClick={() => onCancel(detail.task_id)}
               >
-                Cancel task
+                <span className="maia-stop-icon" aria-hidden="true" />
               </button>
             ) : null}
           </div>
