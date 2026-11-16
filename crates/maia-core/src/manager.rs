@@ -6,6 +6,13 @@
 
 use std::collections::BTreeMap;
 
+use crate::chat_widgets::AskQuestionsPayload;
+use crate::chat_widgets::OpenQuestionBrief;
+use crate::chat_widgets::ask_questions_summary;
+use crate::chat_widgets::parse_ask_questions;
+use crate::chat_widgets::parse_secret_request;
+use crate::chat_widgets::secret_request_summary;
+
 /// Default wake heartbeat interval, in seconds (5 minutes).
 pub const DEFAULT_WAKE_INTERVAL_SECS: u64 = 300;
 
@@ -66,6 +73,8 @@ pub struct WakeSnapshot {
     pub recent_ceo_lines: Vec<String>,
     /// Short notes from earlier wakes. Ignored by fingerprint.
     pub learned: Vec<String>,
+    /// Unanswered CEO questions with age (prompt-only). Ignored by fingerprint.
+    pub open_questions: Vec<OpenQuestionBrief>,
 }
 
 /// Whether a wake should spend a model call.
@@ -109,6 +118,16 @@ pub enum WakeAction {
     AskUser {
         /// Question body.
         text: String,
+    },
+    /// Ask several structured questions in one in-chat card.
+    AskQuestions {
+        /// Structured questions payload.
+        payload: AskQuestionsPayload,
+    },
+    /// Request a secret by name (value never enters chat or model context).
+    RequestSecret {
+        /// Env / vault name.
+        name: String,
     },
     /// Retry a failed or stuck parent with a new approach note.
     Recover {
@@ -300,7 +319,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     let attention = attention_lines(snap);
     if !attention.is_empty() {
         lines.push(
-            "ATTENTION: act on each item that needs you this wake (failed → waiting → close-out). Leave healthy runners alone. One clear ask_user per blocked goal; one close-out per finished goal when clear; do not cross-talk or duplicate CEO messages."
+            "ATTENTION: act on each item that needs you this wake (failed → waiting → close-out). Leave healthy runners alone. Ask what you need (ask_user or ask_questions — several questions OK when the task needs them); never rephrase an already-open question; one close-out per finished goal when clear; do not cross-talk or duplicate CEO messages."
                 .to_owned(),
         );
         for item in attention {
@@ -322,7 +341,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     if !snap.waiting.is_empty() {
         if waiting_ask_already_in_chat(snap) {
             lines.push(
-                "CEO_WAITING (already asked): RECENT_CEO_CHAT already has your unanswered question. Stay silent. Do not rephrase. Do not ask_user again. Do not message_user that you are waiting. When the CEO answers, continue_task with their answer."
+                "CEO_WAITING (already asked): RECENT_CEO_CHAT already has your unanswered question. Stay silent. Do not rephrase. Do not ask_user / ask_questions again for the same decision. Do not message_user that you are waiting. When the CEO answers, continue_task with their answer. If an unrelated CEO message arrives while questions stay open, you may briefly remind once (link/re-surface the open question) — do not nag every wake."
                     .to_owned(),
             );
         } else if snap.waiting.iter().any(|(_, q)| recent_ceo_covers(snap, q, CeoCoverKind::Ask))
@@ -333,7 +352,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             );
         } else {
             lines.push(
-                "CEO_WAITING (mandatory): call ask_user immediately this wake with one clear CEO question. Do not defer. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
+                "CEO_WAITING (mandatory): call ask_user or ask_questions immediately this wake with the CEO decision(s) you need. Several questions in one ask_questions card are OK when the task needs them. Do not defer. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
                     .to_owned(),
             );
         }
@@ -383,9 +402,21 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             }
         }
     }
+    if !snap.open_questions.is_empty() {
+        lines.push(
+            "OPEN_QUESTIONS (still unanswered): you may briefly remind the CEO once if they messaged about something else or a question has been open a while — re-surface or link the open card. Do not nag on every wake. Never rephrase into a duplicate ask."
+                .to_owned(),
+        );
+        for item in &snap.open_questions {
+            let q = truncate_brief(&item.text, BRIEF_TAIL_CHARS);
+            if !q.is_empty() {
+                lines.push(format!("- age_secs={} {q}", item.age_secs));
+            }
+        }
+    }
     if !snap.recent_ceo_lines.is_empty() {
         lines.push(
-            "RECENT_CEO_CHAT (durable signal — do not repeat an ask_user or close-out already here):"
+            "RECENT_CEO_CHAT (durable signal — do not repeat an ask_user / ask_questions or close-out already here):"
                 .to_owned(),
         );
         for line in &snap.recent_ceo_lines {
@@ -614,6 +645,18 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                     });
                 }
             }
+            "ask_questions" => {
+                if let Some(payload) = parse_ask_questions(&call.message) {
+                    actions.push(WakeAction::AskQuestions { payload });
+                }
+            }
+            "request_secret" => {
+                if let Some(request) = parse_secret_request(&call.message) {
+                    actions.push(WakeAction::RequestSecret {
+                        name: request.name,
+                    });
+                }
+            }
             "retry_task" | "continue_task" => {
                 let (task_id, note) = split_task_and_note(&call.message);
                 if !task_id.is_empty() {
@@ -791,7 +834,9 @@ pub fn unanswered_ask_covers(snap: &WakeSnapshot, text: &str) -> bool {
         .any(|line| line.to_ascii_lowercase().starts_with("user:"))
 }
 
-fn ask_shaped_ceo_line(lower: &str) -> bool {
+/// True when a lowercased CEO line looks like an ask (not status chatter).
+#[must_use]
+pub fn ask_shaped_ceo_line(lower: &str) -> bool {
     lower.contains('?')
         || lower.contains("need your decision")
         || lower.contains("what should")
@@ -1022,6 +1067,17 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
                 !waiting_ask_already_in_chat(snap)
                     && !recent_ceo_covers(snap, text, CeoCoverKind::Ask)
             }
+            WakeAction::AskQuestions { payload } => {
+                let summary = ask_questions_summary(payload);
+                !waiting_ask_already_in_chat(snap)
+                    && !recent_ceo_covers(snap, &summary, CeoCoverKind::Ask)
+            }
+            WakeAction::RequestSecret { name } => {
+                let summary = secret_request_summary(&crate::chat_widgets::SecretRequest {
+                    name: name.clone(),
+                });
+                !recent_ceo_covers(snap, &summary, CeoCoverKind::Ask)
+            }
             WakeAction::MessageUser { text } if looks_like_close_out(text) => {
                 !finished_outcome_needs_recover(snap)
                     && !recent_ceo_covers(snap, text, CeoCoverKind::CloseOut)
@@ -1032,9 +1088,14 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         })
         .cloned()
         .collect();
-    let asked = out
-        .iter()
-        .any(|action| matches!(action, WakeAction::AskUser { .. }));
+    let asked = out.iter().any(|action| {
+        matches!(
+            action,
+            WakeAction::AskUser { .. }
+                | WakeAction::AskQuestions { .. }
+                | WakeAction::RequestSecret { .. }
+        )
+    });
     let closed_out = out.iter().any(|action| match action {
         WakeAction::MessageUser { text } => looks_like_close_out(text),
         _ => false,

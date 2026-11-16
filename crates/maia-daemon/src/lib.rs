@@ -6,6 +6,7 @@
 mod attachment_prompt;
 mod attribution_wire;
 mod brain_cli;
+mod ceo_secrets;
 mod discovery;
 mod env;
 mod http;
@@ -36,6 +37,7 @@ pub use manager_wake::{
     ManagerWakeState, load_wake_state, parse_wake_state, save_wake_state, wake_path_beside,
     wake_state_json,
 };
+pub use ceo_secrets::CeoSecretSkin;
 pub use mcp_settings::{MemoryMcpSecretStore, NativeMcpSecretStore};
 pub use model_connection::{
     PublicModelConnection, parse_reasoning_effort, router_from_connection,

@@ -46,6 +46,8 @@ function bindings(decideApproval: RouterBindings['decideApproval']): RouterBindi
     activity: [],
     liveReply: null,
     dismissLiveReply: () => undefined,
+    submitQuestionAnswers: async () => undefined,
+    provideSecret: async () => undefined,
   }
 }
 

@@ -175,6 +175,20 @@ impl SubagentHost {
         }
     }
 
+    /// Restarts the shell with CEO secret env vars (values must not be logged).
+    pub fn apply_ceo_env(&mut self, env: &[(String, String)]) {
+        match self.shell.as_mut() {
+            Some(shell) => {
+                if shell.restart_with_env(env).is_err() {
+                    self.shell = ShellSession::start_with_env(env).ok();
+                }
+            }
+            None => {
+                self.shell = ShellSession::start_with_env(env).ok();
+            }
+        }
+    }
+
     /// Runs one admitted tool call.
     pub fn execute(
         &mut self,

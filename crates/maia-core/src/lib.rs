@@ -45,6 +45,9 @@ pub mod task_loop;
 /// Autonomous manager policy for long-running goals.
 pub mod manager;
 
+/// In-chat question cards and secret requests.
+pub mod chat_widgets;
+
 /// Published subagent tool catalog and call admission.
 pub mod agent_tools;
 

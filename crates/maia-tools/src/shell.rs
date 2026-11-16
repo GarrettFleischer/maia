@@ -47,6 +47,11 @@ pub struct ShellSession {
 impl ShellSession {
     /// Starts the platform shell.
     pub fn start() -> Result<Self, ShellError> {
+        Self::start_with_env(&[])
+    }
+
+    /// Starts the platform shell with extra environment variables (e.g. CEO secrets).
+    pub fn start_with_env(env: &[(String, String)]) -> Result<Self, ShellError> {
         let (program, args, kind) = shell_launch();
         let mut command = Command::new(program);
         command
@@ -54,6 +59,9 @@ impl ShellSession {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        for (key, value) in env {
+            command.env(key, value);
+        }
         let mut child = command.spawn().map_err(|error| {
             ShellError::Unavailable(format!("The shell did not start: {error}"))
         })?;
@@ -139,9 +147,14 @@ impl ShellSession {
     }
 
     fn restart(&mut self) -> Result<(), ShellError> {
+        self.restart_with_env(&[])
+    }
+
+    /// Restarts the shell, optionally injecting environment variables.
+    pub fn restart_with_env(&mut self, env: &[(String, String)]) -> Result<(), ShellError> {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        *self = Self::start()?;
+        *self = Self::start_with_env(env)?;
         Ok(())
     }
 

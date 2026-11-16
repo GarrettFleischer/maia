@@ -612,6 +612,91 @@ describe('live inspector', () => {
     expect(snapshot?.turns[0]?.slots[0]?.label).toBe('Route tools')
     expect(snapshot?.turns[0]?.route).toBe('spawn_task')
   })
+
+  it('parses question cards and secret requests from the transcript', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        messages: [
+          {
+            message_id: 'm-q',
+            role: 'router',
+            text: 'Need a few decisions.',
+            questions: [
+              {
+                id: 'channel',
+                prompt: 'Channel?',
+                kind: 'single',
+                choices: ['email', 'sms'],
+              },
+            ],
+            answers: [{ id: 'channel', selected: ['email'], other: '' }],
+          },
+          {
+            message_id: 'm-s',
+            role: 'router',
+            text: 'Need secret `API_TOKEN`.',
+            secret_request: { name: 'API_TOKEN' },
+            secret_provided: true,
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const transcript = await liveSuperAgentClient('http://127.0.0.1:9').transcript()
+    expect(transcript.messages[0]).toMatchObject({
+      message_id: 'm-q',
+      questions: [
+        { id: 'channel', prompt: 'Channel?', kind: 'single', choices: ['email', 'sms'] },
+      ],
+      answers: [{ id: 'channel', selected: ['email'], other: '' }],
+    })
+    expect(transcript.messages[1]).toMatchObject({
+      message_id: 'm-s',
+      secret_request: { name: 'API_TOKEN' },
+      secret_provided: true,
+    })
+  })
+
+  it('posts question answers and secrets with a fresh operation id', async () => {
+    const operationId = '22222222-2222-4222-8222-222222222222' as SubmissionOperationId
+    const fetchMock = vi.fn(async () => jsonResponse({ status: 'stored' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = liveSuperAgentClient('http://127.0.0.1:9', () => operationId)
+
+    await client.submitQuestionAnswers?.({
+      messageId: 'm-q',
+      answers: [{ id: 'channel', selected: ['email'], other: 'other' }],
+      botId: 'coding',
+      operationId,
+    })
+    expect(String(recordedCall(fetchMock)[0])).toBe(
+      'http://127.0.0.1:9/api/super-agent/question-answers',
+    )
+    expect(JSON.parse(String(recordedCall(fetchMock)[1].body))).toEqual({
+      message_id: 'm-q',
+      answers: [{ id: 'channel', selected: ['email'], other: 'other' }],
+      bot_id: 'coding',
+      operation_id: operationId,
+    })
+
+    await client.provideSecret?.({
+      messageId: 'm-s',
+      name: 'API_TOKEN',
+      value: 'secret',
+      botId: 'coding',
+      operationId,
+    })
+    expect(String(recordedCall(fetchMock, 1)[0])).toBe(
+      'http://127.0.0.1:9/api/super-agent/provide-secret',
+    )
+    expect(JSON.parse(String(recordedCall(fetchMock, 1)[1].body))).toEqual({
+      message_id: 'm-s',
+      name: 'API_TOKEN',
+      value: 'secret',
+      bot_id: 'coding',
+      operation_id: operationId,
+    })
+  })
 })
 
 describe('selectSuperAgentClient', () => {

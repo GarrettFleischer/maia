@@ -18,6 +18,9 @@ import type {
   SidebarRow,
   SidebarSection,
   AttachmentChip,
+  ChatQuestionAnswer,
+  ChatQuestionSpec,
+  ChatSecretRequest,
   ConnectionPhase,
   ConnectionSnapshot,
   LiveFrame,
@@ -212,6 +215,37 @@ export function liveSuperAgentClient(
         },
         readMessageAdmission,
       ),
+    submitQuestionAnswers: (input) =>
+      readJson(
+        root,
+        '/api/super-agent/question-answers',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            message_id: input.messageId,
+            answers: input.answers,
+            bot_id: input.botId,
+            operation_id: input.operationId,
+          }),
+        },
+        readStored,
+      ).then(() => undefined),
+    provideSecret: (input) =>
+      readJson(
+        root,
+        '/api/super-agent/provide-secret',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            message_id: input.messageId,
+            name: input.name,
+            value: input.value,
+            bot_id: input.botId,
+            operation_id: input.operationId,
+          }),
+        },
+        readStored,
+      ).then(() => undefined),
     listBots: () => readJson(root, '/api/bots', undefined, readBotCatalog),
     createBot: (input) =>
       readJson(root, '/api/bots', { method: 'POST', body: JSON.stringify(input) }, readBot),
@@ -553,6 +587,9 @@ function readTranscript(
     const thinking = typeof message.thinking === 'string' && message.thinking.length > 0 ? message.thinking : undefined
     const route = typeof message.route === 'string' && message.route.length > 0 ? message.route : undefined
     const attachments = readAttachmentChips(message.attachments)
+    const questions = readQuestions(message.questions)
+    const answers = readAnswers(message.answers)
+    const secretRequest = readSecretRequest(message.secret_request)
     messages.push({
       message_id: message.message_id,
       role: message.role,
@@ -560,6 +597,10 @@ function readTranscript(
       thinking,
       route,
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(questions ? { questions } : {}),
+      ...(answers ? { answers } : {}),
+      ...(secretRequest ? { secret_request: secretRequest } : {}),
+      ...(message.secret_provided === true ? { secret_provided: true } : {}),
     })
   }
   const activity = readActivity(value.activity)
@@ -815,6 +856,40 @@ function readAttempt(value: unknown): TaskDetail['attempts'] {
     return []
   }
   return [{ attempt_id: value.attempt_id, phase: value.phase, summary: value.summary }]
+}
+
+function readQuestions(value: unknown): ChatQuestionSpec[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined
+  const out: ChatQuestionSpec[] = []
+  for (const item of value) {
+    if (!isRecord(item)) return undefined
+    if (typeof item.id !== 'string' || typeof item.prompt !== 'string') return undefined
+    if (item.kind !== 'single' && item.kind !== 'multi') return undefined
+    const choices = Array.isArray(item.choices)
+      ? item.choices.filter((choice): choice is string => typeof choice === 'string')
+      : []
+    out.push({ id: item.id, prompt: item.prompt, kind: item.kind, choices })
+  }
+  return out
+}
+
+function readAnswers(value: unknown): ChatQuestionAnswer[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined
+  const out: ChatQuestionAnswer[] = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id !== 'string') return undefined
+    const selected = Array.isArray(item.selected)
+      ? item.selected.filter((choice): choice is string => typeof choice === 'string')
+      : []
+    const other = typeof item.other === 'string' ? item.other : ''
+    out.push({ id: item.id, selected, other })
+  }
+  return out
+}
+
+function readSecretRequest(value: unknown): ChatSecretRequest | undefined {
+  if (!isRecord(value) || typeof value.name !== 'string' || value.name.length === 0) return undefined
+  return { name: value.name }
 }
 
 function readAttachmentChips(value: unknown): AttachmentChip[] {

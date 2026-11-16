@@ -90,9 +90,12 @@ use crate::inspector::StoredTurnRow;
 use crate::inspector::inspector_document;
 use crate::live_reply::LiveReplyBoard;
 use crate::live_reply::attach_live_reply;
+use crate::ceo_secrets::CeoSecretSkin;
 use crate::mcp_settings::McpApiError;
 use crate::mcp_settings::McpSecretStore;
 use crate::mcp_settings::MemoryMcpSecretStore;
+use crate::orchestrator::mark_widget_answered;
+use crate::orchestrator::present_router_body;
 use crate::mcp_settings::admit_connection;
 use crate::mcp_settings::create_connection;
 use crate::mcp_settings::delete_connection;
@@ -128,7 +131,6 @@ use crate::orchestrator::ToolStart;
 use crate::orchestrator::WorkerAttempts;
 use crate::orchestrator::WorkerEvent;
 use crate::orchestrator::WorkerMachine;
-use crate::orchestrator::present_router_body;
 use crate::remote::ListenerClass;
 use crate::remote::RemoteHub;
 use crate::remote::TailnetPeer;
@@ -1023,10 +1025,15 @@ fn server_thread<R>(
         });
     let list_models = Arc::clone(&config.ports.list_models);
     let mcp_secrets = Arc::clone(&config.ports.mcp_secrets);
+    let ceo_secrets = Arc::new(CeoSecretSkin::open(
+        &config.database,
+        Arc::clone(&mcp_secrets),
+    ));
     let model = ModelHub::from_ports(config.ports);
     let model_for_actor = model.clone();
     let database_for_actor = config.database.clone();
     let mcp_for_actor = Arc::clone(&mcp_secrets);
+    let ceo_for_actor = Arc::clone(&ceo_secrets);
     let actor = match std::thread::Builder::new()
         .name("maia-actor".to_owned())
         .spawn(move || {
@@ -1038,6 +1045,7 @@ fn server_thread<R>(
                 publication,
                 model_for_actor,
                 mcp_for_actor,
+                ceo_for_actor,
             );
         }) {
         Ok(actor) => actor,
@@ -1240,6 +1248,21 @@ enum ActorCall {
         action: McpAction,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
+    AnswerQuestions {
+        message_id: String,
+        answers: Value,
+        bot_id: String,
+        operation_id: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    ProvideSecret {
+        message_id: String,
+        name: String,
+        value: String,
+        bot_id: String,
+        operation_id: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
 }
 
 enum McpAction {
@@ -1271,6 +1294,7 @@ struct Actor<R> {
     publication: std::sync::Arc<dyn SidebarPublication>,
     model: ModelHub,
     mcp_secrets: Arc<dyn McpSecretStore>,
+    ceo_secrets: Arc<CeoSecretSkin>,
 }
 
 struct LiveRoute {
@@ -1296,6 +1320,7 @@ fn actor_loop<R>(
     publication: std::sync::Arc<dyn SidebarPublication>,
     model: ModelHub,
     mcp_secrets: Arc<dyn McpSecretStore>,
+    ceo_secrets: Arc<CeoSecretSkin>,
 ) where
     R: RouterPort + Clone + Send + 'static,
 {
@@ -1306,7 +1331,12 @@ fn actor_loop<R>(
         publication,
         model,
         mcp_secrets,
+        ceo_secrets,
     };
+    let env = actor.ceo_secrets.env_pairs();
+    if !env.is_empty() {
+        actor.host.apply_ceo_env(&env);
+    }
     let publication_for_notice = std::sync::Arc::clone(&actor.publication);
     let database_for_notice = actor.database.clone();
     actor.host.notify_sidebar(std::sync::Arc::new(move || {
@@ -1401,8 +1431,13 @@ fn wake_interval_allows(
     now: u64,
     attention_nudge: bool,
 ) -> bool {
-    if attention_nudge || interval_secs == 0 {
+    if interval_secs == 0 {
         return true;
+    }
+    // Event-driven nudge bypasses the heartbeat, with a 1s debounce so rapid
+    // state changes coalesce into one wake instead of a storm.
+    if attention_nudge {
+        return now.saturating_sub(last_wake_at) >= 1 || last_wake_at == 0;
     }
     now.saturating_sub(last_wake_at) >= interval_secs
 }
@@ -1990,6 +2025,38 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
         }
         ActorCall::DeleteFact { fact_id, reply } => {
             let _ = reply.send(delete_brain_fact(actor, fact_id));
+        }
+        ActorCall::AnswerQuestions {
+            message_id,
+            answers,
+            bot_id,
+            operation_id,
+            reply,
+        } => {
+            let _ = reply.send(answer_questions_card(
+                actor,
+                &message_id,
+                &answers,
+                &bot_id,
+                &operation_id,
+            ));
+        }
+        ActorCall::ProvideSecret {
+            message_id,
+            name,
+            value,
+            bot_id,
+            operation_id,
+            reply,
+        } => {
+            let _ = reply.send(provide_secret_card(
+                actor,
+                &message_id,
+                &name,
+                &value,
+                &bot_id,
+                &operation_id,
+            ));
         }
         ActorCall::Mcp { action, reply } => {
             let _ = reply.send(mcp_action(actor, action));
@@ -2614,6 +2681,11 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
         .route("/bots/{bot_id}/delete", post(post_bot_delete))
         .route("/super-agent/inspector", get(inspector))
         .route("/super-agent/messages", post(post_message))
+        .route(
+            "/super-agent/question-answers",
+            post(post_question_answers),
+        )
+        .route("/super-agent/provide-secret", post(post_provide_secret))
         .route("/super-agent/live/dismiss", post(dismiss_live_reply))
         .route("/super-agent/tasks/{task_id}", get(task))
         .route("/super-agent/tasks/{task_id}/pin", post(post_pin))
@@ -3014,6 +3086,158 @@ async fn post_message(State(state): State<AppState>, request: Request) -> Respon
             reply,
         })
         .await,
+    )
+}
+
+#[derive(Deserialize)]
+struct QuestionAnswersRequest {
+    message_id: String,
+    answers: Value,
+    bot_id: String,
+    operation_id: String,
+}
+
+#[derive(Deserialize)]
+struct ProvideSecretRequest {
+    message_id: String,
+    name: String,
+    value: String,
+    bot_id: String,
+    operation_id: String,
+}
+
+async fn post_question_answers(State(state): State<AppState>, request: Request) -> Response {
+    let body: QuestionAnswersRequest = match read_bot_body(request).await {
+        Ok(body) => body,
+        Err(error) => return error_response(error),
+    };
+    finish(
+        ask(&state, |reply| ActorCall::AnswerQuestions {
+            message_id: body.message_id,
+            answers: body.answers,
+            bot_id: body.bot_id,
+            operation_id: body.operation_id,
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn post_provide_secret(State(state): State<AppState>, request: Request) -> Response {
+    let mut body: ProvideSecretRequest = match read_bot_body(request).await {
+        Ok(body) => body,
+        Err(error) => return error_response(error),
+    };
+    let result = ask(&state, |reply| ActorCall::ProvideSecret {
+        message_id: body.message_id,
+        name: body.name,
+        value: std::mem::take(&mut body.value),
+        bot_id: body.bot_id,
+        operation_id: body.operation_id,
+        reply,
+    })
+    .await;
+    wipe(&mut body.value);
+    finish(result)
+}
+
+fn answer_questions_card<R: RouterPort>(
+    actor: &mut Actor<R>,
+    message_id: &str,
+    answers: &Value,
+    bot_id: &str,
+    operation_id: &str,
+) -> Result<Value, ApiError> {
+    let (body, presented) = {
+        let connection = Connection::open(&actor.database).map_err(|_| ApiError::Store)?;
+        let body: String = connection
+            .query_row(
+                "SELECT body FROM router_messages WHERE message_id = ?1",
+                params![message_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| ApiError::InvalidJson)?;
+        let presented = present_router_body(&body);
+        (body, presented)
+    };
+    if presented.questions.is_none() {
+        return Err(ApiError::InvalidJson);
+    }
+    if presented.answers.is_some() {
+        return Ok(serde_json::json!({ "status": "already_answered" }));
+    }
+    let parsed: Vec<maia_core::chat_widgets::QuestionAnswer> =
+        serde_json::from_value(answers.clone()).map_err(|_| ApiError::InvalidJson)?;
+    let reply_text = maia_core::chat_widgets::format_question_answers_reply("", &parsed);
+    let updated = mark_widget_answered(&body, Some(answers)).ok_or(ApiError::InvalidJson)?;
+    {
+        let connection = Connection::open(&actor.database).map_err(|_| ApiError::Store)?;
+        connection
+            .execute(
+                "UPDATE router_messages SET body = ?1 WHERE message_id = ?2",
+                params![updated, message_id],
+            )
+            .map_err(|_| ApiError::Store)?;
+    }
+    message(
+        actor,
+        &SubmissionId(operation_id.to_owned()),
+        &reply_text,
+        bot_id,
+        &[],
+    )
+}
+
+fn provide_secret_card<R: RouterPort>(
+    actor: &mut Actor<R>,
+    message_id: &str,
+    name: &str,
+    value: &str,
+    bot_id: &str,
+    operation_id: &str,
+) -> Result<Value, ApiError> {
+    let (body, presented) = {
+        let connection = Connection::open(&actor.database).map_err(|_| ApiError::Store)?;
+        let body: String = connection
+            .query_row(
+                "SELECT body FROM router_messages WHERE message_id = ?1",
+                params![message_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| ApiError::InvalidJson)?;
+        let presented = present_router_body(&body);
+        (body, presented)
+    };
+    if presented.secret_request.is_none() {
+        return Err(ApiError::InvalidJson);
+    }
+    if presented.secret_provided {
+        return Ok(serde_json::json!({ "status": "already_provided" }));
+    }
+    let safe_name = maia_core::chat_widgets::sanitize_secret_name(name).ok_or(ApiError::InvalidJson)?;
+    actor
+        .ceo_secrets
+        .put(&safe_name, value)
+        .map_err(|_| ApiError::Store)?;
+    let env = actor.ceo_secrets.env_pairs();
+    actor.host.apply_ceo_env(&env);
+    let updated = mark_widget_answered(&body, None).ok_or(ApiError::InvalidJson)?;
+    {
+        let connection = Connection::open(&actor.database).map_err(|_| ApiError::Store)?;
+        connection
+            .execute(
+                "UPDATE router_messages SET body = ?1 WHERE message_id = ?2",
+                params![updated, message_id],
+            )
+            .map_err(|_| ApiError::Store)?;
+    }
+    let notice = maia_core::chat_widgets::format_secret_provided_notice(&safe_name);
+    message(
+        actor,
+        &SubmissionId(operation_id.to_owned()),
+        &notice,
+        bot_id,
+        &[],
     )
 }
 
@@ -4761,6 +4985,18 @@ fn transcript_value(connection: &Connection, bot: Option<&str>) -> Result<Value,
         if let Some(route) = presented.route {
             message["route"] = serde_json::Value::String(route);
         }
+        if let Some(questions) = presented.questions {
+            message["questions"] = questions;
+        }
+        if let Some(answers) = presented.answers {
+            message["answers"] = answers;
+        }
+        if let Some(secret_request) = presented.secret_request {
+            message["secret_request"] = secret_request;
+        }
+        if presented.secret_provided {
+            message["secret_provided"] = Value::Bool(true);
+        }
         if let Ok(attachments) = attachment_values(connection, &message_id)
             && !attachments.is_empty()
         {
@@ -5231,6 +5467,14 @@ mod scheduled_wake_tests {
         assert!(
             wake_interval_allows(300, 100, 150, true),
             "failed/waiting/completed nudge must allow an immediate wake check"
+        );
+        assert!(
+            !wake_interval_allows(300, 100, 100, true),
+            "nudge debounce must coalesce same-second state storms"
+        );
+        assert!(
+            wake_interval_allows(300, 0, 0, true),
+            "first nudge with no prior wake must still run"
         );
         assert!(
             wake_interval_allows(300, 100, 450, false),

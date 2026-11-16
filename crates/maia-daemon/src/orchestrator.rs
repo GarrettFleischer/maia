@@ -214,7 +214,7 @@ const ROUTER_NOTE: &str = "The model provider is unavailable.";
 const PROVIDER_RETRY_NOTE: &str = "The provider is busy, retrying.";
 const PROVIDER_RETRY_LIMIT: u32 = 2;
 const ROUTE_REPAIR_LIMIT: u32 = 1;
-const ROUTE_REPAIR: &str = "That call was not a valid manager route. You only have spawn_task, continue_task, link_task, inspect_task, cancel_task, retry_task, message_user, ask_user, success, failure, and waiting. Never call bash, shell, write_file, read_file, or any worker tool. For new work call spawn_task. Send one tool call.";
+const ROUTE_REPAIR: &str = "That call was not a valid manager route. You only have spawn_task, continue_task, link_task, inspect_task, cancel_task, retry_task, message_user, ask_user, ask_questions, request_secret, success, failure, and waiting. Never call bash, shell, write_file, read_file, or any worker tool. For new work call spawn_task. Send one tool call.";
 const UNKNOWN_MANAGER_TOOL: &str = "That tool is not available to the manager. Hire or instruct a worker with spawn_task or continue_task. Never call bash, shell, write_file, or read_file yourself. Send one manager tool call.";
 const AMBIGUOUS_ASK: &str =
     "What should I do with that? Name the task to continue, or tell me the work to start.";
@@ -1317,13 +1317,15 @@ On every turn and every wake: check workers, diagnose failures yourself from the
 Never trust a worker's success claim alone. A finished worker with success can still fail the goal check. Before Done, verify the stated checks yourself (missing required inputs, wrong format, line/word count, path, or content) via the wake brief outcome/output tail or by hiring a worker to inspect the artifact. If verification fails, recover silently with spawn_task and a corrected brief (preferred after a completed wrong draft) — do not ask_user and do not close out yet. Do not keep calling continue_task or retry_task on a completed worker; hire again instead. When the check already passes, Done immediately — do not keep verifying forever.\n\
 You may hire, recover, ask, and close out while other workers are still running — do not wait for healthy runners to finish. If a worker's idle age looks hung with no useful progress, cancel_task and hire or retry with a clearer plan rather than waiting forever.\n\
 A wake brief lists LEARNED notes (hints for how to retry ATTENTION failures only — never spawn_task from LEARNED alone or invent work absent from ATTENTION), ATTENTION (ordered concurrent goals), CEO_WAITING (with the question), FINISHED goals (with outcome= for close-out), RECENT_CEO_CHAT, and each open worker with status, idle age, recent output, and last error. Use that before asking the CEO.\n\
-On a silent wake call only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, record_learning. On a wake do not call success, failure, waiting, link_task, or inspect_task (use the wake brief instead of inspect).\n\
+On a silent wake call only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, ask_questions, request_secret, record_learning. On a wake do not call success, failure, waiting, link_task, or inspect_task (use the wake brief instead of inspect).\n\
 On an owner turn keep going until you call success, failure, waiting, message_user, or ask_user — except after spawn_task, link_task, continue_task, or retry_task, which end the turn silently (no hire / standing-by / in-progress chat).\n\
 - success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory when you did not hire or continue a worker. Owner turns only.\n\
 - failure: message is why this cannot be handled. Owner turns only.\n\
 - waiting: message is one specific question while work stays alive. Prefer ask_user for CEO decisions. Owner turns only. Never use waiting instead of hiring a worker the CEO asked you to hire.\n\
 - message_user: post one useful update only when the CEO genuinely needs to know. Never announce a hire, that you are standing by, or that work is in progress — after hiring or continuing a worker the turn ends silent until a Done close-out or ask_user. When the wake brief shows FINISHED goals (goal_state=needs_close_out) and nothing else needs attention, you MUST send exactly one short Done close-out with message_user — start with Done —, restate the FINISHED outcome= and where it landed, then stay silent on later wakes. Prior status chatter (hired / working / will notify / standing by) does not count as close-out. If RECENT_CEO_CHAT already has that Done close-out, stay silent. Never dump worker logs into chat. Never put a secret value, password, token, or vault contents into Done or message_user — name the secret, do not echo its value.\n\
-- ask_user: one clear CEO decision (credentials, money, irreversible or external action, or a real owner preference between options you cannot choose). Do the work you can first; ask as soon as that decision blocks progress — do not defer. When the wake brief shows CEO_WAITING (mandatory), you MUST ask_user immediately this wake (not silence, not message_user, not a later wake). When it shows CEO_WAITING (already asked), stay silent — the owner has the question and has not answered yet; do not rephrase, do not ask again, do not message_user that you are waiting. After the CEO answers (owner turn or CEO_WAITING answered), continue_task immediately with their answer in that same turn — do not wait for a wake. Never paste worker output. Never ask about things you can decide yourself. Never put a secret value into the question text.\n\
+- ask_user: CEO decision(s) (credentials, money, irreversible or external action, or a real owner preference). Several distinct questions are OK when needed; never duplicates of an open question. Prefer ask_questions for radios/checkboxes. Do the work you can first; ask as soon as a decision blocks progress — do not defer. When CEO_WAITING (mandatory), ask immediately this wake. When already asked, stay silent unless OPEN_QUESTIONS + an unrelated CEO message warrants one brief reminder — do not nag every wake. After the CEO answers, continue_task immediately with their answer. Never paste worker output. Never put a secret value into the question text — use request_secret.\n\
+- ask_questions: one in-chat card with several questions (single = radio, multi = checkboxes). Every question always has Other in the UI. Use when multiple decisions must be defined together.\n\
+- request_secret: ask for a secret by name; masked input; value never enters chat, logs, model context, notes, or Done.\n\
 - New work: always spawn_task first. Do not answer a hire request with only message_user, waiting, ask_user, success, or failure — that leaves no worker. Do not refuse a path yourself; hire a worker. Do not try to run the work with bash or files yourself.\n\
 - After spawn_task, link_task, continue_task, or retry_task the owner turn is already finished silently — do not follow with success or message_user just to acknowledge.\n\
 - Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text). When the CEO answers your ask_user about a waiting worker, continue_task immediately in that same owner turn with that task_id and their answer so the worker can finish — do not wait for a wake and do not spawn a new worker for the same answer. When the CEO asks to hire new work while another worker is waiting or running, still spawn_task for the new work — do not treat a hire request as the answer to the waiter.\n\
@@ -1334,8 +1336,8 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - Failed or stopped work you choose to retry: retry_task.\n\
 - After a useful lesson (what worked or failed): record_learning with one short note. It appears under LEARNED on later wakes — use it only when ATTENTION already lists matching failed/stuck work; do not spawn new goals from LEARNED alone; do not repeat a failed tactic.\n\
 Fixable worker failures (missing file, bad args, wrong/incomplete output vs the goal check, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance that tries a different approach. Do not ask_user. Do not call bash yourself. Prefer a second hire with a corrected brief when the first approach was wrong.\n\
-If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: call ask_user immediately with one clear question unless CEO_WAITING (already asked) or RECENT_CEO_CHAT already has that unanswered ask. Do not defer to a later wake. Do not stay silent on the first ask. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate the decision cleanly. Do not rephrase or ask the same decision again later.\n\
-Shell, files, vault, and network work always go through spawn_task or continue_task. Do not ask_user about a secret until a worker is waiting on it.\n\
+If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: call ask_user / ask_questions / request_secret immediately unless CEO_WAITING (already asked), OPEN_QUESTIONS, or RECENT_CEO_CHAT already has that unanswered ask. Do not defer. Do not stay silent on the first ask. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate cleanly. Do not rephrase the same decision again later.\n\
+Shell, files, vault, and network work always go through spawn_task or continue_task. Prefer request_secret for secret values; do not ask_user to paste a secret into chat.\n\
 Workers never talk to the CEO. Their blockers and questions come to you; you decide.\n\
 A plan, a thought, or a cut-off sentence is not finished. Call a tool.\n\
 Use only a task_id from the candidate list or the wake brief. Never invent an id. Never target a child.\n\
@@ -1447,7 +1449,7 @@ fn router_request(
 
 const TURN_MARK: &str = "\u{1}maia-turn\u{1}";
 
-/// Text, thinking, and route label shown for one stored router message.
+/// Text, thinking, route, and in-chat widgets shown for one stored router message.
 pub struct PresentedRouterBody {
     /// Sentence shown in the transcript.
     pub text: String,
@@ -1455,9 +1457,19 @@ pub struct PresentedRouterBody {
     pub thinking: Option<String>,
     /// Route tool the host admitted, when this message records one.
     pub route: Option<String>,
+    /// Structured question card, when this message asked the CEO.
+    pub questions: Option<serde_json::Value>,
+    /// Answers already submitted for that card.
+    pub answers: Option<serde_json::Value>,
+    /// Secret request card (name only; never a value).
+    pub secret_request: Option<serde_json::Value>,
+    /// Whether the secret was provided (value never stored here).
+    pub secret_provided: bool,
+    /// Unix seconds when the widget was posted (open-question age).
+    pub asked_at: Option<i64>,
 }
 
-/// Splits a stored body into the sentence, thinking, and route the chat shows.
+/// Splits a stored body into the sentence, thinking, route, and widgets the chat shows.
 pub fn present_router_body(body: &str) -> PresentedRouterBody {
     if let Some(json) = body.strip_prefix(TURN_MARK)
         && let Ok(value) = serde_json::from_str::<serde_json::Value>(json)
@@ -1467,9 +1479,18 @@ pub fn present_router_body(body: &str) -> PresentedRouterBody {
             .and_then(|item| item.as_str())
             .unwrap_or("")
             .to_owned();
+        let asked_at = value.get("asked_at").and_then(serde_json::Value::as_i64);
         return PresentedRouterBody {
             route: optional_json_text(&value, "route"),
             thinking: optional_json_text(&value, "thinking"),
+            questions: value.get("questions").cloned(),
+            answers: value.get("answers").cloned(),
+            secret_request: value.get("secret_request").cloned(),
+            secret_provided: value
+                .get("secret_provided")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            asked_at,
             text,
         };
     }
@@ -1477,7 +1498,66 @@ pub fn present_router_body(body: &str) -> PresentedRouterBody {
         route: None,
         text: body.to_owned(),
         thinking: None,
+        questions: None,
+        answers: None,
+        secret_request: None,
+        secret_provided: false,
+        asked_at: None,
     }
+}
+
+/// Builds a TURN_MARK body for a structured question card.
+#[must_use]
+pub fn stored_questions_body(
+    text: &str,
+    questions: &serde_json::Value,
+    asked_at: i64,
+) -> String {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "text".to_owned(),
+        serde_json::Value::String(text.to_owned()),
+    );
+    payload.insert("questions".to_owned(), questions.clone());
+    payload.insert(
+        "asked_at".to_owned(),
+        serde_json::Value::Number(asked_at.into()),
+    );
+    format!("{TURN_MARK}{}", serde_json::Value::Object(payload))
+}
+
+/// Builds a TURN_MARK body for a secret request card.
+#[must_use]
+pub fn stored_secret_request_body(text: &str, name: &str, asked_at: i64) -> String {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "text".to_owned(),
+        serde_json::Value::String(text.to_owned()),
+    );
+    payload.insert(
+        "secret_request".to_owned(),
+        serde_json::json!({ "name": name }),
+    );
+    payload.insert(
+        "asked_at".to_owned(),
+        serde_json::Value::Number(asked_at.into()),
+    );
+    format!("{TURN_MARK}{}", serde_json::Value::Object(payload))
+}
+
+/// Marks a stored question/secret widget body as answered without adding secret values.
+#[must_use]
+pub fn mark_widget_answered(body: &str, answers: Option<&serde_json::Value>) -> Option<String> {
+    let json = body.strip_prefix(TURN_MARK)?;
+    let mut value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let object = value.as_object_mut()?;
+    if let Some(answers) = answers {
+        object.insert("answers".to_owned(), answers.clone());
+    }
+    if object.contains_key("secret_request") {
+        object.insert("secret_provided".to_owned(), serde_json::Value::Bool(true));
+    }
+    Some(format!("{TURN_MARK}{value}"))
 }
 
 fn optional_json_text(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -1824,12 +1904,15 @@ enum RouterStop {
     Done(String),
     Work(NormalizedToolCall),
     Answer(String),
+    /// Structured in-chat widget (`ask_questions` / `request_secret`).
+    CeoWidget(NormalizedToolCall),
     Repair,
 }
 
 fn router_stop(response: &RouterResponse) -> RouterStop {
     match response.tool_calls.as_slice() {
         [call] => match call.name.as_str() {
+            "ask_questions" | "request_secret" => RouterStop::CeoWidget(call.clone()),
             "success" | "failure" | "waiting" | "message_user" | "ask_user" => {
                 match terminal_sentence(&call.arguments_json) {
                     Some(sentence) => RouterStop::Done(sentence),
@@ -1893,7 +1976,13 @@ fn is_manager_tool(name: &str) -> bool {
     is_route_tool(name)
         || matches!(
             name,
-            "success" | "failure" | "waiting" | "message_user" | "ask_user"
+            "success"
+                | "failure"
+                | "waiting"
+                | "message_user"
+                | "ask_user"
+                | "ask_questions"
+                | "request_secret"
         )
 }
 
@@ -1979,6 +2068,9 @@ fn is_route_tool(name: &str) -> bool {
 }
 
 fn wake_tool_payload(call: &NormalizedToolCall) -> String {
+    if matches!(call.name.as_str(), "ask_questions" | "request_secret") {
+        return call.arguments_json.clone();
+    }
     if let Some(message) = terminal_sentence(&call.arguments_json) {
         return message;
     }
@@ -2107,8 +2199,10 @@ fn route_tools_json() -> String {
         ),
         terminal_tool(
             "ask_user",
-            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real owner preference you cannot choose). Do what you can first; as soon as that decision blocks progress, ask immediately — do not defer. When the wake brief shows CEO_WAITING, you MUST use this in the same wake (not message_user, not silence, not a later wake). One question only; skip if RECENT_CEO_CHAT already asked. Never ask about things you can decide yourself. Never paste worker output into chat. Never put a secret value into the question text — name the secret, do not echo a value. Workers never ask the CEO directly.",
+            "Ask the CEO a clear decision (credentials, money, irreversible or external action, or a real owner preference you cannot choose). Several distinct questions are OK when the task needs them — never duplicates or rewordings of an already-open question. Prefer ask_questions when you need radios/checkboxes. Do what you can first; as soon as a decision blocks progress, ask immediately — do not defer. When the wake brief shows CEO_WAITING, you MUST ask in the same wake (not message_user, not silence, not a later wake). Skip if RECENT_CEO_CHAT / OPEN_QUESTIONS already asked. Never ask about things you can decide yourself. Never paste worker output into chat. Never put a secret value into the question text — use request_secret for values. Workers never ask the CEO directly.",
         ),
+        ask_questions_tool(),
+        request_secret_tool(),
         terminal_tool(
             "record_learning",
             "Save one short lesson for later wakes (what worked or failed). Appears under LEARNED. Prefer a different approach next time; do not spam duplicates.",
@@ -2138,6 +2232,8 @@ fn wake_tools_json() -> String {
                     | "cancel_task"
                     | "message_user"
                     | "ask_user"
+                    | "ask_questions"
+                    | "request_secret"
                     | "record_learning"
             )
         })
@@ -2178,6 +2274,56 @@ fn terminal_tool(name: &str, description: &str) -> serde_json::Value {
                     "message": {"type": "string"}
                 },
                 "required": ["message"]
+            }
+        }
+    })
+}
+
+fn ask_questions_tool() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "ask_questions",
+            "description": "Ask the CEO several structured questions in one in-chat card (radios and/or checkboxes). Every question always has an Other free-text box in the UI. Use when a task needs multiple decisions defined at once. Never duplicate an already-open question. Prefer this over several plain ask_user lines when choices help.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intro": {"type": "string"},
+                    "questions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "prompt": {"type": "string"},
+                                "kind": {"type": "string", "enum": ["single", "multi"]},
+                                "choices": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                }
+                            },
+                            "required": ["id", "prompt", "kind"]
+                        }
+                    }
+                },
+                "required": ["questions"]
+            }
+        }
+    })
+}
+
+fn request_secret_tool() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "request_secret",
+            "description": "Ask the CEO for a secret (API key, token, password) by name. The chat shows a masked field; the value is stored for tools as an env value and NEVER appears in chat, logs, model context, task notes, or Done notes. You only learn that it was provided and under which name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"}
+                },
+                "required": ["name"]
             }
         }
     })
@@ -3853,6 +3999,7 @@ impl<R: Router> Orchestrator<R> {
             workers,
             recent_ceo_lines: self.recent_ceo_lines_for(bot_id),
             learned: Vec::new(),
+            open_questions: self.open_questions_for(bot_id),
         }
     }
 
@@ -3907,6 +4054,47 @@ impl<R: Router> Orchestrator<R> {
             .into_iter()
             .rev()
             .collect()
+    }
+
+    /// Unanswered CEO asks with age for prompt-first reminders.
+    fn open_questions_for(&self, bot_id: &str) -> Vec<maia_core::chat_widgets::OpenQuestionBrief> {
+        let Ok(snapshot) = self.store.runtime_snapshot() else {
+            return Vec::new();
+        };
+        let now = self.ids.now;
+        let messages = history_for_bot(&snapshot.router_messages, bot_id);
+        let mut open = Vec::new();
+        for (idx, message) in messages.iter().enumerate() {
+            if message.role != ASSISTANT_ROLE {
+                continue;
+            }
+            let presented = present_router_body(&message.body);
+            let is_ask = presented.questions.is_some()
+                || presented.secret_request.is_some()
+                || maia_core::manager::ask_shaped_ceo_line(
+                    &format!("assistant: {}", presented.text.to_ascii_lowercase()),
+                );
+            if !is_ask {
+                continue;
+            }
+            if presented.answers.is_some() || presented.secret_provided {
+                continue;
+            }
+            let answered_later = messages[idx + 1..].iter().any(|later| later.role == USER_ROLE);
+            if answered_later {
+                continue;
+            }
+            let age_secs = presented
+                .asked_at
+                .map(|asked| u64::try_from(now.saturating_sub(asked).max(0)).unwrap_or(0))
+                .unwrap_or(0);
+            let text = maia_core::manager::truncate_brief(&presented.text, 120);
+            if text.is_empty() {
+                continue;
+            }
+            open.push(maia_core::chat_widgets::OpenQuestionBrief { text, age_secs });
+        }
+        open
     }
 
     fn task_completion_unopened(&self, task: &TaskId) -> bool {
@@ -4019,6 +4207,26 @@ impl<R: Router> Orchestrator<R> {
                         }
                     }
                 }
+                WakeAction::AskQuestions { payload } => {
+                    let summary = maia_core::chat_widgets::ask_questions_summary(payload);
+                    let questions = serde_json::to_value(&payload.questions)
+                        .unwrap_or_else(|_| serde_json::json!([]));
+                    let body = stored_questions_body(&summary, &questions, self.ids.now);
+                    if self.note_router(&body).is_ok() {
+                        messaged = true;
+                    }
+                }
+                WakeAction::RequestSecret { name } => {
+                    let summary = maia_core::chat_widgets::secret_request_summary(
+                        &maia_core::chat_widgets::SecretRequest {
+                            name: name.clone(),
+                        },
+                    );
+                    let body = stored_secret_request_body(&summary, name, self.ids.now);
+                    if self.note_router(&body).is_ok() {
+                        messaged = true;
+                    }
+                }
                 WakeAction::Recover { task_id, note } => {
                     let task = TaskId(task_id.clone());
                     self.recovery_notes.insert(task.clone(), note.clone());
@@ -4092,6 +4300,7 @@ impl<R: Router> Orchestrator<R> {
                     }
                     // Cancel may fail (exhausted ids); still drop Working/Stop for this id.
                     self.clear_live_activity(&task);
+                    self.request_wake_nudge();
                 }
                 WakeAction::Spawn { guidance } => {
                     // Criterion source needs a user router_messages row. Do not BindMessage:
@@ -4208,7 +4417,14 @@ impl<R: Router> Orchestrator<R> {
         }
         let asked = actions
             .iter()
-            .any(|action| matches!(action, WakeAction::AskUser { .. }));
+            .any(|action| {
+                matches!(
+                    action,
+                    WakeAction::AskUser { .. }
+                        | WakeAction::AskQuestions { .. }
+                        | WakeAction::RequestSecret { .. }
+                )
+            });
         let recovered_or_cancelled = actions.iter().any(|action| {
             matches!(
                 action,
@@ -4390,6 +4606,13 @@ impl<R: Router> Orchestrator<R> {
         self.subagent_entries = opened.entries;
         self.subagent = Some(opened.host);
         self.install_mcp(Vec::new(), Vec::new());
+    }
+
+    /// Restarts the worker shell with CEO secrets available as env vars.
+    pub fn apply_ceo_env(&mut self, env: &[(String, String)]) {
+        if let Some(host) = self.subagent.as_mut() {
+            host.apply_ceo_env(env);
+        }
     }
 
     /// Replaces the owner-chat catalog and the tools a subagent may call.
@@ -5246,6 +5469,32 @@ impl<R: Router> Orchestrator<R> {
             machine.thinking = Some(thought);
         }
         match router_stop(&response) {
+            RouterStop::CeoWidget(call) => {
+                let Some(body) = self.ceo_widget_body_from_call(&call) else {
+                    push_tool_exchange(
+                        &mut machine.messages,
+                        &response,
+                        &call,
+                        "ask_questions needs questions[]; request_secret needs a safe name.",
+                    );
+                    return self.resume_route(
+                        machine,
+                        &call,
+                        "ask_questions needs questions[]; request_secret needs a safe name.",
+                    );
+                };
+                RouteDrive::Done(self.finish_owner_turn(
+                    machine.message.clone(),
+                    &machine.text.clone(),
+                    body,
+                    machine.applied.clone(),
+                    machine.thinking.clone(),
+                    machine.usage.clone(),
+                    &machine.measured.clone(),
+                    TurnClose::Model,
+                    &machine.attachments.clone(),
+                ))
+            }
             RouterStop::Done(sentence) | RouterStop::Answer(sentence) => {
                 // After a silent work route the turn already ended with no chat; ignore
                 // trailing success/message_user chatter (hire / standing-by / answers).
@@ -6330,6 +6579,7 @@ impl<R: Router> Orchestrator<R> {
             task: task.clone(),
             command,
         })?;
+        self.request_wake_nudge();
         Ok(route_effect(
             "cancel_task",
             "",
@@ -7733,6 +7983,27 @@ impl<R: Router> Orchestrator<R> {
         route: Option<&str>,
     ) -> Result<(), OrchestratorError> {
         self.note_router(&stored_router_body(text, thinking, route))
+    }
+
+    fn ceo_widget_body_from_call(&self, call: &NormalizedToolCall) -> Option<String> {
+        match call.name.as_str() {
+            "ask_questions" => {
+                let payload = maia_core::chat_widgets::parse_ask_questions(&call.arguments_json)?;
+                let summary = maia_core::chat_widgets::ask_questions_summary(&payload);
+                let questions = serde_json::to_value(&payload.questions).ok()?;
+                Some(stored_questions_body(&summary, &questions, self.ids.now))
+            }
+            "request_secret" => {
+                let request = maia_core::chat_widgets::parse_secret_request(&call.arguments_json)?;
+                let summary = maia_core::chat_widgets::secret_request_summary(&request);
+                Some(stored_secret_request_body(
+                    &summary,
+                    &request.name,
+                    self.ids.now,
+                ))
+            }
+            _ => None,
+        }
     }
 
     fn note_router(&mut self, body: &str) -> Result<(), OrchestratorError> {

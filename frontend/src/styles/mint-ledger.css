@@ -330,7 +330,8 @@ textarea {
 .maia-inspect-icon,
 .maia-quote-icon,
 .maia-tag-icon,
-.maia-source-icon {
+.maia-source-icon,
+.maia-reveal-icon {
   display: block;
   width: 14px;
   height: 14px;
@@ -352,6 +353,15 @@ textarea {
 .maia-send-icon {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8h9'/%3E%3Cpath d='M8 3.5L12.5 8 8 12.5'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8h9'/%3E%3Cpath d='M8 3.5L12.5 8 8 12.5'/%3E%3C/svg%3E");
+}
+
+.maia-reveal-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 8s2.5-4 6.5-4 6.5 4 6.5 4-2.5 4-6.5 4-6.5-4-6.5-4z'/%3E%3Ccircle cx='8' cy='8' r='2'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 8s2.5-4 6.5-4 6.5 4 6.5 4-2.5 4-6.5 4-6.5-4-6.5-4z'/%3E%3Ccircle cx='8' cy='8' r='2'/%3E%3C/svg%3E");
+}
+
+.maia-reveal-icon--on {
+  opacity: 0.7;
 }
 
 .maia-back-icon {
@@ -873,6 +883,92 @@ textarea {
   margin-left: 0;
 }
 
+.maia-chat-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.maia-chat-question {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.maia-chat-question legend {
+  padding: 0;
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.maia-chat-question-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.maia-chat-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.maia-chat-other {
+  display: block;
+  margin-top: 6px;
+}
+
+.maia-chat-other input,
+.maia-chat-secret-field input {
+  width: 100%;
+  max-width: 280px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.maia-chat-secret {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: end;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 28rem;
+}
+
+.maia-chat-secret--provided {
+  grid-template-columns: 1fr;
+}
+
+.maia-chat-secret-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.maia-chat-secret-name,
+.maia-question-status,
+.maia-chat-widget-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted, color-mix(in srgb, var(--text) 65%, transparent));
+}
+
+.maia-chat-questions .maia-icon-btn,
+.maia-chat-secret .maia-icon-btn {
+  flex: none;
+}
 
 .maia-transcript-find {
   display: flex;

@@ -203,6 +203,8 @@ export function ConversationPane({
             liveReply={router.liveReply}
             onDismissLiveReply={router.dismissLiveReply}
             botId={botId}
+            onSubmitQuestionAnswers={router.submitQuestionAnswers}
+            onProvideSecret={router.provideSecret}
             accessory={
               phoneStop ? (
                 <div className="maia-phone-stop" data-testid="phone-stop-bar">

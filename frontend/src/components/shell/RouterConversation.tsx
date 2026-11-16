@@ -1,8 +1,11 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type UIEventHandler } from 'react'
 import { AttachmentChips, attachmentAllowed } from '@/components/shell/AttachmentChips'
+import { ChatQuestionCard } from '@/components/shell/ChatQuestionCard'
+import { ChatSecretField } from '@/components/shell/ChatSecretField'
 import { MarkdownMessage } from '@/components/shell/MarkdownMessage'
 import type {
   ActivityLine,
+  ChatQuestionAnswer,
   ComposerNotice,
   OutgoingMessage,
   RouterMessage,
@@ -63,6 +66,8 @@ export function RouterConversation({
   liveReply = null,
   onDismissLiveReply,
   botId = 'maia',
+  onSubmitQuestionAnswers,
+  onProvideSecret,
 }: {
   messages: readonly RouterMessage[]
   transcriptState: TranscriptState
@@ -91,6 +96,8 @@ export function RouterConversation({
   liveReply?: { text: string; dots: boolean; phase?: 'streaming' | 'interrupted' } | null
   onDismissLiveReply?: () => void
   botId?: string
+  onSubmitQuestionAnswers?: (messageId: string, answers: ChatQuestionAnswer[]) => void | Promise<void>
+  onProvideSecret?: (messageId: string, name: string, value: string) => void | Promise<void>
 }) {
   const [rejection, setRejection] = useState<string | null>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
@@ -488,6 +495,30 @@ export function RouterConversation({
                       </details>
                     ) : null}
                     <MarkdownMessage text={message.text} className="maia-transcript-body" />
+                    {message.questions && message.questions.length > 0 ? (
+                      <ChatQuestionCard
+                        questions={message.questions}
+                        answers={message.answers}
+                        disabled={operation.kind === 'sending' || !onSubmitQuestionAnswers}
+                        onSubmit={(answers) => {
+                          void onSubmitQuestionAnswers?.(message.message_id, answers)
+                        }}
+                      />
+                    ) : null}
+                    {message.secret_request ? (
+                      <ChatSecretField
+                        name={message.secret_request.name}
+                        provided={message.secret_provided === true}
+                        disabled={operation.kind === 'sending' || !onProvideSecret}
+                        onSubmit={(value) => {
+                          void onProvideSecret?.(
+                            message.message_id,
+                            message.secret_request!.name,
+                            value,
+                          )
+                        }}
+                      />
+                    ) : null}
                     <AttachmentChips chips={message.attachments ?? []} />
                     <FactsUsed
                       ids={factsUsed?.get(message.message_id) ?? []}

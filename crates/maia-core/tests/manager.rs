@@ -11,6 +11,7 @@ use maia_core::manager::WakeToolCall;
 use maia_core::manager::encode_bot_wake_fingerprints;
 use maia_core::manager::enforce_ceo_moments;
 use maia_core::manager::enforce_restart_budget;
+use maia_core::manager::format_wake_brief;
 use maia_core::manager::interpret_wake_tools;
 use maia_core::manager::parse_bot_wake_fingerprints;
 use maia_core::manager::plan_wake;
@@ -105,6 +106,86 @@ fn wake_tool_ask_user_is_one_ceo_question() {
         vec![WakeAction::AskUser {
             text: "Need the OpenRouter API key to continue shipping.".to_owned()
         }]
+    );
+}
+
+#[test]
+fn wake_tool_allows_several_ask_user_calls() {
+    let outcomes = interpret_wake_tools(&[
+        WakeToolCall {
+            name: "ask_user".to_owned(),
+            message: "Pick a region: us-west or eu-central?".to_owned(),
+        },
+        WakeToolCall {
+            name: "ask_user".to_owned(),
+            message: "Should I enable dry-run first?".to_owned(),
+        },
+    ]);
+    assert_eq!(outcomes.len(), 2);
+    assert!(
+        outcomes
+            .iter()
+            .all(|action| matches!(action, WakeAction::AskUser { .. })),
+        "multiple ask_user tools must all survive: {outcomes:?}"
+    );
+}
+
+#[test]
+fn wake_tool_ask_questions_builds_structured_card() {
+    let outcomes = interpret_wake_tools(&[WakeToolCall {
+        name: "ask_questions".to_owned(),
+        message: r#"{
+            "intro": "Ship settings",
+            "questions": [
+                {"id": "channel", "prompt": "Channel?", "kind": "single", "choices": ["email", "sms"]},
+                {"id": "topics", "prompt": "Topics?", "kind": "multi", "choices": ["a", "b"]}
+            ]
+        }"#
+        .to_owned(),
+    }]);
+    assert!(
+        matches!(
+            &outcomes[..],
+            [WakeAction::AskQuestions { payload }]
+                if payload.questions.len() == 2
+                    && payload.questions[0].kind == maia_core::chat_widgets::QuestionKind::Single
+                    && payload.questions[1].kind == maia_core::chat_widgets::QuestionKind::Multi
+        ),
+        "expected ask_questions card, got {outcomes:?}"
+    );
+}
+
+#[test]
+fn wake_tool_request_secret_uses_safe_name() {
+    let outcomes = interpret_wake_tools(&[WakeToolCall {
+        name: "request_secret".to_owned(),
+        message: r#"{"name":"RUN67_TEST_KEY"}"#.to_owned(),
+    }]);
+    assert_eq!(
+        outcomes,
+        vec![WakeAction::RequestSecret {
+            name: "RUN67_TEST_KEY".to_owned()
+        }]
+    );
+}
+
+#[test]
+fn wake_brief_lists_open_questions_with_age() {
+    let snap = WakeSnapshot {
+        open_questions: vec![maia_core::chat_widgets::OpenQuestionBrief {
+            text: "Need your decision for channel?".to_owned(),
+            age_secs: 420,
+        }],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    assert!(
+        brief.contains("OPEN_QUESTIONS") && brief.contains("age_secs=420"),
+        "brief must surface open question age: {brief}"
+    );
+    assert!(
+        brief.to_ascii_lowercase().contains("remind"),
+        "brief must allow a prompt-first reminder: {brief}"
     );
 }
 

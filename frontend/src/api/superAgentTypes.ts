@@ -65,6 +65,25 @@ export interface AttachmentChip {
   byte_size: number
 }
 
+export type ChatQuestionKind = 'single' | 'multi'
+
+export interface ChatQuestionSpec {
+  id: string
+  prompt: string
+  kind: ChatQuestionKind
+  choices: string[]
+}
+
+export interface ChatQuestionAnswer {
+  id: string
+  selected: string[]
+  other: string
+}
+
+export interface ChatSecretRequest {
+  name: string
+}
+
 export interface RouterMessage {
   message_id: string
   role: 'owner' | 'router'
@@ -72,6 +91,10 @@ export interface RouterMessage {
   thinking?: string
   route?: string
   attachments?: AttachmentChip[]
+  questions?: ChatQuestionSpec[]
+  answers?: ChatQuestionAnswer[]
+  secret_request?: ChatSecretRequest
+  secret_provided?: boolean
 }
 
 export interface ActivityLine {
@@ -232,6 +255,19 @@ export interface SuperAgentClient {
     attachmentIds?: readonly string[],
     botId?: string,
   ): Promise<MessageAdmissionResult>
+  submitQuestionAnswers?(input: {
+    messageId: string
+    answers: ChatQuestionAnswer[]
+    botId: string
+    operationId: SubmissionOperationId
+  }): Promise<void>
+  provideSecret?(input: {
+    messageId: string
+    name: string
+    value: string
+    botId: string
+    operationId: SubmissionOperationId
+  }): Promise<void>
   listBots?(): Promise<{ bots: BotSummary[]; selected: string }>
   createBot?(input: { name: string; instructions?: string }): Promise<BotSummary>
   renameBot?(botId: string, name: string): Promise<BotSummary>

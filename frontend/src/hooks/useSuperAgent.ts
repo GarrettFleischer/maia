@@ -354,6 +354,11 @@ export interface RouterBindings {
   activity: readonly ActivityLine[]
   liveReply: { text: string; dots: boolean; phase: 'streaming' | 'interrupted' } | null
   dismissLiveReply: () => void
+  submitQuestionAnswers: (
+    messageId: string,
+    answers: import('@/api/superAgentTypes').ChatQuestionAnswer[],
+  ) => Promise<void>
+  provideSecret: (messageId: string, name: string, value: string) => Promise<void>
 }
 
 export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
@@ -1187,6 +1192,41 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
     [refreshSidebar],
   )
 
+  const submitQuestionAnswers = useCallback(
+    async (messageId: string, answers: import('@/api/superAgentTypes').ChatQuestionAnswer[]) => {
+      const activation = activeActivation.current
+      if (!activation || activation.session !== session) return
+      const submitFn = activation.session.client.submitQuestionAnswers
+      if (!submitFn) return
+      await submitFn({
+        messageId,
+        answers,
+        botId: outboxBot.current,
+        operationId: activation.session.client.createOperationId(),
+      })
+      await loadTranscript(activation, 'refresh', TRANSCRIPT_REFRESH_ERROR, 'silent')
+    },
+    [loadTranscript, session],
+  )
+
+  const provideSecret = useCallback(
+    async (messageId: string, name: string, value: string) => {
+      const activation = activeActivation.current
+      if (!activation || activation.session !== session) return
+      const provideFn = activation.session.client.provideSecret
+      if (!provideFn) return
+      await provideFn({
+        messageId,
+        name,
+        value,
+        botId: outboxBot.current,
+        operationId: activation.session.client.createOperationId(),
+      })
+      await loadTranscript(activation, 'refresh', TRANSCRIPT_REFRESH_ERROR, 'silent')
+    },
+    [loadTranscript, session],
+  )
+
   return {
     rows: state.sidebar.rows,
     messages: state.transcript.messages,
@@ -1230,5 +1270,7 @@ export function useSuperAgent(client: SuperAgentClient): RouterBindings & {
       ? { text: liveReply.text, dots: liveReply.dots, phase: liveReply.phase }
       : null,
     dismissLiveReply,
+    submitQuestionAnswers,
+    provideSecret,
   }
 }
