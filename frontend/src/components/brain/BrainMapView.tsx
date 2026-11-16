@@ -7,6 +7,8 @@ import {
   type BrainMapClient,
   type BrainNode,
   type BrainSearchHit,
+  type SkillRecord,
+  type SkillsCatalog,
 } from '@/components/brain/layoutBrainMap'
 import {
   GRAPH_LINE_HEIGHT,
@@ -23,7 +25,7 @@ import {
   type MemoryTag,
 } from '@/components/brain/memoryTags'
 
-type View = 'memory' | 'search' | 'review' | 'timeline' | 'graph'
+type View = 'memory' | 'skills' | 'search' | 'review' | 'timeline' | 'graph'
 
 function facts(map: BrainMap): BrainNode[] {
   return map.nodes.filter((node) => node.kind === 'claim' || node.kind === 'fact')
@@ -48,10 +50,23 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
   const [tagName, setTagName] = useState('')
   const [retagId, setRetagId] = useState<string | null>(null)
   const [retagNames, setRetagNames] = useState<string[]>([])
+  const [skills, setSkills] = useState<SkillsCatalog | null>(null)
+  const [openSkill, setOpenSkill] = useState<SkillRecord | null>(null)
 
   const reload = (next: BrainMap) => {
     setMap(next)
     setError(null)
+  }
+
+  const reloadSkills = () => {
+    if (!client.loadSkills) {
+      setSkills({ skills: [], catalog_tokens: 0 })
+      return
+    }
+    void client.loadSkills().then(
+      (loaded) => setSkills(loaded),
+      () => setError('Skills could not be loaded.'),
+    )
   }
 
   useEffect(() => {
@@ -84,6 +99,12 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
       cancelled = true
     }
   }, [client])
+
+  useEffect(() => {
+    if (view !== 'skills') return
+    reloadSkills()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when opening skills tab
+  }, [client, view])
 
   const memory = useMemo(
     () => groupFactsByPrimaryTag(facts(map ?? { nodes: [], edges: [] }), map?.tags ?? []),
@@ -127,7 +148,7 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
   return (
     <section className="maia-brain" aria-label="Memory">
       <div className="maia-brain-toolbar maia-brain-tabs" role="tablist" aria-label="Brain views">
-        {(['memory', 'search', 'review', 'timeline', 'graph'] as const).map((item) => (
+        {(['memory', 'skills', 'search', 'review', 'timeline', 'graph'] as const).map((item) => (
           <button
             key={item}
             type="button"
@@ -232,6 +253,23 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
             if (!client.setClaimTags) return
             void client.setClaimTags(node.id, retagNames).then(reload, () => setError('Those tags were not saved.'))
             setRetagId(null)
+          }}
+        />
+      ) : null}
+      {view === 'skills' ? (
+        <SkillsList
+          catalog={skills}
+          open={openSkill}
+          onOpen={setOpenSkill}
+          onDelete={(skillId) => {
+            if (!client.deleteSkill) return
+            void client.deleteSkill(skillId).then(
+              (next) => {
+                setSkills(next)
+                setOpenSkill(null)
+              },
+              () => setError('That skill was not deleted.'),
+            )
           }}
         />
       ) : null}
@@ -791,6 +829,66 @@ function Graph({
           {(chosen.tags ?? []).length > 0 ? <p>{(chosen.tags ?? []).join(' · ')}</p> : null}
         </aside>
       ) : null}
+    </div>
+  )
+}
+
+function SkillsList({
+  catalog,
+  open,
+  onOpen,
+  onDelete,
+}: {
+  catalog: SkillsCatalog | null
+  open: SkillRecord | null
+  onOpen: (skill: SkillRecord | null) => void
+  onDelete: (skillId: string) => void
+}) {
+  if (!catalog) return <p role="status">Loading skills.</p>
+  if (catalog.skills.length === 0) {
+    return <p>No skills yet. Workers save reusable procedures with save_skill.</p>
+  }
+  return (
+    <div>
+      <p className="maia-muted" data-testid="skills-catalog-tokens">
+        Catalog ≈ {catalog.catalog_tokens} tokens
+      </p>
+      <ul className="maia-brain-list" aria-label="Skills">
+        {catalog.skills.map((skill) => (
+          <li key={skill.skill_id}>
+            <article>
+              <p>
+                <code>{skill.skill_id}</code> — {skill.when_to_use}
+              </p>
+              <div className="maia-brain-actions">
+                <button
+                  type="button"
+                  className="maia-icon-btn"
+                  aria-label={`View ${skill.skill_id}`}
+                  title="View"
+                  onClick={() => onOpen(open?.skill_id === skill.skill_id ? null : skill)}
+                >
+                  <span className="maia-source-icon" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="maia-icon-btn"
+                  aria-label={`Delete ${skill.skill_id}`}
+                  title="Delete"
+                  onClick={() => onDelete(skill.skill_id)}
+                >
+                  <span className="maia-forget-icon" aria-hidden="true" />
+                </button>
+              </div>
+              {open?.skill_id === skill.skill_id ? (
+                <pre className="maia-muted" data-testid={`skill-body-${skill.skill_id}`}>
+                  {skill.body}
+                </pre>
+              ) : null}
+            </article>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

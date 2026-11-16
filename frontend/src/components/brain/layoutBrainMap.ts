@@ -80,6 +80,21 @@ export interface ExtractionLag {
   tokens?: number
 }
 
+export interface SkillRecord {
+  skill_id: string
+  title: string
+  when_to_use: string
+  body: string
+  project: string
+  max_tokens: number
+  updated_at: number
+}
+
+export interface SkillsCatalog {
+  skills: SkillRecord[]
+  catalog_tokens: number
+}
+
 export interface BrainMapClient {
   load(): Promise<BrainMap>
   reviseFact(id: string, sentence: string): Promise<BrainMap>
@@ -97,6 +112,8 @@ export interface BrainMapClient {
   removeTag?(id: string): Promise<BrainMap>
   setClaimTags?(id: string, tags: readonly string[]): Promise<BrainMap>
   dismissQuarantinedEpisode?(episodeId: string): Promise<BrainMap>
+  loadSkills?(): Promise<SkillsCatalog>
+  deleteSkill?(skillId: string): Promise<SkillsCatalog>
 }
 
 export function brainStatusLine(index: BrainIndex): string {

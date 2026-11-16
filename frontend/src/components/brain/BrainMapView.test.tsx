@@ -324,6 +324,7 @@ describe('BrainMapView', () => {
     expect(tablist).toHaveClass('maia-brain-tabs')
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       'Memory',
+      'Skills',
       'Search',
       'Review',
       'Timeline',
@@ -456,6 +457,42 @@ describe('BrainMapView', () => {
     await user.click(screen.getByRole('button', { name: 'Confirm remove People' }))
     expect(screen.getByText("The user's name is Garrett.")).toBeVisible()
     expect(screen.queryByRole('heading', { name: 'People' })).not.toBeInTheDocument()
+  })
+
+  it('lists skills with view and delete icons', async () => {
+    const user = userEvent.setup()
+    const client = clientFor(sampleMap())
+    let skills = {
+      skills: [
+        {
+          skill_id: 'sort-ints',
+          title: 'Sort ints',
+          when_to_use: 'When PowerShell sort fails on bare ints.',
+          body: 'Use Sort-Object { [int]$_ }.',
+          project: 'maia',
+          max_tokens: 400,
+          updated_at: 1,
+        },
+      ],
+      catalog_tokens: 24,
+    }
+    client.loadSkills = async () => skills
+    client.deleteSkill = async (id) => {
+      skills = {
+        skills: skills.skills.filter((skill) => skill.skill_id !== id),
+        catalog_tokens: 0,
+      }
+      return skills
+    }
+    render(<BrainMapView client={client} />)
+    await screen.findByText("The user's name is Garrett.")
+    await user.click(screen.getByRole('tab', { name: 'Skills' }))
+    expect(await screen.findByTestId('skills-catalog-tokens')).toHaveTextContent('Catalog ≈ 24 tokens')
+    expect(screen.getByText(/sort-ints/)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'View sort-ints' }))
+    expect(screen.getByTestId('skill-body-sort-ints')).toHaveTextContent('Sort-Object')
+    await user.click(screen.getByRole('button', { name: 'Delete sort-ints' }))
+    expect(screen.getByText(/No skills yet/)).toBeVisible()
   })
 })
 

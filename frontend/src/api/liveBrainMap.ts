@@ -4,6 +4,7 @@ import {
   type BrainMap,
   type BrainMapClient,
   type BrainSearchHit,
+  type SkillsCatalog,
 } from '@/components/brain/layoutBrainMap'
 import { withCsrf } from '@/remote/csrf'
 
@@ -135,6 +136,34 @@ export function liveBrainMapClient(origin: string): BrainMapClient {
         }),
       )
     },
+    loadSkills() {
+      return readSkills(fetch(`${root}/api/skills`))
+    },
+    deleteSkill(skillId: string) {
+      return readSkills(
+        fetch(`${root}/api/skills/${encodeURIComponent(skillId)}`, {
+          method: 'DELETE',
+          headers: withCsrf('DELETE', {}),
+        }).then(async (response) => {
+          if (!response.ok) throw new Error('Skill delete failed')
+          return fetch(`${root}/api/skills`)
+        }),
+      )
+    },
+  }
+}
+
+async function readSkills(request: Promise<Response>): Promise<SkillsCatalog> {
+  const response = await request
+  if (!response.ok) throw new Error('Skills could not be read.')
+  const body: unknown = await response.json()
+  if (!body || typeof body !== 'object' || !Array.isArray((body as { skills?: unknown }).skills)) {
+    throw new Error('Skills could not be read.')
+  }
+  const record = body as { skills: SkillsCatalog['skills']; catalog_tokens?: number }
+  return {
+    skills: record.skills,
+    catalog_tokens: typeof record.catalog_tokens === 'number' ? record.catalog_tokens : 0,
   }
 }
 
