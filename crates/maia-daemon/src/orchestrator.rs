@@ -3717,6 +3717,11 @@ impl<R: Router> Orchestrator<R> {
         self.ids.messages.clear();
     }
 
+    /// Queues one router message id for tests (e.g. chatter posts, Done cannot).
+    pub fn push_router_message_id(&mut self, id: impl Into<String>) {
+        self.ids.messages.push_back(id.into());
+    }
+
     fn request_wake_nudge(&mut self) {
         self.wake_nudge = true;
     }
@@ -4121,18 +4126,26 @@ impl<R: Router> Orchestrator<R> {
         let Some(actions) = self.manager_wake_tool_actions(&snap) else {
             return (previous_fingerprint.to_owned(), false, Vec::new());
         };
-        let (mut messaged, new_learned) = self.apply_wake_actions(&actions);
-        // spawn_task on a finished wake defers the Done safety cap. If that hire never
-        // started live work (failed create, empty guidance, etc.), force one close-out
-        // so the CEO is not left hanging on a completed draft.
-        messaged = self.force_done_when_finished_hire_stalled(snap.completed_unopened, messaged);
+        let (mut messaged, mut new_learned) = self.apply_wake_actions(&actions);
+        // Safety cap only: spawn may defer Done for a second hire. If apply left the
+        // finished goal idle with no chat, re-run the same CEO-moment cap (Silent → Done).
+        if !messaged && snap.completed_unopened > 0 {
+            let after = self.wake_snapshot();
+            if after.completed_unopened > 0
+                && after.running_count == 0
+                && after.failed_task_ids.is_empty()
+                && after.stuck_task_ids.is_empty()
+                && after.waiting.is_empty()
+            {
+                let cap = enforce_ceo_moments(&[WakeAction::Silent], &after);
+                let (posted, more) = self.apply_wake_actions(&cap);
+                messaged = posted;
+                new_learned.extend(more);
+            }
+        }
         let asked = actions
             .iter()
             .any(|action| matches!(action, WakeAction::AskUser { .. }));
-        let closed_out = actions.iter().any(|action| match action {
-            WakeAction::MessageUser { text } => maia_core::manager::looks_like_close_out(text),
-            _ => false,
-        }) || messaged;
         let recovered_or_cancelled = actions.iter().any(|action| {
             matches!(
                 action,
@@ -4142,9 +4155,8 @@ impl<R: Router> Orchestrator<R> {
         let failed_or_stuck =
             !snap.failed_task_ids.is_empty() || !snap.stuck_task_ids.is_empty();
         // Keep the fingerprint until attention is actually handled. message_user alone
-        // does not clear failed/waiting work. Status chatter does not count as close-out.
-        // A close-out that was intended but never posted must not advance either — otherwise
-        // the next wake SkipModel-forever and the CEO never gets Done.
+        // does not clear failed/waiting work. Status chatter must not count as close-out —
+        // only a real close (completed_unopened dropped) or a live runner advances.
         if failed_or_stuck && !recovered_or_cancelled && !asked {
             return (previous_fingerprint.to_owned(), messaged, new_learned);
         }
@@ -4155,61 +4167,12 @@ impl<R: Router> Orchestrator<R> {
         if snap.completed_unopened > 0
             && !failed_or_stuck
             && snap.waiting.is_empty()
-            && !(closed_out && messaged)
+            && after.completed_unopened > 0
             && after.running_count == 0
         {
             return (previous_fingerprint.to_owned(), messaged, new_learned);
         }
         (fingerprint, messaged, new_learned)
-    }
-
-    /// When a finished goal is still unopened, idle, and chat had no close-out, post Done once.
-    fn force_done_when_finished_hire_stalled(
-        &mut self,
-        completed_before: u32,
-        already_messaged: bool,
-    ) -> bool {
-        if already_messaged || completed_before == 0 {
-            return already_messaged;
-        }
-        let after = self.wake_snapshot();
-        if after.completed_unopened == 0
-            || after.running_count > 0
-            || !after.failed_task_ids.is_empty()
-            || !after.stuck_task_ids.is_empty()
-            || !after.waiting.is_empty()
-        {
-            return already_messaged;
-        }
-        let summary = after
-            .workers
-            .iter()
-            .find(|worker| worker.status == "completed")
-            .map(|worker| {
-                let title = maia_core::manager::truncate_brief(
-                    &worker.title,
-                    maia_core::manager::BRIEF_TITLE_CHARS,
-                );
-                let out = maia_core::manager::truncate_brief(
-                    &worker.output_tail,
-                    maia_core::manager::BRIEF_TAIL_CHARS,
-                );
-                match (title.is_empty(), out.is_empty()) {
-                    (false, false) => format!("{title} — {out}"),
-                    (false, true) => title,
-                    (true, false) => out,
-                    (true, true) => String::new(),
-                }
-            })
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| "the goal".to_owned());
-        let text = format!("Done — {summary}");
-        if self.note_router(&text).is_ok() {
-            self.close_unopened_completed_for_wake();
-            true
-        } else {
-            already_messaged
-        }
     }
 
     /// Asks the model which wake tools to run, then applies the restart-budget backstop.

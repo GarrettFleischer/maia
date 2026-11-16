@@ -5278,11 +5278,8 @@ fn manager_wake_close_out_uses_message_user_not_raw_success_relay() {
 
 #[test]
 fn manager_wake_forces_done_when_finished_spawn_starts_no_work() {
-    // Model returns spawn_task on a finished wake (defers Done). Host applies a Spawn
-    // that cannot create work (empty guidance is filtered earlier), so use Cancel-only
-    // attention-clear finished + a Spawn action applied via the wake model with guidance
-    // that still leaves the goal idle: push spawn then immediately complete is covered by
-    // force_done_when_finished_hire_stalled when running_count stays 0.
+    // spawn_task on a finished wake defers Done. Empty guidance is dropped before apply,
+    // so the CEO-moment safety cap (and post-apply Silent second pass) still posts Done.
     let mut harness = Harness::open_model("mgr-wake-spawn-stall-done", long_supply());
     harness.router.push_tool("spawn_task", "{}");
     harness
@@ -5311,6 +5308,42 @@ fn manager_wake_forces_done_when_finished_spawn_starts_no_work() {
             .iter()
             .any(|body| body.contains("Done")),
         "forced close-out must land in CEO chat: {bodies:?}"
+    );
+}
+
+#[test]
+fn manager_wake_status_chatter_does_not_advance_finished_fingerprint() {
+    // Model status chatter + forced Done: chatter consumes the only message id, Done
+    // cannot post, goal stays unopened. Fingerprint must not advance (or SkipModel hides Done).
+    let mut harness = Harness::open_model("mgr-wake-chatter-fp", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote CHATTER60 to the workspace file."));
+    let outcome =
+        wait(harness.host().handle_user_message("Write CHATTER60 to a file")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+    let previous = "r=0;c=0;f=;s=;w=";
+    harness.host().drain_router_message_ids();
+    harness.host().push_router_message_id("m-chatter-only");
+    harness.router.push_tool(
+        "message_user",
+        r#"{"message":"Hired a worker; still working on CHATTER60 and will notify you."}"#,
+    );
+    let (fp, messaged, _) = harness.host().run_manager_wake(previous, &[]);
+    assert!(messaged, "status chatter may post with the sole message id");
+    assert_eq!(
+        fp, previous,
+        "unfinished close-out after chatter must not advance fingerprint (was {fp})"
+    );
+    let snap = harness.host().wake_snapshot();
+    assert!(
+        snap.completed_unopened >= 1,
+        "finished goal must stay unopened when Done could not post: {snap:?}"
     );
 }
 
