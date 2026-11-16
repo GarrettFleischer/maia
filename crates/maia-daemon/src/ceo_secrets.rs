@@ -11,7 +11,8 @@ use crate::mcp_settings::McpApiError;
 use crate::mcp_settings::McpSecretStore;
 
 const NAMES_FILE: &str = "ceo_secret_names.json";
-const REF_PREFIX: &str = "ceo-secret:";
+/// Logical store ref prefix. OS targets are derived by [`crate::mcp_settings::mcp_target`].
+const REF_PREFIX: &str = "ceo-";
 
 /// Skin that persists CEO secret names on disk and values in [`McpSecretStore`].
 pub struct CeoSecretSkin {
@@ -24,19 +25,20 @@ pub struct CeoSecretSkin {
 impl CeoSecretSkin {
     /// Opens beside the database path (`data/ceo_secret_names.json`).
     ///
-    /// Values live in a dedicated in-process store (never MCP headers / chat).
-    /// Names are listed on disk so wakes can remind which secrets exist.
+    /// Values live in the shared [`McpSecretStore`] (production: Windows Credential Manager).
+    /// Names are listed on disk so wakes can remind which secrets exist and reloads can refill.
     #[must_use]
-    pub fn open(database: &Path, _shared: Arc<dyn McpSecretStore>) -> Self {
+    pub fn open(database: &Path, shared: Arc<dyn McpSecretStore>) -> Self {
         let names_path = database
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(NAMES_FILE);
         let skin = Self {
             names_path,
-            store: Arc::new(crate::mcp_settings::MemoryMcpSecretStore::new()),
+            store: shared,
             live: Mutex::new(BTreeMap::new()),
         };
+        skin.reload_from_store();
         skin
     }
 
@@ -87,6 +89,15 @@ impl CeoSecretSkin {
             .unwrap_or_default()
     }
 
+    /// Secret values only (for Done scrubbing). Caller must not log them.
+    #[must_use]
+    pub fn values_for_mask(&self) -> Vec<String> {
+        self.live
+            .lock()
+            .map(|live| live.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// Names currently stored (never values).
     #[must_use]
     pub fn names(&self) -> Vec<String> {
@@ -121,5 +132,85 @@ impl CeoSecretSkin {
             };
             live.insert(name, value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp_settings::MemoryMcpSecretStore;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+
+    static TEMP_SEQ: AtomicU64 = AtomicU64::new(1);
+
+    fn temp_db_path() -> PathBuf {
+        let sequence = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "maia-ceo-secrets-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&directory);
+        directory.join("maia.sqlite")
+    }
+
+    #[test]
+    fn put_writes_into_shared_store_and_survives_reopen() {
+        let path = temp_db_path();
+        let shared: Arc<dyn McpSecretStore> = Arc::new(MemoryMcpSecretStore::new());
+        let first = CeoSecretSkin::open(&path, Arc::clone(&shared));
+        first
+            .put("RUN69_TEST_KEY", "throwaway-value-never-log")
+            .expect("put");
+        assert!(first.has("RUN69_TEST_KEY"));
+        assert_eq!(first.names(), vec!["RUN69_TEST_KEY".to_owned()]);
+        assert!(
+            shared
+                .read_secret("ceo-RUN69_TEST_KEY")
+                .expect("read")
+                .is_some()
+        );
+
+        let second = CeoSecretSkin::open(&path, shared);
+        assert!(
+            second.has("RUN69_TEST_KEY"),
+            "reopen must reload values from the shared store"
+        );
+        let pairs = second.env_pairs();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, "RUN69_TEST_KEY");
+        assert_eq!(pairs[0].1, "throwaway-value-never-log");
+        assert_eq!(
+            second.values_for_mask(),
+            vec!["throwaway-value-never-log".to_owned()]
+        );
+    }
+
+    #[test]
+    fn empty_value_is_rejected() {
+        let skin = CeoSecretSkin::memory_for_tests();
+        assert!(skin.put("RUN69_TEST_KEY", "").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_store_survives_reopen() {
+        use crate::mcp_settings::NativeMcpSecretStore;
+        let path = temp_db_path();
+        let shared: Arc<dyn McpSecretStore> = Arc::new(NativeMcpSecretStore);
+        let first = CeoSecretSkin::open(&path, Arc::clone(&shared));
+        first
+            .put("RUN69_NATIVE_KEY", "native-roundtrip-value")
+            .expect("put native");
+        drop(first);
+        let second = CeoSecretSkin::open(&path, Arc::clone(&shared));
+        assert!(
+            second.has("RUN69_NATIVE_KEY"),
+            "Cred Manager values must reload into the live env mirror"
+        );
+        assert_eq!(second.env_pairs().len(), 1);
+        assert_eq!(second.env_pairs()[0].0, "RUN69_NATIVE_KEY");
+        assert_eq!(second.env_pairs()[0].1, "native-roundtrip-value");
+        let _ = shared.delete_secret("ceo-RUN69_NATIVE_KEY");
     }
 }

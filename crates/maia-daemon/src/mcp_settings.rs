@@ -128,7 +128,7 @@ impl McpSecretStore for MemoryMcpSecretStore {
     }
 }
 
-/// OS credential entries `MaiaMcp:{secret_ref}`.
+/// OS credential entries under a Cred Manager–safe target derived from `secret_ref`.
 pub struct NativeMcpSecretStore;
 
 impl McpSecretStore for NativeMcpSecretStore {
@@ -182,8 +182,27 @@ impl McpSecretStore for NativeMcpSecretStore {
     }
 }
 
-fn mcp_target(secret_ref: &str) -> String {
-    format!("MaiaMcp:{secret_ref}")
+/// Builds a Windows Credential Manager target for one logical `secret_ref`.
+///
+/// Targets must be alphanumeric/hyphen only and must not contain blocked
+/// substrings (`SECRET`, `TOKEN`, …). Hex-encoding the ref keeps CEO and MCP
+/// names safe regardless of the logical id.
+#[must_use]
+pub fn mcp_target(secret_ref: &str) -> String {
+    let mut out = String::from("MaiaMcp-");
+    for byte in secret_ref.as_bytes() {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    if out.len() <= 128 {
+        return out;
+    }
+    // Cap long refs with a stable FNV-1a 128-bit fingerprint.
+    let mut hash: u128 = 0xcbf2_9ce4_8422_2325_cbf2_9ce4_8422_2325;
+    for byte in secret_ref.as_bytes() {
+        hash ^= u128::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0001_0000_01b3_0000_0001_0000_01b3);
+    }
+    format!("MaiaMcp-{hash:032x}")
 }
 
 struct Endpoint {
@@ -958,6 +977,20 @@ mod tests {
             panic_capacity: 2,
         })
         .expect("open")
+    }
+
+    #[test]
+    fn mcp_target_is_cred_manager_safe() {
+        let target = mcp_target("ceo-RUN69_TEST_KEY");
+        assert!(target.starts_with("MaiaMcp-"));
+        assert!(
+            target
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        );
+        assert!(!target.to_ascii_uppercase().contains("SECRET"));
+        assert!(!target.to_ascii_uppercase().contains("TOKEN"));
+        assert_eq!(mcp_target("ceo-RUN69_TEST_KEY"), target);
     }
 
     #[test]

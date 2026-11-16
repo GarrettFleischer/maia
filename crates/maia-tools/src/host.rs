@@ -108,6 +108,8 @@ struct ConnectedServer {
 pub struct SubagentHost {
     shell: Option<ShellSession>,
     servers: Vec<ConnectedServer>,
+    /// CEO secrets kept across shell restarts (values must never be logged).
+    ceo_env: Vec<(String, String)>,
 }
 
 impl SubagentHost {
@@ -171,20 +173,29 @@ impl SubagentHost {
             entries,
             live,
             origin,
-            host: Self { shell, servers },
+            host: Self {
+                shell,
+                servers,
+                ceo_env: Vec::new(),
+            },
         }
     }
 
     /// Restarts the shell with CEO secret env vars (values must not be logged).
     pub fn apply_ceo_env(&mut self, env: &[(String, String)]) {
+        self.ceo_env = env.to_vec();
+        self.reopen_shell_with_ceo_env();
+    }
+
+    fn reopen_shell_with_ceo_env(&mut self) {
         match self.shell.as_mut() {
             Some(shell) => {
-                if shell.restart_with_env(env).is_err() {
-                    self.shell = ShellSession::start_with_env(env).ok();
+                if shell.restart_with_env(&self.ceo_env).is_err() {
+                    self.shell = ShellSession::start_with_env(&self.ceo_env).ok();
                 }
             }
             None => {
-                self.shell = ShellSession::start_with_env(env).ok();
+                self.shell = ShellSession::start_with_env(&self.ceo_env).ok();
             }
         }
     }
@@ -217,13 +228,23 @@ impl SubagentHost {
             .get("command")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        if restart {
+            self.reopen_shell_with_ceo_env();
+            return completed(
+                bound_tool_text(&format!(
+                    "The {} session restarted.",
+                    if cfg!(windows) { "PowerShell" } else { "bash" }
+                )),
+                None,
+            );
+        }
         let Some(shell) = self.shell.as_mut() else {
             return known_failure("The shell is not available.".to_owned());
         };
-        match shell.run(command.as_deref(), restart, CALL_TIMEOUT) {
+        match shell.run(command.as_deref(), false, CALL_TIMEOUT) {
             Ok(output) => completed(bound_tool_text(&output), None),
             Err(ShellError::Timeout) => {
-                self.shell = ShellSession::start().ok();
+                self.reopen_shell_with_ceo_env();
                 unknown_receipt()
             }
             Err(error) => known_failure(error.to_string()),
