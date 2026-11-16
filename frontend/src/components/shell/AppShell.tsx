@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { chatActivityLabel, countActivity, phoneStopLabel } from '@/api/superAgentFormat'
+import { chatActivityLabel, countActivity, phoneStopLabel, taskStripLabel } from '@/api/superAgentFormat'
 import { scopeSuperAgentClient } from '@/api/scopeSuperAgent'
 import type { BotSummary, ConnectionSnapshot, InspectorTurn, SuperAgentClient } from '@/api/superAgentTypes'
 import { liveBrainMapClient } from '@/api/liveBrainMap'
@@ -14,6 +14,7 @@ import { withClearedUnread } from '@/components/shell/botCatalog'
 import { clearBotDraft, readBotDraft, writeBotDraft } from '@/components/shell/botDrafts'
 import { ConversationPane, type ConversationLayout } from '@/components/shell/ConversationPane'
 import { StopAllButton } from '@/components/shell/StopAllButton'
+import { TaskRail } from '@/components/shell/TaskRail'
 import { McpServersSection } from '@/components/settings/McpServersSection'
 import { ManagerWakeSection } from '@/components/settings/ManagerWakeSection'
 import { ModelConnectionSection } from '@/components/settings/ModelConnectionSection'
@@ -472,7 +473,30 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
             onDismiss={install.dismiss}
           />
         ) : null}
-        {centerView === 'brain' ? (
+        {centerView === 'tasks' ? (
+          <section
+            className={viewport === 'phone' ? 'maia-conversation maia-phone-screen' : 'maia-conversation'}
+            aria-label="Tasks"
+          >
+            <header className="maia-conv-head">
+              <div>
+                <h1>Tasks</h1>
+                <p>{taskStripLabel(agent.rows)}</p>
+              </div>
+            </header>
+            <div className="maia-main-body">
+              <TaskRail
+                rows={agent.rows}
+                openTaskId={agent.detail?.task_id ?? null}
+                onOpen={openTask}
+                onPin={(taskId, mark) => {
+                  void agent.pin(taskId, mark)
+                }}
+              />
+              {activity.running > 0 ? <StopAllButton onStop={stopAll} /> : null}
+            </div>
+          </section>
+        ) : centerView === 'brain' ? (
           <section
             className={viewport === 'phone' ? 'maia-conversation maia-phone-screen' : 'maia-conversation'}
             aria-label="Brain"
@@ -616,6 +640,16 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
           </button>
           <button
             type="button"
+            aria-current={centerView === 'tasks' ? 'page' : undefined}
+            onClick={() => {
+              returnToChat.current = phoneChat
+              setCenterView((view) => toggleCenterView(view, 'tasks'))
+            }}
+          >
+            Tasks
+          </button>
+          <button
+            type="button"
             aria-current={centerView === 'brain' ? 'page' : undefined}
             onClick={() => {
               returnToChat.current = phoneChat
@@ -641,6 +675,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
 }
 
 function phoneTitle(view: CenterView, chat: boolean, name: string): string {
+  if (view === 'tasks') return 'Tasks'
   if (view === 'brain') return 'Brain'
   if (view === 'settings') return 'Settings'
   return chat ? name : 'Chats'

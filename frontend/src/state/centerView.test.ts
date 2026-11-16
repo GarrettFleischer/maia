@@ -19,4 +19,9 @@ describe('toggleCenterView', () => {
     expect(toggleCenterView('settings', 'brain')).toBe('brain')
     expect(toggleCenterView('brain', 'settings')).toBe('settings')
   })
+
+  it('opens and closes the tasks screen', () => {
+    expect(toggleCenterView('conversation', 'tasks')).toBe('tasks')
+    expect(toggleCenterView('tasks', 'tasks')).toBe('conversation')
+  })
 })

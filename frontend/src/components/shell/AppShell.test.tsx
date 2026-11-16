@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createFixtureSuperAgentClient } from '@/api/fixtureSuperAgent'
 import { AppShell } from '@/components/shell/AppShell'
@@ -82,6 +82,20 @@ describe('AppShell layout', () => {
     expect(screen.getByRole('button', { name: (value: string) => value === 'Maia' })).toBeVisible()
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Brain' })).not.toBeInTheDocument()
+  })
+
+  it('opens Tasks from the phone bottom nav', async () => {
+    window.innerWidth = 390
+    window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
+      initialState: { ...defaultFixtureState(), onboarding_complete: true },
+    })
+    const nav = screen.getByRole('navigation', { name: 'Sections' })
+    await user.click(within(nav).getByRole('button', { name: 'Tasks' }))
+    const tasks = screen.getByRole('region', { name: 'Tasks' })
+    expect(tasks).toHaveClass('maia-phone-screen')
+    expect(within(tasks).getByRole('heading', { name: 'Tasks' })).toBeVisible()
   })
 
   it('uses the phone shell when the CSS viewport is a phone even if innerWidth is the wide track', () => {

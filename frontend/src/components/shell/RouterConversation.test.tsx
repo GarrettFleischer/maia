@@ -1034,7 +1034,8 @@ describe('fixture client isolation', () => {
 })
 
 async function expandTaskStrip(user: ReturnType<typeof userEvent.setup>) {
-  const toggle = await screen.findByRole('button', { name: /^Tasks/ })
+  const strip = await screen.findByRole('region', { name: 'Tasks' })
+  const toggle = within(strip).getByRole('button', { name: /^Tasks/ })
   if (toggle.getAttribute('aria-expanded') !== 'true') {
     await user.click(toggle)
   }
