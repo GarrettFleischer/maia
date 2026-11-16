@@ -235,8 +235,20 @@ pub fn attention_lines(snap: &WakeSnapshot) -> Vec<String> {
             lines.push(format!("continue/fix {id} (stuck)"));
         }
     }
+    let waiter_unanswered = waiting_ask_already_in_chat(snap);
+    let waiter_answered = !waiter_unanswered
+        && snap
+            .waiting
+            .iter()
+            .any(|(_, q)| recent_ceo_covers(snap, q, CeoCoverKind::Ask));
     for (id, _) in &snap.waiting {
-        lines.push(format!("ask_user for {id} (CEO decision)"));
+        if waiter_unanswered {
+            lines.push(format!("await CEO answer for {id} (already asked)"));
+        } else if waiter_answered {
+            lines.push(format!("continue_task for {id} (CEO answered)"));
+        } else {
+            lines.push(format!("ask_user for {id} (CEO decision)"));
+        }
     }
     if snap.completed_unopened > 0 {
         lines.push(
@@ -301,10 +313,23 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         );
     }
     if !snap.waiting.is_empty() {
-        lines.push(
-            "CEO_WAITING (mandatory): call ask_user once with one clear CEO question. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
-                .to_owned(),
-        );
+        if waiting_ask_already_in_chat(snap) {
+            lines.push(
+                "CEO_WAITING (already asked): RECENT_CEO_CHAT already has your unanswered question. Stay silent. Do not rephrase. Do not ask_user again. Do not message_user that you are waiting. When the CEO answers, continue_task with their answer."
+                    .to_owned(),
+            );
+        } else if snap.waiting.iter().any(|(_, q)| recent_ceo_covers(snap, q, CeoCoverKind::Ask))
+        {
+            lines.push(
+                "CEO_WAITING (CEO answered): RECENT_CEO_CHAT has the owner's answer. continue_task with that task_id and their answer so the worker can finish. Do not ask_user again."
+                    .to_owned(),
+            );
+        } else {
+            lines.push(
+                "CEO_WAITING (mandatory): call ask_user once with one clear CEO question. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
+                    .to_owned(),
+            );
+        }
         for (id, question) in &snap.waiting {
             let q = truncate_brief(question, BRIEF_TAIL_CHARS);
             lines.push(format!("- {id}: {q}"));
@@ -613,27 +638,68 @@ pub enum CeoCoverKind {
     CloseOut,
 }
 
+/// True when a waiter question was asked in CEO chat and no user line followed that ask.
+#[must_use]
+pub fn waiting_ask_already_in_chat(snap: &WakeSnapshot) -> bool {
+    snap.waiting
+        .iter()
+        .any(|(_, question)| unanswered_ask_covers(snap, question))
+}
+
+/// True when recent CEO chat has an ask covering `text` with no later `user:` reply.
+#[must_use]
+pub fn unanswered_ask_covers(snap: &WakeSnapshot, text: &str) -> bool {
+    let keys = distinctive_tokens(text);
+    if keys.is_empty() {
+        return false;
+    }
+    let mut last_ask: Option<usize> = None;
+    for (idx, line) in snap.recent_ceo_lines.iter().enumerate() {
+        let lower = line.to_ascii_lowercase();
+        if !lower.starts_with("assistant:") {
+            continue;
+        }
+        if !keys.iter().any(|key| lower.contains(key.as_str())) {
+            continue;
+        }
+        if ask_shaped_ceo_line(&lower) {
+            last_ask = Some(idx);
+        }
+    }
+    let Some(ask_idx) = last_ask else {
+        return false;
+    };
+    !snap.recent_ceo_lines[ask_idx + 1..]
+        .iter()
+        .any(|line| line.to_ascii_lowercase().starts_with("user:"))
+}
+
+fn ask_shaped_ceo_line(lower: &str) -> bool {
+    lower.contains('?')
+        || lower.contains("need your decision")
+        || lower.contains("what should")
+        || lower.contains("provide")
+        || lower.contains("password")
+}
+
 /// True when recent CEO assistant chat already covers `text` for this kind of moment.
 #[must_use]
 pub fn recent_ceo_covers(snap: &WakeSnapshot, text: &str, kind: CeoCoverKind) -> bool {
-    let key = distinctive_token(text);
-    if key.is_empty() {
+    let keys = distinctive_tokens(text);
+    if keys.is_empty() {
         return false;
     }
     snap.recent_ceo_lines.iter().any(|line| {
         let lower = line.to_ascii_lowercase();
-        if !lower.starts_with("assistant:") || !lower.contains(key.as_str()) {
+        if !lower.starts_with("assistant:") {
+            return false;
+        }
+        if !keys.iter().any(|key| lower.contains(key.as_str())) {
             return false;
         }
         match kind {
             // Status chatter that merely mentions the secret must not suppress a real ask.
-            CeoCoverKind::Ask => {
-                lower.contains('?')
-                    || lower.contains("need your decision")
-                    || lower.contains("what should")
-                    || lower.contains("provide")
-                    || lower.contains("password")
-            }
+            CeoCoverKind::Ask => ask_shaped_ceo_line(&lower),
             CeoCoverKind::CloseOut => {
                 let body = lower.strip_prefix("assistant:").unwrap_or(lower.as_str()).trim();
                 looks_like_close_out(body)
@@ -653,14 +719,23 @@ pub fn looks_like_close_out(text: &str) -> bool {
         || trimmed.starts_with("all done")
 }
 
+/// Alphanumeric tokens of length >= 6, lowercased (longest first).
+#[must_use]
+pub fn distinctive_tokens(text: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = text
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .map(|part| part.to_ascii_lowercase())
+        .filter(|part| part.chars().count() >= 6)
+        .collect();
+    tokens.sort_by_key(|part| std::cmp::Reverse(part.chars().count()));
+    tokens.dedup();
+    tokens
+}
+
 /// Longest alphanumeric token of length >= 6, lowercased. Empty when none.
 #[must_use]
 pub fn distinctive_token(text: &str) -> String {
-    text.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-        .map(|part| part.to_ascii_lowercase())
-        .filter(|part| part.chars().count() >= 6)
-        .max_by_key(|part| part.chars().count())
-        .unwrap_or_default()
+    distinctive_tokens(text).into_iter().next().unwrap_or_default()
 }
 
 /// One-line Done body for a finished wake, or `"the goal"` when nothing useful is known.
@@ -704,10 +779,16 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         })
         .filter(|action| match action {
             // Safety cap: never re-post an ask / Done already covered in CEO chat.
-            WakeAction::AskUser { text } => !recent_ceo_covers(snap, text, CeoCoverKind::Ask),
+            // While a waiter is already asked, drop any rephrased ask_user too.
+            WakeAction::AskUser { text } => {
+                !waiting_ask_already_in_chat(snap)
+                    && !recent_ceo_covers(snap, text, CeoCoverKind::Ask)
+            }
             WakeAction::MessageUser { text } if looks_like_close_out(text) => {
                 !recent_ceo_covers(snap, text, CeoCoverKind::CloseOut)
             }
+            // Unanswered ask → stay silent; drop standing-by / status chatter.
+            WakeAction::MessageUser { .. } if waiting_ask_already_in_chat(snap) => false,
             _ => true,
         })
         .cloned()

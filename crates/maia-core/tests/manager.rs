@@ -181,6 +181,171 @@ fn wake_waiting_without_ask_user_is_forced_once_unless_already_in_chat() {
 }
 
 #[test]
+fn wake_standing_by_message_is_dropped_while_unanswered_ask_is_open() {
+    let snap = WakeSnapshot {
+        waiting: vec![(
+            "task-wait".to_owned(),
+            "Need RUN61_CEO_SECRET from the vault".to_owned(),
+        )],
+        recent_ceo_lines: vec![
+            "assistant: Need your decision for task-wait: Need RUN61_CEO_SECRET from the vault?"
+                .to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let chatter = enforce_ceo_moments(
+        &[WakeAction::MessageUser {
+            text: "Waiting for your answer on vault secret RUN61_CEO_SECRET. I'll continue once you provide it."
+                .to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        !chatter.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { .. }
+        )),
+        "standing-by message_user while an unanswered ask is open must be dropped: {chatter:?}"
+    );
+    assert!(
+        chatter
+            .iter()
+            .all(|action| matches!(action, WakeAction::Silent)),
+        "expected silent wake after dropping standing-by chatter: {chatter:?}"
+    );
+}
+
+#[test]
+fn wake_rephrased_ask_is_dropped_even_when_longest_token_differs() {
+    // Longest token in the rephrase is "credentials" (11); shared cover key is RUN61_CEO_SECRET.
+    let snap = WakeSnapshot {
+        waiting: vec![(
+            "task-wait".to_owned(),
+            "Need RUN61_CEO_SECRET from the vault".to_owned(),
+        )],
+        recent_ceo_lines: vec![
+            "assistant: Need your decision for task-wait: Need RUN61_CEO_SECRET from the vault?"
+                .to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let rephrased = enforce_ceo_moments(
+        &[WakeAction::AskUser {
+            text: "Please provide the vault credentials so the waiting worker can finish?"
+                .to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        !rephrased
+            .iter()
+            .any(|action| matches!(action, WakeAction::AskUser { .. })),
+        "rephrased ask while waiter already covered must be dropped: {rephrased:?}"
+    );
+}
+
+#[test]
+fn wake_genuinely_new_ask_still_gets_through_when_prior_ask_was_different() {
+    let snap = WakeSnapshot {
+        waiting: vec![(
+            "task-color".to_owned(),
+            "Pick blue or green for the banner".to_owned(),
+        )],
+        recent_ceo_lines: vec![
+            "assistant: Need your decision for task-old: Need RUN61_CEO_SECRET from the vault?"
+                .to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let fresh = enforce_ceo_moments(
+        &[WakeAction::AskUser {
+            text: "Should the banner use blue or green?".to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        fresh.iter().any(|action| matches!(
+            action,
+            WakeAction::AskUser { text } if text.to_ascii_lowercase().contains("blue")
+                || text.to_ascii_lowercase().contains("green")
+                || text.to_ascii_lowercase().contains("banner")
+        )),
+        "a genuinely new CEO question must still post: {fresh:?}"
+    );
+}
+
+#[test]
+fn wake_brief_says_already_asked_when_ceo_chat_covers_waiter() {
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        waiting: vec![(
+            "task-wait".to_owned(),
+            "Need RUN61_CEO_SECRET from the vault".to_owned(),
+        )],
+        recent_ceo_lines: vec![
+            "assistant: Need your decision for task-wait: Need RUN61_CEO_SECRET from the vault?"
+                .to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    let lower = brief.to_ascii_lowercase();
+    assert!(
+        lower.contains("ceo_waiting (already asked)"),
+        "brief must label the waiter as already asked: {brief}"
+    );
+    assert!(
+        lower.contains("do not rephrase"),
+        "brief must forbid rephrasing the open ask: {brief}"
+    );
+    assert!(
+        !lower.contains("ceo_waiting (mandatory)"),
+        "must not still mandate ask_user after the CEO was already asked: {brief}"
+    );
+}
+
+#[test]
+fn wake_brief_after_ceo_answer_points_at_continue_not_silence() {
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        waiting: vec![(
+            "task-wait".to_owned(),
+            "Need RUN61_CEO_SECRET from the vault".to_owned(),
+        )],
+        recent_ceo_lines: vec![
+            "assistant: Need your decision for task-wait: Need RUN61_CEO_SECRET from the vault?"
+                .to_owned(),
+            "user: the secret is run61-ok".to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    let lower = brief.to_ascii_lowercase();
+    assert!(
+        lower.contains("continue_task"),
+        "after the CEO answers, brief must push continue_task: {brief}"
+    );
+    assert!(
+        !lower.contains("ceo_waiting (already asked)"),
+        "answered asks must not tell the model to stay silent: {brief}"
+    );
+    let dropped = enforce_ceo_moments(
+        &[WakeAction::AskUser {
+            text: "Please provide RUN61_CEO_SECRET again?".to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        !dropped
+            .iter()
+            .any(|action| matches!(action, WakeAction::AskUser { .. })),
+        "even after an answer, do not re-ask the covered secret: {dropped:?}"
+    );
+}
+
+#[test]
 fn looks_like_close_out_rejects_status_chatter() {
     assert!(maia_core::manager::looks_like_close_out(
         "Done — wrote DONE43 to the workspace file."
