@@ -49,8 +49,14 @@ export function AttachmentChips({
             <span>{chip.safe_name}</span>
           )}
           {onRemove ? (
-            <button type="button" onClick={() => onRemove(chip.attachment_id)}>
-              Remove {chip.safe_name}
+            <button
+              type="button"
+              className="maia-icon-btn"
+              aria-label={`Remove ${chip.safe_name}`}
+              title={`Remove ${chip.safe_name}`}
+              onClick={() => onRemove(chip.attachment_id)}
+            >
+              <span className="maia-remove-icon" aria-hidden="true" />
             </button>
           ) : null}
         </li>

@@ -82,8 +82,9 @@ function CodeBlock({ text, children }: { text: string; children?: ReactNode }) {
       <div className="maia-code-toolbar">
         <button
           type="button"
-          className="maia-btn"
+          className="maia-icon-btn"
           aria-label="Copy code"
+          title="Copy code"
           onClick={() => {
             const clipboard = globalThis.navigator?.clipboard
             if (!clipboard) return
@@ -92,7 +93,7 @@ function CodeBlock({ text, children }: { text: string; children?: ReactNode }) {
             })
           }}
         >
-          Copy
+          <span className="maia-copy-icon" aria-hidden="true" />
         </button>
         {copied ? <span role="status">Copied</span> : null}
       </div>

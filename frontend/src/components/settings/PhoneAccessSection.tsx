@@ -120,8 +120,14 @@ export function PhoneAccessSection({ origin }: { origin: string }) {
           {status.devices.map((device) => (
             <li key={device.node_id}>
               {device.name}{' '}
-              <button type="button" className="maia-btn" onClick={() => void unpair(device.node_id)}>
-                Unpair {device.name}
+              <button
+                type="button"
+                className="maia-icon-btn"
+                aria-label={`Unpair ${device.name}`}
+                title={`Unpair ${device.name}`}
+                onClick={() => void unpair(device.node_id)}
+              >
+                <span className="maia-remove-icon" aria-hidden="true" />
               </button>
             </li>
           ))}

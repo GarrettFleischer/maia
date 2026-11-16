@@ -325,23 +325,25 @@ export function RouterConversation({
           <div className="maia-transcript-find-nav">
             <button
               type="button"
-              className="maia-btn"
+              className="maia-icon-btn"
               aria-label="Previous find match"
+              title="Previous find match"
               onClick={() =>
                 setFindActive((current) => stepFindIndex(current, matchIds.length, 'prev'))
               }
             >
-              Prev
+              <span className="maia-find-prev-icon" aria-hidden="true" />
             </button>
             <button
               type="button"
-              className="maia-btn"
+              className="maia-icon-btn"
               aria-label="Next find match"
+              title="Next find match"
               onClick={() =>
                 setFindActive((current) => stepFindIndex(current, matchIds.length, 'next'))
               }
             >
-              Next
+              <span className="maia-find-next-icon" aria-hidden="true" />
             </button>
           </div>
         ) : null}
@@ -436,8 +438,9 @@ export function RouterConversation({
                     >
                       <button
                         type="button"
-                        className="maia-btn"
+                        className="maia-icon-btn"
                         aria-label="Copy message"
+                        title="Copy message"
                         onClick={() => {
                           const clipboard = globalThis.navigator?.clipboard
                           if (!clipboard) return
@@ -446,19 +449,20 @@ export function RouterConversation({
                           })
                         }}
                       >
-                        Copy
+                        <span className="maia-copy-icon" aria-hidden="true" />
                       </button>
                       {message.role === 'owner' ? (
                         <button
                           type="button"
-                          className="maia-btn"
+                          className="maia-icon-btn"
                           aria-label="Edit message"
+                          title="Edit message"
                           onClick={() => {
                             onDraftChange(message.text)
                             fieldRef.current?.focus()
                           }}
                         >
-                          Edit
+                          <span className="maia-edit-icon" aria-hidden="true" />
                         </button>
                       ) : null}
                       {copiedMessageId === message.message_id ? (
@@ -478,8 +482,14 @@ export function RouterConversation({
                 <p className="maia-transcript-body">{item.text}</p>
                 <p>{item.state === 'pending' ? 'Sending.' : 'Not sent.'}</p>
                 {item.state === 'failed' ? (
-                  <button type="button" className="maia-btn" onClick={() => onRetryOutgoing?.(item.id)}>
-                    Retry
+                  <button
+                    type="button"
+                    className="maia-icon-btn"
+                    aria-label="Retry"
+                    title="Retry"
+                    onClick={() => onRetryOutgoing?.(item.id)}
+                  >
+                    <span className="maia-retry-icon" aria-hidden="true" />
                   </button>
                 ) : null}
               </article>
@@ -515,8 +525,14 @@ export function RouterConversation({
                   <div className="maia-live-interrupted">
                     <p role="status">Interrupted · partial kept · not a saved reply</p>
                     {onDismissLiveReply ? (
-                      <button type="button" className="maia-btn" onClick={onDismissLiveReply}>
-                        Dismiss
+                      <button
+                        type="button"
+                        className="maia-icon-btn"
+                        aria-label="Dismiss"
+                        title="Dismiss"
+                        onClick={onDismissLiveReply}
+                      >
+                        <span className="maia-remove-icon" aria-hidden="true" />
                       </button>
                     ) : null}
                   </div>
@@ -606,11 +622,14 @@ export function RouterConversation({
                 <span>{file.name}</span>
                 <button
                   type="button"
+                  className="maia-icon-btn"
+                  aria-label={`Remove ${file.name}`}
+                  title={`Remove ${file.name}`}
                   onClick={() =>
                     setPendingFiles((current) => current.filter((item) => item !== file))
                   }
                 >
-                  Remove {file.name}
+                  <span className="maia-remove-icon" aria-hidden="true" />
                 </button>
               </li>
             ))}
@@ -686,13 +705,15 @@ export function RouterConversation({
             {notice.kind === 'quiet' ? (
               <button
                 type="button"
-                className="maia-btn"
+                className="maia-icon-btn"
+                aria-label="Retry"
+                title="Retry"
                 onClick={() => {
                   const pending = outgoing.find((item) => item.state === 'pending')
                   if (pending) onRetryOutgoing?.(pending.id)
                 }}
               >
-                Retry
+                <span className="maia-retry-icon" aria-hidden="true" />
               </button>
             ) : null}
             {notice.kind === 'refresh_failed' ? (

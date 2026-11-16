@@ -199,8 +199,14 @@ export function InspectorPanel({
           <h2 id="inspector-drawer-title" style={{ margin: 0, fontSize: 15 }}>
             Inspector
           </h2>
-          <button type="button" className="maia-btn" onClick={onClose}>
-            Close inspector
+          <button
+            type="button"
+            className="maia-icon-btn"
+            aria-label="Close inspector"
+            title="Close inspector"
+            onClick={onClose}
+          >
+            <span className="maia-remove-icon" aria-hidden="true" />
           </button>
         </div>
         <div style={{ marginTop: 12 }}>{body}</div>

@@ -404,8 +404,14 @@ function MemoryList({
                     ) : null}
                     <p className="maia-muted">{learned(node)}</p>
                     <div className="maia-brain-actions">
-                      <button type="button" className="maia-btn" onClick={() => onEdit(node)}>
-                        Edit
+                      <button
+                        type="button"
+                        className="maia-icon-btn"
+                        aria-label="Edit"
+                        title="Edit"
+                        onClick={() => onEdit(node)}
+                      >
+                        <span className="maia-edit-icon" aria-hidden="true" />
                       </button>
                       {editing === node.id ? (
                         <button type="button" className="maia-btn" onClick={() => onSave(node)}>
@@ -415,8 +421,14 @@ function MemoryList({
                       <button type="button" className="maia-btn" onClick={() => onRetagStart(node)}>
                         Tags
                       </button>
-                      <button type="button" className="maia-btn" onClick={() => onForget(node)}>
-                        Forget
+                      <button
+                        type="button"
+                        className="maia-icon-btn"
+                        aria-label="Forget"
+                        title="Forget"
+                        onClick={() => onForget(node)}
+                      >
+                        <span className="maia-forget-icon" aria-hidden="true" />
                       </button>
                       <button
                         type="button"

@@ -61,19 +61,21 @@ export function AllowlistPanel() {
               <td>
                 <button
                   type="button"
-                  className="maia-btn"
+                  className="maia-icon-btn"
                   aria-label={`Edit ${entry.label}`}
+                  title={`Edit ${entry.label}`}
                   onClick={() => setEditId(entry.id)}
                 >
-                  Edit
+                  <span className="maia-edit-icon" aria-hidden="true" />
                 </button>
                 <button
                   type="button"
-                  className="maia-btn"
+                  className="maia-icon-btn"
                   aria-label={`Revoke ${entry.label}`}
+                  title={`Revoke ${entry.label}`}
                   onClick={() => dispatch({ type: 'revoke_allowlist_entry', id: entry.id })}
                 >
-                  Revoke
+                  <span className="maia-forget-icon" aria-hidden="true" />
                 </button>
               </td>
             </tr>
