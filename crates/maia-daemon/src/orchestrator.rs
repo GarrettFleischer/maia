@@ -2630,6 +2630,14 @@ impl ActivityLog {
             .retain(|event| event.task_id.as_deref() != Some(task_id));
     }
 
+    /// Drops router lines with no task so Quiet chats do not keep a Working strip.
+    pub fn clear_untasked(&self) {
+        let Ok(mut state) = self.inner.lock() else {
+            return;
+        };
+        state.events.retain(|event| event.task_id.is_some());
+    }
+
     /// Copies the current lines in order.
     pub fn snapshot(&self) -> Vec<ActivityEvent> {
         self.inner
@@ -4009,7 +4017,8 @@ impl<R: Router> Orchestrator<R> {
                             });
                         }
                     }
-                    self.record_activity(format!("Wake cancel for {}", task.0), Some(&task));
+                    // Cancel may fail (exhausted ids); still drop Working/Stop for this id.
+                    self.clear_live_activity(&task);
                 }
                 WakeAction::Spawn { guidance } => {
                     // Criterion source needs a user router_messages row. Do not BindMessage:
@@ -4231,6 +4240,10 @@ impl<R: Router> Orchestrator<R> {
     fn clear_live_activity(&mut self, task: &TaskId) {
         self.task_activity.remove(task);
         self.activity.clear_task(&task.0);
+    }
+
+    fn clear_router_activity(&mut self) {
+        self.activity.clear_untasked();
     }
 
     /// Uses this embedder to seed and score recall. Missing vectors stay on text search.
@@ -5316,6 +5329,7 @@ impl<R: Router> Orchestrator<R> {
             &[],
             self.ids.now,
         );
+        self.clear_router_activity();
         MessageOutcome::Routed(TurnOutcome {
             admitted,
             task,
@@ -5348,6 +5362,7 @@ impl<R: Router> Orchestrator<R> {
     }
 
     fn admitted_failure(&mut self, message: MessageId, error: OrchestratorError) -> MessageOutcome {
+        self.clear_router_activity();
         if let Some(reason) = routing_failure_reason(&error) {
             let _ = self.note_router(reason.safe_note());
             MessageOutcome::RoutingFailed {

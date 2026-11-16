@@ -2861,6 +2861,54 @@ fn completed_worker_clears_its_activity_lines() {
 }
 
 #[test]
+fn finished_owner_turn_clears_untasked_router_activity() {
+    let mut harness = Harness::open("activity-clears-router", prompt_supply());
+    harness.router.push_tool(
+        "success",
+        &success_arguments("Hello, Garrett. What should I take on?"),
+    );
+    let outcome = wait(harness.host().handle_user_message("Hello, this is Garrett")).expect("chat");
+    assert!(outcome.task.is_none());
+    let leftover: Vec<_> = harness
+        .host()
+        .activity_events()
+        .into_iter()
+        .filter(|event| event.task_id.is_none())
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "quiet chat must not keep Router Working lines: {leftover:?}"
+    );
+}
+
+#[test]
+fn wake_cancel_does_not_repush_activity_for_dead_task() {
+    use maia_core::manager::WakeAction;
+
+    let mut harness = Harness::open_model("wake-cancel-no-orphan", prompt_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need a path."}"#);
+    let outcome = wait(harness.host().handle_user_message("Open a config file")).expect("spawn");
+    let task = outcome.task.expect("task");
+    let (messaged, _) = harness.host().apply_wake_actions(&[WakeAction::Cancel {
+        task_id: task.0.clone(),
+    }]);
+    assert!(!messaged, "wake cancel must not post into CEO chat");
+    let leftover: Vec<_> = harness
+        .host()
+        .activity_events()
+        .into_iter()
+        .filter(|event| event.task_id.as_deref() == Some(task.0.as_str()))
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "cancelled task must not keep Working/Stop activity: {leftover:?}"
+    );
+}
+
+#[test]
 fn success_marks_open_todos_done_on_the_stored_plan() {
     let mut harness = Harness::open_model("todos-close-on-success", prompt_supply());
     harness.router.push_tool("spawn_task", "{}");
