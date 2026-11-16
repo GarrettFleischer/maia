@@ -62,7 +62,7 @@ pub struct WakeSnapshot {
     pub completed_unopened: u32,
     /// Prompt-only detail per open worker. Ignored by fingerprint.
     pub workers: Vec<WorkerBrief>,
-    /// Recent selected-bot CEO chat lines for dedup. Ignored by fingerprint.
+    /// Recent CEO chat lines for this wake's bot (dedup). Ignored by fingerprint.
     pub recent_ceo_lines: Vec<String>,
     /// Short notes from earlier wakes. Ignored by fingerprint.
     pub learned: Vec<String>,
@@ -440,6 +440,89 @@ pub fn snapshot_fingerprint(snap: &WakeSnapshot) -> String {
         .join("|");
     parts.push(format!("w={waiting_line}"));
     parts.join(";")
+}
+
+/// True when `text` is a multi-bot wake fingerprint map (`bot_id=r=...` lines).
+#[must_use]
+pub fn is_bot_wake_fingerprint_map(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    trimmed.contains('\n') || trimmed.contains("=r=")
+}
+
+/// Parse per-bot wake fingerprints. Raw single-bot fingerprints (`r=...`) yield an empty map.
+#[must_use]
+pub fn parse_bot_wake_fingerprints(text: &str) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    if !is_bot_wake_fingerprint_map(text) {
+        return map;
+    }
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((bot, fp)) = line.split_once('=') else {
+            continue;
+        };
+        let bot = bot.trim();
+        let fp = fp.trim();
+        if bot.is_empty() || fp.is_empty() {
+            continue;
+        }
+        map.insert(bot.to_owned(), fp.to_owned());
+    }
+    map
+}
+
+/// Encode per-bot wake fingerprints (sorted). Empty map → empty string.
+#[must_use]
+pub fn encode_bot_wake_fingerprints(by_bot: &BTreeMap<String, String>) -> String {
+    by_bot
+        .iter()
+        .map(|(bot, fp)| format!("{bot}={fp}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Previous fingerprint for one bot from a stored wake fingerprint string.
+///
+/// Multi-bot maps look up `bot_id`. Legacy single-bot strings (`r=...`) apply to any bot.
+#[must_use]
+pub fn previous_bot_wake_fingerprint(encoded: &str, bot_id: &str) -> String {
+    let map = parse_bot_wake_fingerprints(encoded);
+    if let Some(fp) = map.get(bot_id) {
+        return fp.clone();
+    }
+    if !is_bot_wake_fingerprint_map(encoded) {
+        return encoded.to_owned();
+    }
+    String::new()
+}
+
+/// Persist wake fingerprints after a multi-bot pass.
+///
+/// One bot → raw snapshot fingerprint (legacy-compatible). Several → map encoding.
+#[must_use]
+pub fn store_bot_wake_fingerprints(
+    by_bot: &BTreeMap<String, String>,
+    bots_woken: &[String],
+) -> String {
+    if bots_woken.len() <= 1 {
+        if let Some(bot) = bots_woken.first() {
+            return by_bot.get(bot).cloned().unwrap_or_default();
+        }
+        return String::new();
+    }
+    let mut kept = BTreeMap::new();
+    for bot in bots_woken {
+        if let Some(fp) = by_bot.get(bot) {
+            kept.insert(bot.clone(), fp.clone());
+        }
+    }
+    encode_bot_wake_fingerprints(&kept)
 }
 
 /// Decides whether this wake spends a model call.

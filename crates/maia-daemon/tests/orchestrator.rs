@@ -4834,7 +4834,7 @@ fn manager_wake_asks_user_once_for_a_blocker() {
 }
 
 #[test]
-fn manager_wake_ask_user_binds_to_selected_bot_not_stale_turn_bot() {
+fn manager_wake_ask_user_binds_to_waiting_bot_not_ui_selection() {
     let mut harness = Harness::open_model("mgr-wake-ask-selected", long_supply());
     let other = match harness
         .host()
@@ -4864,7 +4864,7 @@ fn manager_wake_ask_user_binds_to_selected_bot_not_stale_turn_bot() {
     let outcome = wait(harness.host().handle_user_message("Read the vault secret")).expect("run");
     let _task = outcome.task.expect("task");
 
-    // Stale turn_bot: talk on Maia, then re-select the waiting bot without a new owner turn.
+    // Stale turn_bot + UI on Maia: waiting bot must still receive ask_user.
     harness
         .host()
         .store()
@@ -4875,13 +4875,6 @@ fn manager_wake_ask_user_binds_to_selected_bot_not_stale_turn_bot() {
     harness.host().set_next_bot("maia");
     harness.router.push_tool("success", &success_arguments("Noted."));
     let _ = wait(harness.host().handle_user_message("hi")).expect("maia turn");
-    harness
-        .host()
-        .store()
-        .bots(BotRequest::Select {
-            bot_id: other.bot_id.clone(),
-        })
-        .expect("re-select other");
 
     harness.router.push_tool(
         "ask_user",
@@ -4907,11 +4900,11 @@ fn manager_wake_ask_user_binds_to_selected_bot_not_stale_turn_bot() {
     };
     assert!(
         bound.iter().any(|(bot, _)| bot == &other.bot_id),
-        "ask_user must bind to selected waiting bot, got {bound:?}"
+        "ask_user must bind to waiting bot, got {bound:?}"
     );
     assert!(
         !bound.iter().any(|(bot, _)| bot == "maia"),
-        "ask_user must not bind to stale turn_bot maia: {bound:?}"
+        "ask_user must not bind to UI-selected maia: {bound:?}"
     );
 }
 
@@ -5596,14 +5589,111 @@ fn wake_snapshot_ignores_failed_tasks_from_other_bots() {
         wait(harness.host().handle_user_message("Fail on maia")).expect("maia");
     let maia_task = maia_outcome.task.expect("maia task");
 
-    let snap = harness.host().wake_snapshot();
+    let snap_maia = harness.host().wake_snapshot_for("maia");
     assert!(
-        snap.failed_task_ids.iter().any(|id| id == &maia_task.0),
-        "selected bot failure must appear: {snap:?}"
+        snap_maia.failed_task_ids.iter().any(|id| id == &maia_task.0),
+        "maia failure must appear in maia snapshot: {snap_maia:?}"
     );
     assert!(
-        !snap.failed_task_ids.iter().any(|id| id == &other_task.0),
-        "other bot failure must not poison wake: {snap:?}"
+        !snap_maia
+            .failed_task_ids
+            .iter()
+            .any(|id| id == &other_task.0),
+        "other bot failure must not appear in maia snapshot: {snap_maia:?}"
+    );
+    let snap_other = harness.host().wake_snapshot_for(&other.bot_id);
+    assert!(
+        snap_other
+            .failed_task_ids
+            .iter()
+            .any(|id| id == &other_task.0),
+        "other bot failure must appear in its own snapshot: {snap_other:?}"
+    );
+}
+
+#[test]
+fn manager_wake_closes_out_non_selected_bot_with_finished_work() {
+    // UI selection must not starve a Super Agent whose worker finished while another
+    // bot is selected. Wake every bot that has open finished work; Done binds there.
+    let mut harness = Harness::open_model("mgr-wake-unselected-done", long_supply());
+    let other = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Create {
+            name: "wake-unselected".to_owned(),
+            instructions: String::new(),
+            now: NOW,
+        })
+        .expect("create bot")
+    {
+        BotResponse::Bot(bot) => bot,
+        other => panic!("expected bot, got {other:?}"),
+    };
+    harness.host().set_next_bot(&other.bot_id);
+    harness
+        .host()
+        .store()
+        .bots(BotRequest::Select {
+            bot_id: other.bot_id.clone(),
+        })
+        .expect("select other");
+    harness.router.push_tool("spawn_task", "{}");
+    harness.router.push_tool(
+        "success",
+        &success_arguments("Wrote WAKE62 to the workspace file."),
+    );
+    let outcome =
+        wait(harness.host().handle_user_message("Write WAKE62 to a file")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+
+    // Select Maia so the finished bot is no longer UI-selected.
+    harness
+        .host()
+        .store()
+        .bots(BotRequest::Select {
+            bot_id: "maia".to_owned(),
+        })
+        .expect("select maia");
+    harness.host().set_next_bot("maia");
+
+    harness.router.push_tool(
+        "message_user",
+        r#"{"message":"Done — wrote WAKE62 to the workspace file."}"#,
+    );
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
+    assert!(
+        messaged,
+        "non-selected bot with finished work must still get a wake close-out"
+    );
+
+    let bound: Vec<(String, String)> = {
+        let conn = Connection::open(&harness.database).expect("db");
+        let mut stmt = conn
+            .prepare(
+                "SELECT b.bot_id, m.body FROM router_messages m \
+                 JOIN message_bots b ON b.message_id = m.message_id \
+                 WHERE m.body LIKE '%WAKE62%' AND m.role = 'assistant' \
+                 ORDER BY m.ordinal",
+            )
+            .expect("prep");
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .expect("query");
+        rows.map(|row| row.expect("row")).collect()
+    };
+    assert!(
+        bound
+            .iter()
+            .any(|(bot, body)| bot == &other.bot_id && body.contains("Done")),
+        "Done must post in the finished bot's chat, got {bound:?}"
+    );
+    assert!(
+        !bound.iter().any(|(bot, _)| bot == "maia"),
+        "Done must not land in the selected-but-idle Maia chat: {bound:?}"
     );
 }
 

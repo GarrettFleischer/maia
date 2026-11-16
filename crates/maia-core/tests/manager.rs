@@ -1,17 +1,48 @@
 //! Autonomous manager contracts: wake plan, tools, restart budget. No model or store.
 
+use std::collections::BTreeMap;
+
 use maia_core::manager::DEFAULT_AUTONOMOUS_RETRY_BUDGET;
 use maia_core::manager::DEFAULT_WAKE_INTERVAL_SECS;
 use maia_core::manager::MAX_MODEL_CALLS_PER_WAKE;
 use maia_core::manager::WakeAction;
 use maia_core::manager::WakeSnapshot;
 use maia_core::manager::WakeToolCall;
+use maia_core::manager::encode_bot_wake_fingerprints;
 use maia_core::manager::enforce_ceo_moments;
 use maia_core::manager::enforce_restart_budget;
 use maia_core::manager::interpret_wake_tools;
+use maia_core::manager::parse_bot_wake_fingerprints;
 use maia_core::manager::plan_wake;
+use maia_core::manager::previous_bot_wake_fingerprint;
 use maia_core::manager::restart_budget_exhausted;
 use maia_core::manager::snapshot_fingerprint;
+use maia_core::manager::store_bot_wake_fingerprints;
+
+#[test]
+fn bot_wake_fingerprints_round_trip_and_legacy_single() {
+    let mut map = BTreeMap::new();
+    map.insert("alpha".to_owned(), "r=1;c=0;f=;s=;w=".to_owned());
+    map.insert("beta".to_owned(), "r=0;c=1;f=;s=;w=".to_owned());
+    let encoded = encode_bot_wake_fingerprints(&map);
+    assert_eq!(parse_bot_wake_fingerprints(&encoded), map);
+    assert_eq!(
+        previous_bot_wake_fingerprint(&encoded, "beta"),
+        "r=0;c=1;f=;s=;w="
+    );
+    let legacy = "r=1;c=0;f=t1;s=;w=";
+    assert_eq!(previous_bot_wake_fingerprint(legacy, "maia"), legacy);
+    assert_eq!(previous_bot_wake_fingerprint(legacy, "other"), legacy);
+    assert!(parse_bot_wake_fingerprints(legacy).is_empty());
+    assert_eq!(
+        store_bot_wake_fingerprints(&map, &["alpha".to_owned()]),
+        "r=1;c=0;f=;s=;w="
+    );
+    assert_eq!(
+        store_bot_wake_fingerprints(&map, &["alpha".to_owned(), "beta".to_owned()]),
+        encoded
+    );
+}
 
 #[test]
 fn restart_budget_is_exhausted_when_used_meets_cap() {

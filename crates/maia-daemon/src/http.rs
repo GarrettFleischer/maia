@@ -1485,11 +1485,8 @@ fn run_scheduled_wake<R: RouterPort>(
     ) {
         return;
     }
-    if let Ok(maia_store::BotResponse::Text(selected)) =
-        actor.host.store().bots(maia_store::BotRequest::Selected)
-    {
-        actor.host.set_next_bot(&selected);
-    }
+    // UI selection must not decide which Super Agent wakes — run_manager_wake
+    // iterates every bot with open work and binds CEO posts via turn_bot.
     actor.host.configure_manager_wake_policy(
         wake_state.restart_budget,
         wake_state.mute_nonessential_wake_messages,

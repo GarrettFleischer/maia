@@ -3787,15 +3787,16 @@ impl<R: Router> Orchestrator<R> {
         self.activity.snapshot()
     }
 
-    /// Snapshot of work the manager wake inspects.
+    /// Snapshot of work the manager wake inspects for the current turn bot.
     ///
-    /// Only the selected bot's open tasks are included so deleted/other bots
-    /// cannot poison the wake fingerprint forever.
+    /// Prefer [`Self::wake_snapshot_for`] when the bot id is known. UI selection
+    /// does not decide which Super Agent is woken.
     pub fn wake_snapshot(&self) -> WakeSnapshot {
-        let selected = match self.store.bots(maia_store::BotRequest::Selected) {
-            Ok(maia_store::BotResponse::Text(bot)) => bot,
-            _ => self.turn_bot.clone(),
-        };
+        self.wake_snapshot_for(&self.turn_bot)
+    }
+
+    /// Snapshot of open work for one Super Agent (not the UI-selected bot).
+    pub fn wake_snapshot_for(&self, bot_id: &str) -> WakeSnapshot {
         let mut failed_task_ids = Vec::new();
         let mut stuck_task_ids = Vec::new();
         let mut waiting = Vec::new();
@@ -3803,7 +3804,7 @@ impl<R: Router> Orchestrator<R> {
         let mut completed_unopened = 0_u32;
         let mut workers = Vec::new();
         for (task, phase) in &self.phases {
-            if self.task_bot(task) != selected {
+            if self.task_bot(task) != bot_id {
                 continue;
             }
             match phase {
@@ -3850,12 +3851,38 @@ impl<R: Router> Orchestrator<R> {
             running_count,
             completed_unopened,
             workers,
-            recent_ceo_lines: self.recent_ceo_lines_for(&selected),
+            recent_ceo_lines: self.recent_ceo_lines_for(bot_id),
             learned: Vec::new(),
         }
     }
 
-    /// Last few selected-bot CEO chat lines for wake dedup (prompt-only).
+    /// Super Agents that still have open wake work (failed / waiting / running / unreported).
+    ///
+    /// Sorted for stable wake order. Idle bots are omitted so they stay cheap.
+    pub fn bots_with_open_wake_work(&self) -> Vec<String> {
+        let mut bots = std::collections::BTreeSet::new();
+        for (task, phase) in &self.phases {
+            let bot = self.task_bot(task);
+            if bot.is_empty() {
+                continue;
+            }
+            let open = match phase {
+                TaskPhase::Failed { .. }
+                | TaskPhase::WaitingForUser { .. }
+                | TaskPhase::Blocked { .. }
+                | TaskPhase::Queued
+                | TaskPhase::Running { .. } => true,
+                TaskPhase::Completed { .. } => self.task_completion_unopened(task),
+                _ => false,
+            };
+            if open {
+                bots.insert(bot);
+            }
+        }
+        bots.into_iter().collect()
+    }
+
+    /// Last few CEO chat lines for one bot (wake dedup, prompt-only).
     fn recent_ceo_lines_for(&self, bot_id: &str) -> Vec<String> {
         const MAX_LINES: usize = 6;
         const MAX_CHARS: usize = 160;
@@ -3894,13 +3921,11 @@ impl<R: Router> Orchestrator<R> {
     ///
     /// ATTENTION asks for one close-out per finished goal; closing every unopened
     /// completion on a single message_user would hide later goals from the CEO.
+    /// Scoped to `turn_bot` (the Super Agent this wake is acting for).
     fn close_unopened_completed_for_wake(&mut self) {
-        let selected = match self.store.bots(maia_store::BotRequest::Selected) {
-            Ok(maia_store::BotResponse::Text(bot)) => bot,
-            _ => self.turn_bot.clone(),
-        };
+        let bot = self.turn_bot.clone();
         let oldest = self.phases.iter().find_map(|(task, phase)| {
-            if self.task_bot(task) != selected {
+            if self.task_bot(task) != bot {
                 return None;
             }
             match phase {
@@ -4086,23 +4111,49 @@ impl<R: Router> Orchestrator<R> {
         (messaged, learned)
     }
 
-    /// Runs one manager wake: skip the model when nothing changed; otherwise one tool turn.
+    /// Runs one manager wake across every Super Agent with open work.
     ///
-    /// Returns fingerprint, whether chat was posted, and any new learning notes.
-    /// Silent wakes return false / empty notes. When the wake model call fails, the previous
-    /// fingerprint is kept so the next wake can retry.
+    /// UI selection does not decide who wakes. Each bot gets its own snapshot,
+    /// fingerprint dedup, safety cap, and CEO chat bind via `turn_bot`.
+    /// Returns a stored fingerprint string, whether any chat was posted, and notes.
     pub fn run_manager_wake(
         &mut self,
         previous_fingerprint: &str,
         learned: &[String],
     ) -> (String, bool, Vec<String>) {
-        // CEO-facing wake posts bind via turn_bot; keep it on the selected bot.
-        if let Ok(maia_store::BotResponse::Text(selected)) =
-            self.store.bots(maia_store::BotRequest::Selected)
-        {
-            self.turn_bot = selected;
+        let bots = self.bots_with_open_wake_work();
+        if bots.is_empty() {
+            return (String::new(), false, Vec::new());
         }
-        let mut snap = self.wake_snapshot();
+        let saved_turn = self.turn_bot.clone();
+        let mut by_bot = std::collections::BTreeMap::new();
+        let mut any_messaged = false;
+        let mut all_learned = Vec::new();
+        for bot_id in &bots {
+            let previous =
+                maia_core::manager::previous_bot_wake_fingerprint(previous_fingerprint, bot_id);
+            self.turn_bot = bot_id.clone();
+            let (fp, messaged, new_learned) =
+                self.run_manager_wake_for_bot(&previous, learned);
+            by_bot.insert(bot_id.clone(), fp);
+            any_messaged |= messaged;
+            all_learned.extend(new_learned);
+        }
+        self.turn_bot = saved_turn;
+        (
+            maia_core::manager::store_bot_wake_fingerprints(&by_bot, &bots),
+            any_messaged,
+            all_learned,
+        )
+    }
+
+    /// One Super Agent wake: skip the model when nothing changed; otherwise one tool turn.
+    fn run_manager_wake_for_bot(
+        &mut self,
+        previous_fingerprint: &str,
+        learned: &[String],
+    ) -> (String, bool, Vec<String>) {
+        let mut snap = self.wake_snapshot_for(&self.turn_bot);
         snap.learned = learned.to_vec();
         let fingerprint = snapshot_fingerprint(&snap);
         let plan = plan_wake(
@@ -4130,7 +4181,7 @@ impl<R: Router> Orchestrator<R> {
         // Safety cap only: spawn may defer Done for a second hire. If apply left the
         // finished goal idle with no chat, re-run the same CEO-moment cap (Silent → Done).
         if !messaged && snap.completed_unopened > 0 {
-            let after = self.wake_snapshot();
+            let after = self.wake_snapshot_for(&self.turn_bot);
             if after.completed_unopened > 0
                 && after.running_count == 0
                 && after.failed_task_ids.is_empty()
@@ -4163,7 +4214,7 @@ impl<R: Router> Orchestrator<R> {
         if !snap.waiting.is_empty() && !asked && !recovered_or_cancelled {
             return (previous_fingerprint.to_owned(), messaged, new_learned);
         }
-        let after = self.wake_snapshot();
+        let after = self.wake_snapshot_for(&self.turn_bot);
         if snap.completed_unopened > 0
             && !failed_or_stuck
             && snap.waiting.is_empty()
