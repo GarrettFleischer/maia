@@ -875,6 +875,57 @@ fn fingerprint_ignores_recent_ceo_chat() {
 }
 
 #[test]
+fn plan_wake_skips_model_while_waiting_ask_is_unanswered() {
+    let snap = WakeSnapshot {
+        waiting: vec![("task-wait".to_owned(), "Need RUN63_CEO_SECRET".to_owned())],
+        recent_ceo_lines: vec![
+            "assistant: Need your decision: provide RUN63_CEO_SECRET?".to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let fp = snapshot_fingerprint(&snap);
+    let plan = plan_wake(
+        1_000,
+        0,
+        DEFAULT_WAKE_INTERVAL_SECS,
+        &fp,
+        &snap,
+        0,
+        MAX_MODEL_CALLS_PER_WAKE,
+    );
+    assert!(
+        matches!(plan, maia_core::manager::WakePlan::SkipModel),
+        "unanswered ask must stay SkipModel on unchanged fingerprint, got {plan:?}"
+    );
+}
+
+#[test]
+fn plan_wake_runs_model_when_ceo_answers_even_if_fingerprint_unchanged() {
+    let snap = WakeSnapshot {
+        waiting: vec![("task-wait".to_owned(), "Need RUN63_CEO_SECRET".to_owned())],
+        recent_ceo_lines: vec![
+            "assistant: Need your decision: provide RUN63_CEO_SECRET?".to_owned(),
+            "user: The vault secret RUN63_CEO_SECRET is run63-ok.".to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let fp = snapshot_fingerprint(&snap);
+    let plan = plan_wake(
+        1_000,
+        0,
+        DEFAULT_WAKE_INTERVAL_SECS,
+        &fp,
+        &snap,
+        0,
+        MAX_MODEL_CALLS_PER_WAKE,
+    );
+    assert!(
+        matches!(plan, maia_core::manager::WakePlan::RunModel { .. }),
+        "CEO answer is outside the fingerprint; wake must still RunModel to continue_task, got {plan:?}"
+    );
+}
+
+#[test]
 fn wake_brief_includes_per_worker_status_idle_output_and_error() {
     use maia_core::manager::WorkerBrief;
     use maia_core::manager::format_wake_brief;

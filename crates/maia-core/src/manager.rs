@@ -549,7 +549,10 @@ pub fn plan_wake(
         return WakePlan::Silent;
     }
     if !previous_fingerprint.is_empty() && previous_fingerprint == fingerprint {
-        return WakePlan::SkipModel;
+        // Answers are not in the fingerprint; still wake so continue_task can run.
+        if !waiting_ceo_answered(snap) {
+            return WakePlan::SkipModel;
+        }
     }
     if model_calls_this_wake >= max_model_calls {
         return WakePlan::CapReached;
@@ -557,6 +560,11 @@ pub fn plan_wake(
     if !snap.failed_task_ids.is_empty() || !snap.stuck_task_ids.is_empty() {
         return WakePlan::RunModel {
             reason: "failed or stuck work needs judgment".to_owned(),
+        };
+    }
+    if waiting_ceo_answered(snap) {
+        return WakePlan::RunModel {
+            reason: "CEO answered a waiting question".to_owned(),
         };
     }
     if !snap.waiting.is_empty() {
@@ -727,6 +735,20 @@ pub fn waiting_ask_already_in_chat(snap: &WakeSnapshot) -> bool {
     snap.waiting
         .iter()
         .any(|(_, question)| unanswered_ask_covers(snap, question))
+}
+
+/// True when a waiter was asked and the CEO's reply is already in recent chat.
+///
+/// CEO answers live outside the wake fingerprint, so [`plan_wake`] must still
+/// spend a model call to `continue_task` even when the fingerprint is unchanged.
+#[must_use]
+pub fn waiting_ceo_answered(snap: &WakeSnapshot) -> bool {
+    !snap.waiting.is_empty()
+        && !waiting_ask_already_in_chat(snap)
+        && snap
+            .waiting
+            .iter()
+            .any(|(_, question)| recent_ceo_covers(snap, question, CeoCoverKind::Ask))
 }
 
 /// True when recent CEO chat has an ask covering `text` with no later `user:` reply.
