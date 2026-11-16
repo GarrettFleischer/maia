@@ -117,6 +117,19 @@ fn is_phrase(text: &str) -> bool {
         &["how", "are", "you"],
         &["whats", "up"],
         &["what", "s", "up"],
+        &["yes"],
+        &["no"],
+        &["sure"],
+        &["got", "it"],
+        &["sounds", "good"],
+        &["cool"],
+        &["great"],
+        &["np"],
+        &["no", "problem"],
+        &["all", "good"],
+        &["yep"],
+        &["yup"],
+        &["nah"],
     ];
     PHRASES.contains(&words.as_slice())
 }

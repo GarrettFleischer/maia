@@ -188,8 +188,11 @@ pub(crate) fn prompt_slots(
             3,
             "Candidate tasks",
             measured.candidates.len(),
-            residence,
-            &format!("{} tasks", json_len(&measured.candidates)),
+            CacheResidence::Uncached,
+            &format!(
+                "{} tasks (per-turn user; not in stable system prefix)",
+                json_len(&measured.candidates)
+            ),
         ),
         slot(
             4,
@@ -755,7 +758,9 @@ mod tests {
         );
         assert_eq!(slots[0].bytes, 4);
         assert_eq!(slots[0].detail, "1 schemas");
-        assert_eq!(slots[2].detail, "0 tasks");
+        assert!(slots[2].detail.contains("0 tasks"));
+        assert!(slots[2].detail.contains("per-turn user"));
+        assert_eq!(slots[2].residence, CacheResidence::Uncached);
         assert_eq!(slots[3].bytes, 10);
         assert_eq!(slots[3].detail, "2 messages");
         assert!(slots.iter().all(|slot| !slot.detail.contains("compact")));

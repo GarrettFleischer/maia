@@ -1561,6 +1561,21 @@ fn record_learning_wake_tool_emits_note_action() {
 }
 
 #[test]
+fn remember_wake_tool_emits_memory_write_action() {
+    let outcomes = interpret_wake_tools(&[WakeToolCall {
+        name: "remember".to_owned(),
+        message: r#"{"message":"Garrett prefers concise replies."}"#.to_owned(),
+    }]);
+    assert_eq!(
+        outcomes,
+        vec![WakeAction::MemoryWrite {
+            name: "remember".to_owned(),
+            arguments_json: r#"{"message":"Garrett prefers concise replies."}"#.to_owned(),
+        }]
+    );
+}
+
+#[test]
 fn merge_learned_notes_dedups_and_caps() {
     use maia_core::manager::MAX_LEARNED_NOTES;
     use maia_core::manager::merge_learned_notes;

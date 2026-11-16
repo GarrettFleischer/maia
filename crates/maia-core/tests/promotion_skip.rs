@@ -17,6 +17,14 @@ fn skips_empty_tool_noise_and_small_talk() {
         Some(PromotionSkipReason::SmallTalk)
     );
     assert_eq!(
+        should_skip_promotion("got it"),
+        Some(PromotionSkipReason::SmallTalk)
+    );
+    assert_eq!(
+        should_skip_promotion("sounds good"),
+        Some(PromotionSkipReason::SmallTalk)
+    );
+    assert_eq!(
         should_skip_promotion("The project is named Bob's Best Burgers."),
         None
     );

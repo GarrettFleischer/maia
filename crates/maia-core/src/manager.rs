@@ -151,6 +151,13 @@ pub enum WakeAction {
         /// One short note about what worked or failed.
         note: String,
     },
+    /// Write a durable brain claim via remember / update_memory / retire_memory.
+    MemoryWrite {
+        /// Tool name.
+        name: String,
+        /// Raw tool arguments JSON.
+        arguments_json: String,
+    },
 }
 
 /// True when automatic restarts are used up and the manager must ask the user.
@@ -683,6 +690,23 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                 let note = truncate_brief(&call.message, LEARNED_NOTE_CHARS);
                 if !note.is_empty() {
                     actions.push(WakeAction::RecordLearning { note });
+                }
+            }
+            "remember" | "update_memory" | "retire_memory" => {
+                let arguments_json = if call.message.trim().starts_with('{') {
+                    call.message.clone()
+                } else if call.name == "retire_memory" {
+                    serde_json::json!({ "claim_id": call.message.trim() }).to_string()
+                } else if call.name == "remember" {
+                    serde_json::json!({ "message": call.message.trim() }).to_string()
+                } else {
+                    call.message.clone()
+                };
+                if !call.message.trim().is_empty() {
+                    actions.push(WakeAction::MemoryWrite {
+                        name: call.name.clone(),
+                        arguments_json,
+                    });
                 }
             }
             _ => {}

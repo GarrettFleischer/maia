@@ -242,6 +242,20 @@ impl<R: Router> Orchestrator<R> {
         call: &NormalizedToolCall,
     ) -> Option<WorkerDrive> {
         let name = call.name.as_str();
+        if matches!(name, "remember" | "update_memory" | "retire_memory") {
+            let output = self.run_memory_tool(call);
+            self.record_activity(output.clone(), Some(&machine.task.clone()));
+            push_tool_exchange(&mut machine.messages, response, call, &output);
+            return Some(self.follow_loop(
+                machine,
+                StepObservation {
+                    tool: name.to_owned(),
+                    arguments: call.arguments_json.clone(),
+                    output,
+                    status: StepStatus::Completed,
+                },
+            ));
+        }
         if !matches!(name, "todo_add" | "todo_done" | "todo_start" | "ask_owner") {
             if let Err(reminder) = gate_tool(&machine.todos, name) {
                 push_tool_exchange(&mut machine.messages, response, call, &reminder);

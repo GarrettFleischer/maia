@@ -313,7 +313,8 @@ When a later message answers your waiting question (secret, password, approval, 
 A plan or a cut-off sentence is not finished. Call a tool.\n\
 Do not invent results. To read or list a file or folder, call bash. On Windows the command is PowerShell and a path looks like F:\\Development.\n\
 Stay inside this task. Do not start another task.\n\
-Work only on the current in-progress list item. If a step is missing, add it first. Tests, error handling, matching style, and a bug in the same files can be added. Anything else: call ask_owner and keep working on the list.\n";
+Work only on the current in-progress list item. If a step is missing, add it first. Tests, error handling, matching style, and a bug in the same files can be added. Anything else: call ask_owner and keep working on the list.\n\
+When you learn a durable fact worth keeping (owner preference, project coding rule, what you tried that failed and the path you took instead, important info from a document or site), call remember with one short sentence before you move on. Use update_memory or retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status.\n";
 
 #[derive(Clone, Copy)]
 enum ReportDelivery {
@@ -1317,7 +1318,7 @@ On every turn and every wake: check workers, diagnose failures yourself from the
 Never trust a worker's success claim alone. A finished worker with success can still fail the goal check. Before Done, verify the stated checks yourself (missing required inputs, wrong format, line/word count, path, or content) via the wake brief outcome/output tail or by hiring a worker to inspect the artifact. If verification fails, recover silently with spawn_task and a corrected brief (preferred after a completed wrong draft) — do not ask_user and do not close out yet. Do not keep calling continue_task or retry_task on a completed worker; hire again instead. When the check already passes, Done immediately — do not keep verifying forever.\n\
 You may hire, recover, ask, and close out while other workers are still running — do not wait for healthy runners to finish. If a worker's idle age looks hung with no useful progress, cancel_task and hire or retry with a clearer plan rather than waiting forever.\n\
 A wake brief lists LEARNED notes (hints for how to retry ATTENTION failures only — never spawn_task from LEARNED alone or invent work absent from ATTENTION), ATTENTION (ordered concurrent goals), CEO_WAITING (with the question), FINISHED goals (with outcome= for close-out), RECENT_CEO_CHAT, and each open worker with status, idle age, recent output, and last error. Use that before asking the CEO.\n\
-On a silent wake call only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, ask_questions, request_secret, record_learning. On a wake do not call success, failure, waiting, link_task, or inspect_task (use the wake brief instead of inspect).\n\
+On a silent wake call only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, ask_questions, request_secret, record_learning, remember, update_memory, retire_memory. On a wake do not call success, failure, waiting, link_task, or inspect_task (use the wake brief instead of inspect).\n\
 On an owner turn keep going until you call success, failure, waiting, message_user, or ask_user — except after spawn_task, link_task, continue_task, or retry_task, which end the turn silently (no hire / standing-by / in-progress chat).\n\
 - success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory when you did not hire or continue a worker. Owner turns only.\n\
 - failure: message is why this cannot be handled. Owner turns only.\n\
@@ -1335,6 +1336,7 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - Stop for good: cancel_task.\n\
 - Failed or stopped work you choose to retry: retry_task.\n\
 - After a useful lesson (what worked or failed): record_learning with one short note. It appears under LEARNED on later wakes — use it only when ATTENTION already lists matching failed/stuck work; do not spawn new goals from LEARNED alone; do not repeat a failed tactic.\n\
+- Durable brain memory: when the owner states a preference, name, project rule, or important fact — or when you learn what was tried and failed and which path worked — call remember with one short sentence. Use update_memory / retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status. Do not dump secrets into memory.\n\
 Fixable worker failures (missing file, bad args, wrong/incomplete output vs the goal check, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance that tries a different approach. Do not ask_user. Do not call bash yourself. Prefer a second hire with a corrected brief when the first approach was wrong.\n\
 If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: call ask_user / ask_questions / request_secret immediately unless CEO_WAITING (already asked), OPEN_QUESTIONS, or RECENT_CEO_CHAT already has that unanswered ask. Do not defer. Do not stay silent on the first ask. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate cleanly. Do not rephrase the same decision again later.\n\
 Shell, files, vault, and network work always go through spawn_task or continue_task. Prefer request_secret for secret values; do not ask_user to paste a secret into chat.\n\
@@ -1411,13 +1413,20 @@ fn router_request(
 ) -> BuiltRouterRequest {
     let candidates = candidate_parent_json(phases, prompts, activity, max_considered, text);
     let tools_json = route_tools_json();
+    // Stable system prefix first (contract + catalog) so provider prompt cache can hit.
+    // Per-turn candidates ride on the user message, not the system prefix.
     let mut messages = Vec::with_capacity(history.len().saturating_add(3));
     messages.push(ChatMessage::text(
         ChatRole::System,
-        format!("{ROUTE_CONTROL_CONTRACT}\n\nSubagent tools\n{catalog}\n{candidates}"),
+        format!("{ROUTE_CONTROL_CONTRACT}\n\nSubagent tools\n{catalog}"),
     ));
     messages.extend(history.iter().cloned());
-    messages.push(ChatMessage::text(ChatRole::User, text.to_owned()));
+    let user_body = if candidates.trim().is_empty() || candidates.trim() == "[]" {
+        text.to_owned()
+    } else {
+        format!("Candidates:\n{candidates}\n\n{text}")
+    };
+    messages.push(ChatMessage::text(ChatRole::User, user_body));
     if let Some(recall) = recall {
         messages.push(ChatMessage::text(ChatRole::System, recall.bytes.clone()));
     }
@@ -1906,6 +1915,8 @@ enum RouterStop {
     Answer(String),
     /// Structured in-chat widget (`ask_questions` / `request_secret`).
     CeoWidget(NormalizedToolCall),
+    /// Side-effect memory write; resume the owner turn after the tool result.
+    Memory(NormalizedToolCall),
     Repair,
 }
 
@@ -1913,6 +1924,7 @@ fn router_stop(response: &RouterResponse) -> RouterStop {
     match response.tool_calls.as_slice() {
         [call] => match call.name.as_str() {
             "ask_questions" | "request_secret" => RouterStop::CeoWidget(call.clone()),
+            "remember" | "update_memory" | "retire_memory" => RouterStop::Memory(call.clone()),
             "success" | "failure" | "waiting" | "message_user" | "ask_user" => {
                 match terminal_sentence(&call.arguments_json) {
                     Some(sentence) => RouterStop::Done(sentence),
@@ -1983,6 +1995,10 @@ fn is_manager_tool(name: &str) -> bool {
                 | "ask_user"
                 | "ask_questions"
                 | "request_secret"
+                | "remember"
+                | "update_memory"
+                | "retire_memory"
+                | "record_learning"
         )
 }
 
@@ -2068,7 +2084,10 @@ fn is_route_tool(name: &str) -> bool {
 }
 
 fn wake_tool_payload(call: &NormalizedToolCall) -> String {
-    if matches!(call.name.as_str(), "ask_questions" | "request_secret") {
+    if matches!(
+        call.name.as_str(),
+        "ask_questions" | "request_secret" | "remember" | "update_memory" | "retire_memory"
+    ) {
         return call.arguments_json.clone();
     }
     if let Some(message) = terminal_sentence(&call.arguments_json) {
@@ -2208,6 +2227,9 @@ fn route_tools_json() -> String {
             "Save one short lesson for later wakes (what worked or failed). Appears under LEARNED. Prefer a different approach next time; do not spam duplicates.",
         ),
     ];
+    if crate::memory_tools::MemoryWriteMode::from_env().prompt_tools() {
+        tools.extend(crate::memory_tools::memory_tool_defs());
+    }
     tools.extend(terminal_tools());
     serde_json::Value::Array(tools).to_string()
 }
@@ -2235,6 +2257,9 @@ fn wake_tools_json() -> String {
                     | "ask_questions"
                     | "request_secret"
                     | "record_learning"
+                    | "remember"
+                    | "update_memory"
+                    | "retire_memory"
             )
         })
         .collect();
@@ -2242,7 +2267,7 @@ fn wake_tools_json() -> String {
 }
 
 fn plan_tools() -> Vec<serde_json::Value> {
-    vec![
+    let mut tools = vec![
         terminal_tool(
             "todo_add",
             "Add a step to the working list. message is the step. Obvious steps are added. Other steps are asked first.",
@@ -2259,7 +2284,11 @@ fn plan_tools() -> Vec<serde_json::Value> {
             "ask_owner",
             "Ask the owner about a step that is not on the list. message is the step. Keep working on the list.",
         ),
-    ]
+    ];
+    if crate::memory_tools::MemoryWriteMode::from_env().prompt_tools() {
+        tools.extend(crate::memory_tools::memory_tool_defs());
+    }
+    tools
 }
 
 fn terminal_tool(name: &str, description: &str) -> serde_json::Value {
@@ -3072,6 +3101,10 @@ pub struct Orchestrator<R> {
     restart_budget: u32,
     /// When true, drop non-essential wake `message_user` chatter (keep ask + close-out).
     mute_nonessential_wake_messages: bool,
+    /// CEO secret values for Done scrubbing (never logged or put in model context).
+    ceo_secret_mask_values: Vec<String>,
+    /// CEO secret env pairs kept for ephemeral shell hosts (values never logged).
+    ceo_secret_env: Vec<(String, String)>,
 }
 
 /// One admitted tool plus the connection and hash that pin it.
@@ -3832,6 +3865,8 @@ impl<R: Router> Orchestrator<R> {
             wake_nudge: false,
             restart_budget: DEFAULT_AUTONOMOUS_RETRY_BUDGET,
             mute_nonessential_wake_messages: false,
+            ceo_secret_mask_values: Vec::new(),
+            ceo_secret_env: Vec::new(),
         }
     }
 
@@ -4186,13 +4221,29 @@ impl<R: Router> Orchestrator<R> {
                         learned.push(clipped);
                     }
                 }
+                WakeAction::MemoryWrite {
+                    name,
+                    arguments_json,
+                } => {
+                    if let Some(parsed) =
+                        crate::memory_tools::parse_memory_tool(name, arguments_json)
+                    {
+                        let _ = crate::memory_tools::apply_memory_tool(
+                            &self.store,
+                            &parsed,
+                            &self.turn_bot,
+                            self.ids.now,
+                        );
+                    }
+                }
                 WakeAction::MessageUser { text } | WakeAction::AskUser { text } => {
                     let posted = if matches!(action, WakeAction::MessageUser { .. })
                         && maia_core::manager::looks_like_close_out(text)
                     {
                         let snap = self.wake_snapshot_for(&self.turn_bot);
-                        let secrets =
+                        let mut secrets =
                             maia_core::manager::ceo_supplied_secret_values(&snap.recent_ceo_lines);
+                        secrets.extend(self.ceo_secret_mask_values.iter().cloned());
                         maia_core::manager::mask_close_out_secrets(text, &secrets)
                     } else {
                         text.clone()
@@ -4610,8 +4661,28 @@ impl<R: Router> Orchestrator<R> {
 
     /// Restarts the worker shell with CEO secrets available as env vars.
     pub fn apply_ceo_env(&mut self, env: &[(String, String)]) {
+        self.ceo_secret_env = env.to_vec();
+        self.ceo_secret_mask_values = env.iter().map(|(_, value)| value.clone()).collect();
         if let Some(host) = self.subagent.as_mut() {
             host.apply_ceo_env(env);
+        }
+    }
+
+    /// Applies remember / update_memory / retire_memory and returns a short tool result.
+    fn run_memory_tool(&self, call: &NormalizedToolCall) -> String {
+        let Some(parsed) =
+            crate::memory_tools::parse_memory_tool(call.name.as_str(), &call.arguments_json)
+        else {
+            return "Memory tool needs a valid sentence or claim_id.".to_owned();
+        };
+        match crate::memory_tools::apply_memory_tool(
+            &self.store,
+            &parsed,
+            &self.turn_bot,
+            self.ids.now,
+        ) {
+            Ok(message) => message,
+            Err(_) => "Could not write that memory.".to_owned(),
         }
     }
 
@@ -4674,11 +4745,15 @@ impl<R: Router> Orchestrator<R> {
                 if use_ephemeral_shell(self.subagent_borrowed, &job.connection_id) {
                     let connection = job.connection_id.clone();
                     let call = job.call.clone();
+                    let ceo_env = self.ceo_secret_env.clone();
                     if std::thread::Builder::new()
                         .name("maia-tool-ephemeral".to_owned())
                         .spawn(move || {
                             let opened = maia_tools::SubagentHost::open(&[]);
                             let mut host = opened.host;
+                            if !ceo_env.is_empty() {
+                                host.apply_ceo_env(&ceo_env);
+                            }
                             let receipt = host.execute(
                                 &connection,
                                 &call.server_tool,
@@ -5495,6 +5570,11 @@ impl<R: Router> Orchestrator<R> {
                     &machine.attachments.clone(),
                 ))
             }
+            RouterStop::Memory(call) => {
+                let result = self.run_memory_tool(&call);
+                push_tool_exchange(&mut machine.messages, &response, &call, &result);
+                self.resume_route(machine, &call, &result)
+            }
             RouterStop::Done(sentence) | RouterStop::Answer(sentence) => {
                 // After a silent work route the turn already ended with no chat; ignore
                 // trailing success/message_user chatter (hire / standing-by / answers).
@@ -6189,7 +6269,10 @@ impl<R: Router> Orchestrator<R> {
         task: Option<&TaskId>,
     ) -> Result<(), OrchestratorError> {
         // Task units extract only when the task finishes. Chat turns extract here.
-        if task.is_none() {
+        // Prompt-driven mode skips automatic extraction (agents call remember instead).
+        if task.is_none()
+            && crate::memory_tools::MemoryWriteMode::from_env().automatic_extraction()
+        {
             self.store_completed_unit_episode(
                 &format!("episode-{}", message.0),
                 &message.0,
@@ -6302,6 +6385,9 @@ impl<R: Router> Orchestrator<R> {
         if !maia_core::dream::should_enqueue_extraction(
             maia_core::dream::ExtractionTiming::TaskFinished,
         ) {
+            return;
+        }
+        if !crate::memory_tools::MemoryWriteMode::from_env().automatic_extraction() {
             return;
         }
         let owner = self.task_owner_text(task);

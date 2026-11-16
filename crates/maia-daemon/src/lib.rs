@@ -14,6 +14,7 @@ pub mod inspector;
 mod live_reply;
 mod manager_wake;
 mod mcp_settings;
+mod memory_tools;
 mod model_connection;
 mod orchestrator;
 mod promoter_env;
@@ -39,6 +40,7 @@ pub use manager_wake::{
 };
 pub use ceo_secrets::CeoSecretSkin;
 pub use mcp_settings::{MemoryMcpSecretStore, NativeMcpSecretStore};
+pub use memory_tools::{MemoryToolCall, MemoryWriteMode, apply_memory_tool, parse_memory_tool};
 pub use model_connection::{
     PublicModelConnection, parse_reasoning_effort, router_from_connection,
     streaming_router_from_connection,
