@@ -570,6 +570,15 @@ fn wake_brief_lists_finished_goals_for_one_close_out() {
         brief.to_ascii_lowercase().contains("message_user"),
         "finished brief must require message_user close-out: {brief}"
     );
+    assert!(
+        brief.contains("goal_state=needs_close_out"),
+        "FINISHED lines must make the still-open goal state obvious: {brief}"
+    );
+    assert!(
+        brief.to_ascii_lowercase().contains("status chatter")
+            || brief.to_ascii_lowercase().contains("does not close"),
+        "FINISHED brief must say prior status chatter does not close the goal: {brief}"
+    );
 }
 
 #[test]
@@ -915,7 +924,7 @@ fn close_out_is_forced_while_a_healthy_runner_is_still_busy() {
     };
     let brief = format_wake_brief(&snap);
     assert!(
-        brief.contains("REQUIRED: call message_user once now for the finished goal."),
+        brief.contains("REQUIRED: call message_user once now for the finished goal"),
         "healthy runners must not defer close-out REQUIRED: {brief}"
     );
     let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
