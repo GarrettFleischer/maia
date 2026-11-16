@@ -5761,3 +5761,47 @@ fn sync_clock_stamps_new_tasks_and_keeps_titles_glanceable() {
         "stored titles must be glanceable first lines"
     );
 }
+
+#[test]
+fn wake_recover_noop_does_not_burn_restart_budget() {
+    use maia_core::manager::WakeAction;
+    let mut harness = Harness::open_model("wake-recover-noop", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Finished quickly."));
+    let outcome = wait(harness.host().handle_user_message("Quick finish")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Completed { .. })),
+        "phase {:?}",
+        harness.host().phase(&task)
+    );
+    let retries_before = {
+        let (_, todo, _, _) = harness
+            .host()
+            .store()
+            .task_plan(&task.0)
+            .expect("plan")
+            .expect("plan row");
+        maia_core::task_loop::plan_progress_from_todo(&todo).autonomous_retries
+    };
+    let _ = harness.host().apply_wake_actions(&[WakeAction::Recover {
+        task_id: task.0.clone(),
+        note: "nothing to restart".to_owned(),
+    }]);
+    let retries_after = {
+        let (_, todo, _, _) = harness
+            .host()
+            .store()
+            .task_plan(&task.0)
+            .expect("plan")
+            .expect("plan row");
+        maia_core::task_loop::plan_progress_from_todo(&todo).autonomous_retries
+    };
+    assert_eq!(
+        retries_before, retries_after,
+        "no-op recover must not burn restart budget"
+    );
+    assert_eq!(retries_after, 0);
+}

@@ -3921,33 +3921,13 @@ impl<R: Router> Orchestrator<R> {
                 WakeAction::Recover { task_id, note } => {
                     let task = TaskId(task_id.clone());
                     self.recovery_notes.insert(task.clone(), note.clone());
-                    if let Ok(Some((_, todo_json, _, _))) = self.store.task_plan(&task.0) {
-                        let progress = maia_core::task_loop::plan_progress_from_todo(&todo_json);
-                        let used = progress.autonomous_retries;
-                        if let Ok(Some((goal_json, todo_json, count, handoff_of))) =
-                            self.store.task_plan(&task.0)
-                            && let Some((contract, list, _, _)) =
-                                maia_core::task_loop::parse_stored_plan(&goal_json, &todo_json)
-                        {
-                            let count = u32::try_from(count).unwrap_or(0);
-                            self.save_plan(
-                                &task,
-                                &contract,
-                                &list,
-                                count,
-                                handoff_of,
-                                &maia_core::task_loop::PlanProgress {
-                                    loop_nudges: progress.loop_nudges,
-                                    steps_since_review: progress.steps_since_review,
-                                    autonomous_retries: used.saturating_add(1),
-                                },
-                            );
-                        }
-                    }
-                    match self.phases.get(&task) {
+                    let restarted = match self.phases.get(&task) {
                         Some(TaskPhase::Failed { .. } | TaskPhase::Stopped { .. }) => {
                             if self.retry_task(&task).is_ok() {
                                 let _ = self.maybe_work(&task, OwnerNotice::Hold);
+                                true
+                            } else {
+                                false
                             }
                         }
                         Some(TaskPhase::WaitingForUser { .. } | TaskPhase::Blocked { .. }) => {
@@ -3960,14 +3940,43 @@ impl<R: Router> Orchestrator<R> {
                                 .is_ok()
                             {
                                 let _ = self.maybe_work(&task, OwnerNotice::Hold);
+                                true
+                            } else {
+                                false
                             }
                         }
-                        _ => {}
+                        _ => false,
+                    };
+                    if restarted {
+                        if let Ok(Some((_, todo_json, _, _))) = self.store.task_plan(&task.0) {
+                            let progress =
+                                maia_core::task_loop::plan_progress_from_todo(&todo_json);
+                            let used = progress.autonomous_retries;
+                            if let Ok(Some((goal_json, todo_json, count, handoff_of))) =
+                                self.store.task_plan(&task.0)
+                                && let Some((contract, list, _, _)) =
+                                    maia_core::task_loop::parse_stored_plan(&goal_json, &todo_json)
+                            {
+                                let count = u32::try_from(count).unwrap_or(0);
+                                self.save_plan(
+                                    &task,
+                                    &contract,
+                                    &list,
+                                    count,
+                                    handoff_of,
+                                    &maia_core::task_loop::PlanProgress {
+                                        loop_nudges: progress.loop_nudges,
+                                        steps_since_review: progress.steps_since_review,
+                                        autonomous_retries: used.saturating_add(1),
+                                    },
+                                );
+                            }
+                        }
+                        self.record_activity(
+                            format!("Wake recovery for {}", task.0),
+                            Some(&task),
+                        );
                     }
-                    self.record_activity(
-                        format!("Wake recovery for {}", task.0),
-                        Some(&task),
-                    );
                 }
                 WakeAction::Cancel { task_id } => {
                     let task = TaskId(task_id.clone());
