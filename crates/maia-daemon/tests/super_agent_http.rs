@@ -3876,7 +3876,9 @@ async fn brain_map_is_empty_and_rejects_a_missing_fact() {
                 "quarantined": 0,
                 "oldest_waiting_at": null,
                 "paused_for_day": false,
-                "quarantined_episodes": []
+                "quarantined_episodes": [],
+                "calls": 0,
+                "tokens": 0
             }
         })
     );

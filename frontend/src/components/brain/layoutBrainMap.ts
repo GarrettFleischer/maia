@@ -75,6 +75,9 @@ export interface ExtractionLag {
   oldest_waiting_at: number | null
   paused_for_day: boolean
   quarantined_episodes: string[]
+  /** Promoter day stats when the daemon exposes them. */
+  calls?: number
+  tokens?: number
 }
 
 export interface BrainMapClient {
@@ -203,6 +206,8 @@ function parseExtraction(value: unknown): ExtractionLag | undefined {
     oldest_waiting_at: oldest,
     paused_for_day: value.paused_for_day,
     quarantined_episodes,
+    ...(typeof value.calls === 'number' ? { calls: value.calls } : {}),
+    ...(typeof value.tokens === 'number' ? { tokens: value.tokens } : {}),
   }
 }
 

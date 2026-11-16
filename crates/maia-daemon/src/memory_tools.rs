@@ -21,41 +21,6 @@ use crate::inspector::ROUTER_THREAD;
 
 static REMEMBER_SEQ: AtomicU64 = AtomicU64::new(1);
 
-/// How automatic per-message extraction relates to prompt-driven tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MemoryWriteMode {
-    /// Legacy promoter only (no agent memory tools expected).
-    Extract,
-    /// Agents write via tools; skip automatic extraction.
-    Prompt,
-    /// Tools available and extraction still runs (compare / transition).
-    Both,
-}
-
-impl MemoryWriteMode {
-    /// Reads `MAIA_MEMORY_WRITE` (`extract` | `prompt` | `both`). Default: `prompt`.
-    #[must_use]
-    pub fn from_env() -> Self {
-        match std::env::var("MAIA_MEMORY_WRITE") {
-            Ok(value) if value.eq_ignore_ascii_case("extract") => Self::Extract,
-            Ok(value) if value.eq_ignore_ascii_case("both") => Self::Both,
-            _ => Self::Prompt,
-        }
-    }
-
-    /// True when the promoter should still enqueue chat/task episodes.
-    #[must_use]
-    pub const fn automatic_extraction(self) -> bool {
-        matches!(self, Self::Extract | Self::Both)
-    }
-
-    /// True when remember/update/retire tools are exposed.
-    #[must_use]
-    pub const fn prompt_tools(self) -> bool {
-        matches!(self, Self::Prompt | Self::Both)
-    }
-}
-
 /// One parsed memory tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryToolCall {
@@ -401,11 +366,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn memory_write_mode_defaults_to_prompt() {
-        assert_eq!(MemoryWriteMode::Prompt.automatic_extraction(), false);
-        assert_eq!(MemoryWriteMode::Prompt.prompt_tools(), true);
-        assert_eq!(MemoryWriteMode::Extract.automatic_extraction(), true);
-        assert_eq!(MemoryWriteMode::Both.automatic_extraction(), true);
-    }
 }

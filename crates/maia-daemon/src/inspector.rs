@@ -436,6 +436,11 @@ pub(crate) fn inspector_document(
                 "ordinal": row.ordinal,
                 "message_id": row.message_id,
                 "cached_percent": cached_percent(&usage),
+                "usage": {
+                    "input_tokens": usage_value(usage.input_tokens),
+                    "output_tokens": usage_value(usage.output_tokens),
+                    "cached_input_tokens": usage_value(usage.cached_input_tokens),
+                },
                 "slots": parse_json_array(&row.slots_json),
                 "recall": parse_json_array(&row.recall_json),
                 "used": facts_used,
@@ -724,6 +729,30 @@ mod tests {
             cache_residence(&usage(UsageValue::Reported(200), UsageValue::Reported(50))),
             CacheResidence::Unreported
         );
+    }
+
+    #[test]
+    fn inspector_document_includes_usage_counts() {
+        let doc = inspector_document(
+            &[StoredTurnRow {
+                ordinal: 1,
+                message_id: "m-1".to_owned(),
+                slots_json: "[]".to_owned(),
+                usage_json: usage_json(&usage(
+                    UsageValue::Reported(120),
+                    UsageValue::Reported(40),
+                ))
+                .expect("usage json"),
+                recall_json: "[]".to_owned(),
+                thinking: None,
+                route: None,
+                reply: "Hi.".to_owned(),
+            }],
+            &BTreeMap::new(),
+        );
+        assert_eq!(doc["turns"][0]["usage"]["input_tokens"]["kind"], "reported");
+        assert_eq!(doc["turns"][0]["usage"]["input_tokens"]["tokens"], 120);
+        assert_eq!(doc["turns"][0]["cached_percent"], 33);
     }
 
     #[test]

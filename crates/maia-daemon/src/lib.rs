@@ -40,7 +40,7 @@ pub use manager_wake::{
 };
 pub use ceo_secrets::CeoSecretSkin;
 pub use mcp_settings::{MemoryMcpSecretStore, NativeMcpSecretStore};
-pub use memory_tools::{MemoryToolCall, MemoryWriteMode, apply_memory_tool, parse_memory_tool};
+pub use memory_tools::{MemoryToolCall, apply_memory_tool, parse_memory_tool};
 pub use model_connection::{
     PublicModelConnection, parse_reasoning_effort, router_from_connection,
     streaming_router_from_connection,
@@ -51,8 +51,8 @@ pub use orchestrator::{
     PhaseCodecError, ProposalParseError, ReplayGuard, RoutedOutcome, RouterTurn,
     RoutingFailureReason, StagedAttachment, StepOutcome, SubmissionAdmission, TurnOutcome,
     UNKNOWN_OUTCOME_SUMMARY, accepted_routing_policy, canonical_phase, encode_route_proposal,
-    named_tool_response, open_routing_policy, parse_canonical_phase, present_router_body,
-    route_tool_response, validate_runtime_snapshot,
+    manager_system_prefix, named_tool_response, open_routing_policy, parse_canonical_phase,
+    present_router_body, route_tool_response, validate_runtime_snapshot,
 };
 pub use promoter_env::{
     DEFAULT_PROMOTER_DAILY_CALL_CAP, DEFAULT_PROMOTER_DAILY_TOKEN_CAP, DEFAULT_PROMOTER_MODEL,

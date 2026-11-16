@@ -3872,17 +3872,24 @@ fn read_brain<R: RouterPort>(
     let day = crate::promotion::promotion_day_key(unix_now());
     let (calls, tokens) = store.promotion_day_stats(&day).map_err(map_brain_store)?;
     let paused = crate::promotion::extraction_paused_for_day(calls, tokens, caps);
-    value["extraction"] = extraction_lag_value(&lag, paused);
+    value["extraction"] = extraction_lag_value(&lag, paused, calls, tokens);
     Ok(value)
 }
 
-fn extraction_lag_value(lag: &maia_store::ExtractionLag, paused_for_day: bool) -> Value {
+fn extraction_lag_value(
+    lag: &maia_store::ExtractionLag,
+    paused_for_day: bool,
+    calls: i64,
+    tokens: i64,
+) -> Value {
     serde_json::json!({
         "waiting": lag.waiting,
         "quarantined": lag.quarantined,
         "oldest_waiting_at": lag.oldest_waiting_at,
         "paused_for_day": paused_for_day,
         "quarantined_episodes": lag.quarantined_episode_ids,
+        "calls": calls,
+        "tokens": tokens,
     })
 }
 

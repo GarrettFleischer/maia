@@ -148,7 +148,6 @@ use maia_core::thread_cache::ContextPacketInput;
 use maia_core::thread_cache::PacketRole;
 use maia_core::thread_cache::PacketTurn;
 use maia_core::thread_cache::pack_context_packet;
-use maia_store::AppendEvents;
 use maia_store::ApprovalDecision;
 use maia_store::ApprovalSettlement;
 use maia_store::ApprovalWrite;
@@ -156,7 +155,6 @@ use maia_store::CanonicalTextRequirement as RuntimeTextRequirement;
 use maia_store::ChildLink;
 use maia_store::ChildPhaseMutation;
 use maia_store::ContinueTaskWrite;
-use maia_store::EpisodeWrite;
 use maia_store::HostMutationWrite;
 use maia_store::MAX_PROSE_BYTES;
 use maia_store::MAX_THREAD_EVENT_BODY_BYTES;
@@ -171,7 +169,6 @@ use maia_store::RuntimeChild;
 use maia_store::RuntimeMessage;
 use maia_store::RuntimeSnapshot;
 use maia_store::RuntimeTask;
-use maia_store::SegmentWrite;
 use maia_store::SqliteOwner;
 use maia_store::StoreError;
 use maia_store::StoredCriterion;
@@ -187,7 +184,6 @@ use maia_store::TaskPhaseMutation;
 use maia_store::TaskReportWrite;
 use maia_store::TaskView;
 use maia_store::TaskWrite;
-use maia_store::ThreadEventWrite;
 use maia_store::decode_canonical_fields;
 use maia_store::validate_canonical_text;
 use maia_store::validate_child_contract;
@@ -200,7 +196,6 @@ use maia_store::validate_router_message_contract;
 
 use crate::inspector::MeasuredPrompt;
 use crate::inspector::PackedRecall;
-use crate::inspector::ROUTER_THREAD;
 use crate::inspector::cache_residence;
 use crate::inspector::prompt_slots;
 use crate::inspector::usage_json;
@@ -314,7 +309,7 @@ A plan or a cut-off sentence is not finished. Call a tool.\n\
 Do not invent results. To read or list a file or folder, call bash. On Windows the command is PowerShell and a path looks like F:\\Development.\n\
 Stay inside this task. Do not start another task.\n\
 Work only on the current in-progress list item. If a step is missing, add it first. Tests, error handling, matching style, and a bug in the same files can be added. Anything else: call ask_owner and keep working on the list.\n\
-When you learn a durable fact worth keeping (owner preference, project coding rule, what you tried that failed and the path you took instead, important info from a document or site), call remember with one short sentence before you move on. Use update_memory or retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status.\n";
+When you learn a durable fact worth keeping (owner preference, project coding rule, important info from a document or site), call remember with one short sentence before you move on. After a coding approach fails and you take another path, always remember what failed and which path worked so you do not repeat the rabbit hole. Use update_memory or retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status.\n";
 
 #[derive(Clone, Copy)]
 enum ReportDelivery {
@@ -1336,7 +1331,7 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - Stop for good: cancel_task.\n\
 - Failed or stopped work you choose to retry: retry_task.\n\
 - After a useful lesson (what worked or failed): record_learning with one short note. It appears under LEARNED on later wakes — use it only when ATTENTION already lists matching failed/stuck work; do not spawn new goals from LEARNED alone; do not repeat a failed tactic.\n\
-- Durable brain memory: when the owner states a preference, name, project rule, or important fact — or when you learn what was tried and failed and which path worked — call remember with one short sentence. Use update_memory / retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status. Do not dump secrets into memory.\n\
+- Durable brain memory: when the owner states a preference, name, project rule, or important fact, call remember with one short sentence. After a coding approach fails and another path works, remember both (what failed, what worked) so later wakes avoid the same rabbit hole. Use update_memory / retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status. Do not dump secrets into memory.\n\
 Fixable worker failures (missing file, bad args, wrong/incomplete output vs the goal check, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance that tries a different approach. Do not ask_user. Do not call bash yourself. Prefer a second hire with a corrected brief when the first approach was wrong.\n\
 If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: call ask_user / ask_questions / request_secret immediately unless CEO_WAITING (already asked), OPEN_QUESTIONS, or RECENT_CEO_CHAT already has that unanswered ask. Do not defer. Do not stay silent on the first ask. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate cleanly. Do not rephrase the same decision again later.\n\
 Shell, files, vault, and network work always go through spawn_task or continue_task. Prefer request_secret for secret values; do not ask_user to paste a secret into chat.\n\
@@ -1358,10 +1353,9 @@ struct CandidateParent<'a> {
     activity: Option<String>,
 }
 
-struct ShownRouterTurn<'a> {
+struct ShownRouterTurn {
     route: Option<&'static str>,
     reply: String,
-    attachments: &'a [StagedAttachment],
 }
 
 #[derive(Clone)]
@@ -1399,6 +1393,12 @@ fn push_untrusted(messages: &mut Vec<ChatMessage>, attachments: &[StagedAttachme
     messages.push(message);
 }
 
+/// Stable manager system prefix: contract + tool catalog only (no per-turn candidates).
+#[must_use]
+pub fn manager_system_prefix(catalog: &str) -> String {
+    format!("{ROUTE_CONTROL_CONTRACT}\n\nSubagent tools\n{catalog}")
+}
+
 fn router_request(
     turn: &RouterTurn,
     request_id: RequestId,
@@ -1418,7 +1418,7 @@ fn router_request(
     let mut messages = Vec::with_capacity(history.len().saturating_add(3));
     messages.push(ChatMessage::text(
         ChatRole::System,
-        format!("{ROUTE_CONTROL_CONTRACT}\n\nSubagent tools\n{catalog}"),
+        manager_system_prefix(catalog),
     ));
     messages.extend(history.iter().cloned());
     let user_body = if candidates.trim().is_empty() || candidates.trim() == "[]" {
@@ -2227,9 +2227,7 @@ fn route_tools_json() -> String {
             "Save one short lesson for later wakes (what worked or failed). Appears under LEARNED. Prefer a different approach next time; do not spam duplicates.",
         ),
     ];
-    if crate::memory_tools::MemoryWriteMode::from_env().prompt_tools() {
-        tools.extend(crate::memory_tools::memory_tool_defs());
-    }
+    tools.extend(crate::memory_tools::memory_tool_defs());
     tools.extend(terminal_tools());
     serde_json::Value::Array(tools).to_string()
 }
@@ -2285,9 +2283,7 @@ fn plan_tools() -> Vec<serde_json::Value> {
             "Ask the owner about a step that is not on the list. message is the step. Keep working on the list.",
         ),
     ];
-    if crate::memory_tools::MemoryWriteMode::from_env().prompt_tools() {
-        tools.extend(crate::memory_tools::memory_tool_defs());
-    }
+    tools.extend(crate::memory_tools::memory_tool_defs());
     tools
 }
 
@@ -2532,16 +2528,6 @@ fn is_terminal(phase: &TaskPhase) -> bool {
     matches!(
         phase,
         TaskPhase::Completed { .. } | TaskPhase::Cancelled { .. } | TaskPhase::Abandoned { .. }
-    )
-}
-
-fn memory_unit_finished(phase: &TaskPhase) -> bool {
-    matches!(
-        phase,
-        TaskPhase::Completed { .. }
-            | TaskPhase::Failed { .. }
-            | TaskPhase::Cancelled { .. }
-            | TaskPhase::Abandoned { .. }
     )
 }
 
@@ -5777,7 +5763,7 @@ impl<R: Router> Orchestrator<R> {
         usage: RouterUsage,
         measured: &MeasuredPrompt,
         close: TurnClose,
-        attachments: &[StagedAttachment],
+        _attachments: &[StagedAttachment],
     ) -> MessageOutcome {
         let sentence = sanitize_owner_sentence(sentence);
         let (admitted, task, route) = if matches!(close, TurnClose::HostAsk) {
@@ -5801,7 +5787,6 @@ impl<R: Router> Orchestrator<R> {
             }
         };
         let shown = ShownRouterTurn {
-            attachments,
             route,
             reply: sentence,
         };
@@ -6137,8 +6122,6 @@ impl<R: Router> Orchestrator<R> {
             }],
             children,
         })?;
-        let outcome = self.task_outcome_text(task, &next);
-        self.enqueue_task_memory_if_finished(task, &current, &next, &outcome);
         self.phases.insert(task.clone(), next.clone());
         if is_terminal(&next) || matches!(next, TaskPhase::Stopped { .. }) {
             self.clear_live_activity(task);
@@ -6183,9 +6166,7 @@ impl<R: Router> Orchestrator<R> {
             children,
         })?;
         let mut applied = None;
-        for (task, current, next) in planned {
-            let outcome = self.task_outcome_text(&task, &next);
-            self.enqueue_task_memory_if_finished(&task, &current, &next, &outcome);
+        for (task, _current, next) in planned {
             self.phases.insert(task.clone(), next.clone());
             if is_terminal(&next) || matches!(next, TaskPhase::Stopped { .. }) {
                 self.clear_live_activity(&task);
@@ -6261,27 +6242,15 @@ impl<R: Router> Orchestrator<R> {
     fn persist_router_turn(
         &self,
         message: &MessageId,
-        owner_text: &str,
+        _owner_text: &str,
         thinking: Option<&str>,
         measured: &MeasuredPrompt,
         usage: &RouterUsage,
-        shown: &ShownRouterTurn<'_>,
-        task: Option<&TaskId>,
+        shown: &ShownRouterTurn,
+        _task: Option<&TaskId>,
     ) -> Result<(), OrchestratorError> {
-        // Task units extract only when the task finishes. Chat turns extract here.
-        // Prompt-driven mode skips automatic extraction (agents call remember instead).
-        if task.is_none()
-            && crate::memory_tools::MemoryWriteMode::from_env().automatic_extraction()
-        {
-            self.store_completed_unit_episode(
-                &format!("episode-{}", message.0),
-                &message.0,
-                owner_text,
-                &shown.reply,
-                shown.attachments,
-                &self.turn_bot,
-            )?;
-        }
+        // Prompt-driven memory only: agents call remember / update_memory / retire_memory.
+        // Do not enqueue chat turns for automatic extraction.
         let slots = prompt_slots(measured, cache_residence(usage));
         let slots_json = serde_json::to_string(&slots).map_err(|_| snapshot_error())?;
         let usage_json = usage_json(usage).map_err(|_| snapshot_error())?;
@@ -6309,141 +6278,6 @@ impl<R: Router> Orchestrator<R> {
         Ok(())
     }
 
-    /// Single completion hook for extraction (slice 4 can add session summary here).
-    fn store_completed_unit_episode(
-        &self,
-        episode_id: &str,
-        turn_id: &str,
-        owner_text: &str,
-        final_text: &str,
-        attachments: &[StagedAttachment],
-        bot_id: &str,
-    ) -> Result<(), OrchestratorError> {
-        self.ensure_router_thread()?;
-        let (body, hide) = maia_core::dream::episode_record(owner_text, final_text);
-        if body.is_empty() {
-            return Ok(());
-        }
-        let mut segments = vec![SegmentWrite {
-            text: owner_text.to_owned(),
-            taint: MemoryTaint::Trusted,
-            sources: "owner".to_owned(),
-        }];
-        for attachment in attachments {
-            segments.push(SegmentWrite {
-                text: attachment.note.clone(),
-                taint: MemoryTaint::Untrusted,
-                sources: "attachment".to_owned(),
-            });
-        }
-        if !final_text.trim().is_empty() {
-            segments.push(SegmentWrite {
-                text: final_text.to_owned(),
-                taint: MemoryTaint::Trusted,
-                sources: "router".to_owned(),
-            });
-        }
-        let taint = if attachments.is_empty() {
-            MemoryTaint::Trusted
-        } else {
-            MemoryTaint::Untrusted
-        };
-        self.store.insert_episode(EpisodeWrite {
-            episode_id: episode_id.to_owned(),
-            thread_id: ROUTER_THREAD.to_owned(),
-            turn_id: turn_id.to_owned(),
-            body,
-            taint,
-            reasoning: None,
-            participants: "owner".to_owned(),
-            created_at: self.ids.now,
-            segments,
-        })?;
-        if let Some(reason) = hide {
-            let _ = self.store.hide_episode(episode_id.to_owned(), reason);
-        }
-        let _ = self.store.bots(maia_store::BotRequest::NoteProvenance {
-            target_kind: "episode".to_owned(),
-            target_id: episode_id.to_owned(),
-            bot_id: bot_id.to_owned(),
-            session_id: turn_id.to_owned(),
-            noted_at: self.ids.now,
-        });
-        Ok(())
-    }
-
-    fn enqueue_task_memory_if_finished(
-        &self,
-        task: &TaskId,
-        previous: &TaskPhase,
-        next: &TaskPhase,
-        outcome: &str,
-    ) {
-        if !memory_unit_finished(next) || memory_unit_finished(previous) {
-            return;
-        }
-        if !maia_core::dream::should_enqueue_extraction(
-            maia_core::dream::ExtractionTiming::TaskFinished,
-        ) {
-            return;
-        }
-        if !crate::memory_tools::MemoryWriteMode::from_env().automatic_extraction() {
-            return;
-        }
-        let owner = self.task_owner_text(task);
-        let bot_id = self.task_bot(task);
-        let _ = self.store_completed_unit_episode(
-            &format!("episode-task-{}", task.0),
-            &task.0,
-            &owner,
-            outcome,
-            &[],
-            &bot_id,
-        );
-    }
-
-    fn task_owner_text(&self, task: &TaskId) -> String {
-        let mut parts = Vec::new();
-        if let Some(prompt) = self.prompts.get(task) {
-            let text = String::from_utf8_lossy(prompt);
-            if !text.trim().is_empty() {
-                parts.push(text.into_owned());
-            }
-        } else if let Ok(view) = self.store.load_task_view(&task.0) {
-            let text = String::from_utf8_lossy(&view.prompt);
-            if !text.trim().is_empty() {
-                parts.push(text.into_owned());
-            }
-        }
-        if let Ok(snapshot) = self.store.runtime_snapshot() {
-            if let Some(row) = snapshot.tasks.into_iter().find(|row| row.task_id == task.0) {
-                for input in row.inputs {
-                    let text = String::from_utf8_lossy(&input.prompt);
-                    if !text.trim().is_empty() {
-                        parts.push(text.into_owned());
-                    }
-                }
-            }
-        }
-        let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
-        maia_core::dream::join_owner_messages(&refs)
-    }
-
-    fn task_outcome_text(&self, task: &TaskId, phase: &TaskPhase) -> String {
-        match phase {
-            TaskPhase::Cancelled { .. } => {
-                "Cancelled that task. It will not continue.".to_owned()
-            }
-            TaskPhase::Abandoned { .. } => "Abandoned that task.".to_owned(),
-            TaskPhase::Failed { .. } => self
-                .latest_task_summary(task)
-                .unwrap_or_else(|| "The task failed.".to_owned()),
-            TaskPhase::Completed { .. } => self
-                .latest_task_summary(task)
-                .unwrap_or_else(|| "The task completed.".to_owned()),
-            _ => String::new(),
-        }
-    }
 
     fn latest_task_summary(&self, task: &TaskId) -> Option<String> {
         self.store
@@ -6482,27 +6316,6 @@ impl<R: Router> Orchestrator<R> {
 
     fn session_summary_for_current_task(&self, task: &TaskId) -> String {
         self.session_summary_for_bot(&self.task_bot(task))
-    }
-
-    fn ensure_router_thread(&self) -> Result<(), OrchestratorError> {
-        match self.store.thread(ROUTER_THREAD) {
-            Ok(_) => Ok(()),
-            Err(StoreError::NotFound { .. }) => {
-                self.store.append(AppendEvents {
-                    thread_id: ROUTER_THREAD.to_owned(),
-                    expected_version: 0,
-                    participants: "owner".to_owned(),
-                    occurred_at: self.ids.now,
-                    events: vec![ThreadEventWrite {
-                        event_id: "router-open".to_owned(),
-                        kind: "system".to_owned(),
-                        body: "Router".to_owned(),
-                    }],
-                })?;
-                Ok(())
-            }
-            Err(error) => Err(error.into()),
-        }
     }
 
     fn conversation_before(&self, latest: &str) -> Result<Vec<ChatMessage>, OrchestratorError> {
@@ -7656,8 +7469,6 @@ impl<R: Router> Orchestrator<R> {
             .ok_or(OrchestratorError::UnknownTask)?;
         let next = self.reduce(&current, &event)?;
         self.persist_phase(task, &next)?;
-        let outcome = self.task_outcome_text(task, &next);
-        self.enqueue_task_memory_if_finished(task, &current, &next, &outcome);
         self.phases.insert(task.clone(), next);
         self.notice_sidebar();
         Ok(())
@@ -7935,7 +7746,6 @@ impl<R: Router> Orchestrator<R> {
             },
         )?;
         self.persist_phase(task, &next)?;
-        self.enqueue_task_memory_if_finished(task, running, &next, summary);
         self.phases.insert(task.clone(), next.clone());
         let _ = self.store_report(task, attempt, "failure", summary, call_id, delivery)?;
         Ok(StepOutcome {
@@ -8029,7 +7839,6 @@ impl<R: Router> Orchestrator<R> {
             },
         )?;
         self.persist_phase(task, &next)?;
-        self.enqueue_task_memory_if_finished(task, running, &next, summary);
         self.evidence.insert(task.clone(), completion.stored);
         self.phases.insert(task.clone(), next.clone());
         let _ = self.store_report(
@@ -8257,7 +8066,6 @@ impl<R: Router> Orchestrator<R> {
         self.store.insert_task_evidence(evidence_write)?;
         let next = self.reduce(running, &PhaseEvent::Complete { evidence: set_id })?;
         self.persist_phase(task, &next)?;
-        self.enqueue_task_memory_if_finished(task, running, &next, summary);
         self.evidence.insert(task.clone(), stored);
         self.phases.insert(task.clone(), next);
         self.store
@@ -8290,8 +8098,6 @@ impl<R: Router> Orchestrator<R> {
             .map_err(|_| OrchestratorError::DecisionNotApplied)?;
         let next = self.reduce(running, &PhaseEvent::Complete { evidence: set_id })?;
         self.persist_phase(task, &next)?;
-        let outcome = self.task_outcome_text(task, &next);
-        self.enqueue_task_memory_if_finished(task, running, &next, &outcome);
         self.phases.insert(task.clone(), next);
         self.store
             .set_completion_view(&task.0, VIEW_UNOPENED)
@@ -9297,5 +9103,33 @@ mod attachment_bind_tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].message_id.as_deref(), Some(chat.message.0.as_str()));
         assert_eq!(chat.message.0, "m-early");
+    }
+}
+
+#[cfg(test)]
+mod manager_prefix_tests {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    use super::manager_system_prefix;
+
+    fn byte_hash(text: &str) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        text.as_bytes().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn manager_system_prefix_is_byte_identical_across_consecutive_builds() {
+        let catalog = "bash\nread_file\nwrite_file";
+        let first = manager_system_prefix(catalog);
+        let second = manager_system_prefix(catalog);
+        assert_eq!(first.as_bytes(), second.as_bytes());
+        assert_eq!(byte_hash(&first), byte_hash(&second));
+        // Per-turn candidate JSON must not enter the system prefix.
+        assert!(!first.contains("\"task_id\""));
+        assert!(first.ends_with("Subagent tools\nbash\nread_file\nwrite_file"));
+        let other = manager_system_prefix("other_tool");
+        assert_ne!(byte_hash(&first), byte_hash(&other));
     }
 }
