@@ -114,6 +114,7 @@ use crate::model_connection::resolve_key;
 use crate::model_connection::streaming_router_from_connection;
 use crate::promotion::PromotionCaps;
 use crate::orchestrator::ActivityLog;
+use crate::orchestrator::activity_for_bot;
 use crate::orchestrator::FastAdmission;
 use crate::orchestrator::McpToolReply;
 use crate::orchestrator::MessageOutcome;
@@ -2767,6 +2768,16 @@ async fn transcript(State(state): State<AppState>, Query(query): Query<BotScope>
     let read = tokio::task::spawn_blocking(move || {
         let connection = open_read(&database)?;
         let mut value = transcript_value(&connection, bot.as_deref())?;
+        let activity = match bot.as_deref() {
+            Some(bot_id) => {
+                let task_ids = load_tasks(&connection, Some(bot_id))?
+                    .into_iter()
+                    .map(|task| task.task_id)
+                    .collect::<std::collections::HashSet<_>>();
+                activity_for_bot(&activity, &task_ids)
+            }
+            None => activity,
+        };
         value["activity"] = serde_json::to_value(&activity).unwrap_or(Value::Array(Vec::new()));
         attach_live_reply(&mut value, live_view.as_ref());
         Ok(value)

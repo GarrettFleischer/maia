@@ -2653,6 +2653,26 @@ impl Default for ActivityLog {
     }
 }
 
+/// Honest leaf: keep only activity lines whose task belongs to the bot.
+///
+/// Untasked router lines are dropped on a bot-scoped read so another bot's
+/// Working strip cannot flash while switching Super Agents.
+pub fn activity_for_bot(
+    events: &[ActivityEvent],
+    bot_task_ids: &std::collections::HashSet<String>,
+) -> Vec<ActivityEvent> {
+    events
+        .iter()
+        .filter(|event| {
+            event
+                .task_id
+                .as_ref()
+                .is_some_and(|task_id| bot_task_ids.contains(task_id))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Owner message accepted into the durable queue, not yet routed.
 pub(crate) struct QueuedChat {
     /// Client operation id.
@@ -8512,6 +8532,39 @@ mod listed_tasks_tests {
             "{sentence}"
         );
         assert!(!sentence.contains("task-done"), "{sentence}");
+    }
+}
+
+#[cfg(test)]
+mod activity_scope_tests {
+    use std::collections::HashSet;
+
+    use super::{ActivityEvent, activity_for_bot};
+
+    #[test]
+    fn activity_for_bot_keeps_only_that_bots_task_lines() {
+        let events = vec![
+            ActivityEvent {
+                seq: 1,
+                label: "Working".to_owned(),
+                task_id: Some("task-a".to_owned()),
+            },
+            ActivityEvent {
+                seq: 2,
+                label: "Other bot working".to_owned(),
+                task_id: Some("task-b".to_owned()),
+            },
+            ActivityEvent {
+                seq: 3,
+                label: "Router: reading your message".to_owned(),
+                task_id: None,
+            },
+        ];
+        let bot_tasks = HashSet::from(["task-a".to_owned()]);
+        let kept = activity_for_bot(&events, &bot_tasks);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].label, "Working");
+        assert_eq!(kept[0].task_id.as_deref(), Some("task-a"));
     }
 }
 
