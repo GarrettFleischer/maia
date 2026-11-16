@@ -1463,7 +1463,6 @@ fn run_scheduled_wake<R: RouterPort>(
     // last_wake_at) apply without a daemon restart.
     let disk = crate::manager_wake::load_wake_state(wake_path);
     wake_state.interval_secs = disk.interval_secs;
-    wake_state.max_model_calls_per_wake = disk.max_model_calls_per_wake;
     wake_state.restart_budget = disk.restart_budget;
     wake_state.mute_nonessential_wake_messages = disk.mute_nonessential_wake_messages;
     wake_state.last_wake_at = disk.last_wake_at;
@@ -3313,7 +3312,6 @@ async fn get_manager_wake(State(state): State<AppState>) -> Response {
     finish(Ok(serde_json::json!({
         "interval_secs": wake.interval_secs,
         "last_wake_at": wake.last_wake_at,
-        "max_model_calls_per_wake": wake.max_model_calls_per_wake,
         "restart_budget": wake.restart_budget,
         "mute_nonessential_wake_messages": wake.mute_nonessential_wake_messages,
     })))
@@ -3328,13 +3326,6 @@ async fn put_manager_wake(State(state): State<AppState>, request: Request) -> Re
     let mut wake = crate::manager_wake::load_wake_state(&path);
     if let Some(secs) = value.get("interval_secs").and_then(Value::as_u64) {
         wake.interval_secs = secs.clamp(30, 86_400);
-    }
-    if let Some(cap) = value
-        .get("max_model_calls_per_wake")
-        .and_then(Value::as_u64)
-        .and_then(|raw| u32::try_from(raw).ok())
-    {
-        wake.max_model_calls_per_wake = cap.clamp(1, 8);
     }
     if let Some(budget) = value
         .get("restart_budget")
@@ -3353,7 +3344,6 @@ async fn put_manager_wake(State(state): State<AppState>, request: Request) -> Re
         Ok(()) => finish(Ok(serde_json::json!({
             "interval_secs": wake.interval_secs,
             "last_wake_at": wake.last_wake_at,
-            "max_model_calls_per_wake": wake.max_model_calls_per_wake,
             "restart_budget": wake.restart_budget,
             "mute_nonessential_wake_messages": wake.mute_nonessential_wake_messages,
         }))),

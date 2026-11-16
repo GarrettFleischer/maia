@@ -5,17 +5,8 @@ import type { SuperAgentDataSource } from '@/api/superAgentTypes'
 interface WakeView {
   interval_secs: number
   last_wake_at: number
-  max_model_calls_per_wake: number
   restart_budget: number
   mute_nonessential_wake_messages: boolean
-}
-
-const DEFAULT_VIEW: WakeView = {
-  interval_secs: 300,
-  last_wake_at: 0,
-  max_model_calls_per_wake: 1,
-  restart_budget: 3,
-  mute_nonessential_wake_messages: false,
 }
 
 export function ManagerWakeSection({
@@ -25,7 +16,6 @@ export function ManagerWakeSection({
   source: SuperAgentDataSource
   editable: boolean
 }) {
-  const [view, setView] = useState<WakeView>(DEFAULT_VIEW)
   const [minutes, setMinutes] = useState('5')
   const [budget, setBudget] = useState('3')
   const [mute, setMute] = useState(false)
@@ -49,7 +39,6 @@ export function ManagerWakeSection({
         setStatus(result.message)
         return
       }
-      setView(result.view)
       setMinutes(String(Math.max(1, Math.round(result.view.interval_secs / 60))))
       setBudget(String(result.view.restart_budget))
       setMute(result.view.mute_nonessential_wake_messages)
@@ -76,7 +65,6 @@ export function ManagerWakeSection({
     setBusy(true)
     const result = await saveWake(window.location.origin, {
       interval_secs: parsed * 60,
-      max_model_calls_per_wake: view.max_model_calls_per_wake,
       restart_budget: parsedBudget,
       mute_nonessential_wake_messages: mute,
     })
@@ -85,7 +73,6 @@ export function ManagerWakeSection({
       setStatus(result.message)
       return
     }
-    setView(result.view)
     setMinutes(String(Math.max(1, Math.round(result.view.interval_secs / 60))))
     setBudget(String(result.view.restart_budget))
     setMute(result.view.mute_nonessential_wake_messages)
@@ -160,7 +147,6 @@ async function loadWake(
       view: {
         interval_secs: Number(body.interval_secs) || 300,
         last_wake_at: Number(body.last_wake_at) || 0,
-        max_model_calls_per_wake: Number(body.max_model_calls_per_wake) || 1,
         restart_budget: Number(body.restart_budget) || 3,
         mute_nonessential_wake_messages: Boolean(body.mute_nonessential_wake_messages),
       },
@@ -174,7 +160,6 @@ async function saveWake(
   origin: string,
   body: {
     interval_secs: number
-    max_model_calls_per_wake: number
     restart_budget: number
     mute_nonessential_wake_messages: boolean
   },
@@ -192,8 +177,6 @@ async function saveWake(
       view: {
         interval_secs: Number(saved.interval_secs) || body.interval_secs,
         last_wake_at: Number(saved.last_wake_at) || 0,
-        max_model_calls_per_wake:
-          Number(saved.max_model_calls_per_wake) || body.max_model_calls_per_wake,
         restart_budget: Number(saved.restart_budget) || body.restart_budget,
         mute_nonessential_wake_messages:
           typeof saved.mute_nonessential_wake_messages === 'boolean'

@@ -31,7 +31,7 @@ Workers never talk to the CEO. Their failures and questions park for the manager
 | CEO moment safety cap | always | If the wake model skips a waiting `ask_user` or finished close-out, host posts that one message unless `RECENT_CEO_CHAT` already covers it; close-out-only wakes drop `spawn_task` so shared LEARNED notes cannot invent work on the selected bot |
 | `wake_interval_secs` | 300 | Heartbeat cadence (Settings) |
 | `mute_nonessential_wake_messages` | false (Settings) | Drop optional wake status chatter; keep ask_user and finished close-outs |
-| `max_model_calls_per_wake` | 1 | Cost cap when something changed |
+| `MAX_MODEL_CALLS_PER_WAKE` | 1 (code constant) | One model tool turn per changed wake; not a Settings knob |
 | Skip model when fingerprint unchanged | always | Do not burn money on idle wakes |
 
 No failure classifiers, fixed recovery strategies, or state-machine “retry vs escalate” rules beyond that budget.

@@ -9,7 +9,6 @@ use std::path::PathBuf;
 
 use maia_core::manager::DEFAULT_AUTONOMOUS_RETRY_BUDGET;
 use maia_core::manager::DEFAULT_WAKE_INTERVAL_SECS;
-use maia_core::manager::MAX_MODEL_CALLS_PER_WAKE;
 use serde_json::Value;
 use serde_json::json;
 
@@ -26,8 +25,6 @@ pub struct ManagerWakeState {
     pub model_calls_today: u32,
     /// Calendar day key `YYYY-MM-DD` for the cost counter.
     pub cost_day: String,
-    /// Cap on model calls per individual wake.
-    pub max_model_calls_per_wake: u32,
     /// Automatic recoveries per goal before the host forces ask_user.
     pub restart_budget: u32,
     /// When true, drop non-essential wake status chatter (keep ask + close-out).
@@ -44,7 +41,6 @@ impl Default for ManagerWakeState {
             last_fingerprint: String::new(),
             model_calls_today: 0,
             cost_day: String::new(),
-            max_model_calls_per_wake: MAX_MODEL_CALLS_PER_WAKE,
             restart_budget: DEFAULT_AUTONOMOUS_RETRY_BUDGET,
             mute_nonessential_wake_messages: false,
             learned: Vec::new(),
@@ -109,12 +105,6 @@ pub fn parse_wake_state(text: &str) -> ManagerWakeState {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
-        max_model_calls_per_wake: value
-            .get("max_model_calls_per_wake")
-            .and_then(Value::as_u64)
-            .and_then(|raw| u32::try_from(raw).ok())
-            .unwrap_or(MAX_MODEL_CALLS_PER_WAKE)
-            .max(1),
         restart_budget: value
             .get("restart_budget")
             .and_then(Value::as_u64)
@@ -147,7 +137,6 @@ pub fn wake_state_json(state: &ManagerWakeState) -> String {
         "last_fingerprint": state.last_fingerprint,
         "model_calls_today": state.model_calls_today,
         "cost_day": state.cost_day,
-        "max_model_calls_per_wake": state.max_model_calls_per_wake,
         "restart_budget": state.restart_budget,
         "mute_nonessential_wake_messages": state.mute_nonessential_wake_messages,
         "learned": state.learned,
@@ -184,7 +173,6 @@ mod tests {
             last_fingerprint: "fp".to_owned(),
             model_calls_today: 2,
             cost_day: "day-1".to_owned(),
-            max_model_calls_per_wake: 1,
             restart_budget: 5,
             mute_nonessential_wake_messages: true,
             learned: vec!["tried bash twice".to_owned()],
