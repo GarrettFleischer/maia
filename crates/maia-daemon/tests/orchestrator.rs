@@ -2224,12 +2224,14 @@ fn candidate_parents_are_bounded_and_continue_cites_a_live_id() {
         SecurityProfile::Protected,
         policy,
     );
-    harness.router.push_proposal(create_task(900, 200, &[]));
+    // Silent hire ends the turn on spawn_task; do not queue a trailing success
+    // (push_proposal still does) or the next owner turn consumes Done. as AskUser.
+    harness.router.push_tool("spawn_task", "{}");
     admit_create(harness.host(), "first goal");
-    harness.router.push_proposal(create_task(900, 200, &[]));
+    harness.router.push_tool("spawn_task", "{}");
     let second = admit_create(harness.host(), "second goal");
     assert_eq!(second, TaskId("task-2".to_owned()));
-    harness.router.push_proposal(create_task(900, 200, &[]));
+    harness.router.push_tool("spawn_task", "{}");
     let third = admit_create(harness.host(), "third goal");
     assert_eq!(third, TaskId("task-3".to_owned()));
     let (system, user) = request_pair(&harness);
@@ -2246,10 +2248,12 @@ fn candidate_parents_are_bounded_and_continue_cites_a_live_id() {
     assert!(!system.contains("task-3"));
 
     let mut open = Harness::open("continue-live", prompt_supply());
-    open.router.push_proposal(create_task(900, 200, &[]));
+    open.router.push_tool("spawn_task", "{}");
     admit_create(open.host(), "Add a pin control");
-    open.router.push_proposal(continue_parent());
-    let outcome = wait(open.host().handle_user_message("keep going")).expect("continue");
+    open.router
+        .push_tool("continue_task", r#"{"task_id":"task-1"}"#);
+    // Avoid the phrase "keep going" — it appears in ROUTE_CONTROL_CONTRACT prose.
+    let outcome = wait(open.host().handle_user_message("resume that pin work")).expect("continue");
     assert!(matches!(
         outcome.admitted,
         AdmittedRoute::Admit(RouteDecision::Continue { .. })
@@ -2261,12 +2265,12 @@ fn candidate_parents_are_bounded_and_continue_cites_a_live_id() {
         1
     );
     let (system, user) = request_pair(&open);
-    assert_eq!(user, "keep going");
+    assert_eq!(user, "resume that pin work");
     let candidates = candidate_list(&system);
     assert_eq!(candidates[0]["task_id"], "task-1");
     assert_eq!(candidates[0]["phase"], "queued");
     assert!(system.contains("task-1"));
-    assert!(!system.contains("keep going"));
+    assert!(!system.contains("resume that pin work"));
 }
 
 #[test]
@@ -3986,14 +3990,8 @@ fn worker_failure_leaves_the_task_failed() {
         "phase {:?}",
         harness.host().phase(&task)
     );
-    let labels = harness.host().activity_labels();
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.contains("manager will decide")),
-        "labels {labels:?}"
-    );
-    // Workers never post to the CEO chat; the manager asks on a later wake/turn.
+    // Finished/failed tasks clear their activity lines (Quiet Stop strip); do not
+    // pin labels. Workers never post to the CEO chat; the manager asks later.
     let bodies = shown(
         &harness.database,
         "SELECT body FROM router_messages ORDER BY ordinal",
@@ -4268,7 +4266,7 @@ fn malformed_route_is_repaired_once_then_a_valid_spawn_starts_one_task() {
         requests[1]
             .messages
             .iter()
-            .any(|message| message.content.contains("not a valid route"))
+            .any(|message| message.content.contains("not a valid manager route"))
     );
 }
 
@@ -4418,7 +4416,7 @@ fn unreadable_provider_body_is_repaired_once_then_spawn_starts_one_task() {
         requests[1]
             .messages
             .iter()
-            .any(|message| message.content.contains("not a valid route"))
+            .any(|message| message.content.contains("not a valid manager route"))
     );
     let bodies = shown(
         &harness.database,
@@ -4534,8 +4532,9 @@ fn a_task_finishes_after_more_than_one_hundred_distinct_tool_calls() {
         "{:?}",
         harness.host().phase(&task)
     );
+    // Activity lines for finished tasks are cleared; the call count + Completed
+    // phase already prove there is no arbitrary 32-step hard stop.
     let labels = harness.host().activity_labels();
-    assert!(labels.iter().any(|label| label.contains("Step 100")));
     assert!(
         labels
             .iter()
@@ -4568,14 +4567,8 @@ fn a_repeated_tool_call_nudges_the_next_model_request() {
             && text.contains("https://example.com/same")
     });
     assert!(nudged);
-    assert!(
-        harness
-            .host()
-            .activity_labels()
-            .iter()
-            .any(|label| label.contains("Noticed a loop")
-                && label.contains("Asked it to try something else"))
-    );
+    // Loop activity is cleared when the task finishes; the nudge in the next
+    // model request is the durable contract.
 }
 
 #[test]
@@ -4655,9 +4648,6 @@ fn alternating_tool_calls_are_detected() {
         let text = request_text(&request);
         text.contains("alternating between")
             && text.contains("Say in one line what you will try next")
-    }));
-    assert!(harness.host().activity_labels().iter().any(|label| {
-        label.contains("alternated between") && label.contains("Asked it to try something else")
     }));
 }
 
@@ -4743,13 +4733,7 @@ fn compaction_triggers_and_keeps_the_goal() {
         let text = request_text(request);
         text.contains(goal) && text.contains("Running summary")
     }));
-    assert!(
-        harness
-            .host()
-            .activity_labels()
-            .iter()
-            .any(|label| label == "Compacted context")
-    );
+    // Compaction activity clears when the task finishes; requests above prove it ran.
 }
 
 #[test]
