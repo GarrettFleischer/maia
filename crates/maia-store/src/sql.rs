@@ -233,6 +233,20 @@ pub(crate) const MIGRATION_V20: &[&str] = &[
      )",
 ];
 
+/// Migration 21 stores auto-activated skill packs (procedures / project rules).
+pub(crate) const MIGRATION_V21: &[&str] = &[
+    "CREATE TABLE skills (\
+        skill_id TEXT PRIMARY KEY, \
+        title TEXT NOT NULL, \
+        when_to_use TEXT NOT NULL, \
+        body TEXT NOT NULL, \
+        project TEXT NOT NULL DEFAULT '', \
+        max_tokens INTEGER NOT NULL DEFAULT 400, \
+        updated_at INTEGER NOT NULL, \
+        retired INTEGER NOT NULL DEFAULT 0 CHECK (retired IN (0, 1))\
+     )",
+];
+
 /// Migration 17 drops tasks whose owner-message source was already deleted.
 ///
 /// A deleted bot used to remove chat rows while leaving the task. Restore then

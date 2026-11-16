@@ -664,6 +664,10 @@ enum NormalCommand {
         request: crate::bot_ops::BotRequest,
         reply: Reply<crate::bot_ops::BotResponse>,
     },
+    Skills {
+        request: crate::skill_ops::SkillRequest,
+        reply: Reply<crate::skill_ops::SkillResponse>,
+    },
 }
 
 enum PanicCommand {
@@ -2004,6 +2008,20 @@ impl SqliteOwner {
     ) -> Result<crate::bot_ops::BotResponse, StoreError> {
         let (reply, rx) = oneshot::channel();
         self.send_normal(NormalCommand::Bots { request, reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Applies one skills catalog command.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, validation, missing-skill, or SQLite failure.
+    pub fn skills(
+        &self,
+        request: crate::skill_ops::SkillRequest,
+    ) -> Result<crate::skill_ops::SkillResponse, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::Skills { request, reply }, Submit::Wait)?;
         Pending { rx }.wait()
     }
 
@@ -3951,6 +3969,9 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
         }
         NormalCommand::Bots { request, reply } => {
             send(reply, crate::bot_ops::apply(connection, &request));
+        }
+        NormalCommand::Skills { request, reply } => {
+            send(reply, crate::skill_ops::apply(connection, &request));
         }
     }
 }
