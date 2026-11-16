@@ -322,9 +322,8 @@ describe('RouterConversation', () => {
     expect(within(router).getByText('Maia')).toBeVisible()
   })
 
-  it('copies a message and edits an owner message into the composer', async () => {
+  it('copies only agent messages and never shows edit or owner copy', async () => {
     const user = userEvent.setup()
-    const onDraftChange = vi.fn()
     render(
       <ReviewedRouterConversation
         messages={[
@@ -338,7 +337,7 @@ describe('RouterConversation', () => {
         draft=""
         notice={{ kind: 'idle' }}
         disabled={false}
-        onDraftChange={onDraftChange}
+        onDraftChange={vi.fn()}
         onRetryTranscript={vi.fn()}
         onAnnouncementAcknowledged={vi.fn()}
         onSubmit={vi.fn()}
@@ -347,6 +346,10 @@ describe('RouterConversation', () => {
 
     const owner = screen.getByRole('article', { name: 'Message from You' })
     const router = screen.getByRole('article', { name: 'Message from Maia' })
+    expect(within(owner).queryByRole('button', { name: 'Copy message' })).toBeNull()
+    expect(within(owner).queryByRole('button', { name: 'Edit message' })).toBeNull()
+    expect(within(owner).queryByRole('group', { name: 'Actions for message from You' })).toBeNull()
+    expect(within(router).queryByRole('button', { name: 'Edit message' })).toBeNull()
     const copy = within(router).getByRole('button', { name: 'Copy message' })
     expect(copy).toHaveClass('maia-icon-btn')
     expect(copy.querySelector('.maia-copy-icon')).not.toBeNull()
@@ -363,14 +366,6 @@ describe('RouterConversation', () => {
     await user.click(copy)
     expect(await navigator.clipboard.readText()).toBe('Router body')
     expect(within(router).getByRole('status')).toHaveTextContent('Copied')
-    const edit = within(owner).getByRole('button', { name: 'Edit message' })
-    expect(edit).toHaveClass('maia-icon-btn')
-    expect(edit.querySelector('.maia-edit-icon')).not.toBeNull()
-    expect(edit).toBeVisible()
-    expect(within(owner).getByRole('group', { name: 'Actions for message from You' }).closest('.maia-run-head')).not.toBeNull()
-    expect(within(router).queryByRole('button', { name: 'Edit message' })).toBeNull()
-    await user.click(edit)
-    expect(onDraftChange).toHaveBeenCalledWith('Owner body')
   })
 
   it('uses compact Attach and Send icon buttons in the composer', () => {

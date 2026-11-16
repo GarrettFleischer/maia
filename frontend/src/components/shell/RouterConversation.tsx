@@ -449,44 +449,32 @@ export function RouterConversation({
                   >
                     <div className="maia-run-head">
                       <p className="maia-speaker">{speaker}</p>
-                      <div
-                        className="maia-message-actions"
-                        role="group"
-                        aria-label={`Actions for message from ${speaker}`}
-                      >
-                        <button
-                          type="button"
-                          className="maia-icon-btn"
-                          aria-label="Copy message"
-                          title="Copy message"
-                          onClick={() => {
-                            const clipboard = globalThis.navigator?.clipboard
-                            if (!clipboard) return
-                            void copyText(message.text, clipboard).then((result) => {
-                              if (result === 'copied') setCopiedMessageId(message.message_id)
-                            })
-                          }}
+                      {message.role !== 'owner' ? (
+                        <div
+                          className="maia-message-actions"
+                          role="group"
+                          aria-label={`Actions for message from ${speaker}`}
                         >
-                          <span className="maia-copy-icon" aria-hidden="true" />
-                        </button>
-                        {message.role === 'owner' ? (
                           <button
                             type="button"
                             className="maia-icon-btn"
-                            aria-label="Edit message"
-                            title="Edit message"
+                            aria-label="Copy message"
+                            title="Copy message"
                             onClick={() => {
-                              onDraftChange(message.text)
-                              fieldRef.current?.focus()
+                              const clipboard = globalThis.navigator?.clipboard
+                              if (!clipboard) return
+                              void copyText(message.text, clipboard).then((result) => {
+                                if (result === 'copied') setCopiedMessageId(message.message_id)
+                              })
                             }}
                           >
-                            <span className="maia-edit-icon" aria-hidden="true" />
+                            <span className="maia-copy-icon" aria-hidden="true" />
                           </button>
-                        ) : null}
-                        {copiedMessageId === message.message_id ? (
-                          <span role="status">Copied</span>
-                        ) : null}
-                      </div>
+                          {copiedMessageId === message.message_id ? (
+                            <span role="status">Copied</span>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                     {fold ? (
                       <details className="maia-fold">

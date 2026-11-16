@@ -879,10 +879,6 @@ textarea {
   flex: 0 1 auto;
 }
 
-.maia-run--you .maia-message-actions {
-  margin-left: 0;
-}
-
 .maia-chat-questions {
   display: flex;
   flex-direction: column;
