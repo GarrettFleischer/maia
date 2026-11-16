@@ -1317,14 +1317,14 @@ On every turn and every wake: check workers, diagnose failures yourself from the
 You may hire, recover, ask, and close out while other workers are still running — do not wait for healthy runners to finish. If a worker's idle age looks hung with no useful progress, cancel_task and hire or retry with a clearer plan rather than waiting forever.\n\
 A wake brief lists LEARNED notes (hints for how to retry ATTENTION failures only — never spawn_task from LEARNED alone or invent work absent from ATTENTION), ATTENTION (ordered concurrent goals), CEO_WAITING (with the question), FINISHED goals (with outcome= for close-out), RECENT_CEO_CHAT, and each open worker with status, idle age, recent output, and last error. Use that before asking the CEO.\n\
 On a silent wake call only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, record_learning. On a wake do not call success, failure, waiting, link_task, or inspect_task (use the wake brief instead of inspect).\n\
-On an owner turn keep going until you call success, failure, waiting, message_user, or ask_user.\n\
-- success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory. Owner turns only.\n\
+On an owner turn keep going until you call success, failure, waiting, message_user, or ask_user — except after spawn_task, link_task, continue_task, or retry_task, which end the turn silently (no hire / standing-by / in-progress chat).\n\
+- success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory when you did not hire or continue a worker. Owner turns only.\n\
 - failure: message is why this cannot be handled. Owner turns only.\n\
 - waiting: message is one specific question while work stays alive. Prefer ask_user for CEO decisions. Owner turns only. Never use waiting instead of hiring a worker the CEO asked you to hire.\n\
-- message_user: post one useful update only when the CEO genuinely needs to know. Do not message_user just to announce a hire, that you are standing by, or that work is in progress — hire the worker and stay silent until a Done close-out or ask_user. When the wake brief shows FINISHED goals (goal_state=needs_close_out) and nothing else needs attention, you MUST send exactly one short Done close-out with message_user — start with Done —, restate the FINISHED outcome= and where it landed, then stay silent on later wakes. Prior status chatter (hired / working / will notify / standing by) does not count as close-out. If RECENT_CEO_CHAT already has that Done close-out, stay silent. Never dump worker logs into chat.\n\
-- ask_user: one clear CEO decision (credentials, money, irreversible or external action, real preference). When the wake brief shows CEO_WAITING, you MUST ask_user once (not silence, not message_user). If RECENT_CEO_CHAT already asked, do not ask again — continue_task with the CEO's answer instead. Never paste worker output.\n\
-Route tools do not finish an owner turn. After one of them, call success, failure, waiting, message_user, or ask_user.\n\
-- New work: always spawn_task first before any terminal. Do not answer a hire request with only message_user, waiting, ask_user, success, or failure — that leaves no worker. Do not refuse a path yourself; hire a worker. Do not try to run the work with bash or files yourself.\n\
+- message_user: post one useful update only when the CEO genuinely needs to know. Never announce a hire, that you are standing by, or that work is in progress — after hiring or continuing a worker the turn ends silent until a Done close-out or ask_user. When the wake brief shows FINISHED goals (goal_state=needs_close_out) and nothing else needs attention, you MUST send exactly one short Done close-out with message_user — start with Done —, restate the FINISHED outcome= and where it landed, then stay silent on later wakes. Prior status chatter (hired / working / will notify / standing by) does not count as close-out. If RECENT_CEO_CHAT already has that Done close-out, stay silent. Never dump worker logs into chat.\n\
+- ask_user: one clear CEO decision (credentials, money, irreversible or external action, or a real owner preference between options you cannot choose). Do the work you can first; ask only when stuck on that decision. When the wake brief shows CEO_WAITING, you MUST ask_user once (not silence, not message_user). If RECENT_CEO_CHAT already asked, do not ask again — continue_task with the CEO's answer instead. Never paste worker output. Never ask about things you can decide yourself.\n\
+- New work: always spawn_task first. Do not answer a hire request with only message_user, waiting, ask_user, success, or failure — that leaves no worker. Do not refuse a path yourself; hire a worker. Do not try to run the work with bash or files yourself.\n\
+- After spawn_task, link_task, continue_task, or retry_task the owner turn is already finished silently — do not follow with success or message_user just to acknowledge.\n\
 - Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text). When the CEO answers your ask_user about a waiting worker, continue_task with that task_id and their answer so the worker can finish — do not spawn a new worker for the same answer. When the CEO asks to hire new work while another worker is waiting or running, still spawn_task for the new work — do not treat a hire request as the answer to the waiter.\n\
 - After a waiting worker receives the CEO's answer, continue_task with their answer so the worker sees it framed as the answer; the worker must finish promptly (success) unless the goal still requires tools. Do not re-wait for the same question and do not run long shell work that blocks other workers unless the goal needs it.\n\
 - Follow-up after a finished task: link_task.\n\
@@ -1637,6 +1637,14 @@ fn dispatch_note(text: &str) -> String {
     } else {
         format!("Dispatched as one new task: {title}.")
     }
+}
+
+/// Routes that finish an owner turn without CEO chat (hire / continue / recover).
+fn silent_work_route(route: &str) -> bool {
+    matches!(
+        route,
+        "spawn_task" | "link_task" | "continue_task" | "retry_task"
+    )
 }
 
 /// True when the CEO is asking to hire new work (not answering a waiting worker).
@@ -2094,11 +2102,11 @@ fn route_tools_json() -> String {
         ),
         terminal_tool(
             "message_user",
-            "Post one useful update to the owner chat. Default silent. When the wake brief shows FINISHED goal_state=needs_close_out, you MUST send one short close-out that starts with Done — and restates the FINISHED outcome= (what was delivered and where). One close-out per finished goal; then stay silent. Status chatter does not close a goal. Skip if RECENT_CEO_CHAT already has that Done close-out. Never dump raw worker logs.",
+            "Post one useful update to the owner chat. Default silent. Never use this to announce a hire, standing by, or in-progress status. When the wake brief shows FINISHED goal_state=needs_close_out, you MUST send one short close-out that starts with Done — and restates the FINISHED outcome= (what was delivered and where). One close-out per finished goal; then stay silent. Status chatter does not close a goal. Skip if RECENT_CEO_CHAT already has that Done close-out. Never dump raw worker logs.",
         ),
         terminal_tool(
             "ask_user",
-            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real preference). When the wake brief shows CEO_WAITING, you MUST use this (not message_user, not silence). One question only; skip if RECENT_CEO_CHAT already asked. Never paste worker output into chat. Workers never ask the CEO directly.",
+            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real owner preference you cannot choose). Do what you can first; ask only when that decision blocks progress. When the wake brief shows CEO_WAITING, you MUST use this (not message_user, not silence). One question only; skip if RECENT_CEO_CHAT already asked. Never ask about things you can decide yourself. Never paste worker output into chat. Workers never ask the CEO directly.",
         ),
         terminal_tool(
             "record_learning",
@@ -5086,10 +5094,14 @@ impl<R: Router> Orchestrator<R> {
             }
             Err(error) if machine.applied.is_some() => {
                 log_router_failure(&OrchestratorError::Router(error));
+                let sentence = match machine.applied.as_ref() {
+                    Some(applied) if silent_work_route(applied.route) => String::new(),
+                    _ => machine.last_result.clone(),
+                };
                 return RouteDrive::Done(self.finish_owner_turn(
                     machine.message.clone(),
                     &machine.text.clone(),
-                    machine.last_result.clone(),
+                    sentence,
                     machine.applied.clone(),
                     machine.thinking.clone(),
                     machine.usage.clone(),
@@ -5148,6 +5160,12 @@ impl<R: Router> Orchestrator<R> {
         }
         match router_stop(&response) {
             RouterStop::Done(sentence) | RouterStop::Answer(sentence) => {
+                // After a silent work route the turn already ended with no chat; ignore
+                // trailing success/message_user chatter (hire / standing-by / answers).
+                let sentence = match machine.applied.as_ref() {
+                    Some(applied) if silent_work_route(applied.route) => String::new(),
+                    _ => sentence,
+                };
                 RouteDrive::Done(self.finish_owner_turn(
                     machine.message.clone(),
                     &machine.text.clone(),
@@ -5161,6 +5179,24 @@ impl<R: Router> Orchestrator<R> {
                 ))
             }
             RouterStop::Work(call) if machine.applied.is_some() => {
+                // Hire/continue/retry already ended the turn silently; ignore extra route tools.
+                if machine
+                    .applied
+                    .as_ref()
+                    .is_some_and(|applied| silent_work_route(applied.route))
+                {
+                    return RouteDrive::Done(self.finish_owner_turn(
+                        machine.message.clone(),
+                        &machine.text.clone(),
+                        String::new(),
+                        machine.applied.clone(),
+                        machine.thinking.clone(),
+                        machine.usage.clone(),
+                        &machine.measured.clone(),
+                        TurnClose::Model,
+                        &machine.attachments.clone(),
+                    ));
+                }
                 let result = "A task is already started for this message. Call success with the sentence the owner should read.";
                 push_tool_exchange(&mut machine.messages, &response, &call, result);
                 self.resume_route(machine, &call, result)
@@ -5183,11 +5219,28 @@ impl<R: Router> Orchestrator<R> {
                         ))
                     }
                     Ok(RouteExecution::Continue(effect)) => {
+                        let silent = effect
+                            .applied
+                            .as_ref()
+                            .is_some_and(|applied| silent_work_route(applied.route));
                         if effect.applied.is_some() {
                             machine.applied = effect.applied;
                             machine.last_result.clone_from(&effect.result);
                         }
                         push_tool_exchange(&mut machine.messages, &response, &call, &effect.result);
+                        if silent {
+                            return RouteDrive::Done(self.finish_owner_turn(
+                                machine.message.clone(),
+                                &machine.text.clone(),
+                                String::new(),
+                                machine.applied.clone(),
+                                machine.thinking.clone(),
+                                machine.usage.clone(),
+                                &machine.measured.clone(),
+                                TurnClose::Model,
+                                &machine.attachments.clone(),
+                            ));
+                        }
                         self.resume_route(machine, &call, &effect.result)
                     }
                     Err(OrchestratorError::Proposal(_)) => {
@@ -5214,10 +5267,14 @@ impl<R: Router> Orchestrator<R> {
                 }
             }
             RouterStop::Repair if machine.applied.is_some() => {
+                let sentence = match machine.applied.as_ref() {
+                    Some(applied) if silent_work_route(applied.route) => String::new(),
+                    _ => machine.last_result.clone(),
+                };
                 RouteDrive::Done(self.finish_owner_turn(
                     machine.message.clone(),
                     &machine.text.clone(),
-                    machine.last_result.clone(),
+                    sentence,
                     machine.applied.clone(),
                     machine.thinking.clone(),
                     machine.usage.clone(),
@@ -5332,6 +5389,16 @@ impl<R: Router> Orchestrator<R> {
             route,
             reply: sentence,
         };
+        // Silent hire/continue/retry: no CEO chat row and no empty snapshot (store rejects "").
+        if shown.reply.trim().is_empty() {
+            self.settle_live_reply(&self.turn_bot.clone());
+            self.clear_router_activity();
+            return MessageOutcome::Routed(TurnOutcome {
+                admitted,
+                task,
+                message,
+            });
+        }
         if let Err(error) = self.note_turn(&shown.reply, None, route) {
             return self.admitted_failure(message, error);
         }

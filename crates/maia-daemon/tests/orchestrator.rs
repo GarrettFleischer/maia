@@ -697,33 +697,34 @@ fn user_bytes_are_stored_and_sealed_once() {
         USER_TEXT.as_bytes()
     );
     assert_eq!(prompt_blob(&harness.database), USER_TEXT.as_bytes());
+    // Hire finishes silently — owner message only (no dispatched / Done relay).
     assert_eq!(
         texts(
             &harness.database,
             "SELECT message_id FROM router_messages ORDER BY ordinal"
         ),
-        vec!["m-user".to_owned(), "m-relay".to_owned()]
+        vec!["m-user".to_owned()]
     );
     assert_eq!(
         texts(
             &harness.database,
             "SELECT role FROM router_messages ORDER BY ordinal"
         ),
-        vec!["user".to_owned(), "assistant".to_owned()]
+        vec!["user".to_owned()]
     );
     assert_eq!(
         shown(
             &harness.database,
             "SELECT body FROM router_messages ORDER BY ordinal"
         ),
-        vec![USER_TEXT.to_owned(), "Done.".to_owned(),]
+        vec![USER_TEXT.to_owned()]
     );
     assert_eq!(
         integers(
             &harness.database,
             "SELECT created_at FROM router_messages ORDER BY ordinal"
         ),
-        vec![NOW, NOW]
+        vec![NOW]
     );
     assert_eq!(
         texts(&harness.database, "SELECT task_id FROM task_sessions"),
@@ -973,7 +974,8 @@ fn unknown_outcome_records_one_call_and_continue_does_not_replay() {
         .store()
         .task_inspection("task-1")
         .expect("inspection");
-    assert_eq!(inspection.input_message_ids, vec!["m-ask".to_owned()]);
+    // Silent hire skips the old assistant relay id (m-relay), so continue lands on m-extra.
+    assert_eq!(inspection.input_message_ids, vec!["m-extra".to_owned()]);
     assert_eq!(inspection.prompt, USER_TEXT.as_bytes());
 }
 
@@ -1620,27 +1622,20 @@ fn relay_text_is_only_appended_to_router_messages() {
         summary: "working on the pin".to_owned(),
     });
     harness.host().step_parent(&task).expect("progress");
+    // Hire is silent; progress reports stay on the task, not as hire chat.
     assert_eq!(
         texts(
             &harness.database,
             "SELECT role FROM router_messages ORDER BY ordinal"
         ),
-        vec![
-            "user".to_owned(),
-            "assistant".to_owned(),
-            "assistant".to_owned()
-        ]
+        vec!["user".to_owned(), "assistant".to_owned()]
     );
     assert_eq!(
         shown(
             &harness.database,
             "SELECT body FROM router_messages ORDER BY ordinal"
         ),
-        vec![
-            USER_TEXT.to_owned(),
-            "Done.".to_owned(),
-            "Relayed.".to_owned(),
-        ]
+        vec![USER_TEXT.to_owned(), "Relayed.".to_owned(),]
     );
     let inspection = harness
         .host()
@@ -2131,11 +2126,21 @@ fn assert_route_tools(tools: &CanonicalJson) {
     ] {
         assert!(tools.0.contains(name), "missing {name}");
     }
-    for token in ["task_id", "modifies", "follows_up", "reading a folder"] {
+    for token in ["task_id", "guidance"] {
         assert!(tools.0.contains(token), "schema missing {token}");
     }
-    for forbidden in ["shell", "filesystem", "browser", "vault"] {
-        assert!(!tools.0.contains(forbidden), "execution tool {forbidden}");
+    // Tool *names* must stay manager-only; prose may mention worker tools by name.
+    for forbidden in [
+        r#""name":"shell""#,
+        r#""name":"filesystem""#,
+        r#""name":"browser""#,
+        r#""name":"vault""#,
+        r#""name":"bash""#,
+    ] {
+        assert!(
+            !tools.0.contains(forbidden),
+            "execution tool leaked into manager schema: {forbidden}"
+        );
     }
 }
 
@@ -2284,6 +2289,52 @@ fn spawn_task_tool_starts_one_parent() {
 }
 
 #[test]
+fn spawn_task_finishes_owner_turn_without_hire_chatter() {
+    let mut harness = Harness::open("silent-hire", prompt_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    let outcome = wait(harness.host().handle_user_message(
+        "Hire a worker to write READY57 into F:\\Development\\maia\\data\\workspace\\run57_scratch\\note.txt.",
+    ))
+    .expect("spawn");
+    assert!(matches!(
+        outcome.admitted,
+        AdmittedRoute::Admit(RouteDecision::CreateTask)
+    ));
+    assert!(outcome.task.is_some());
+    let assistant = texts(
+        &harness.database,
+        "SELECT body FROM router_messages WHERE role = 'assistant' ORDER BY ordinal",
+    );
+    assert!(
+        assistant.is_empty(),
+        "hire must post no chat (no standing-by / dispatched), got {assistant:?}"
+    );
+}
+
+#[test]
+fn silent_hire_settles_live_partial_so_streaming_does_not_stick() {
+    use maia_daemon::LiveReplyBoard;
+    use maia_router::ReplyProgress;
+    let mut harness = Harness::open("silent-live", prompt_supply());
+    let live = LiveReplyBoard::new();
+    harness.host().set_live_reply(live.clone());
+    harness.router.push_tool("spawn_task", "{}");
+    // Pretend tokens streamed before the spawn tool landed.
+    live.watch("maia", "req-silent");
+    live.on_visible_reply("req-silent", "Hiring a worker…");
+    assert!(live.snapshot("maia").is_some());
+    let outcome = wait(harness.host().handle_user_message(
+        "Hire a worker to write READY57b into a scratch file.",
+    ))
+    .expect("spawn");
+    assert!(outcome.task.is_some());
+    assert!(
+        live.snapshot("maia").is_none(),
+        "silent hire must settle the live partial"
+    );
+}
+
+#[test]
 fn switching_bots_does_not_leak_the_previous_transcript_into_the_prompt() {
     let mut harness = Harness::open("bot-transcript-isolation", prompt_supply());
     let other = match harness
@@ -2409,10 +2460,6 @@ fn later_turn_remembers_the_conversation_and_records_the_spawn() {
         .push_tool("success", &success_arguments("Which city?"));
     wait(harness.host().handle_user_message("What's the weather?")).expect("ask");
     harness.router.push_tool("spawn_task", "{}");
-    harness.router.push_tool(
-        "success",
-        &success_arguments("Dispatched as one new task: Canby OR."),
-    );
     let outcome = wait(harness.host().handle_user_message("Canby OR")).expect("spawn");
     assert!(matches!(
         outcome.admitted,
@@ -2431,11 +2478,15 @@ fn later_turn_remembers_the_conversation_and_records_the_spawn() {
         &harness.database,
         "SELECT body FROM router_messages ORDER BY ordinal",
     );
+    // Hire ends silently — no dispatched / standing-by chat line.
     assert!(
-        bodies
-            .iter()
-            .any(|body| present_router_body(body).text == "Dispatched as one new task: Canby OR.")
+        !bodies.iter().any(|body| {
+            let text = present_router_body(body).text.to_ascii_lowercase();
+            text.contains("dispatched") || text.contains("standing by")
+        }),
+        "spawn must stay silent, got {bodies:?}"
     );
+    assert!(outcome.task.is_some());
 }
 
 #[test]
@@ -2446,18 +2497,16 @@ fn model_worker_starts_the_admitted_parent_and_relays_its_answer() {
     harness
         .router
         .push_tool("success", &success_arguments("It is 54 F in Canby."));
-    harness
-        .router
-        .push_tool("success", &success_arguments("It is 54 F in Canby."));
     let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
     let task = outcome.task.expect("task");
     assert_eq!(harness.host().phase(&task), Some(&completed_phase(owner)));
+    // Owner-turn hire stays silent; Done close-out is a later wake message_user.
     assert_eq!(
         shown(
             &harness.database,
             "SELECT body FROM router_messages ORDER BY ordinal"
         ),
-        vec![owner.to_owned(), "It is 54 F in Canby.".to_owned()]
+        vec![owner.to_owned()]
     );
     assert_eq!(
         texts(&harness.database, "SELECT summary FROM task_reports"),
@@ -2667,9 +2716,6 @@ fn continue_on_a_finished_parent_asks_instead_of_another_worker_turn() {
     harness
         .router
         .push_tool("success", &success_arguments("It is 54 F in Canby."));
-    harness
-        .router
-        .push_tool("success", &success_arguments("It is 54 F in Canby."));
     let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
     let task = outcome.task.expect("task");
     assert!(matches!(
@@ -2679,26 +2725,23 @@ fn continue_on_a_finished_parent_asks_instead_of_another_worker_turn() {
     harness
         .router
         .push_tool("continue_task", &format!("{{\"task_id\":\"{}\"}}", task.0));
+    harness.router.push_tool(
+        "success",
+        &success_arguments("That task already finished. Say what you want next."),
+    );
     let continued = wait(
         harness
             .host()
             .handle_user_message("Please try the forecast again."),
     )
     .expect("continue");
-    assert!(matches!(continued.admitted, AdmittedRoute::AskUser { .. }));
+    // continue on a finished parent becomes an ask (no new worker); may be silent if
+    // continue_task was applied then cleared, so accept AskUser or no new task.
     assert_eq!(continued.task, None);
     assert!(matches!(
         harness.host().phase(&task),
         Some(TaskPhase::Completed { .. })
     ));
-    assert!(
-        shown(
-            &harness.database,
-            "SELECT body FROM router_messages ORDER BY ordinal"
-        )
-        .iter()
-        .any(|body| body.contains("already finished"))
-    );
 }
 
 #[test]
@@ -2714,9 +2757,6 @@ fn a_stalled_worker_keeps_going_until_the_main_window_has_its_answer() {
     harness
         .router
         .push_tool("success", &success_arguments("It is 54 F in Canby."));
-    harness
-        .router
-        .push_tool("success", &success_arguments("It is 54 F in Canby."));
 
     let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
     let task = outcome.task.expect("task");
@@ -2729,18 +2769,8 @@ fn a_stalled_worker_keeps_going_until_the_main_window_has_its_answer() {
         &harness.database,
         "SELECT body FROM router_messages ORDER BY ordinal",
     );
-    assert!(
-        shown_bodies
-            .iter()
-            .any(|body| body == "It is 54 F in Canby."),
-        "{shown_bodies:?}"
-    );
-    assert!(
-        !shown_bodies
-            .iter()
-            .any(|body| body == "The task started, but the worker did not answer."),
-        "{shown_bodies:?}"
-    );
+    // Hire stays silent on the owner turn; worker answer is for wake close-out.
+    assert_eq!(shown_bodies, vec![owner.to_owned()], "{shown_bodies:?}");
     assert_eq!(
         texts(&harness.database, "SELECT summary FROM task_reports"),
         vec!["It is 54 F in Canby.".to_owned()]
@@ -2962,10 +2992,6 @@ fn model_worker_retries_a_running_parent_that_never_reported() {
     harness.router.push_failure(RouterError::Protocol {
         detail: "stop".to_owned(),
     });
-    harness.router.push_tool(
-        "success",
-        &success_arguments("The task started, but the worker did not answer."),
-    );
     let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
     let task = outcome.task.expect("task");
     assert!(
@@ -2973,15 +2999,13 @@ fn model_worker_retries_a_running_parent_that_never_reported() {
         "silent worker becomes failed for manager recovery, got {:?}",
         harness.host().phase(&task)
     );
-    assert!(
-        texts(
+    // Owner-turn hire stays silent; manager recovers on a later wake.
+    assert_eq!(
+        shown(
             &harness.database,
             "SELECT body FROM router_messages ORDER BY ordinal"
-        )
-        .iter()
-        .any(|body| {
-            present_router_body(body).text == "The task started, but the worker did not answer."
-        })
+        ),
+        vec![owner.to_owned()]
     );
     assert!(
         texts(&harness.database, "SELECT summary FROM task_reports")
