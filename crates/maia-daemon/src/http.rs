@@ -2774,7 +2774,7 @@ async fn transcript(State(state): State<AppState>, Query(query): Query<BotScope>
                     .into_iter()
                     .map(|task| task.task_id)
                     .collect::<std::collections::HashSet<_>>();
-                activity_for_bot(&activity, &task_ids)
+                activity_for_bot(&activity, bot_id, &task_ids)
             }
             None => activity,
         };

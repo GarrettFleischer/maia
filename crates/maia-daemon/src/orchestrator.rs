@@ -1321,7 +1321,7 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory. Owner turns only.\n\
 - failure: message is why this cannot be handled. Owner turns only.\n\
 - waiting: message is one specific question while work stays alive. Prefer ask_user for CEO decisions. Owner turns only. Never use waiting instead of hiring a worker the CEO asked you to hire.\n\
-- message_user: post one useful update only when the CEO genuinely needs to know. When the wake brief shows FINISHED goals (goal_state=needs_close_out) and nothing else needs attention, you MUST send exactly one short Done close-out with message_user — start with Done —, restate the FINISHED outcome= and where it landed, then stay silent on later wakes. Prior status chatter (hired / working / will notify) does not count as close-out. If RECENT_CEO_CHAT already has that Done close-out, stay silent. Never dump worker logs into chat.\n\
+- message_user: post one useful update only when the CEO genuinely needs to know. Do not message_user just to announce a hire, that you are standing by, or that work is in progress — hire the worker and stay silent until a Done close-out or ask_user. When the wake brief shows FINISHED goals (goal_state=needs_close_out) and nothing else needs attention, you MUST send exactly one short Done close-out with message_user — start with Done —, restate the FINISHED outcome= and where it landed, then stay silent on later wakes. Prior status chatter (hired / working / will notify / standing by) does not count as close-out. If RECENT_CEO_CHAT already has that Done close-out, stay silent. Never dump worker logs into chat.\n\
 - ask_user: one clear CEO decision (credentials, money, irreversible or external action, real preference). When the wake brief shows CEO_WAITING, you MUST ask_user once (not silence, not message_user). If RECENT_CEO_CHAT already asked, do not ask again — continue_task with the CEO's answer instead. Never paste worker output.\n\
 Route tools do not finish an owner turn. After one of them, call success, failure, waiting, message_user, or ask_user.\n\
 - New work: always spawn_task first before any terminal. Do not answer a hire request with only message_user, waiting, ask_user, success, or failure — that leaves no worker. Do not refuse a path yourself; hire a worker. Do not try to run the work with bash or files yourself.\n\
@@ -2577,6 +2577,9 @@ pub struct ActivityEvent {
     pub label: String,
     /// Parent task id when the line belongs to a task.
     pub task_id: Option<String>,
+    /// Super Agent that owns this line (turn bot when recorded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -2603,7 +2606,7 @@ impl ActivityLog {
     }
 
     /// Appends one label. Keeps the newest 80 lines.
-    pub fn push(&self, label: impl Into<String>, task_id: Option<String>) {
+    pub fn push(&self, label: impl Into<String>, task_id: Option<String>, bot_id: Option<String>) {
         let Ok(mut state) = self.inner.lock() else {
             return;
         };
@@ -2613,6 +2616,7 @@ impl ActivityLog {
             seq,
             label: label.into(),
             task_id,
+            bot_id,
         });
         let extra = state.events.len().saturating_sub(80);
         if extra > 0 {
@@ -2653,21 +2657,21 @@ impl Default for ActivityLog {
     }
 }
 
-/// Honest leaf: keep only activity lines whose task belongs to the bot.
+/// Honest leaf: keep activity for one Super Agent.
 ///
-/// Untasked router lines are dropped on a bot-scoped read so another bot's
-/// Working strip cannot flash while switching Super Agents.
+/// Task lines stay when their task belongs to the bot. Untasked router lines
+/// stay when they were recorded for that bot, so the Working strip can show
+/// "Router: reading your message" without leaking another bot's activity.
 pub fn activity_for_bot(
     events: &[ActivityEvent],
+    bot_id: &str,
     bot_task_ids: &std::collections::HashSet<String>,
 ) -> Vec<ActivityEvent> {
     events
         .iter()
-        .filter(|event| {
-            event
-                .task_id
-                .as_ref()
-                .is_some_and(|task_id| bot_task_ids.contains(task_id))
+        .filter(|event| match event.task_id.as_ref() {
+            Some(task_id) => bot_task_ids.contains(task_id),
+            None => event.bot_id.as_deref() == Some(bot_id),
         })
         .cloned()
         .collect()
@@ -4254,7 +4258,11 @@ impl<R: Router> Orchestrator<R> {
             self.task_activity.insert(task.clone(), label.clone());
             self.last_progress_at.insert(task.clone(), self.ids.now);
         }
-        self.activity.push(label, task.map(|task| task.0.clone()));
+        self.activity.push(
+            label,
+            task.map(|task| task.0.clone()),
+            Some(self.turn_bot.clone()),
+        );
     }
 
     fn clear_live_activity(&mut self, task: &TaskId) {
@@ -4920,10 +4928,10 @@ impl<R: Router> Orchestrator<R> {
         text: &str,
         attachments: &[StagedAttachment],
     ) -> Result<RouteMachine, MessageOutcome> {
-        self.record_activity("Router: reading your message", None);
-        // Bot id must be known before history and also_happening, or a switch
-        // leaks the previous Super Agent transcript into this prompt.
+        // Bot id must be known before activity, history, and also_happening, or a
+        // switch leaks the previous Super Agent into this prompt / Working strip.
         self.turn_bot = self.message_bot(&message.0);
+        self.record_activity("Router: reading your message", None);
         if !attachments.is_empty() {
             let ids = attachments
                 .iter()
@@ -5760,7 +5768,11 @@ impl<R: Router> Orchestrator<R> {
             .map(|item| item.sentence.clone())
             .collect::<Vec<_>>();
         let label = maia_core::brain::recall_activity_label(packed.items.len(), &titles);
-        self.activity.push(label, task.map(|task| task.0.clone()));
+        self.activity.push(
+            label,
+            task.map(|task| task.0.clone()),
+            Some(self.turn_bot.clone()),
+        );
     }
 
     fn persist_router_turn(
@@ -8548,23 +8560,56 @@ mod activity_scope_tests {
                 seq: 1,
                 label: "Working".to_owned(),
                 task_id: Some("task-a".to_owned()),
+                bot_id: Some("bot-a".to_owned()),
             },
             ActivityEvent {
                 seq: 2,
                 label: "Other bot working".to_owned(),
                 task_id: Some("task-b".to_owned()),
+                bot_id: Some("bot-b".to_owned()),
             },
             ActivityEvent {
                 seq: 3,
                 label: "Router: reading your message".to_owned(),
                 task_id: None,
+                bot_id: Some("bot-b".to_owned()),
             },
         ];
         let bot_tasks = HashSet::from(["task-a".to_owned()]);
-        let kept = activity_for_bot(&events, &bot_tasks);
+        let kept = activity_for_bot(&events, "bot-a", &bot_tasks);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].label, "Working");
         assert_eq!(kept[0].task_id.as_deref(), Some("task-a"));
+    }
+
+    #[test]
+    fn activity_for_bot_keeps_untasked_router_lines_for_that_bot() {
+        let events = vec![
+            ActivityEvent {
+                seq: 1,
+                label: "Router: reading your message".to_owned(),
+                task_id: None,
+                bot_id: Some("bot-a".to_owned()),
+            },
+            ActivityEvent {
+                seq: 2,
+                label: "Other bot thinking".to_owned(),
+                task_id: None,
+                bot_id: Some("bot-b".to_owned()),
+            },
+            ActivityEvent {
+                seq: 3,
+                label: "Working".to_owned(),
+                task_id: Some("task-a".to_owned()),
+                bot_id: Some("bot-a".to_owned()),
+            },
+        ];
+        let bot_tasks = HashSet::from(["task-a".to_owned()]);
+        let kept = activity_for_bot(&events, "bot-a", &bot_tasks);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].label, "Router: reading your message");
+        assert_eq!(kept[0].task_id, None);
+        assert_eq!(kept[1].label, "Working");
     }
 }
 
