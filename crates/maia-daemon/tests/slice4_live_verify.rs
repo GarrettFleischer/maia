@@ -148,7 +148,6 @@ fn live_slice4_summary_in_one_promoter_call() {
     ];
     let packed = pack_context_packet(
         ContextPacketInput {
-            card: "",
             conclusions: &format!("The owner prefers oat milk for slice4 {stamp}."),
             summary: &summary,
             recent: &recent,

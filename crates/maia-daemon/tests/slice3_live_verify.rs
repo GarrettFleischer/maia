@@ -88,7 +88,6 @@ fn live_slice3_packet_budget_and_bot_isolation() {
     }];
     let packed_b = pack_context_packet(
         ContextPacketInput {
-            card: "",
             conclusions: "Garrett prefers oat milk.",
             summary: "",
             recent: &b_history,
@@ -132,7 +131,6 @@ fn live_slice3_packet_budget_and_bot_isolation() {
         .collect();
     let packed_long = pack_context_packet(
         ContextPacketInput {
-            card: "Name: Garrett",
             conclusions: "Garrett prefers oat milk.",
             summary: "",
             recent: &long_recent,
@@ -145,7 +143,7 @@ fn live_slice3_packet_budget_and_bot_isolation() {
         "long chat packet over budget: {}",
         packed_long.total_tokens
     );
-    assert_eq!(packed_long.card, "Name: Garrett");
+    assert_eq!(packed_long.conclusions, "Garrett prefers oat milk.");
     assert!(
         packed_long.recent.len() < long_recent.len(),
         "budget must drop older turns"

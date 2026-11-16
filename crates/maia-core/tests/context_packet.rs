@@ -2,8 +2,8 @@
 
 use maia_core::task_loop::estimate_tokens;
 use maia_core::thread_cache::{
-    CONTEXT_PACKET_BUDGET, CONTEXT_PACKET_CARD_CAP, CONTEXT_PACKET_CONCLUSIONS_CAP, ContextPacket,
-    ContextPacketInput, PacketRole, PacketTurn, pack_context_packet,
+    CONTEXT_PACKET_BUDGET, CONTEXT_PACKET_CONCLUSIONS_CAP, ContextPacket, ContextPacketInput,
+    PacketRole, PacketTurn, pack_context_packet,
 };
 
 fn tokens(text: &str) -> u32 {
@@ -24,8 +24,7 @@ fn long_line(label: &str, token_target: u32) -> String {
 }
 
 #[test]
-fn packed_suffix_stays_within_budget_and_keeps_the_card() {
-    let card = long_line("card", 180);
+fn packed_suffix_stays_within_budget_and_keeps_newer_turns() {
     let conclusions = long_line("claim", 400);
     let summary = long_line("summary", 600);
     let recent = vec![
@@ -36,7 +35,6 @@ fn packed_suffix_stays_within_budget_and_keeps_the_card() {
     ];
     let packed = pack_context_packet(
         ContextPacketInput {
-            card: &card,
             conclusions: &conclusions,
             summary: &summary,
             recent: &recent,
@@ -49,15 +47,6 @@ fn packed_suffix_stays_within_budget_and_keeps_the_card() {
         "over budget: {} > {}",
         packed.total_tokens,
         CONTEXT_PACKET_BUDGET
-    );
-    assert!(
-        !packed.card.is_empty(),
-        "card must survive packing: {packed:?}"
-    );
-    assert!(
-        tokens(&packed.card) <= CONTEXT_PACKET_CARD_CAP,
-        "card over cap: {}",
-        tokens(&packed.card)
     );
     assert!(
         tokens(&packed.conclusions) <= CONTEXT_PACKET_CONCLUSIONS_CAP,
@@ -86,7 +75,6 @@ fn packed_suffix_stays_within_budget_and_keeps_the_card() {
 fn empty_summary_still_yields_a_valid_packet() {
     let packed = pack_context_packet(
         ContextPacketInput {
-            card: "Name: Garrett",
             conclusions: "Garrett prefers oat milk.",
             summary: "",
             recent: &[
@@ -98,11 +86,11 @@ fn empty_summary_still_yields_a_valid_packet() {
         tokens,
     );
     assert!(packed.summary.is_empty());
-    assert_eq!(packed.card, "Name: Garrett");
     assert_eq!(packed.conclusions, "Garrett prefers oat milk.");
     assert_eq!(packed.recent.len(), 2);
     assert!(packed.total_tokens <= CONTEXT_PACKET_BUDGET);
     assert!(!packed.memory_block().is_empty());
+    assert!(!packed.memory_block().contains("## card"));
 }
 
 #[test]
@@ -113,7 +101,6 @@ fn same_inputs_are_byte_stable() {
         turn(PacketRole::User, "gamma"),
     ];
     let input = ContextPacketInput {
-        card: "card line",
         conclusions: "conclusion line",
         summary: "summary line",
         recent: &recent,
@@ -126,9 +113,8 @@ fn same_inputs_are_byte_stable() {
 }
 
 #[test]
-fn card_cap_and_conclusion_cap_match_section_three() {
+fn conclusion_cap_matches_section_three() {
     assert_eq!(CONTEXT_PACKET_BUDGET, 2_000);
-    assert_eq!(CONTEXT_PACKET_CARD_CAP, 200);
     assert_eq!(CONTEXT_PACKET_CONCLUSIONS_CAP, 500);
     let _unused: fn(ContextPacketInput<'_>, fn(&str) -> u32) -> ContextPacket =
         pack_context_packet;

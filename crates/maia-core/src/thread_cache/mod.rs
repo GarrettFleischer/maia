@@ -19,8 +19,8 @@ pub use compact::{
 };
 pub use compile::compile_prompt;
 pub use context_packet::{
-    CONTEXT_PACKET_BUDGET, CONTEXT_PACKET_CARD_CAP, CONTEXT_PACKET_CONCLUSIONS_CAP, ContextPacket,
-    ContextPacketInput, PacketRole, PacketTurn, pack_context_packet,
+    CONTEXT_PACKET_BUDGET, CONTEXT_PACKET_CONCLUSIONS_CAP, ContextPacket, ContextPacketInput,
+    PacketRole, PacketTurn, pack_context_packet,
 };
 pub use recall::{
     CompiledWithRecall, RecallLineage, RecallPackPolicy, append_recall, reuse_recall,

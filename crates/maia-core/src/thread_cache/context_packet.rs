@@ -1,12 +1,11 @@
 //! Non-durable, budgeted context packet for each Super Agent turn.
 //!
-//! Card, conclusions, session summary, and recent messages share one token
-//! budget. The router contract and tool catalog sit outside this packet.
+//! Conclusions, session summary, and recent messages share one token budget.
+//! The router contract and tool catalog sit outside this packet.
+//! Peer-card injection was dropped (Honcho slice 5 / Run 72).
 
 /// Total token budget for the packet (four characters per token in production).
 pub const CONTEXT_PACKET_BUDGET: u32 = 2_000;
-/// Soft cap for the peer card block inside the packet.
-pub const CONTEXT_PACKET_CARD_CAP: u32 = 200;
 /// Soft cap for ranked conclusions inside the packet.
 pub const CONTEXT_PACKET_CONCLUSIONS_CAP: u32 = 500;
 
@@ -31,11 +30,9 @@ pub struct PacketTurn {
 /// Explicit packing inputs. The token estimator is a separate function argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextPacketInput<'a> {
-    /// Owner peer card lines (may be empty until the card slice lands).
-    pub card: &'a str,
     /// Ranked conclusion block (may be empty).
     pub conclusions: &'a str,
-    /// Rolling session summary (may be empty until the summary slice lands).
+    /// Rolling session summary (may be empty).
     pub summary: &'a str,
     /// Recent transcript turns, oldest first and newest last.
     pub recent: &'a [PacketTurn],
@@ -46,26 +43,21 @@ pub struct ContextPacketInput<'a> {
 /// Budgeted packet parts ready for the orchestrator to place on the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextPacket {
-    /// Card text that fit the card cap and overall budget.
-    pub card: String,
     /// Conclusions text that fit the conclusions cap and overall budget.
     pub conclusions: String,
     /// Summary text that fit its share of the narrative remainder.
     pub summary: String,
     /// Recent turns kept newest-last after dropping oldest over budget.
     pub recent: Vec<PacketTurn>,
-    /// Sum of estimated tokens for card, conclusions, summary, and recent turns.
+    /// Sum of estimated tokens for conclusions, summary, and recent turns.
     pub total_tokens: u32,
 }
 
 impl ContextPacket {
-    /// Renders the non-transcript memory block (card, conclusions, summary).
+    /// Renders the non-transcript memory block (conclusions, summary).
     #[must_use]
     pub fn memory_block(&self) -> String {
         let mut parts = Vec::new();
-        if !self.card.is_empty() {
-            parts.push(format!("## card\n{}", self.card.trim_end()));
-        }
         if !self.conclusions.is_empty() {
             parts.push(self.conclusions.trim_end().to_owned());
         }
@@ -76,28 +68,23 @@ impl ContextPacket {
     }
 }
 
-/// Packs card, conclusions, summary, and recent turns into one budgeted packet.
+/// Packs conclusions, summary, and recent turns into one budgeted packet.
 ///
-/// Over-budget recent turns are dropped from the front. The card is kept when
-/// any budget remains. Empty summary still yields a valid packet.
+/// Over-budget recent turns are dropped from the front. Empty summary still
+/// yields a valid packet.
 #[must_use]
 pub fn pack_context_packet(
     input: ContextPacketInput<'_>,
     estimate_tokens: fn(&str) -> u32,
 ) -> ContextPacket {
-    let card = take_fitting(input.card, CONTEXT_PACKET_CARD_CAP, input.budget, estimate_tokens);
-    let mut used = estimate_tokens(&card);
-    let conclusions_budget = input
-        .budget
-        .saturating_sub(used)
-        .min(CONTEXT_PACKET_CONCLUSIONS_CAP);
+    let conclusions_budget = input.budget.min(CONTEXT_PACKET_CONCLUSIONS_CAP);
     let conclusions = take_fitting(
         input.conclusions,
         conclusions_budget,
         conclusions_budget,
         estimate_tokens,
     );
-    used = used.saturating_add(estimate_tokens(&conclusions));
+    let mut used = estimate_tokens(&conclusions);
 
     let narrative = input.budget.saturating_sub(used);
     let summary_cap = narrative.saturating_mul(2) / 5; // ~40% of narrative remainder
@@ -109,7 +96,6 @@ pub fn pack_context_packet(
     used = used.saturating_add(recent_cost(&recent, estimate_tokens));
 
     ContextPacket {
-        card,
         conclusions,
         summary,
         recent,
