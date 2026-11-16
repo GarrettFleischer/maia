@@ -33,8 +33,8 @@ pub use http::{
 pub use inspector::{PackedRecall, RecallKind, RecallLine};
 pub use live_reply::{LiveReplyBoard, attach_live_reply};
 pub use manager_wake::{
-    ManagerWakeState, cost_day_key, load_wake_state, parse_wake_state, roll_cost_day,
-    save_wake_state, wake_path_beside, wake_state_json,
+    ManagerWakeState, load_wake_state, parse_wake_state, save_wake_state, wake_path_beside,
+    wake_state_json,
 };
 pub use mcp_settings::{MemoryMcpSecretStore, NativeMcpSecretStore};
 pub use model_connection::{

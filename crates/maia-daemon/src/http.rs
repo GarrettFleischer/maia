@@ -1469,13 +1469,10 @@ fn run_scheduled_wake<R: RouterPort>(
     wake_state.last_wake_at = disk.last_wake_at;
     wake_state.last_fingerprint = disk.last_fingerprint;
     wake_state.learned = disk.learned;
-    wake_state.cost_day = disk.cost_day;
-    wake_state.model_calls_today = disk.model_calls_today;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    crate::manager_wake::roll_cost_day(wake_state, now);
     let attention_nudge = actor.host.take_wake_nudge();
     if !wake_interval_allows(
         wake_state.interval_secs,
