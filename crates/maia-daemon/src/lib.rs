@@ -17,6 +17,7 @@ mod mcp_settings;
 mod memory_tools;
 mod model_connection;
 mod orchestrator;
+mod skill_tools;
 mod promoter_env;
 mod promotion;
 mod remote;
@@ -41,6 +42,10 @@ pub use manager_wake::{
 pub use ceo_secrets::CeoSecretSkin;
 pub use mcp_settings::{MemoryMcpSecretStore, NativeMcpSecretStore};
 pub use memory_tools::{MemoryToolCall, apply_memory_tool, parse_memory_tool};
+pub use skill_tools::{
+    SkillToolCall, apply_skill_tool, catalog_token_estimate, format_skills_catalog,
+    load_catalog_block, parse_skill_tool, skill_tool_defs,
+};
 pub use model_connection::{
     PublicModelConnection, parse_reasoning_effort, router_from_connection,
     streaming_router_from_connection,

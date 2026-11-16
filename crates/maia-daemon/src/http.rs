@@ -1146,6 +1146,10 @@ enum ActorCall {
         request: maia_store::BotRequest,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
+    Skills {
+        request: maia_store::SkillRequest,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
     SaveAttachment {
         write: maia_store::AttachmentWrite,
         reply: oneshot::Sender<Result<Value, ApiError>>,
@@ -1901,6 +1905,15 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
                 .store()
                 .bots(request)
                 .map(bot_response_json)
+                .map_err(map_bot);
+            let _ = reply.send(saved);
+        }
+        ActorCall::Skills { request, reply } => {
+            let saved = actor
+                .host
+                .store()
+                .skills(request)
+                .map(skill_response_json)
                 .map_err(map_bot);
             let _ = reply.send(saved);
         }
@@ -2748,6 +2761,11 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
             "/brain/facts/{fact_id}",
             patch(patch_fact).delete(delete_fact),
         )
+        .route("/skills", get(get_skills))
+        .route(
+            "/skills/{skill_id}",
+            get(get_skill).delete(delete_skill),
+        )
         .fallback(unknown_api)
         .layer(DefaultBodyLimit::max(MAX_HTTP_BODY));
     let uploads = Router::new()
@@ -3056,6 +3074,64 @@ fn bot_response_json(response: maia_store::BotResponse) -> Value {
         | maia_store::BotResponse::Provenance(_)
         | maia_store::BotResponse::Transcript(_) => serde_json::json!({ "status": "stored" }),
     }
+}
+
+fn skill_json(skill: &maia_store::SkillRecord) -> Value {
+    serde_json::json!({
+        "skill_id": skill.skill_id,
+        "title": skill.title,
+        "when_to_use": skill.when_to_use,
+        "body": skill.body,
+        "project": skill.project,
+        "max_tokens": skill.max_tokens,
+        "updated_at": skill.updated_at,
+    })
+}
+
+fn skill_response_json(response: maia_store::SkillResponse) -> Value {
+    match response {
+        maia_store::SkillResponse::Skill(skill) => skill_json(&skill),
+        maia_store::SkillResponse::List(skills) => serde_json::json!({
+            "skills": skills.iter().map(skill_json).collect::<Vec<_>>(),
+            "catalog_tokens": crate::skill_tools::catalog_token_estimate(
+                &crate::skill_tools::format_skills_catalog(&skills, crate::skill_tools::MAX_CATALOG_CHARS),
+            ),
+        }),
+        maia_store::SkillResponse::Empty => serde_json::json!({ "status": "deleted" }),
+    }
+}
+
+async fn get_skills(State(state): State<AppState>) -> Response {
+    finish(
+        ask(&state, |reply| ActorCall::Skills {
+            request: maia_store::SkillRequest::List,
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn get_skill(State(state): State<AppState>, Path(skill_id): Path<String>) -> Response {
+    finish(
+        ask(&state, |reply| ActorCall::Skills {
+            request: maia_store::SkillRequest::Get { skill_id },
+            reply,
+        })
+        .await,
+    )
+}
+
+async fn delete_skill(State(state): State<AppState>, Path(skill_id): Path<String>) -> Response {
+    finish(
+        ask(&state, move |reply| ActorCall::Skills {
+            request: maia_store::SkillRequest::Delete {
+                skill_id,
+                now: unix_now(),
+            },
+            reply,
+        })
+        .await,
+    )
 }
 
 async fn task(State(state): State<AppState>, Path(task_id): Path<String>) -> Response {
