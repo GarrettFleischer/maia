@@ -342,7 +342,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If a check fails, spawn_task with a corrected brief — do not continue_task or retry_task on a completed worker, do not ask_user, and do not Done yet. When verification passes, send one Done message_user immediately this wake that starts with Done — and restates each outcome=. Do not defer close-out. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
+            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If a check fails, spawn_task with a corrected brief — do not continue_task or retry_task on a completed worker, do not ask_user, and do not Done yet. When verification passes, send one Done message_user immediately this wake that starts with Done — and restates each outcome=. Never put a secret value, password, token, or vault contents into Done — name the secret, do not echo its value (even if outcome= shows it). Do not defer close-out. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -846,7 +846,8 @@ pub fn distinctive_token(text: &str) -> String {
 /// One-line Done body for a finished wake, or `"the goal"` when nothing useful is known.
 #[must_use]
 pub fn finished_close_out_summary(snap: &WakeSnapshot) -> String {
-    snap.workers
+    let raw = snap
+        .workers
         .iter()
         .find(|worker| worker.status == "completed")
         .map(|worker| {
@@ -860,7 +861,96 @@ pub fn finished_close_out_summary(snap: &WakeSnapshot) -> String {
             }
         })
         .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| "the goal".to_owned())
+        .unwrap_or_else(|| "the goal".to_owned());
+    let secrets = ceo_supplied_secret_values(&snap.recent_ceo_lines);
+    mask_close_out_secrets(&raw, &secrets)
+}
+
+/// Secret values the CEO just supplied in recent owner chat (after ` is ` / quotes).
+///
+/// Honest leaf: lines in, value strings out. Does not treat long ALL_CAPS names as values.
+#[must_use]
+pub fn ceo_supplied_secret_values(recent_ceo_lines: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in recent_ceo_lines {
+        let body = line
+            .strip_prefix("user:")
+            .or_else(|| line.strip_prefix("User:"))
+            .unwrap_or(line)
+            .trim();
+        if body.is_empty() {
+            continue;
+        }
+        push_quoted_secret_values(body, &mut out);
+        push_is_clause_secret_value(body, &mut out);
+    }
+    out.sort_by_key(|value| std::cmp::Reverse(value.chars().count()));
+    out.dedup();
+    out
+}
+
+fn push_quoted_secret_values(body: &str, out: &mut Vec<String>) {
+    for (open, close) in [('"', '"'), ('\'', '\'')] {
+        let mut rest = body;
+        while let Some(start) = rest.find(open) {
+            let after = &rest[start + open.len_utf8()..];
+            let Some(end) = after.find(close) else {
+                break;
+            };
+            let value = after[..end].trim();
+            if secret_value_candidate(value) {
+                out.push(value.to_owned());
+            }
+            rest = &after[end + close.len_utf8()..];
+        }
+    }
+}
+
+fn push_is_clause_secret_value(body: &str, out: &mut Vec<String>) {
+    let lower = body.to_ascii_lowercase();
+    let mut search_from = 0usize;
+    while let Some(rel) = lower[search_from..].find(" is ") {
+        let abs = search_from + rel;
+        let after = body[abs + 4..].trim_start();
+        let token = after
+            .split(|ch: char| ch.is_whitespace() || matches!(ch, '.' | ',' | ';' | '!' | '?'))
+            .next()
+            .unwrap_or("")
+            .trim_matches(|ch: char| matches!(ch, '"' | '\'' | '`'));
+        if secret_value_candidate(token) {
+            out.push(token.to_owned());
+        }
+        search_from = abs + 4;
+    }
+}
+
+fn secret_value_candidate(value: &str) -> bool {
+    let chars = value.chars().count();
+    if chars < 6 || chars > 128 {
+        return false;
+    }
+    // Secret *names* are often ALL_CAPS with underscores; values usually are not.
+    let letters: Vec<char> = value.chars().filter(|ch| ch.is_ascii_alphabetic()).collect();
+    if !letters.is_empty() && letters.iter().all(|ch| ch.is_ascii_uppercase()) {
+        return false;
+    }
+    true
+}
+
+/// Replaces each known secret value in close-out text with `[redacted]`.
+#[must_use]
+pub fn mask_close_out_secrets(text: &str, secrets: &[String]) -> String {
+    let mut ordered: Vec<&str> = secrets
+        .iter()
+        .map(String::as_str)
+        .filter(|secret| !secret.is_empty())
+        .collect();
+    ordered.sort_by_key(|secret| std::cmp::Reverse(secret.chars().count()));
+    let mut out = text.to_owned();
+    for secret in ordered {
+        out = out.replace(secret, "[redacted]");
+    }
+    out
 }
 
 /// Safety cap only: waiting → one ask_user; silent finished → one Done; skip if already in chat.
@@ -926,9 +1016,9 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
     if snap.completed_unopened > 0 && attention_clear && !closed_out && !recovering {
         let summary = finished_close_out_summary(snap);
         if !recent_ceo_covers(snap, &summary, CeoCoverKind::CloseOut) {
-            out.push(WakeAction::MessageUser {
-                text: format!("Done — {summary}"),
-            });
+            let secrets = ceo_supplied_secret_values(&snap.recent_ceo_lines);
+            let text = mask_close_out_secrets(&format!("Done — {summary}"), &secrets);
+            out.push(WakeAction::MessageUser { text });
         }
     }
 

@@ -417,6 +417,107 @@ fn looks_like_close_out_rejects_status_chatter() {
 }
 
 #[test]
+fn ceo_supplied_secret_values_extract_is_clause_not_secret_name() {
+    let lines = vec![
+        "assistant: Need RUN65_CEO_SECRET from the vault?".to_owned(),
+        "user: The vault secret RUN65_CEO_SECRET is run65-ok-n0techo. Continue.".to_owned(),
+    ];
+    let values = maia_core::manager::ceo_supplied_secret_values(&lines);
+    assert!(
+        values.iter().any(|v| v == "run65-ok-n0techo"),
+        "must extract the value after ' is ': {values:?}"
+    );
+    assert!(
+        !values.iter().any(|v| v == "RUN65_CEO_SECRET" || v == "run65_ceo_secret"),
+        "must not treat the secret name as a value: {values:?}"
+    );
+}
+
+#[test]
+fn mask_close_out_secrets_redacts_known_values_keeps_name() {
+    let masked = maia_core::manager::mask_close_out_secrets(
+        "Done — obtained RUN65_CEO_SECRET (run65-ok-n0techo) and finished.",
+        &["run65-ok-n0techo".to_owned()],
+    );
+    assert!(
+        masked.contains("RUN65_CEO_SECRET"),
+        "secret name must remain: {masked}"
+    );
+    assert!(
+        !masked.contains("run65-ok-n0techo"),
+        "secret value must be masked: {masked}"
+    );
+    assert!(
+        masked.contains("[redacted]"),
+        "mask marker required: {masked}"
+    );
+}
+
+#[test]
+fn enforce_ceo_moments_masks_secret_in_forced_done() {
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        recent_ceo_lines: vec![
+            "user: The vault secret RUN65_CEO_SECRET is run65-ok-n0techo.".to_owned(),
+        ],
+        workers: vec![WorkerBrief {
+            task_id: "t1".to_owned(),
+            title: "read vault".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: None,
+            output_tail: "got run65-ok-n0techo from vault".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let actions = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    let done = actions.iter().find_map(|action| match action {
+        WakeAction::MessageUser { text } => Some(text.as_str()),
+        _ => None,
+    });
+    let done = done.expect("forced Done");
+    assert!(
+        done.starts_with("Done"),
+        "must force a Done close-out: {done}"
+    );
+    assert!(
+        !done.contains("run65-ok-n0techo"),
+        "forced Done must not echo CEO-supplied secret: {done}"
+    );
+}
+
+#[test]
+fn wake_brief_finished_forbids_echoing_secret_values() {
+    use maia_core::manager::WorkerBrief;
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "t1".to_owned(),
+            title: "read vault".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: None,
+            output_tail: "ok".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    let lower = brief.to_ascii_lowercase();
+    assert!(
+        lower.contains("finished (close-out)"),
+        "brief must include FINISHED close-out: {brief}"
+    );
+    assert!(
+        lower.contains("secret") && (lower.contains("never") || lower.contains("do not")),
+        "FINISHED must forbid echoing secret values: {brief}"
+    );
+}
+
+#[test]
 fn finished_wake_keeps_spawn_for_verify_recover_and_does_not_force_done() {
     // A worker can finish "success" while the artifact fails the goal check.
     // Manager must be allowed to hire again; safety cap must not overwrite with Done.

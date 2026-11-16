@@ -5249,6 +5249,140 @@ fn worker_attention_phases_set_wake_nudge() {
 }
 
 #[test]
+fn worker_silent_sets_wake_nudge() {
+    let mut harness = Harness::open_model("wake-nudge-silent", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    // Worker model fails with no recoverable tool → worker_silent / Failed orphan.
+    harness
+        .router
+        .push_failure(RouterError::Server { code: 502 });
+    harness.router.push_failure(RouterError::Protocol {
+        detail: "stop".to_owned(),
+    });
+    let _ = wait(harness.host().handle_user_message("Do silent work")).expect("run");
+    assert!(
+        harness.host().take_wake_nudge(),
+        "silent/orphan worker failure must nudge manager wake"
+    );
+}
+
+#[test]
+fn owner_message_while_waiting_sets_wake_nudge() {
+    // Two waiters → sole_waiting remaps nothing. Owner chat must still nudge so a wake
+    // can continue_task without burning the full interval.
+    let mut harness = Harness::open_model("wake-nudge-owner-waiting", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need secret A"}"#);
+    let first = wait(harness.host().handle_user_message("Park on secret A")).expect("first");
+    let first_id = first.task.expect("first task");
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need secret B"}"#);
+    let second = wait(harness.host().handle_user_message(
+        "Hire one worker NOW while the other is waiting. Park on secret B.",
+    ))
+    .expect("second");
+    let second_id = second.task.expect("second task");
+    assert_ne!(first_id.0, second_id.0, "need two distinct waiters");
+    assert!(matches!(
+        harness.host().phase(&first_id),
+        Some(TaskPhase::WaitingForUser { .. })
+    ));
+    assert!(matches!(
+        harness.host().phase(&second_id),
+        Some(TaskPhase::WaitingForUser { .. })
+    ));
+    let _ = harness.host().take_wake_nudge();
+    harness.router.push_tool("message_user", r#"{"message":"Noted."}"#);
+    let _ = wait(harness.host().handle_user_message(
+        "The vault secret for A is run65-ok-n0techo.",
+    ))
+    .expect("owner reply");
+    assert!(
+        harness.host().take_wake_nudge(),
+        "owner message while workers are waiting must nudge manager wake"
+    );
+}
+
+#[test]
+fn wake_close_out_masks_ceo_supplied_secret_value() {
+    let mut harness = Harness::open_model("close-mask-secret", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("waiting", r#"{"message":"Need RUN65_CEO_SECRET"}"#);
+    let outcome = wait(harness.host().handle_user_message("Open the vault")).expect("hire");
+    let task = outcome.task.expect("task");
+    let _ = harness.host().take_wake_nudge();
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("read ok"));
+    harness
+        .router
+        .push_tool("success", &success_arguments("read ok"));
+    let _ = wait(harness.host().handle_user_message(
+        "The vault secret RUN65_CEO_SECRET is run65-ok-n0techo.",
+    ))
+    .expect("ceo reply");
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Completed { .. })),
+        "worker should finish after CEO reply"
+    );
+    let before = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Transcript {
+            bot_id: "maia".to_owned(),
+        })
+        .expect("transcript")
+    {
+        BotResponse::Transcript(rows) => rows.len(),
+        other => panic!("transcript {other:?}"),
+    };
+    let (messaged, _) = harness.host().apply_wake_actions(&[
+        maia_core::manager::WakeAction::MessageUser {
+            text: "Done — stored RUN65_CEO_SECRET as run65-ok-n0techo.".to_owned(),
+        },
+    ]);
+    assert!(messaged, "close-out must post");
+    let posted = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Transcript {
+            bot_id: "maia".to_owned(),
+        })
+        .expect("transcript")
+    {
+        BotResponse::Transcript(rows) => rows
+            .into_iter()
+            .skip(before)
+            .map(|row| row.body)
+            .collect::<Vec<_>>(),
+        other => panic!("transcript {other:?}"),
+    };
+    assert_eq!(posted.len(), 1, "one close-out: {posted:?}");
+    assert!(
+        posted[0].contains("RUN65_CEO_SECRET"),
+        "may name the secret: {}",
+        posted[0]
+    );
+    assert!(
+        !posted[0].contains("run65-ok-n0techo"),
+        "must mask CEO-supplied secret value: {}",
+        posted[0]
+    );
+    assert!(
+        posted[0].contains("[redacted]"),
+        "mask marker required: {}",
+        posted[0]
+    );
+}
+
+#[test]
 fn wake_close_out_marks_only_one_finished_goal() {
     let mut harness = Harness::open_model("close-one-finished", long_supply());
     harness.router.push_tool("spawn_task", "{}");

@@ -2107,7 +2107,7 @@ fn route_tools_json() -> String {
         ),
         terminal_tool(
             "ask_user",
-            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real owner preference you cannot choose). Do what you can first; as soon as that decision blocks progress, ask immediately — do not defer. When the wake brief shows CEO_WAITING, you MUST use this in the same wake (not message_user, not silence, not a later wake). One question only; skip if RECENT_CEO_CHAT already asked. Never ask about things you can decide yourself. Never paste worker output into chat. Workers never ask the CEO directly.",
+            "Ask the CEO one clear decision question (credentials, money, irreversible or external action, or a real owner preference you cannot choose). Do what you can first; as soon as that decision blocks progress, ask immediately — do not defer. When the wake brief shows CEO_WAITING, you MUST use this in the same wake (not message_user, not silence, not a later wake). One question only; skip if RECENT_CEO_CHAT already asked. Never ask about things you can decide yourself. Never paste worker output into chat. Never put a secret value into the question text — name the secret, do not echo a value. Workers never ask the CEO directly.",
         ),
         terminal_tool(
             "record_learning",
@@ -3999,11 +3999,21 @@ impl<R: Router> Orchestrator<R> {
                     }
                 }
                 WakeAction::MessageUser { text } | WakeAction::AskUser { text } => {
-                    if self.note_router(text).is_ok() {
+                    let posted = if matches!(action, WakeAction::MessageUser { .. })
+                        && maia_core::manager::looks_like_close_out(text)
+                    {
+                        let snap = self.wake_snapshot_for(&self.turn_bot);
+                        let secrets =
+                            maia_core::manager::ceo_supplied_secret_values(&snap.recent_ceo_lines);
+                        maia_core::manager::mask_close_out_secrets(text, &secrets)
+                    } else {
+                        text.clone()
+                    };
+                    if self.note_router(&posted).is_ok() {
                         messaged = true;
                         // Only a real close-out drops finished goals; status chatter must not.
                         if matches!(action, WakeAction::MessageUser { .. })
-                            && maia_core::manager::looks_like_close_out(text)
+                            && maia_core::manager::looks_like_close_out(&posted)
                         {
                             self.close_unopened_completed_for_wake();
                         }
@@ -5011,6 +5021,11 @@ impl<R: Router> Orchestrator<R> {
         // Bot id must be known before activity, history, and also_happening, or a
         // switch leaks the previous Super Agent into this prompt / Working strip.
         self.turn_bot = self.message_bot(&message.0);
+        // Owner chat while a worker is waiting: nudge so a wake can continue_task even
+        // when this turn misses continue (do not burn the full wake interval).
+        if self.bot_has_waiting_worker(&self.turn_bot) {
+            self.request_wake_nudge();
+        }
         self.record_activity("Router: reading your message", None);
         if !attachments.is_empty() {
             let ids = attachments
@@ -6587,6 +6602,13 @@ impl<R: Router> Orchestrator<R> {
         Some(first)
     }
 
+    /// True when this Super Agent has at least one worker waiting on the CEO.
+    fn bot_has_waiting_worker(&self, bot_id: &str) -> bool {
+        self.phases.iter().any(|(task, phase)| {
+            self.task_bot(task) == bot_id && matches!(phase, TaskPhase::WaitingForUser { .. })
+        })
+    }
+
     fn work_parent(
         &mut self,
         task: &TaskId,
@@ -7160,6 +7182,7 @@ impl<R: Router> Orchestrator<R> {
             );
         }
         self.clear_live_activity(task);
+        self.request_wake_nudge();
         match notice {
             OwnerNotice::Relay => {
                 let _ = self.note_router(WORKER_SILENT);
