@@ -732,7 +732,10 @@ describe('RouterConversation', () => {
         ]}
       />,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'New messages' }))
+    const jumpLatest = screen.getByRole('button', { name: 'New messages' })
+    expect(jumpLatest).toHaveClass('maia-icon-btn')
+    expect(jumpLatest.querySelector('.maia-jump-latest-icon')).not.toBeNull()
+    fireEvent.click(jumpLatest)
     expect(screen.queryByRole('button', { name: 'New messages' })).not.toBeInTheDocument()
     expect(transcript.scrollTop).toBe(400)
   })

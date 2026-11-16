@@ -1593,13 +1593,30 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px;
-  padding: 0 12px 8px;
+  gap: 6px;
+  padding: 0 12px 4px;
 }
 
-.maia-jump-new {
-  min-height: 44px;
-  min-width: 44px;
+.maia-jump-row .maia-icon-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.maia-jump-new-icon,
+.maia-jump-latest-icon {
+  width: 8px;
+  height: 8px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  margin-top: -2px;
+}
+
+.maia-jump-new-icon {
+  transform: rotate(135deg);
+  margin-top: 2px;
 }
 
 .maia-new-line {

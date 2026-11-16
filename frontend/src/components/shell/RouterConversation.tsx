@@ -589,16 +589,24 @@ export function RouterConversation({
           {placed.unseenIndex !== null ? (
             <button
               type="button"
-              className="maia-btn maia-jump-new"
+              className="maia-icon-btn maia-jump-new"
               data-testid="jump-new"
+              aria-label="Jump to new"
+              title="Jump to new"
               onClick={jumpToNew}
             >
-              New
+              <span className="maia-jump-new-icon" aria-hidden="true" />
             </button>
           ) : null}
           {latestOffer ? (
-            <button type="button" className="maia-btn maia-latest" onClick={jumpToLatest}>
-              New messages
+            <button
+              type="button"
+              className="maia-icon-btn maia-latest"
+              aria-label="New messages"
+              title="New messages"
+              onClick={jumpToLatest}
+            >
+              <span className="maia-jump-latest-icon" aria-hidden="true" />
             </button>
           ) : null}
         </div>
