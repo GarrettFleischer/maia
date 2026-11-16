@@ -1953,6 +1953,47 @@ fn request_id_exhaustion_after_owner_commit_is_admitted_processing_failure() {
 }
 
 #[test]
+fn processing_note_for_missing_bot_does_not_land_in_maia() {
+    // BindMessage fails when next_bot is gone (delete-before-route race). The
+    // status note must not fall back into Maia's transcript.
+    let mut ids = supply();
+    ids.requests.clear();
+    let mut harness = Harness::open("orphan-note-not-maia", ids);
+    harness.host().set_next_bot("throwaway-deleted");
+
+    let outcome = wait(harness.host().handle_user_message_admission(USER_TEXT))
+        .expect("owner message was admitted");
+    assert!(matches!(
+        outcome,
+        MessageOutcome::ProcessingFailed {
+            message: MessageId(ref id),
+            ..
+        } if id == "m-user"
+    ));
+
+    let maia_bodies = match harness
+        .host()
+        .store()
+        .bots(BotRequest::Transcript {
+            bot_id: "maia".to_owned(),
+        })
+        .expect("maia transcript")
+    {
+        BotResponse::Transcript(rows) => rows
+            .into_iter()
+            .map(|row| row.body)
+            .collect::<Vec<_>>(),
+        other => panic!("expected transcript, got {other:?}"),
+    };
+    assert!(
+        !maia_bodies.iter().any(|body| {
+            body.contains("Your message was saved, but that turn could not finish")
+        }),
+        "processing note must not bind to Maia when the turn's bot is gone: {maia_bodies:?}"
+    );
+}
+
+#[test]
 fn router_note_write_failure_is_still_admitted() {
     let mut ids = supply();
     ids.messages.truncate(1);

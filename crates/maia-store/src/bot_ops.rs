@@ -890,6 +890,8 @@ fn task_bot(connection: &Connection, task_id: &str) -> Result<String, StoreError
 }
 
 fn message_bot(connection: &Connection, message_id: &str) -> Result<String, StoreError> {
+    // Unbound rows stay empty. Callers must not invent Maia — that spills orphaned
+    // turns into Garrett's chat when a throwaway bot was deleted mid-route.
     Ok(connection
         .query_row(
             "SELECT bot_id FROM message_bots WHERE message_id = ?1",
@@ -897,7 +899,7 @@ fn message_bot(connection: &Connection, message_id: &str) -> Result<String, Stor
             |row| row.get(0),
         )
         .optional()?
-        .unwrap_or_else(|| "maia".to_owned()))
+        .unwrap_or_default())
 }
 
 fn upsert_work(

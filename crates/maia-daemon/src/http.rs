@@ -1452,11 +1452,20 @@ fn restore_pending_inbox<R: RouterPort>(actor: &Actor<R>) -> VecDeque<QueuedChat
     };
     pending
         .into_iter()
-        .map(|(operation, message, text)| QueuedChat {
-            operation: SubmissionId(operation),
-            message: maia_core::super_agent::MessageId(message.clone()),
-            text,
-            attachments: staged_for_message(actor, &message),
+        .map(|(operation, message, text)| {
+            let bot_id = match actor.host.store().bots(maia_store::BotRequest::MessageBot {
+                message_id: message.clone(),
+            }) {
+                Ok(maia_store::BotResponse::Text(bot)) if !bot.trim().is_empty() => bot,
+                _ => "maia".to_owned(),
+            };
+            QueuedChat {
+                operation: SubmissionId(operation),
+                message: maia_core::super_agent::MessageId(message.clone()),
+                text,
+                attachments: staged_for_message(actor, &message),
+                bot_id,
+            }
         })
         .collect()
 }
@@ -1612,10 +1621,12 @@ where
     R: RouterPort + Clone + Send + 'static,
 {
     let operation = queued.operation.clone();
-    let mut live = match actor
-        .host
-        .open_route(queued.message, &queued.text, &queued.attachments)
-    {
+    let mut live = match actor.host.open_route(
+        queued.message,
+        &queued.text,
+        &queued.attachments,
+        &queued.bot_id,
+    ) {
         Ok(machine) => LiveRoute {
             operation: operation.clone(),
             machine,

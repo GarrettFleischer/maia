@@ -1686,7 +1686,6 @@ fn budget_router_context(
     let conclusions = recall.map(|packed| packed.bytes.as_str()).unwrap_or("");
     let packed = pack_context_packet(
         ContextPacketInput {
-            card: "",
             conclusions,
             summary,
             recent: &recent,
@@ -2874,6 +2873,8 @@ pub(crate) struct QueuedChat {
     pub text: String,
     /// Staged files already checked by HTTP.
     pub attachments: Vec<StagedAttachment>,
+    /// Super Agent chosen at admit time (survives a missing message_bots row).
+    pub bot_id: String,
 }
 
 /// Fast admission result. Routing is a later step.
@@ -5141,16 +5142,17 @@ impl<R: Router> Orchestrator<R> {
     ) -> Result<MessageOutcome, OrchestratorError> {
         let message = MessageId(self.ids.pop_message()?);
         let bot_id = std::mem::replace(&mut self.next_bot, "maia".to_owned());
+        self.turn_bot = bot_id.clone();
         self.insert_user_message(&message, text, attachments)?;
         let _ = self.store.bots(maia_store::BotRequest::BindMessage {
             message_id: message.0.clone(),
-            bot_id,
+            bot_id: bot_id.clone(),
             preview: text.to_owned(),
             now: self.ids.now,
             from_owner: true,
         });
         Ok(self
-            .process_admitted_message(message, text, attachments)
+            .process_admitted_message(message, text, attachments, &bot_id)
             .await)
     }
 
@@ -5216,6 +5218,7 @@ impl<R: Router> Orchestrator<R> {
         }
         let message = MessageId(self.ids.pop_message()?);
         let bot_id = std::mem::replace(&mut self.next_bot, "maia".to_owned());
+        self.turn_bot = bot_id.clone();
         let state = self
             .store
             .begin_message_submission(MessageSubmissionWrite {
@@ -5249,6 +5252,7 @@ impl<R: Router> Orchestrator<R> {
                     message,
                     text: text.to_owned(),
                     attachments: attachments.to_vec(),
+                    bot_id,
                 }))
             }
             MessageSubmissionState::Pending { message_id } => {
@@ -5283,7 +5287,12 @@ impl<R: Router> Orchestrator<R> {
             FastAdmission::Queued(queued) => queued,
         };
         match self
-            .process_admitted_message(queued.message, &queued.text, &queued.attachments)
+            .process_admitted_message(
+                queued.message,
+                &queued.text,
+                &queued.attachments,
+                &queued.bot_id,
+            )
             .await
         {
             MessageOutcome::Routed(outcome) => Ok(SubmissionAdmission::NewRouted(outcome)),
@@ -5305,9 +5314,10 @@ impl<R: Router> Orchestrator<R> {
         message: MessageId,
         text: &str,
         attachments: &[StagedAttachment],
+        bot_id: &str,
     ) -> MessageOutcome {
         self.apply_owner_answer(text);
-        let mut machine = match self.open_route(message, text, attachments) {
+        let mut machine = match self.open_route(message, text, attachments, bot_id) {
             Ok(machine) => machine,
             Err(outcome) => return outcome,
         };
@@ -5332,10 +5342,16 @@ impl<R: Router> Orchestrator<R> {
         message: MessageId,
         text: &str,
         attachments: &[StagedAttachment],
+        bot_id: &str,
     ) -> Result<RouteMachine, MessageOutcome> {
-        // Bot id must be known before activity, history, and also_happening, or a
-        // switch leaks the previous Super Agent into this prompt / Working strip.
-        self.turn_bot = self.message_bot(&message.0);
+        // Admit-time bot wins. Store MessageBot still defaults unbound rows to
+        // "maia"; trusting that after a failed bind spills status into Maia.
+        let admitted = bot_id.trim();
+        self.turn_bot = if !admitted.is_empty() {
+            admitted.to_owned()
+        } else {
+            self.message_bot_or(&message.0, "maia")
+        };
         // Owner chat while a worker is waiting: nudge so a wake can continue_task even
         // when this turn misses continue (do not burn the full wake interval).
         if self.bot_has_waiting_worker(&self.turn_bot) {
@@ -5903,6 +5919,15 @@ impl<R: Router> Orchestrator<R> {
         }
     }
 
+    fn bot_exists(&self, bot_id: &str) -> bool {
+        matches!(
+            self.store.bots(maia_store::BotRequest::Get {
+                bot_id: bot_id.to_owned(),
+            }),
+            Ok(maia_store::BotResponse::Bot(_))
+        )
+    }
+
     /// Runs one explicit parent script against `task`.
     pub fn step_parent(&mut self, task: &TaskId) -> Result<StepOutcome, OrchestratorError> {
         let role = SessionRole::ParentTask { task: task.clone() };
@@ -6324,12 +6349,21 @@ impl<R: Router> Orchestrator<R> {
             .and_then(|view| view.reports.last().map(|report| report.summary.clone()))
     }
 
-    fn message_bot(&self, message_id: &str) -> String {
+    /// Bound bot for `message_id`, else `fallback` (admit-time id). Never invent Maia
+    /// when the caller already named another Super Agent.
+    fn message_bot_or(&self, message_id: &str, fallback: &str) -> String {
         match self.store.bots(maia_store::BotRequest::MessageBot {
             message_id: message_id.to_owned(),
         }) {
-            Ok(maia_store::BotResponse::Text(bot)) => bot,
-            _ => "maia".to_owned(),
+            Ok(maia_store::BotResponse::Text(bot)) if !bot.trim().is_empty() => bot,
+            _ => {
+                let trimmed = fallback.trim();
+                if trimmed.is_empty() {
+                    "maia".to_owned()
+                } else {
+                    trimmed.to_owned()
+                }
+            }
         }
     }
 
@@ -7940,6 +7974,12 @@ impl<R: Router> Orchestrator<R> {
     }
 
     fn note_router(&mut self, body: &str) -> Result<(), OrchestratorError> {
+        let bot_id = self.turn_bot.clone();
+        self.settle_live_reply(&bot_id);
+        // Deleted throwaway (or never-bound ghost): skip rather than spill into Maia.
+        if !self.bot_exists(&bot_id) {
+            return Ok(());
+        }
         let message_id = self.ids.pop_message()?;
         let write = RouterMessageWrite {
             message_id: message_id.clone(),
@@ -7948,12 +7988,10 @@ impl<R: Router> Orchestrator<R> {
             created_at: self.ids.now,
         };
         self.store.insert_router_message(write)?;
-        let bot_id = self.turn_bot.clone();
-        self.settle_live_reply(&bot_id);
         let preview = present_router_body(body).text;
         let _ = self.store.bots(maia_store::BotRequest::BindMessage {
             message_id,
-            bot_id: self.turn_bot.clone(),
+            bot_id,
             preview,
             now: self.ids.now,
             from_owner: false,
@@ -9149,7 +9187,12 @@ mod manager_prefix_tests {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
+    use maia_core::thread_cache::CONTEXT_PACKET_BUDGET;
+    use maia_core::thread_cache::ContextPacketInput;
+    use maia_core::thread_cache::pack_context_packet;
+
     use super::manager_system_prefix;
+    use super::packet_token_estimate;
 
     fn byte_hash(text: &str) -> u64 {
         let mut hasher = DefaultHasher::new();
@@ -9169,5 +9212,45 @@ mod manager_prefix_tests {
         assert!(first.ends_with("Subagent tools\nbash\nread_file\nwrite_file"));
         let other = manager_system_prefix("other_tool");
         assert_ne!(byte_hash(&first), byte_hash(&other));
+    }
+
+    #[test]
+    fn memory_skills_trailing_token_budget_stays_small() {
+        // Cached prefix (no MCP catalog lines beyond the fixed contract).
+        let prefix_tokens = packet_token_estimate(&manager_system_prefix(""));
+        // Empty trailing memory block after card drop.
+        let empty = pack_context_packet(
+            ContextPacketInput {
+                conclusions: "",
+                summary: "",
+                recent: &[],
+                budget: CONTEXT_PACKET_BUDGET,
+            },
+            packet_token_estimate,
+        );
+        assert_eq!(empty.memory_block(), "");
+        assert_eq!(empty.total_tokens, 0);
+        // One skill catalog line stays under the hard catalog cap.
+        let catalog = crate::skill_tools::format_skills_catalog(
+            &[maia_store::SkillRecord {
+                skill_id: "run72-probe".to_owned(),
+                title: "run72 probe".to_owned(),
+                when_to_use: "When measuring catalog tokens.".to_owned(),
+                body: "Use Sort-Object { [int]$_ }.".to_owned(),
+                project: String::new(),
+                max_tokens: 400,
+                updated_at: 1,
+            }],
+            crate::skill_tools::MAX_CATALOG_CHARS,
+        );
+        let catalog_tokens = crate::skill_tools::catalog_token_estimate(&catalog);
+        assert!(catalog_tokens > 0);
+        assert!(catalog_tokens <= 300);
+        // Prefix is the large cached piece; trailing skills stay tiny.
+        assert!(prefix_tokens > 200);
+        assert!((catalog_tokens as u32) < prefix_tokens / 10);
+        eprintln!(
+            "run72 tokens: prefix={prefix_tokens} empty_memory=0 catalog={catalog_tokens}"
+        );
     }
 }
