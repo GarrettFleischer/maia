@@ -5277,6 +5277,44 @@ fn manager_wake_close_out_uses_message_user_not_raw_success_relay() {
 }
 
 #[test]
+fn manager_wake_forces_done_when_finished_spawn_starts_no_work() {
+    // Model returns spawn_task on a finished wake (defers Done). Host applies a Spawn
+    // that cannot create work (empty guidance is filtered earlier), so use Cancel-only
+    // attention-clear finished + a Spawn action applied via the wake model with guidance
+    // that still leaves the goal idle: push spawn then immediately complete is covered by
+    // force_done_when_finished_hire_stalled when running_count stays 0.
+    let mut harness = Harness::open_model("mgr-wake-spawn-stall-done", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote STALL59 to the workspace file."));
+    let outcome =
+        wait(harness.host().handle_user_message("Write STALL59 to a file")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(matches!(
+        harness.host().phase(&task),
+        Some(TaskPhase::Completed { .. })
+    ));
+    // Model claims it will hire again but returns spawn with no usable guidance payload.
+    harness.router.push_tool("spawn_task", r#"{"guidance":""}"#);
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
+    assert!(
+        messaged,
+        "empty-guidance spawn on a finished wake must still force Done"
+    );
+    let bodies = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("Done")),
+        "forced close-out must land in CEO chat: {bodies:?}"
+    );
+}
+
+#[test]
 fn manager_wake_keeps_fingerprint_when_close_out_message_fails_to_post() {
     // Run50 flake path: wake intends a Done close-out but note_router fails (e.g. id
     // exhaustion). Advancing the fingerprint then SkipModel-forever hides the unfinished
