@@ -518,6 +518,73 @@ fn wake_brief_finished_forbids_echoing_secret_values() {
 }
 
 #[test]
+fn wake_brief_masks_ceo_secret_in_finished_outcome_line() {
+    use maia_core::manager::WorkerBrief;
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        recent_ceo_lines: vec![
+            "user: The vault secret RUN66_CEO_SECRET is run66-ok-n0techo. Continue.".to_owned(),
+        ],
+        workers: vec![WorkerBrief {
+            task_id: "t1".to_owned(),
+            title: "read vault".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: None,
+            output_tail: "got run66-ok-n0techo from vault".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    let outcome_line = brief
+        .lines()
+        .find(|line| line.contains("outcome=") && line.contains("goal_state=needs_close_out"))
+        .expect("FINISHED outcome line");
+    assert!(
+        outcome_line.contains("[redacted]"),
+        "FINISHED outcome= must mask CEO secret values: {outcome_line}"
+    );
+    assert!(
+        !outcome_line.contains("run66-ok-n0techo"),
+        "model must never see secret value in FINISHED outcome=: {outcome_line}"
+    );
+    assert!(
+        brief.contains("RUN66_CEO_SECRET") || brief.contains("vault"),
+        "secret name / context may remain: {brief}"
+    );
+}
+
+#[test]
+fn wake_brief_finished_recover_requires_goal_checks_in_corrected_brief() {
+    use maia_core::manager::WorkerBrief;
+    use maia_core::manager::format_wake_brief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-draft".to_owned(),
+            title: "Write WRONG draft".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Wrote WRONG.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    let lower = brief.to_ascii_lowercase();
+    assert!(
+        lower.contains("corrected brief")
+            && (lower.contains("goal check")
+                || lower.contains("stated check")
+                || lower.contains("acceptance")),
+        "FINISHED recover must keep goal checks durable in the next hire brief: {brief}"
+    );
+}
+
+#[test]
 fn finished_wake_keeps_spawn_for_verify_recover_and_does_not_force_done() {
     // A worker can finish "success" while the artifact fails the goal check.
     // Manager must be allowed to hire again; safety cap must not overwrite with Done.
@@ -562,14 +629,14 @@ fn finished_wake_keeps_spawn_for_verify_recover_and_does_not_force_done() {
 
     let silent_close = enforce_ceo_moments(&[WakeAction::Silent], &snap);
     assert!(
-        silent_close.iter().any(|action| matches!(
+        !silent_close.iter().any(|action| matches!(
             action,
-            WakeAction::MessageUser { text } if text.starts_with("Done")
+            WakeAction::MessageUser { text } if maia_core::manager::looks_like_close_out(text)
         )),
-        "silent finished wake still forces one Done close-out: {silent_close:?}"
+        "silent finished wake must not Done while outcome still shows WRONG: {silent_close:?}"
     );
 
-    // continue/retry on a completed draft is a host no-op; must not block Done.
+    // continue/retry on a completed draft is a host no-op; WRONG outcome still blocks Done.
     let noop_recover = enforce_ceo_moments(
         &[WakeAction::Recover {
             task_id: "task-draft".to_owned(),
@@ -578,11 +645,11 @@ fn finished_wake_keeps_spawn_for_verify_recover_and_does_not_force_done() {
         &snap,
     );
     assert!(
-        noop_recover.iter().any(|action| matches!(
+        !noop_recover.iter().any(|action| matches!(
             action,
-            WakeAction::MessageUser { text } if text.starts_with("Done")
+            WakeAction::MessageUser { text } if maia_core::manager::looks_like_close_out(text)
         )),
-        "noop recover on a finished wake must still force Done: {noop_recover:?}"
+        "noop recover must not Done while outcome still shows WRONG: {noop_recover:?}"
     );
 
     let idle = WakeSnapshot {
@@ -620,6 +687,122 @@ fn finished_wake_keeps_spawn_for_verify_recover_and_does_not_force_done() {
             .iter()
             .any(|action| matches!(action, WakeAction::Spawn { .. })),
         "spawn_task remains allowed when ATTENTION has a failure: {allowed:?}"
+    );
+}
+
+#[test]
+fn finished_ok_outcome_still_forces_done_when_silent() {
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-ok".to_owned(),
+            title: "Write primes".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Wrote 2,3,5,7,11,13,17.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.starts_with("Done")
+        )),
+        "ok outcome must still force Done on silent wake: {forced:?}"
+    );
+}
+
+#[test]
+fn finished_verification_pass_mentioning_no_wrong_still_forces_done() {
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-ok".to_owned(),
+            title: "Verify primes".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Verification passed: primes file has seven lines and no WRONG token."
+                .to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.starts_with("Done")
+        )),
+        "negated 'no WRONG' verification must still force Done: {forced:?}"
+    );
+}
+
+#[test]
+fn finished_wrong_outcome_drops_false_done_close_out() {
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-draft".to_owned(),
+            title: "draft".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Wrote WRONG into primes2.txt".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let lied = enforce_ceo_moments(
+        &[WakeAction::MessageUser {
+            text: "Done — the file is correct.".to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        !lied.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if maia_core::manager::looks_like_close_out(text)
+        )),
+        "false Done must be dropped while outcome still shows WRONG: {lied:?}"
+    );
+}
+
+#[test]
+fn plan_wake_reruns_model_when_finished_outcome_still_wrong() {
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-draft".to_owned(),
+            title: "draft".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Wrote WRONG.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let fp = snapshot_fingerprint(&snap);
+    let plan = plan_wake(
+        1_000,
+        0,
+        DEFAULT_WAKE_INTERVAL_SECS,
+        &fp,
+        &snap,
+        0,
+        MAX_MODEL_CALLS_PER_WAKE,
+    );
+    assert!(
+        matches!(plan, maia_core::manager::WakePlan::RunModel { .. }),
+        "WRONG outcome must not SkipModel on an unchanged fingerprint: {plan:?}"
     );
 }
 

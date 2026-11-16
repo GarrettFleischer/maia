@@ -2067,7 +2067,7 @@ fn route_tools_json() -> String {
     let mut tools = vec![
         route_tool(
             "spawn_task",
-            "REQUIRED for any new work that needs shell, files, browser, network, or vault. Hire one worker. You never run that work yourself. Optional guidance is the worker brief (details + steps). Prefer a short first line so the Tasks rail stays glanceable. When the CEO names two workers (for example RESEARCH then WRITE), spawn only the first now; hire the next on a later wake after that one finishes — do not fold both into one mega-title. After a failed or incomplete result, you may hire a second worker with a corrected brief instead of repeating the same approach.",
+            "REQUIRED for any new work that needs shell, files, browser, network, or vault. Hire one worker. You never run that work yourself. Optional guidance is the worker brief (details + steps). Prefer a short first line so the Tasks rail stays glanceable. When the CEO names two workers (for example RESEARCH then WRITE), spawn only the first now; hire the next on a later wake after that one finishes — do not fold both into one mega-title. After a failed or incomplete result, or when a finished outcome fails a goal check, hire again with a corrected brief that restates every stated goal check (path, format, content, forbidden tokens) so the next hire is durable — do not omit the checks.",
             RouteToolShape::Spawn,
             true,
         ),
@@ -2103,7 +2103,7 @@ fn route_tools_json() -> String {
         ),
         terminal_tool(
             "message_user",
-            "Post one useful update to the owner chat. Default silent. Never use this to announce a hire, standing by, or in-progress status. When the wake brief shows FINISHED goal_state=needs_close_out, verify the outcome against the goal checks. If a check fails, spawn_task with a corrected brief in the same wake when you can; when the check already passes (or the outcome already matches), MUST send one short Done close-out immediately this wake that starts with Done — and restates the FINISHED outcome= (what was delivered and where). Do not defer close-out. Do not keep verifying forever. One close-out per finished goal; then stay silent. Status chatter does not close a goal. Skip if RECENT_CEO_CHAT already has that Done close-out. Never dump raw worker logs. Never put a secret value, password, token, or vault contents into Done — name the secret, do not echo its value.",
+            "Post one useful update to the owner chat. Default silent. Never use this to announce a hire, standing by, or in-progress status. When the wake brief shows FINISHED goal_state=needs_close_out, verify the outcome against the goal checks. If outcome= contains WRONG or a check fails, do not Done — spawn_task with a corrected brief in the same wake; when the check already passes (or the outcome already matches), MUST send one short Done close-out immediately this wake that starts with Done — and restates the FINISHED outcome= (what was delivered and where). Do not defer close-out. Do not keep verifying forever. One close-out per finished goal; then stay silent. Status chatter does not close a goal. Skip if RECENT_CEO_CHAT already has that Done close-out. Never dump raw worker logs. Never put a secret value, password, token, or vault contents into Done — name the secret, do not echo its value.",
         ),
         terminal_tool(
             "ask_user",

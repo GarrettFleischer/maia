@@ -263,7 +263,14 @@ pub fn attention_lines(snap: &WakeSnapshot) -> Vec<String> {
             || snap.stuck_task_ids.iter().any(|id| id == &worker.task_id)
             || snap.waiting.iter().any(|(id, _)| id == &worker.task_id);
         if !busy {
-            lines.push(format!("leave {} alone (healthy)", worker.task_id));
+            if worker.secs_since_progress.is_none() {
+                lines.push(format!(
+                    "leave {} alone (resumed or idle unknown after host restart — do not re-hire a duplicate)",
+                    worker.task_id
+                ));
+            } else {
+                lines.push(format!("leave {} alone (healthy)", worker.task_id));
+            }
         }
     }
     lines
@@ -342,7 +349,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If a check fails, spawn_task with a corrected brief — do not continue_task or retry_task on a completed worker, do not ask_user, and do not Done yet. When verification passes, send one Done message_user immediately this wake that starts with Done — and restates each outcome=. Never put a secret value, password, token, or vault contents into Done — name the secret, do not echo its value (even if outcome= shows it). Do not defer close-out. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
+            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If outcome= contains WRONG or otherwise fails a stated check, you MUST spawn_task this wake with a corrected brief that restates every stated goal check (path, format, content, forbidden tokens) so the next hire is durable — do not Silent, do not Done, do not continue_task or retry_task on a completed worker, and do not ask_user. When verification passes, send one Done message_user immediately this wake that starts with Done — and restates each outcome=. Never put a secret value, password, token, or vault contents into Done — name the secret, do not echo its value (even if outcome= shows it). Do not defer close-out. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -356,9 +363,13 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
                     .to_owned(),
             );
         }
+        let secrets = ceo_supplied_secret_values(&snap.recent_ceo_lines);
         for worker in finished {
             let title = truncate_brief(&worker.title, BRIEF_TITLE_CHARS);
-            let out = truncate_brief(&worker.output_tail, BRIEF_TAIL_CHARS);
+            let out = mask_close_out_secrets(
+                &truncate_brief(&worker.output_tail, BRIEF_TAIL_CHARS),
+                &secrets,
+            );
             if out.is_empty() {
                 lines.push(format!(
                     "- {}: goal_state=needs_close_out title={title} outcome=(no summary)",
@@ -550,7 +561,8 @@ pub fn plan_wake(
     }
     if !previous_fingerprint.is_empty() && previous_fingerprint == fingerprint {
         // Answers are not in the fingerprint; still wake so continue_task can run.
-        if !waiting_ceo_answered(snap) {
+        // WRONG outcomes are not in the fingerprint either — keep calling until recover.
+        if !waiting_ceo_answered(snap) && !finished_outcome_needs_recover(snap) {
             return WakePlan::SkipModel;
         }
     }
@@ -824,6 +836,37 @@ pub fn looks_like_close_out(text: &str) -> bool {
         || trimmed.starts_with("all done")
 }
 
+/// Durable failed-check marker already present in FINISHED `outcome=` (not a classifier).
+///
+/// When a completed worker's output tail still shows a WRONG draft, close-out must wait for a
+/// corrected hire — safety must not Done over a known-bad draft. Negated mentions
+/// ("no WRONG", verification passed) do not count.
+#[must_use]
+pub fn finished_outcome_needs_recover(snap: &WakeSnapshot) -> bool {
+    snap.workers
+        .iter()
+        .any(|worker| worker.status == "completed" && outcome_shows_wrong_draft(&worker.output_tail))
+}
+
+fn outcome_shows_wrong_draft(tail: &str) -> bool {
+    let upper = tail.to_ascii_uppercase();
+    if !upper.contains("WRONG") {
+        return false;
+    }
+    let wrote_wrong = upper.contains("WROTE WRONG")
+        || upper.contains("WORD WRONG")
+        || upper.contains("WRONG INTO")
+        || upper.trim() == "WRONG";
+    let negated = upper.contains("NO WRONG")
+        || upper.contains("WITHOUT WRONG")
+        || upper.contains("NOT CONTAIN WRONG")
+        || upper.contains("FORBIDDEN TOKEN");
+    if negated {
+        return wrote_wrong;
+    }
+    true
+}
+
 /// Alphanumeric tokens of length >= 6, lowercased (longest first).
 #[must_use]
 pub fn distinctive_tokens(text: &str) -> Vec<String> {
@@ -980,7 +1023,8 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
                     && !recent_ceo_covers(snap, text, CeoCoverKind::Ask)
             }
             WakeAction::MessageUser { text } if looks_like_close_out(text) => {
-                !recent_ceo_covers(snap, text, CeoCoverKind::CloseOut)
+                !finished_outcome_needs_recover(snap)
+                    && !recent_ceo_covers(snap, text, CeoCoverKind::CloseOut)
             }
             // Unanswered ask → stay silent; drop standing-by / status chatter.
             WakeAction::MessageUser { .. } if waiting_ask_already_in_chat(snap) => false,
@@ -1013,7 +1057,12 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         }
     }
 
-    if snap.completed_unopened > 0 && attention_clear && !closed_out && !recovering {
+    if snap.completed_unopened > 0
+        && attention_clear
+        && !closed_out
+        && !recovering
+        && !finished_outcome_needs_recover(snap)
+    {
         let summary = finished_close_out_summary(snap);
         if !recent_ceo_covers(snap, &summary, CeoCoverKind::CloseOut) {
             let secrets = ceo_supplied_secret_values(&snap.recent_ceo_lines);
