@@ -91,7 +91,9 @@ describe('BotList', () => {
         onDelete={vi.fn()}
       />,
     )
-    await user.click(screen.getByRole('button', { name: 'New bot' }))
+    const newBot = screen.getByRole('button', { name: 'New bot' })
+    expect(newBot).toHaveClass('maia-icon-btn')
+    await user.click(newBot)
     await user.type(screen.getByRole('textbox', { name: 'Bot name' }), 'Arise')
     await user.type(screen.getByRole('textbox', { name: 'Standing instructions' }), 'this one is for Arise')
     const cancel = screen.getByRole('button', { name: 'Cancel' })

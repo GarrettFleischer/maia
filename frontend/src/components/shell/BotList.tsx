@@ -82,7 +82,13 @@ export function BotList({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <button type="button" className="maia-btn" aria-label="New bot" onClick={() => setCreating(true)}>
+        <button
+          type="button"
+          className="maia-icon-btn"
+          aria-label="New bot"
+          title="New bot"
+          onClick={() => setCreating(true)}
+        >
           +
         </button>
       </div>

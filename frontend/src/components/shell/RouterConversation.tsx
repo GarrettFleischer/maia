@@ -780,8 +780,14 @@ function writeCursor(botId: string, messageId: string) {
 function FactsUsed({ ids, onOpen }: { ids: readonly string[]; onOpen: () => void }) {
   if (ids.length === 0) return null
   return (
-    <button type="button" className="maia-btn" onClick={onOpen}>
-      Facts used
+    <button
+      type="button"
+      className="maia-icon-btn"
+      aria-label="Facts used"
+      title="Facts used"
+      onClick={onOpen}
+    >
+      <span className="maia-inspect-icon" aria-hidden="true" />
     </button>
   )
 }
