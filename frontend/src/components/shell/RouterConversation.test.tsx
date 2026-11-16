@@ -322,8 +322,7 @@ describe('RouterConversation', () => {
     expect(within(router).getByText('Maia')).toBeVisible()
   })
 
-  it('copies only agent messages and never shows edit or owner copy', async () => {
-    const user = userEvent.setup()
+  it('never shows whole-message copy or edit on any bubble', () => {
     render(
       <ReviewedRouterConversation
         messages={[
@@ -349,23 +348,9 @@ describe('RouterConversation', () => {
     expect(within(owner).queryByRole('button', { name: 'Copy message' })).toBeNull()
     expect(within(owner).queryByRole('button', { name: 'Edit message' })).toBeNull()
     expect(within(owner).queryByRole('group', { name: 'Actions for message from You' })).toBeNull()
+    expect(within(router).queryByRole('button', { name: 'Copy message' })).toBeNull()
     expect(within(router).queryByRole('button', { name: 'Edit message' })).toBeNull()
-    const copy = within(router).getByRole('button', { name: 'Copy message' })
-    expect(copy).toHaveClass('maia-icon-btn')
-    expect(copy.querySelector('.maia-copy-icon')).not.toBeNull()
-    const routerActions = within(router).getByRole('group', {
-      name: 'Actions for message from Maia',
-    })
-    expect(routerActions.closest('.maia-run-head')).not.toBeNull()
-    expect(routerActions.closest('.maia-run-head')?.querySelector('.maia-speaker')).not.toBeNull()
-    const routerBody = router.querySelector('.maia-transcript-body')
-    expect(routerBody).not.toBeNull()
-    expect(
-      routerActions.compareDocumentPosition(routerBody!) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-    await user.click(copy)
-    expect(await navigator.clipboard.readText()).toBe('Router body')
-    expect(within(router).getByRole('status')).toHaveTextContent('Copied')
+    expect(within(router).queryByRole('group', { name: 'Actions for message from Maia' })).toBeNull()
   })
 
   it('uses compact Attach and Send icon buttons in the composer', () => {
