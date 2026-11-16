@@ -2101,6 +2101,11 @@ fn assert_control_contract(system: &str) {
     assert!(system.contains("Never target a child."));
     assert!(system.contains("If two listed tasks could match"));
     assert!(system.contains("Workers never talk to the CEO"));
+    assert!(
+        system.to_ascii_lowercase().contains("never")
+            && system.to_ascii_lowercase().contains("secret value"),
+        "prompt must forbid echoing secret values into CEO chat"
+    );
     assert!(system.contains("Candidates:"));
     for token in ["modifies", "follows_up", "shape:\"single\"", "0..1000"] {
         assert!(
