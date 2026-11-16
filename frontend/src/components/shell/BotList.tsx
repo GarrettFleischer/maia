@@ -111,8 +111,14 @@ export function BotList({
           <button type="submit" className="maia-btn">
             Create
           </button>
-          <button type="button" className="maia-btn" onClick={() => setCreating(false)}>
-            Cancel
+          <button
+            type="button"
+            className="maia-icon-btn"
+            aria-label="Cancel"
+            title="Cancel"
+            onClick={() => setCreating(false)}
+          >
+            <span className="maia-remove-icon" aria-hidden="true" />
           </button>
         </form>
       ) : null}

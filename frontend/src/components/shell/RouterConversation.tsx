@@ -379,11 +379,13 @@ export function RouterConversation({
             <p>{transcriptState.text}</p>
             <button
               type="button"
-              className="maia-btn"
+              className="maia-icon-btn"
+              aria-label="Retry conversation"
+              title="Retry conversation"
               onClick={onRetryTranscript}
               disabled={operation.kind === 'sending'}
             >
-              Retry conversation
+              <span className="maia-retry-icon" aria-hidden="true" />
             </button>
           </div>
         ) : null}
@@ -735,11 +737,13 @@ export function RouterConversation({
             {notice.kind === 'refresh_failed' ? (
               <button
                 type="button"
-                className="maia-btn"
+                className="maia-icon-btn"
+                aria-label="Refresh conversation"
+                title="Refresh conversation"
                 onClick={onRetryTranscript}
                 disabled={operation.kind === 'sending'}
               >
-                Refresh conversation
+                <span className="maia-retry-icon" aria-hidden="true" />
               </button>
             ) : null}
           </div>

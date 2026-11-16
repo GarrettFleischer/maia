@@ -691,7 +691,10 @@ describe('RouterConversation', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'Message sent. Refresh the conversation to see the latest reply.',
     )
-    await user.click(screen.getByRole('button', { name: 'Refresh conversation' }))
+    const refresh = screen.getByRole('button', { name: 'Refresh conversation' })
+    expect(refresh).toHaveClass('maia-icon-btn')
+    expect(refresh.querySelector('.maia-retry-icon')).not.toBeNull()
+    await user.click(refresh)
     expect(onRetryTranscript).toHaveBeenCalledOnce()
   })
 
