@@ -33,4 +33,4 @@ Attach small, reusable skill packs to a turn without the owner asking and withou
 ## Fit with memory
 
 - Brain claims = facts. Skills = how-to. Session summary = rolling narrative.
-- Honcho-style digests (slices 5–10) should be reconsidered only if skills + remember leave a gap.
+- Honcho slices 5–10: **dropped / already covered** (Run 72). See `docs/design/17-honcho-slices.md`.
