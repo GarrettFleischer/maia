@@ -317,7 +317,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If a check fails, spawn_task or continue_task with a corrected brief — do not ask_user and do not Done yet. When verification passes, send one Done message_user that starts with Done — and restates each outcome=. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
+            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If a check fails, spawn_task with a corrected brief — do not continue_task or retry_task on a completed worker, do not ask_user, and do not Done yet. When verification passes, send one Done message_user that starts with Done — and restates each outcome=. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -327,7 +327,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             && snap.waiting.is_empty()
         {
             lines.push(
-                "REQUIRED: verify the finished goal; recover with spawn_task if the check fails; otherwise message_user once (Done — …)."
+                "REQUIRED: verify the finished goal; if the check fails spawn_task once (do not continue_task on completed); otherwise message_user once (Done — …)."
                     .to_owned(),
             );
         }
@@ -663,12 +663,31 @@ pub fn distinctive_token(text: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Safety cap: waiting → one ask_user; silent finished → one close-out; skip if already in chat.
+/// One-line Done body for a finished wake, or `"the goal"` when nothing useful is known.
+#[must_use]
+pub fn finished_close_out_summary(snap: &WakeSnapshot) -> String {
+    snap.workers
+        .iter()
+        .find(|worker| worker.status == "completed")
+        .map(|worker| {
+            let title = truncate_brief(&worker.title, BRIEF_TITLE_CHARS);
+            let out = truncate_brief(&worker.output_tail, BRIEF_TAIL_CHARS);
+            match (title.is_empty(), out.is_empty()) {
+                (false, false) => format!("{title} — {out}"),
+                (false, true) => title,
+                (true, false) => out,
+                (true, true) => String::new(),
+            }
+        })
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "the goal".to_owned())
+}
+
+/// Safety cap only: waiting → one ask_user; silent finished → one Done; skip if already in chat.
 ///
-/// Drops `spawn_task` only on idle wakes (no attention, no finished goal). LEARNED notes are
-/// shared across bots; an idle wake must not invent goals. A finished wake may keep
-/// `spawn_task` and defer Done so a wrong draft can get a second hire; the host forces Done
-/// if that hire never starts live work.
+/// Drops `spawn_task` on idle wakes (LEARNED must not invent goals). A finished wake may keep
+/// `spawn_task` and defer Done for a second hire; the host re-runs this cap after apply when
+/// that hire never started live work (see orchestrator second pass).
 #[must_use]
 pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<WakeAction> {
     // Failed / stuck / waiting block close-out; healthy runners do not.
@@ -683,6 +702,14 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
             let idle = attention_clear && snap.completed_unopened == 0;
             !(idle && matches!(action, WakeAction::Spawn { .. }))
         })
+        .filter(|action| match action {
+            // Safety cap: never re-post an ask / Done already covered in CEO chat.
+            WakeAction::AskUser { text } => !recent_ceo_covers(snap, text, CeoCoverKind::Ask),
+            WakeAction::MessageUser { text } if looks_like_close_out(text) => {
+                !recent_ceo_covers(snap, text, CeoCoverKind::CloseOut)
+            }
+            _ => true,
+        })
         .cloned()
         .collect();
     let asked = out
@@ -692,8 +719,7 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         WakeAction::MessageUser { text } => looks_like_close_out(text),
         _ => false,
     });
-    // A real second hire defers Done so the wrong draft is not closed out first.
-    // Host must force Done later if that spawn does not start live work.
+    // Real second hire defers Done; host second-pass forces Done if the hire stays idle.
     let recovering = out
         .iter()
         .any(|action| matches!(action, WakeAction::Spawn { .. }));
@@ -712,23 +738,7 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
     }
 
     if snap.completed_unopened > 0 && attention_clear && !closed_out && !recovering {
-        let finished = snap
-            .workers
-            .iter()
-            .find(|worker| worker.status == "completed");
-        let summary = finished
-            .map(|worker| {
-                let title = truncate_brief(&worker.title, BRIEF_TITLE_CHARS);
-                let out = truncate_brief(&worker.output_tail, BRIEF_TAIL_CHARS);
-                match (title.is_empty(), out.is_empty()) {
-                    (false, false) => format!("{title} — {out}"),
-                    (false, true) => title,
-                    (true, false) => out,
-                    (true, true) => String::new(),
-                }
-            })
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| "the goal".to_owned());
+        let summary = finished_close_out_summary(snap);
         if !recent_ceo_covers(snap, &summary, CeoCoverKind::CloseOut) {
             out.push(WakeAction::MessageUser {
                 text: format!("Done — {summary}"),

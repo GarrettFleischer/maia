@@ -164,6 +164,20 @@ fn wake_waiting_without_ask_user_is_forced_once_unless_already_in_chat() {
         !skipped.iter().any(|action| matches!(action, WakeAction::AskUser { .. })),
         "must not duplicate an ask already in CEO chat: {skipped:?}"
     );
+
+    // Model can still emit ask_user on later wakes; safety cap must drop covered asks.
+    let model_repeat = enforce_ceo_moments(
+        &[WakeAction::AskUser {
+            text: "What is the vault secret RUN43_CEO_SECRET needed to finish?".to_owned(),
+        }],
+        &already,
+    );
+    assert!(
+        !model_repeat
+            .iter()
+            .any(|action| matches!(action, WakeAction::AskUser { .. })),
+        "model-emitted ask already covered in CEO chat must be dropped: {model_repeat:?}"
+    );
 }
 
 #[test]
@@ -969,6 +983,11 @@ fn close_out_is_forced_while_a_healthy_runner_is_still_busy() {
     assert!(
         brief.contains("verify") && brief.contains("Done"),
         "FINISHED brief must say verify before Done: {brief}"
+    );
+    assert!(
+        brief.to_ascii_lowercase().contains("spawn_task")
+            && brief.to_ascii_lowercase().contains("do not continue_task"),
+        "FINISHED recover must prefer spawn_task and forbid continue_task on completed: {brief}"
     );
     assert!(
         brief.contains("REQUIRED:") && brief.contains("finished goal"),
