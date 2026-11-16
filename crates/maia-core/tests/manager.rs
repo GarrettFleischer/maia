@@ -180,9 +180,9 @@ fn looks_like_close_out_rejects_status_chatter() {
 }
 
 #[test]
-fn close_out_only_wake_drops_spawn_inspired_by_learned() {
-    // Shared LEARNED notes from another bot must not invent new work on a
-    // close-out-only wake (run44 left a Done close-out on Maia's real chat).
+fn finished_wake_keeps_spawn_for_verify_recover_and_does_not_force_done() {
+    // A worker can finish "success" while the artifact fails the goal check.
+    // Manager must be allowed to hire again; safety cap must not overwrite with Done.
     use maia_core::manager::WorkerBrief;
 
     let snap = WakeSnapshot {
@@ -192,34 +192,77 @@ fn close_out_only_wake_drops_spawn_inspired_by_learned() {
                 .to_owned(),
         ],
         workers: vec![WorkerBrief {
-            task_id: "task-done".to_owned(),
-            title: "Write DONE47".to_owned(),
+            task_id: "task-draft".to_owned(),
+            title: "Write WRONG draft".to_owned(),
             status: "completed".to_owned(),
             secs_since_progress: Some(1),
-            output_tail: "Wrote DONE47.".to_owned(),
+            output_tail: "Wrote WRONG.".to_owned(),
             last_error: String::new(),
         }],
         ..WakeSnapshot::default()
     };
-    let gated = enforce_ceo_moments(
+    let recovered = enforce_ceo_moments(
         &[WakeAction::Spawn {
-            guidance: "Create an empty file at run44_multi_missing.txt then verify it exists."
+            guidance: "Overwrite the file with the seven required prime lines, then success."
                 .to_owned(),
         }],
         &snap,
     );
     assert!(
-        !gated
+        recovered
             .iter()
             .any(|action| matches!(action, WakeAction::Spawn { .. })),
-        "close-out-only wake must drop spawn_task (LEARNED must not invent work): {gated:?}"
+        "finished wake must keep spawn_task for verify/recover: {recovered:?}"
     );
     assert!(
-        gated.iter().any(|action| matches!(
+        !recovered.iter().any(|action| matches!(
             action,
             WakeAction::MessageUser { text } if text.starts_with("Done")
         )),
-        "close-out-only wake must still force close-out: {gated:?}"
+        "spawn_task on a finished wake defers Done for a real second hire: {recovered:?}"
+    );
+
+    let silent_close = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    assert!(
+        silent_close.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.starts_with("Done")
+        )),
+        "silent finished wake still forces one Done close-out: {silent_close:?}"
+    );
+
+    // continue/retry on a completed draft is a host no-op; must not block Done.
+    let noop_recover = enforce_ceo_moments(
+        &[WakeAction::Recover {
+            task_id: "task-draft".to_owned(),
+            note: "overwrite with primes".to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        noop_recover.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.starts_with("Done")
+        )),
+        "noop recover on a finished wake must still force Done: {noop_recover:?}"
+    );
+
+    let idle = WakeSnapshot {
+        completed_unopened: 0,
+        learned: snap.learned.clone(),
+        ..WakeSnapshot::default()
+    };
+    let dropped = enforce_ceo_moments(
+        &[WakeAction::Spawn {
+            guidance: "Invent unrelated work from LEARNED alone.".to_owned(),
+        }],
+        &idle,
+    );
+    assert!(
+        !dropped
+            .iter()
+            .any(|action| matches!(action, WakeAction::Spawn { .. })),
+        "idle wake with no attention must still drop LEARNED-only spawn: {dropped:?}"
     );
 
     let with_failure = WakeSnapshot {
@@ -924,7 +967,11 @@ fn close_out_is_forced_while_a_healthy_runner_is_still_busy() {
     };
     let brief = format_wake_brief(&snap);
     assert!(
-        brief.contains("REQUIRED: call message_user once now for the finished goal"),
+        brief.contains("verify") && brief.contains("Done"),
+        "FINISHED brief must say verify before Done: {brief}"
+    );
+    assert!(
+        brief.contains("REQUIRED:") && brief.contains("finished goal"),
         "healthy runners must not defer close-out REQUIRED: {brief}"
     );
     let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);

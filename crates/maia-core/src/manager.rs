@@ -317,7 +317,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): these goals are still open until you send one Done message_user. Prior status chatter (hired, working on it, will notify) does not close a goal. Call message_user once now with a short close-out that starts with Done — and restates each outcome=. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
+            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If a check fails, spawn_task or continue_task with a corrected brief — do not ask_user and do not Done yet. When verification passes, send one Done message_user that starts with Done — and restates each outcome=. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -327,7 +327,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             && snap.waiting.is_empty()
         {
             lines.push(
-                "REQUIRED: call message_user once now for the finished goal (Done — …)."
+                "REQUIRED: verify the finished goal; recover with spawn_task if the check fails; otherwise message_user once (Done — …)."
                     .to_owned(),
             );
         }
@@ -663,10 +663,12 @@ pub fn distinctive_token(text: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Safety cap: waiting → one ask_user; finished-only → one close-out; skip if already in chat.
+/// Safety cap: waiting → one ask_user; silent finished → one close-out; skip if already in chat.
 ///
-/// Also drops `spawn_task` when ATTENTION has no failed/stuck/waiting work. LEARNED notes are
-/// shared across bots; a close-out-only wake must not invent new goals from them.
+/// Drops `spawn_task` only on idle wakes (no attention, no finished goal). LEARNED notes are
+/// shared across bots; an idle wake must not invent goals. A finished wake may keep
+/// `spawn_task` and defer Done so a wrong draft can get a second hire; the host forces Done
+/// if that hire never starts live work.
 #[must_use]
 pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<WakeAction> {
     // Failed / stuck / waiting block close-out; healthy runners do not.
@@ -677,8 +679,9 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         .iter()
         .filter(|action| !matches!(action, WakeAction::Silent))
         .filter(|action| {
-            // No failed/stuck/waiting → nothing to hire for on this wake.
-            !(attention_clear && matches!(action, WakeAction::Spawn { .. }))
+            // Idle wake (no attention, no finished goal) → drop LEARNED-only hire.
+            let idle = attention_clear && snap.completed_unopened == 0;
+            !(idle && matches!(action, WakeAction::Spawn { .. }))
         })
         .cloned()
         .collect();
@@ -689,6 +692,11 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         WakeAction::MessageUser { text } => looks_like_close_out(text),
         _ => false,
     });
+    // A real second hire defers Done so the wrong draft is not closed out first.
+    // Host must force Done later if that spawn does not start live work.
+    let recovering = out
+        .iter()
+        .any(|action| matches!(action, WakeAction::Spawn { .. }));
 
     if !snap.waiting.is_empty() && !asked {
         if let Some((task_id, question)) = snap.waiting.first() {
@@ -703,7 +711,7 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         }
     }
 
-    if snap.completed_unopened > 0 && attention_clear && !closed_out {
+    if snap.completed_unopened > 0 && attention_clear && !closed_out && !recovering {
         let finished = snap
             .workers
             .iter()
