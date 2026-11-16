@@ -2620,6 +2620,16 @@ impl ActivityLog {
         }
     }
 
+    /// Drops lines for one finished task so Quiet chats stop offering Stop.
+    pub fn clear_task(&self, task_id: &str) {
+        let Ok(mut state) = self.inner.lock() else {
+            return;
+        };
+        state
+            .events
+            .retain(|event| event.task_id.as_deref() != Some(task_id));
+    }
+
     /// Copies the current lines in order.
     pub fn snapshot(&self) -> Vec<ActivityEvent> {
         self.inner
@@ -3726,6 +3736,11 @@ impl<R: Router> Orchestrator<R> {
             .collect()
     }
 
+    /// Activity feed lines, oldest first.
+    pub fn activity_events(&self) -> Vec<ActivityEvent> {
+        self.activity.snapshot()
+    }
+
     /// Snapshot of work the manager wake inspects.
     ///
     /// Only the selected bot's open tasks are included so deleted/other bots
@@ -4211,6 +4226,11 @@ impl<R: Router> Orchestrator<R> {
             self.last_progress_at.insert(task.clone(), self.ids.now);
         }
         self.activity.push(label, task.map(|task| task.0.clone()));
+    }
+
+    fn clear_live_activity(&mut self, task: &TaskId) {
+        self.task_activity.remove(task);
+        self.activity.clear_task(&task.0);
     }
 
     /// Uses this embedder to seed and score recall. Missing vectors stay on text search.
@@ -5594,6 +5614,9 @@ impl<R: Router> Orchestrator<R> {
         let outcome = self.task_outcome_text(task, &next);
         self.enqueue_task_memory_if_finished(task, &current, &next, &outcome);
         self.phases.insert(task.clone(), next.clone());
+        if is_terminal(&next) || matches!(next, TaskPhase::Stopped { .. }) {
+            self.clear_live_activity(task);
+        }
         Ok(next)
     }
 
@@ -5638,6 +5661,9 @@ impl<R: Router> Orchestrator<R> {
             let outcome = self.task_outcome_text(&task, &next);
             self.enqueue_task_memory_if_finished(&task, &current, &next, &outcome);
             self.phases.insert(task.clone(), next.clone());
+            if is_terminal(&next) || matches!(next, TaskPhase::Stopped { .. }) {
+                self.clear_live_activity(&task);
+            }
             applied = Some(next);
         }
         applied.ok_or(OrchestratorError::UnknownTask)
@@ -6604,6 +6630,7 @@ impl<R: Router> Orchestrator<R> {
         let notice = machine.notice;
         match agent_stop(&response) {
             AgentStop::Success(text) => {
+                self.close_todos_on_success(machine, &text);
                 WorkerDrive::Done(self.complete_worker(&task, &attempt, &text, notice))
             }
             AgentStop::Failure(text) => {
@@ -6945,8 +6972,8 @@ impl<R: Router> Orchestrator<R> {
                     kind: FailureKind::WorkerReported,
                 },
             );
-            self.record_activity(&summary, Some(task));
         }
+        self.clear_live_activity(task);
         match notice {
             OwnerNotice::Relay => {
                 let _ = self.note_router(WORKER_SILENT);
@@ -7012,6 +7039,7 @@ impl<R: Router> Orchestrator<R> {
         if completed.is_err() {
             let _ = self.settle(task, &report_id);
         }
+        self.clear_live_activity(task);
         self.request_wake_nudge();
         self.relay_worker(WorkerFinish::Success(text.to_owned()), notice)
     }
@@ -7041,6 +7069,7 @@ impl<R: Router> Orchestrator<R> {
         {
             return self.worker_silent(task, notice, None);
         }
+        self.clear_live_activity(task);
         self.request_wake_nudge();
         self.relay_worker(WorkerFinish::Failure(text.to_owned()), notice)
     }

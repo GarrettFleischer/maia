@@ -10,6 +10,7 @@ use maia_core::task_loop::TodoStatus;
 use maia_core::task_loop::accept_model_brief;
 use maia_core::task_loop::answer_proposal;
 use maia_core::task_loop::classify_addition;
+use maia_core::task_loop::close_open_items;
 use maia_core::task_loop::contract_from_model;
 use maia_core::task_loop::deterministic_brief;
 use maia_core::task_loop::deterministic_contract;
@@ -92,6 +93,29 @@ fn a_tool_without_an_in_progress_item_is_refused() {
     assert!(error.contains("Add that step to the list"));
     assert!(gate_tool(&list, "success").is_ok());
     assert!(gate_tool(&list, "todo_add").is_ok());
+}
+
+#[test]
+fn success_closes_pending_and_in_progress_todos() {
+    let mut list = list_from_contract(&contract());
+    propose_addition(&mut list, "write tests for the parser", "needed for a solid result");
+    assert!(list
+        .items
+        .iter()
+        .any(|item| item.status == TodoStatus::InProgress));
+    assert!(list
+        .items
+        .iter()
+        .any(|item| item.status == TodoStatus::Pending));
+    close_open_items(&mut list, "Dog house is ready.");
+    assert!(
+        list.items
+            .iter()
+            .all(|item| item.status == TodoStatus::Done),
+        "{:?}",
+        list.items
+    );
+    assert!(list.items.iter().any(|item| item.note.contains("ready")));
 }
 
 #[test]

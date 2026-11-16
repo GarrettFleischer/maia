@@ -2824,10 +2824,82 @@ fn a_working_parent_does_not_print_its_id_on_the_activity_line() {
     let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
     let task = outcome.task.expect("task");
     let labels = harness.host().activity_labels();
-    assert!(labels.iter().any(|label| label == "Working"), "{labels:?}");
     assert!(
         labels.iter().all(|label| !label.contains(&task.0)),
         "{labels:?}"
+    );
+}
+
+#[test]
+fn completed_worker_clears_its_activity_lines() {
+    let mut harness = Harness::open_model("activity-clears-on-done", prompt_supply());
+    let owner = "Check the weather in Canby, Oregon and report it back.";
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
+    let task = outcome.task.expect("task");
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Completed { .. })),
+        "phase {:?}",
+        harness.host().phase(&task)
+    );
+    let leftover: Vec<_> = harness
+        .host()
+        .activity_events()
+        .into_iter()
+        .filter(|event| event.task_id.as_deref() == Some(task.0.as_str()))
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "finished task must not keep Working/Stop activity: {leftover:?}"
+    );
+}
+
+#[test]
+fn success_marks_open_todos_done_on_the_stored_plan() {
+    let mut harness = Harness::open_model("todos-close-on-success", prompt_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Weather report delivered."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("Weather report delivered."));
+    let outcome = wait(
+        harness
+            .host()
+            .handle_user_message("Check the weather in Canby, Oregon and report it back."),
+    )
+    .expect("spawn");
+    let task = outcome.task.expect("task");
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Completed { .. })),
+        "phase {:?}",
+        harness.host().phase(&task)
+    );
+    let (goal_json, todo_json, _, _) = harness
+        .host()
+        .store()
+        .task_plan(&task.0)
+        .expect("plan")
+        .expect("plan row");
+    let (_, list, _, _) =
+        maia_core::task_loop::parse_stored_plan(&goal_json, &todo_json).expect("parse");
+    assert!(
+        !list.items.is_empty(),
+        "completed worker should still have a working list"
+    );
+    assert!(
+        list.items
+            .iter()
+            .all(|item| item.status == maia_core::task_loop::TodoStatus::Done),
+        "open todos must close when the worker succeeds: {:?}",
+        list.items
     );
 }
 

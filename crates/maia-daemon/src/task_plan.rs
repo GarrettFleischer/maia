@@ -22,6 +22,7 @@ use maia_core::task_loop::TodoStatus;
 use maia_core::task_loop::accept_model_brief;
 use maia_core::task_loop::answer_proposal;
 use maia_core::task_loop::bound_digest;
+use maia_core::task_loop::close_open_items;
 use maia_core::task_loop::complete_item;
 use maia_core::task_loop::contract_from_model;
 use maia_core::task_loop::contract_json;
@@ -360,6 +361,12 @@ impl<R: Router> Orchestrator<R> {
                 autonomous_retries: machine.autonomous_retries,
             },
         );
+    }
+
+    /// Closes leftover list items when the worker calls success and persists them.
+    pub(super) fn close_todos_on_success(&mut self, machine: &mut WorkerMachine, note: &str) {
+        close_open_items(&mut machine.todos, note);
+        self.save_worker_progress(machine);
     }
 
     pub(super) fn save_plan(

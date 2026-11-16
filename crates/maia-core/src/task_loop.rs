@@ -18,12 +18,13 @@ mod task_guard;
 pub use task_guard::{
     Addition, AdditionClass, GoalContract, HandoffNotes, PlanProgress, ReviewEffect, ReviewVerdict,
     TodoItem, TodoList, TodoStatus, accept_model_brief, answer_proposal, bound_digest,
-    classify_addition, complete_item, contract_from_model, contract_json, deterministic_brief,
-    deterministic_contract, effect_of, gate_tool, goal_prompt, handoff_chat_line, handoff_prompt,
-    inherit_list, list_from_contract, owner_decision, owner_question, parse_review,
-    parse_stored_plan, plan_json, plan_json_with_progress, plan_progress_from_todo,
-    propose_addition, review_is_due, review_prompt, start_item, GOAL_CONTRACT_PREFACE,
-    HANDOFF_LIMIT, HANDOFF_PREFACE, REVIEW_INTERVAL_MS, REVIEW_PREFACE, REVIEW_STEP_CADENCE,
+    classify_addition, close_open_items, complete_item, contract_from_model, contract_json,
+    deterministic_brief, deterministic_contract, effect_of, gate_tool, goal_prompt,
+    handoff_chat_line, handoff_prompt, inherit_list, list_from_contract, owner_decision,
+    owner_question, parse_review, parse_stored_plan, plan_json, plan_json_with_progress,
+    plan_progress_from_todo, propose_addition, review_is_due, review_prompt, start_item,
+    GOAL_CONTRACT_PREFACE, HANDOFF_LIMIT, HANDOFF_PREFACE, REVIEW_INTERVAL_MS, REVIEW_PREFACE,
+    REVIEW_STEP_CADENCE,
 };
 
 /// Recent steps kept for loop checks.

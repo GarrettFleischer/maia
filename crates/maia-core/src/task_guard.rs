@@ -479,6 +479,19 @@ pub fn complete_item(list: &mut TodoList, id: &str, result: &str) -> bool {
     true
 }
 
+/// Marks every pending or in-progress item done when the worker succeeds.
+pub fn close_open_items(list: &mut TodoList, note: &str) {
+    let note = note.trim();
+    for item in &mut list.items {
+        if matches!(item.status, TodoStatus::Pending | TodoStatus::InProgress) {
+            item.status = TodoStatus::Done;
+            if item.note.is_empty() && !note.is_empty() {
+                item.note = note.to_owned();
+            }
+        }
+    }
+}
+
 /// Marks an item in progress. Other in-progress items return to pending.
 pub fn start_item(list: &mut TodoList, id: &str) -> bool {
     if !list.items.iter().any(|item| item.id == id) {
