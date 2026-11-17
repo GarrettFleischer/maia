@@ -123,21 +123,23 @@ export function ManagerWakeSection({
       <p className="maia-field-help">
         Keeps decision questions and finished-goal close-outs; drops optional status chatter.
       </p>
-      {canEdit ? (
-        <button
-          type="button"
-          className="maia-icon-btn maia-icon-btn--primary"
-          aria-label="Save wake schedule"
-          title="Save wake schedule"
-          disabled={busy || !loaded}
-          onClick={() => void save()}
-        >
-          <span className="maia-check-icon" aria-hidden="true" />
-        </button>
-      ) : null}
-      <p className="maia-field-help" role="status">
-        {status}
-      </p>
+      <div className="maia-set-acts">
+        <p className="maia-field-help maia-set-grow" role="status">
+          {status}
+        </p>
+        {canEdit ? (
+          <button
+            type="button"
+            className="maia-btn maia-btn--primary"
+            aria-label="Save wake schedule"
+            title="Save wake schedule"
+            disabled={busy || !loaded}
+            onClick={() => void save()}
+          >
+            Save
+          </button>
+        ) : null}
+      </div>
     </section>
   )
 }
