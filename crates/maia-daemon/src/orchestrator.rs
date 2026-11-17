@@ -1320,10 +1320,12 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - failure: message is why this cannot be handled. Owner turns only.\n\
 - waiting: message is one specific question while work stays alive. Prefer ask_user for CEO decisions. Owner turns only. Never use waiting instead of hiring a worker the CEO asked you to hire.\n\
 - message_user: post one useful update only when the CEO genuinely needs to know. Never announce a hire, that you are standing by, or that work is in progress — after hiring or continuing a worker the turn ends silent until a Done close-out or ask_user. When the wake brief shows FINISHED goals (goal_state=needs_close_out) and nothing else needs attention, you MUST send exactly one short Done close-out with message_user — start with Done —, restate the FINISHED outcome= and where it landed, then stay silent on later wakes. Prior status chatter (hired / working / will notify / standing by) does not count as close-out. If RECENT_CEO_CHAT already has that Done close-out, stay silent. Never dump worker logs into chat. Never put a secret value, password, token, or vault contents into Done or message_user — name the secret, do not echo its value.\n\
-- ask_user: CEO decision(s) (credentials, money, irreversible or external action, or a real owner preference). Several distinct questions are OK when needed; never duplicates of an open question. Prefer ask_questions for radios/checkboxes. Do the work you can first; ask as soon as a decision blocks progress — do not defer. When CEO_WAITING (mandatory), ask immediately this wake. When already asked, stay silent unless OPEN_QUESTIONS + an unrelated CEO message warrants one brief reminder — do not nag every wake. After the CEO answers, continue_task immediately with their answer. Never paste worker output. Never put a secret value into the question text — use request_secret.\n\
-- ask_questions: one in-chat card with several questions (single = radio, multi = checkboxes). Every question always has Other in the UI. Use when multiple decisions must be defined together.\n\
+- ask_user: CEO decision(s) (credentials, money, irreversible or external action, or a real owner preference). One plain question is fine; when two or more named choices must be defined together (or the CEO says ask_questions), you MUST call ask_questions instead — never ask_user prose for that. Never duplicates of an open question. Do the work you can first; ask as soon as a decision blocks progress — do not defer. When CEO_WAITING (mandatory), ask immediately this wake. When already asked, stay silent unless OPEN_QUESTIONS + an unrelated CEO message warrants one brief reminder — do not nag every wake. After the CEO answers, continue_task immediately with their answer. Never paste worker output. Never put a secret value into the question text — use request_secret.\n\
+- ask_questions: one in-chat card with several questions (single = radio, multi = checkboxes). Every question always has Other in the UI. MUST use this when multiple decisions must be defined together or the CEO asks for a multi-question card.\n\
 - request_secret: ask for a secret by name; masked input; value never enters chat, logs, model context, notes, or Done.\n\
 - New work: always spawn_task first. Do not answer a hire request with only message_user, waiting, ask_user, success, or failure — that leaves no worker. Do not refuse a path yourself; hire a worker. Do not try to run the work with bash or files yourself.\n\
+- When the CEO mandates a draft/WRONG first hire (or names DRAFT then a later recover hire), spawn that mandated draft first with ONLY that brief — never skip ahead by hiring one worker that delivers the final correct result. After the draft finishes and fails the check, spawn_task again with a corrected brief.\n\
+- When the CEO needs two or more named choices at once (or says to use ask_questions), you MUST call ask_questions with one card — never ask_user prose for that multi-choice ask.\n\
 - After spawn_task, link_task, continue_task, or retry_task the owner turn is already finished silently — do not follow with success or message_user just to acknowledge.\n\
 - Continue an open listed task: continue_task with that task_id and optional guidance (re-plan text). When the CEO answers your ask_user about a waiting worker, continue_task immediately in that same owner turn with that task_id and their answer so the worker can finish — do not wait for a wake and do not spawn a new worker for the same answer. When the CEO asks to hire new work while another worker is waiting or running, still spawn_task for the new work — do not treat a hire request as the answer to the waiter.\n\
 - After a waiting worker receives the CEO's answer, continue_task with their answer so the worker sees it framed as the answer; the worker must finish promptly (success) unless the goal still requires tools. Do not re-wait for the same question and do not run long shell work that blocks other workers unless the goal needs it.\n\
@@ -1718,16 +1720,6 @@ fn stored_chat_message(message: &RuntimeMessage) -> Option<ChatMessage> {
         return None;
     }
     Some(ChatMessage::text(role, content.to_owned()))
-}
-
-fn dispatch_note(text: &str) -> String {
-    let title = first_line(text);
-    let title = title.trim_end_matches('.').trim();
-    if title.is_empty() {
-        "Dispatched as one new task.".to_owned()
-    } else {
-        format!("Dispatched as one new task: {title}.")
-    }
 }
 
 /// Routes that finish an owner turn without CEO chat (hire / continue / recover).
@@ -2190,7 +2182,7 @@ fn route_tools_json() -> String {
     let mut tools = vec![
         route_tool(
             "spawn_task",
-            "REQUIRED for any new work that needs shell, files, browser, network, or vault. Hire one worker. You never run that work yourself. Optional guidance is the worker brief (details + steps). Prefer a short first line so the Tasks rail stays glanceable. When the CEO names two workers (for example RESEARCH then WRITE), spawn only the first now; hire the next on a later wake after that one finishes — do not fold both into one mega-title. After a failed or incomplete result, or when a finished outcome fails a goal check, hire again with a corrected brief that restates every stated goal check (path, format, content, forbidden tokens) so the next hire is durable — do not omit the checks.",
+            "REQUIRED for any new work that needs shell, files, browser, network, or vault. Hire one worker. You never run that work yourself. Optional guidance is the worker brief (details + steps). Prefer a short first line so the Tasks rail stays glanceable. When the CEO names two workers (for example RESEARCH then WRITE), spawn only the first now; hire the next on a later wake after that one finishes — do not fold both into one mega-title. When the CEO mandates a draft/WRONG first hire, spawn that mandated draft with ONLY that brief — never skip it by hiring one worker that delivers the final correct result. After a failed or incomplete result, or when a finished outcome fails a goal check (including a WRONG draft), hire again with a corrected brief that restates every stated goal check (path, format, content, forbidden tokens) so the next hire is durable — do not omit the checks.",
             RouteToolShape::Spawn,
             true,
         ),
@@ -2230,7 +2222,7 @@ fn route_tools_json() -> String {
         ),
         terminal_tool(
             "ask_user",
-            "Ask the CEO a clear decision (credentials, money, irreversible or external action, or a real owner preference you cannot choose). Several distinct questions are OK when the task needs them — never duplicates or rewordings of an already-open question. Prefer ask_questions when you need radios/checkboxes. Do what you can first; as soon as a decision blocks progress, ask immediately — do not defer. When the wake brief shows CEO_WAITING, you MUST ask in the same wake (not message_user, not silence, not a later wake). Skip if RECENT_CEO_CHAT / OPEN_QUESTIONS already asked. Never ask about things you can decide yourself. Never paste worker output into chat. Never put a secret value into the question text — use request_secret for values. Workers never ask the CEO directly.",
+            "Ask the CEO one clear decision (credentials, money, irreversible or external action, or a real owner preference you cannot choose). When two or more named choices must be defined together (or the CEO says ask_questions / multi-question card), you MUST call ask_questions instead — never this tool's prose for that. Never duplicates or rewordings of an already-open question. Do what you can first; as soon as a decision blocks progress, ask immediately — do not defer. When the wake brief shows CEO_WAITING, you MUST ask in the same wake (not message_user, not silence, not a later wake). Skip if RECENT_CEO_CHAT / OPEN_QUESTIONS already asked. Never ask about things you can decide yourself. Never paste worker output into chat. Never put a secret value into the question text — use request_secret for values. Workers never ask the CEO directly.",
         ),
         ask_questions_tool(),
         request_secret_tool(),
@@ -2325,7 +2317,7 @@ fn ask_questions_tool() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": "ask_questions",
-            "description": "Ask the CEO several structured questions in one in-chat card (radios and/or checkboxes). Every question always has an Other free-text box in the UI. Use when a task needs multiple decisions defined at once. Never duplicate an already-open question. Prefer this over several plain ask_user lines when choices help.",
+            "description": "Ask the CEO several structured questions in one in-chat card (radios and/or checkboxes). Every question always has an Other free-text box in the UI. MUST call ask_questions when a task needs multiple decisions defined at once or the CEO asks for a multi-question card — never ask_user prose for that. Never duplicate an already-open question.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -5812,7 +5804,15 @@ impl<R: Router> Orchestrator<R> {
         close: TurnClose,
         _attachments: &[StagedAttachment],
     ) -> MessageOutcome {
-        let sentence = sanitize_owner_sentence(sentence);
+        // Belt-and-suspenders: silent work routes never leave hire/continue chatter in chat.
+        let sentence = if applied
+            .as_ref()
+            .is_some_and(|applied| silent_work_route(applied.route))
+        {
+            String::new()
+        } else {
+            sanitize_owner_sentence(sentence)
+        };
         let (admitted, task, route) = if matches!(close, TurnClose::HostAsk) {
             (
                 AdmittedRoute::AskUser {
@@ -8291,7 +8291,7 @@ fn parent_work_request(
 
 fn route_effect(
     route: &'static str,
-    owner_text: &str,
+    _owner_text: &str,
     task: Option<TaskId>,
     decision: RouteDecision,
     finish: WorkerFinish,
@@ -8305,11 +8305,12 @@ fn route_effect(
         WorkerFinish::Failure(_) => "A worker failed. I will decide what to do next.".to_owned(),
         WorkerFinish::Waiting(_) => "A worker is waiting. I will decide what to do next.".to_owned(),
         WorkerFinish::Skipped => match route {
-            "spawn_task" | "link_task" => dispatch_note(owner_text),
-            "continue_task" => "Handed this message to the running task.".to_owned(),
+            // Owner-turn hire/link stays silent (no "Dispatched as…" chat).
+            "spawn_task" | "link_task" => String::new(),
+            "continue_task" => String::new(),
             "inspect_task" => "Looked at the task. Nothing was changed.".to_owned(),
             "cancel_task" => "Cancelled that task. It will not continue.".to_owned(),
-            "retry_task" => "Started another attempt on that task.".to_owned(),
+            "retry_task" => String::new(),
             _ => "The route finished.".to_owned(),
         },
         WorkerFinish::Silent => WORKER_SILENT.to_owned(),
@@ -9212,6 +9213,29 @@ mod manager_prefix_tests {
         assert!(first.ends_with("Subagent tools\nbash\nread_file\nwrite_file"));
         let other = manager_system_prefix("other_tool");
         assert_ne!(byte_hash(&first), byte_hash(&other));
+    }
+
+    #[test]
+    fn manager_contract_requires_separate_draft_hire_and_ask_questions_card() {
+        // Live run73: manager collapsed an intentional WRONG draft into one final hire,
+        // and used ask_user prose instead of one ask_questions card for two choices.
+        assert!(
+            super::ROUTE_CONTROL_CONTRACT.contains("mandated draft"),
+            "contract must forbid skipping a CEO-mandated draft/WRONG hire"
+        );
+        assert!(
+            super::ROUTE_CONTROL_CONTRACT.contains("MUST call ask_questions"),
+            "contract must require ask_questions for multiple named choices"
+        );
+        let tools = super::route_tools_json();
+        assert!(
+            tools.contains("mandated draft") || tools.contains("WRONG draft"),
+            "spawn_task tool must mention mandated draft/WRONG sequence"
+        );
+        assert!(
+            tools.contains("MUST call ask_questions"),
+            "ask tools must require ask_questions for multi-choice cards"
+        );
     }
 
     #[test]

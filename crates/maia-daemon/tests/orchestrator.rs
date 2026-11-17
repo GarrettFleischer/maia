@@ -2362,6 +2362,37 @@ fn spawn_task_finishes_owner_turn_without_hire_chatter() {
 }
 
 #[test]
+fn fallback_spawn_after_repair_stays_silent_without_dispatched_note() {
+    // Live run73 ask bot posted route=spawn_task "Dispatched as one new task: …".
+    let mut harness = Harness::open("silent-fallback-hire", prompt_supply());
+    // Exhaust route repairs with unreadable replies so host fallback-spawns.
+    harness.router.push_raw("{not a tool}".to_owned());
+    harness.router.push_raw("{still not a tool}".to_owned());
+    harness.router.push_raw("{and again}".to_owned());
+    let outcome = wait(harness.host().handle_user_message(
+        "Hire a worker to write READY73 into F:\\Development\\maia\\data\\workspace\\run73_scratch\\fallback.txt.",
+    ))
+    .expect("fallback spawn");
+    assert!(
+        matches!(
+            outcome.admitted,
+            AdmittedRoute::Admit(RouteDecision::CreateTask)
+        ),
+        "repair exhaustion on hire text should fallback-spawn: {outcome:?}"
+    );
+    let assistant = texts(
+        &harness.database,
+        "SELECT body FROM router_messages WHERE role = 'assistant' ORDER BY ordinal",
+    );
+    assert!(
+        assistant
+            .iter()
+            .all(|body| !body.contains("Dispatched as one new task")),
+        "fallback spawn must not post Dispatched hire chatter, got {assistant:?}"
+    );
+}
+
+#[test]
 fn silent_hire_settles_live_partial_so_streaming_does_not_stick() {
     use maia_daemon::LiveReplyBoard;
     use maia_router::ReplyProgress;
