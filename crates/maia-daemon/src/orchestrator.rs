@@ -309,7 +309,7 @@ A plan or a cut-off sentence is not finished. Call a tool.\n\
 Do not invent results. To read or list a file or folder, call bash. On Windows the command is PowerShell and a path looks like F:\\Development.\n\
 Stay inside this task. Do not start another task.\n\
 Work only on the current in-progress list item. If a step is missing, add it first. Tests, error handling, matching style, and a bug in the same files can be added. Anything else: call ask_owner and keep working on the list.\n\
-When you learn a durable fact worth keeping (owner preference, important info from a document or site), call remember with one short sentence before you move on. After a coding approach fails and you take another path, always remember what failed and which path worked so you do not repeat the rabbit hole. Trailing ## recall is id + short title only — call get_memories for full text, or search_memories then get_memories for exact codes/filenames. Before editing a file, search_memories for that path (especially tried-and-failed notes). Use update_memory or retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status.\n\
+When you learn a durable fact worth keeping (owner preference, important info from a document or site), call remember with one short sentence before you move on. After a coding approach fails and you take another path, always remember what failed and which path worked so you do not repeat the rabbit hole. Trailing ## recall is id + short title only — call get_memories for full text, or search_memories then get_memories for exact codes/filenames. Before editing a file, search_memories for that path (especially tried-and-failed notes). Use update_memory (with reason/alternatives on decisions) or retire_memory when a recalled claim is wrong or obsolete. When you work out how code fits together, save_exploration; later get_exploration if hashes still match. Skip greetings and transient status.\n\
 Reusable how-to: when you discover a reusable procedure or project coding rule (multi-step, worth following again), call save_skill with a short title, one-line when_to_use, and a tight body — not remember. When the trailing ## skills catalog lists a match for the current task, call load_skill before improvising.\n";
 
 #[derive(Clone, Copy)]
@@ -1314,7 +1314,7 @@ On every turn and every wake: check workers, diagnose failures yourself from the
 Never trust a worker's success claim alone. A finished worker with success can still fail the goal check. Before Done, verify the stated checks yourself (missing required inputs, wrong format, line/word count, path, or content) via the wake brief outcome/output tail or by hiring a worker to inspect the artifact. If verification fails, recover silently with spawn_task and a corrected brief (preferred after a completed wrong draft) — do not ask_user and do not close out yet. Do not keep calling continue_task or retry_task on a completed worker; hire again instead. When the check already passes, Done immediately — do not keep verifying forever.\n\
 You may hire, recover, ask, and close out while other workers are still running — do not wait for healthy runners to finish. If a worker's idle age looks hung with no useful progress, cancel_task and hire or retry with a clearer plan rather than waiting forever.\n\
 A wake brief lists LEARNED notes (hints for how to retry ATTENTION failures only — never spawn_task from LEARNED alone or invent work absent from ATTENTION), ATTENTION (ordered concurrent goals), CEO_WAITING (with the question), FINISHED goals (with outcome= for close-out), RECENT_CEO_CHAT, and each open worker with status, idle age, recent output, and last error. Use that before asking the CEO.\n\
-On a silent wake call only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, ask_questions, request_secret, record_learning, remember, update_memory, retire_memory, search_memories, get_memories, save_skill, load_skill. On a wake do not call success, failure, waiting, link_task, or inspect_task (use the wake brief instead of inspect).\n\
+On a silent wake call only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, ask_questions, request_secret, record_learning, remember, update_memory, retire_memory, search_memories, get_memories, save_exploration, get_exploration, save_skill, load_skill. On a wake do not call success, failure, waiting, link_task, or inspect_task (use the wake brief instead of inspect).\n\
 On an owner turn keep going until you call success, failure, waiting, message_user, or ask_user — except after spawn_task, link_task, continue_task, or retry_task, which end the turn silently (no hire / standing-by / in-progress chat).\n\
 - success: message is the sentence the owner should read. Use it for a greeting, thanks, or a question you can answer from memory when you did not hire or continue a worker. Owner turns only.\n\
 - failure: message is why this cannot be handled. Owner turns only.\n\
@@ -1334,7 +1334,7 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - Stop for good: cancel_task.\n\
 - Failed or stopped work you choose to retry: retry_task.\n\
 - After a useful lesson (what worked or failed): record_learning with one short note. It appears under LEARNED on later wakes — use it only when ATTENTION already lists matching failed/stuck work; do not spawn new goals from LEARNED alone; do not repeat a failed tactic.\n\
-- Durable brain memory: when the owner states a preference, name, or important fact, call remember with one short sentence. After a coding approach fails and another path works, remember both (what failed, what worked) so later wakes avoid the same rabbit hole. Trailing ## recall lists id + short title only — call get_memories for full text; use search_memories (then get_memories) for exact error codes, filenames, or identifiers. Before editing a file, search_memories for that path (especially tried-and-failed notes). Past session summaries are searchable via search_memories (tagged [session_summary]). Use update_memory / retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status. Do not dump secrets into memory.\n\
+- Durable brain memory: when the owner states a preference, name, or important fact, call remember with one short sentence. After a coding approach fails and another path works, remember both (what failed, what worked) so later wakes avoid the same rabbit hole. Trailing ## recall lists id + short title only — call get_memories for full text; use search_memories (then get_memories) for exact error codes, filenames, or identifiers. Before editing a file, search_memories for that path (especially tried-and-failed notes). Past session summaries are searchable via search_memories (tagged [session_summary]). Use update_memory / retire_memory when a recalled claim is wrong or obsolete; on decisions pass reason and alternatives so get_memories can show previously. When you work out how code fits together, save_exploration (topic, conclusion, files read); later get_exploration to reuse if hashes still match. Skip greetings and transient status. Do not dump secrets into memory.\n\
 - Skills (how-to): reusable procedures and project coding rules go in save_skill (title + when_to_use + body), not remember. When ## skills in the trailing context matches the task, call load_skill with that skill_id and follow it. Never put secrets into skills.\n\
 Fixable worker failures (missing file, bad args, wrong/incomplete output vs the goal check, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance that tries a different approach. Do not ask_user. Do not call bash yourself. Prefer a second hire with a corrected brief when the first approach was wrong.\n\
 If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: call ask_user / ask_questions / request_secret immediately unless CEO_WAITING (already asked), OPEN_QUESTIONS, or RECENT_CEO_CHAT already has that unanswered ask. Do not defer. Do not stay silent on the first ask. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate cleanly. Do not rephrase the same decision again later.\n\
@@ -1918,7 +1918,8 @@ fn router_stop(response: &RouterResponse) -> RouterStop {
         [call] => match call.name.as_str() {
             "ask_questions" | "request_secret" => RouterStop::CeoWidget(call.clone()),
             "remember" | "update_memory" | "retire_memory" | "search_memories" | "get_memories"
-            | "recall" | "save_skill" | "load_skill" | "activate_skill" => {
+            | "recall" | "save_exploration" | "get_exploration" | "delete_exploration"
+            | "save_skill" | "load_skill" | "activate_skill" => {
                 RouterStop::Memory(call.clone())
             }
             "success" | "failure" | "waiting" | "message_user" | "ask_user" => {
@@ -1997,6 +1998,9 @@ fn is_manager_tool(name: &str) -> bool {
                 | "search_memories"
                 | "get_memories"
                 | "recall"
+                | "save_exploration"
+                | "get_exploration"
+                | "delete_exploration"
                 | "save_skill"
                 | "load_skill"
                 | "activate_skill"
@@ -2273,6 +2277,8 @@ fn wake_tools_json() -> String {
                     | "retire_memory"
                     | "search_memories"
                     | "get_memories"
+                    | "save_exploration"
+                    | "get_exploration"
                     | "save_skill"
                     | "load_skill"
             )
@@ -4248,12 +4254,14 @@ impl<R: Router> Orchestrator<R> {
                     } else if let Some(parsed) =
                         crate::memory_tools::parse_memory_tool(name, arguments_json)
                     {
+                        let workspace = std::path::PathBuf::from("data").join("workspace");
                         let _ = crate::memory_tools::apply_memory_tool(
                             &self.store,
                             &parsed,
                             &self.turn_bot,
                             self.ids.now,
                             &known,
+                            &workspace,
                         );
                     }
                 }
@@ -4715,12 +4723,14 @@ impl<R: Router> Orchestrator<R> {
         else {
             return "Memory tool needs a valid sentence or claim_id.".to_owned();
         };
+        let workspace = std::path::PathBuf::from("data").join("workspace");
         match crate::memory_tools::apply_memory_tool(
             &self.store,
             &parsed,
             &self.turn_bot,
             self.ids.now,
             &known,
+            &workspace,
         ) {
             Ok(message) => message,
             Err(_) => "Could not write that memory.".to_owned(),

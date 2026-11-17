@@ -693,7 +693,8 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                 }
             }
             "remember" | "update_memory" | "retire_memory" | "search_memories" | "get_memories"
-            | "recall" | "save_skill" | "load_skill" | "activate_skill" => {
+            | "recall" | "save_exploration" | "get_exploration" | "delete_exploration"
+            | "save_skill" | "load_skill" | "activate_skill" => {
                 let arguments_json = if call.message.trim().starts_with('{') {
                     call.message.clone()
                 } else if call.name == "retire_memory" {
@@ -704,6 +705,8 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
                     serde_json::json!({ "query": call.message.trim() }).to_string()
                 } else if call.name == "get_memories" {
                     serde_json::json!({ "ids": [call.message.trim()] }).to_string()
+                } else if call.name == "get_exploration" || call.name == "delete_exploration" {
+                    serde_json::json!({ "topic": call.message.trim() }).to_string()
                 } else if call.name == "load_skill" || call.name == "activate_skill" {
                     serde_json::json!({ "skill_id": call.message.trim() }).to_string()
                 } else {

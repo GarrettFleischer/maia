@@ -1,5 +1,6 @@
 //! Prompt-driven brain writes and progressive-disclosure recall tools.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -11,6 +12,9 @@ use maia_core::memory_redact::redact_secrets_for_save;
 use maia_core::thread_cache::compact_recall_title;
 use maia_store::AppendEvents;
 use maia_store::EpisodeWrite;
+use maia_store::ExplorationFileRecord;
+use maia_store::ExplorationRequest;
+use maia_store::ExplorationResponse;
 use maia_store::MemoryTaint;
 use maia_store::PromotionClaimWrite;
 use maia_store::PromotionReplaceWrite;
@@ -19,6 +23,8 @@ use maia_store::SegmentWrite;
 use maia_store::SqliteOwner;
 use maia_store::StoreError;
 use maia_store::ThreadEventWrite;
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::inspector::ROUTER_THREAD;
 
@@ -29,6 +35,10 @@ pub const SEARCH_RESULT_LIMIT: usize = 12;
 
 /// Cap for get_memories ids in one call.
 pub const GET_MEMORIES_LIMIT: usize = 8;
+
+/// Soft caps for decision reason / alternatives fields.
+const MAX_REASON_CHARS: usize = 240;
+const MAX_ALTERNATIVES_CHARS: usize = 240;
 
 /// One parsed memory tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +54,10 @@ pub enum MemoryToolCall {
         claim_id: String,
         /// Successor sentence.
         sentence: String,
+        /// Why this decision / change.
+        reason: Option<String>,
+        /// Options considered and discarded.
+        alternatives: Option<String>,
     },
     /// Hide a claim (retire).
     Retire {
@@ -60,9 +74,31 @@ pub enum MemoryToolCall {
         /// Claim/fact ids from recall or search_memories.
         ids: Vec<String>,
     },
+    /// Save an exploration memo keyed to file content hashes.
+    SaveExploration {
+        /// Short topic key.
+        topic: String,
+        /// Conclusion about how the code fits together.
+        conclusion: String,
+        /// File paths read while forming the conclusion.
+        files: Vec<String>,
+    },
+    /// Load an exploration memo by topic or path; report file freshness.
+    GetExploration {
+        /// Topic key (preferred).
+        topic: Option<String>,
+        /// File path lookup when topic is absent.
+        path: Option<String>,
+    },
+    /// Delete an exploration memo by topic (cleanup / tests).
+    DeleteExploration {
+        /// Topic key.
+        topic: String,
+    },
 }
 
-/// Parses remember / update_memory / retire_memory / search_memories / get_memories.
+/// Parses remember / update_memory / retire_memory / search_memories / get_memories /
+/// save_exploration / get_exploration.
 #[must_use]
 pub fn parse_memory_tool(name: &str, arguments_json: &str) -> Option<MemoryToolCall> {
     let value: serde_json::Value = serde_json::from_str(arguments_json).ok()?;
@@ -80,6 +116,8 @@ pub fn parse_memory_tool(name: &str, arguments_json: &str) -> Option<MemoryToolC
             Some(MemoryToolCall::Update {
                 claim_id: claim_id.to_owned(),
                 sentence,
+                reason: optional_short_field(&value, "reason", MAX_REASON_CHARS),
+                alternatives: optional_short_field(&value, "alternatives", MAX_ALTERNATIVES_CHARS),
             })
         }
         "retire_memory" => {
@@ -115,8 +153,93 @@ pub fn parse_memory_tool(name: &str, arguments_json: &str) -> Option<MemoryToolC
             }
             Some(MemoryToolCall::Get { ids })
         }
+        "save_exploration" => {
+            let topic = value.get("topic")?.as_str()?.trim();
+            if topic.is_empty() || topic.chars().count() > maia_store::MAX_TOPIC_CHARS {
+                return None;
+            }
+            let conclusion = value
+                .get("conclusion")
+                .or_else(|| value.get("message"))?
+                .as_str()?
+                .trim();
+            if conclusion.is_empty()
+                || conclusion.chars().count() > maia_store::MAX_CONCLUSION_CHARS
+            {
+                return None;
+            }
+            let files = parse_file_paths(&value)?;
+            if files.is_empty() {
+                return None;
+            }
+            Some(MemoryToolCall::SaveExploration {
+                topic: topic.to_owned(),
+                conclusion: conclusion.to_owned(),
+                files,
+            })
+        }
+        "get_exploration" => {
+            let topic = value
+                .get("topic")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            let path = value
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            if topic.is_none() && path.is_none() {
+                return None;
+            }
+            Some(MemoryToolCall::GetExploration { topic, path })
+        }
+        "delete_exploration" => {
+            let topic = value
+                .get("topic")
+                .or_else(|| value.get("message"))?
+                .as_str()?
+                .trim();
+            if topic.is_empty() || topic.chars().count() > maia_store::MAX_TOPIC_CHARS {
+                return None;
+            }
+            Some(MemoryToolCall::DeleteExploration {
+                topic: topic.to_owned(),
+            })
+        }
         _ => None,
     }
+}
+
+fn optional_short_field(
+    value: &serde_json::Value,
+    key: &str,
+    max_chars: usize,
+) -> Option<String> {
+    let raw = value.get(key)?.as_str()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let clipped: String = raw.chars().take(max_chars).collect();
+    Some(clipped)
+}
+
+fn parse_file_paths(value: &serde_json::Value) -> Option<Vec<String>> {
+    let arr = value.get("files")?.as_array()?;
+    let mut files = Vec::new();
+    for item in arr {
+        let path = item.as_str()?.trim();
+        if path.is_empty() || path.chars().count() > maia_store::MAX_PATH_CHARS {
+            return None;
+        }
+        files.push(path.to_owned());
+        if files.len() >= maia_store::MAX_FILES_PER_MEMO {
+            break;
+        }
+    }
+    Some(files)
 }
 
 fn parse_ids(value: &serde_json::Value) -> Option<Vec<String>> {
@@ -155,6 +278,32 @@ fn clean_sentence(value: &serde_json::Value) -> Option<String> {
         raw.to_owned()
     };
     Some(sentence)
+}
+
+/// Appends optional decision reason / discarded alternatives onto a claim sentence.
+#[must_use]
+pub fn sentence_with_decision(
+    sentence: &str,
+    reason: Option<&str>,
+    alternatives: Option<&str>,
+) -> String {
+    let reason = reason.map(str::trim).filter(|s| !s.is_empty());
+    let alternatives = alternatives.map(str::trim).filter(|s| !s.is_empty());
+    match (reason, alternatives) {
+        (None, None) => sentence.to_owned(),
+        (Some(why), None) => format!("{sentence} (why: {why})"),
+        (None, Some(discarded)) => format!("{sentence} (discarded: {discarded})"),
+        (Some(why), Some(discarded)) => {
+            format!("{sentence} (why: {why}; discarded: {discarded})")
+        }
+    }
+}
+
+/// SHA-256 hex of raw file bytes.
+#[must_use]
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn fact_lexemes(sentence: &str) -> Vec<String> {
@@ -200,15 +349,19 @@ pub fn format_compact_memory_hits(hits: &[(String, String)]) -> String {
     out
 }
 
-/// Formats full memory bodies for get_memories.
+/// Formats full memory bodies for get_memories (includes a short previously line when present).
 #[must_use]
-pub fn format_memory_bodies(rows: &[(String, String)]) -> String {
+pub fn format_memory_bodies(rows: &[(String, String, Option<String>)]) -> String {
     if rows.is_empty() {
         return "No memories found for those ids.".to_owned();
     }
     let mut out = String::from("## memory bodies\n");
-    for (id, sentence) in rows {
+    for (id, sentence, previous) in rows {
         out.push_str(&format!("`{id}`: {sentence}\n"));
+        if let Some(prev) = previous {
+            let clipped: String = prev.chars().take(160).collect();
+            out.push_str(&format!("  previously: {clipped}\n"));
+        }
     }
     out
 }
@@ -250,10 +403,65 @@ pub fn compact_search_hits(
         .collect()
 }
 
+/// Resolves a path for hashing: absolute as-is, else under `workspace_root`.
+#[must_use]
+pub fn resolve_exploration_path(workspace_root: &Path, raw: &str) -> PathBuf {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace_root.join(path)
+    }
+}
+
+fn hash_workspace_file(workspace_root: &Path, raw: &str) -> Result<(String, String), String> {
+    let resolved = resolve_exploration_path(workspace_root, raw);
+    let bytes = std::fs::read(&resolved).map_err(|_| format!("missing:{raw}"))?;
+    Ok((raw.to_owned(), sha256_hex(&bytes)))
+}
+
+fn format_exploration_get(
+    conclusion: &str,
+    files: &[(String, FileFreshness)],
+) -> String {
+    let mut out = format!("## exploration\n{conclusion}\n## files\n");
+    for (path, status) in files {
+        let label = match status {
+            FileFreshness::Unchanged => "unchanged",
+            FileFreshness::Changed => "changed",
+            FileFreshness::Missing => "missing",
+        };
+        out.push_str(&format!("`{path}` — {label}\n"));
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileFreshness {
+    Unchanged,
+    Changed,
+    Missing,
+}
+
+fn classify_file(workspace_root: &Path, path: &str, expected_hash: &str) -> FileFreshness {
+    let resolved = resolve_exploration_path(workspace_root, path);
+    match std::fs::read(&resolved) {
+        Ok(bytes) => {
+            if sha256_hex(&bytes) == expected_hash {
+                FileFreshness::Unchanged
+            } else {
+                FileFreshness::Changed
+            }
+        }
+        Err(_) => FileFreshness::Missing,
+    }
+}
+
 /// Applies one memory tool against the shared brain. Never logs sentence contents.
 ///
 /// `known_secret_values` are CEO-stored secret values (Credential Manager) when cheaply
 /// available; patterns and `<private>` blocks are always scrubbed before save.
+/// `workspace_root` is used only by exploration tools to hash file contents.
 ///
 /// # Errors
 ///
@@ -264,6 +472,7 @@ pub fn apply_memory_tool(
     bot_id: &str,
     now: i64,
     known_secret_values: &[&str],
+    workspace_root: &Path,
 ) -> Result<String, StoreError> {
     match call {
         MemoryToolCall::Remember { sentence } => {
@@ -318,8 +527,15 @@ pub fn apply_memory_tool(
         MemoryToolCall::Update {
             claim_id,
             sentence,
+            reason,
+            alternatives,
         } => {
-            let sentence = redact_secrets_for_save(sentence, known_secret_values);
+            let sentence = sentence_with_decision(
+                sentence,
+                reason.as_deref(),
+                alternatives.as_deref(),
+            );
+            let sentence = redact_secrets_for_save(&sentence, known_secret_values);
             let (episode_id, turn_id, new_claim_id) = next_ids(now);
             ensure_router_thread(store, now)?;
             store.insert_episode(EpisodeWrite {
@@ -373,11 +589,70 @@ pub fn apply_memory_tool(
         }
         MemoryToolCall::Get { ids } => {
             let rows = store.memory_bodies(ids)?;
-            let pairs: Vec<(String, String)> = rows
+            let pairs: Vec<(String, String, Option<String>)> = rows
                 .into_iter()
-                .map(|row| (row.id, row.sentence))
+                .map(|row| (row.id, row.sentence, row.previous))
                 .collect();
             Ok(format_memory_bodies(&pairs))
+        }
+        MemoryToolCall::SaveExploration {
+            topic,
+            conclusion,
+            files,
+        } => {
+            let conclusion = redact_secrets_for_save(conclusion, known_secret_values);
+            let mut hashed = Vec::with_capacity(files.len());
+            for path in files {
+                match hash_workspace_file(workspace_root, path) {
+                    Ok((path, content_sha256)) => hashed.push(ExplorationFileRecord {
+                        path,
+                        content_sha256,
+                    }),
+                    Err(_) => {
+                        return Ok(format!(
+                            "Could not read `{path}` to hash for exploration memo."
+                        ));
+                    }
+                }
+            }
+            match store.explorations(ExplorationRequest::Save {
+                topic: topic.clone(),
+                conclusion,
+                files: hashed,
+                observer_bot_id: bot_id.to_owned(),
+                now,
+            })? {
+                ExplorationResponse::Memo(record) => {
+                    Ok(format!("Saved exploration `{}`.", record.memo_id))
+                }
+                ExplorationResponse::Empty => Ok("Could not save exploration.".to_owned()),
+            }
+        }
+        MemoryToolCall::GetExploration { topic, path } => {
+            let response = store.explorations(ExplorationRequest::Get {
+                topic: topic.clone().unwrap_or_default(),
+                path: path.clone().unwrap_or_default(),
+            })?;
+            let ExplorationResponse::Memo(record) = response else {
+                return Ok("No exploration memo matched.".to_owned());
+            };
+            let statuses: Vec<(String, FileFreshness)> = record
+                .files
+                .iter()
+                .map(|file| {
+                    (
+                        file.path.clone(),
+                        classify_file(workspace_root, &file.path, &file.content_sha256),
+                    )
+                })
+                .collect();
+            Ok(format_exploration_get(&record.conclusion, &statuses))
+        }
+        MemoryToolCall::DeleteExploration { topic } => {
+            store.explorations(ExplorationRequest::Delete {
+                topic: topic.clone(),
+            })?;
+            Ok(format!("Deleted exploration for topic `{topic}`."))
         }
     }
 }
@@ -425,12 +700,14 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "update_memory",
-                "description": "Replace an existing brain claim when the fact changed. claim_id from recall or search_memories; message is the new one-sentence fact.",
+                "description": "Replace an existing brain claim when the fact changed. claim_id from recall or search_memories; message is the new one-sentence fact. Optional reason (why) and alternatives (options discarded) are stored with the decision; the prior sentence stays as history.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "claim_id": {"type": "string"},
-                        "message": {"type": "string"}
+                        "message": {"type": "string"},
+                        "reason": {"type": "string"},
+                        "alternatives": {"type": "string"}
                     },
                     "required": ["claim_id", "message"]
                 }
@@ -468,13 +745,43 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "get_memories",
-                "description": "Load full text for a few memory ids from ## recall or search_memories. Pass ids (array, max 8).",
+                "description": "Load full text for a few memory ids from ## recall or search_memories. Pass ids (array, max 8). When a fact was updated, includes a short previously line.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "ids": {"type": "array", "items": {"type": "string"}}
                     },
                     "required": ["ids"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "save_exploration",
+                "description": "Save how part of the code fits together. topic is a short key; conclusion is the insight; files are paths you read (daemon stores SHA-256 of each). Separate from ordinary remember facts. Later call get_exploration to reuse if hashes still match.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string"},
+                        "conclusion": {"type": "string"},
+                        "files": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["topic", "conclusion", "files"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "get_exploration",
+                "description": "Load an exploration memo by topic or path. Returns the conclusion plus each file marked unchanged, changed, or missing versus the stored hashes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string"},
+                        "path": {"type": "string"}
+                    }
                 }
             }
         }),
@@ -503,6 +810,17 @@ mod tests {
         .expect("open")
     }
 
+    fn apply(
+        store: &SqliteOwner,
+        call: &MemoryToolCall,
+        bot_id: &str,
+        now: i64,
+        known: &[&str],
+        workspace: &Path,
+    ) -> String {
+        apply_memory_tool(store, call, bot_id, now, known, workspace).expect("apply")
+    }
+
     #[test]
     fn parse_remember_requires_sentence() {
         assert!(parse_memory_tool("remember", r#"{"message":""}"#).is_none());
@@ -517,7 +835,8 @@ mod tests {
     #[test]
     fn remember_persists_a_claim() {
         let store = open_store();
-        let result = apply_memory_tool(
+        let workspace = std::env::temp_dir();
+        let result = apply(
             &store,
             &MemoryToolCall::Remember {
                 sentence: "The project uses prompt-first memory writes.".to_owned(),
@@ -525,8 +844,8 @@ mod tests {
             "run69-bot",
             100,
             &[],
-        )
-        .expect("remember");
+            &workspace,
+        );
         assert!(result.starts_with("Remembered as claim-remember-"));
         let map = store.brain_map().expect("map");
         assert!(
@@ -545,9 +864,10 @@ mod tests {
     #[test]
     fn remember_redacts_secrets_before_save() {
         let store = open_store();
+        let workspace = std::env::temp_dir();
         let fake_key = "sk-testFAKESECRET_w1x2y3z4a5b6c7d8e9f0";
         let known = "ceo-stored-fake-secret-value-75";
-        let result = apply_memory_tool(
+        let result = apply(
             &store,
             &MemoryToolCall::Remember {
                 sentence: format!(
@@ -557,8 +877,8 @@ mod tests {
             "run75-bot",
             300,
             &[known],
-        )
-        .expect("remember");
+            &workspace,
+        );
         assert!(result.starts_with("Remembered as claim-remember-"));
         let map = store.brain_map().expect("map");
         let sentence = map
@@ -576,11 +896,12 @@ mod tests {
     #[test]
     fn search_returns_compact_list_and_get_loads_full_text() {
         let store = open_store();
+        let workspace = std::env::temp_dir();
         let long = format!(
             "Build failed with ECONNREFUSED_77 while opening hello73.py during the nightly deploy of the staging stack with extra detail for truncation."
         );
         assert!(long.chars().count() > maia_core::thread_cache::RECALL_TITLE_CHARS);
-        let remembered = apply_memory_tool(
+        let remembered = apply(
             &store,
             &MemoryToolCall::Remember {
                 sentence: long.clone(),
@@ -588,14 +909,14 @@ mod tests {
             "run74-bot",
             200,
             &[],
-        )
-        .expect("remember");
+            &workspace,
+        );
         let claim_id = remembered
             .trim_start_matches("Remembered as ")
             .trim_end_matches('.')
             .to_owned();
 
-        let search = apply_memory_tool(
+        let search = apply(
             &store,
             &MemoryToolCall::Search {
                 query: "ECONNREFUSED_77".to_owned(),
@@ -603,8 +924,8 @@ mod tests {
             "run74-bot",
             201,
             &[],
-        )
-        .expect("search");
+            &workspace,
+        );
         assert!(search.contains("## memories"));
         assert!(search.contains(&claim_id));
         assert!(search.contains("Call get_memories"));
@@ -614,7 +935,7 @@ mod tests {
             "compact list must truncate long sentences"
         );
 
-        let full = apply_memory_tool(
+        let full = apply(
             &store,
             &MemoryToolCall::Get {
                 ids: vec![claim_id.clone()],
@@ -622,8 +943,8 @@ mod tests {
             "run74-bot",
             202,
             &[],
-        )
-        .expect("get");
+            &workspace,
+        );
         assert!(full.contains("## memory bodies"));
         assert!(full.contains("ECONNREFUSED_77"));
         assert!(full.contains("hello73.py"));
@@ -633,8 +954,9 @@ mod tests {
     #[test]
     fn search_finds_memories_that_mention_a_file_path() {
         let store = open_store();
+        let workspace = std::env::temp_dir();
         let path = r"F:\tmp\run75_throwaway.py";
-        let _ = apply_memory_tool(
+        let _ = apply(
             &store,
             &MemoryToolCall::Remember {
                 sentence: format!(
@@ -644,9 +966,9 @@ mod tests {
             "run75-path-bot",
             400,
             &[],
-        )
-        .expect("remember");
-        let search = apply_memory_tool(
+            &workspace,
+        );
+        let search = apply(
             &store,
             &MemoryToolCall::Search {
                 query: path.to_owned(),
@@ -654,8 +976,8 @@ mod tests {
             "run75-path-bot",
             401,
             &[],
-        )
-        .expect("search");
+            &workspace,
+        );
         assert!(
             search.contains("run75_throwaway") || search.contains("broken import"),
             "exact FTS / neuron search should find path mentions without a dedicated filter: {search}"
@@ -678,7 +1000,7 @@ mod tests {
         let full = format_memory_bodies(
             &hits
                 .iter()
-                .map(|(id, s)| (id.clone(), s.clone()))
+                .map(|(id, s)| (id.clone(), s.clone(), None))
                 .collect::<Vec<_>>(),
         );
         assert!(compact.len() < full.len());
@@ -688,5 +1010,156 @@ mod tests {
             compact_tokens < full_tokens,
             "compact {compact_tokens} should be under full {full_tokens}"
         );
+    }
+
+    #[test]
+    fn exploration_save_reuses_when_unchanged_and_flags_changed_file() {
+        let store = open_store();
+        let workspace = std::env::temp_dir().join(format!(
+            "maia-explore-ws-{}-{}",
+            std::process::id(),
+            REMEMBER_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&workspace).expect("ws");
+        let a = workspace.join("run76_a.rs");
+        let b = workspace.join("run76_b.rs");
+        fs::write(&a, b"fn a() {}").expect("a");
+        fs::write(&b, b"fn b() {}").expect("b");
+
+        let saved = apply(
+            &store,
+            &MemoryToolCall::SaveExploration {
+                topic: "run76 glue".to_owned(),
+                conclusion: "A calls into B for setup.".to_owned(),
+                files: vec![
+                    "run76_a.rs".to_owned(),
+                    "run76_b.rs".to_owned(),
+                ],
+            },
+            "run76-bot",
+            500,
+            &[],
+            &workspace,
+        );
+        assert!(saved.contains("Saved exploration"));
+
+        let reuse = apply(
+            &store,
+            &MemoryToolCall::GetExploration {
+                topic: Some("run76 glue".to_owned()),
+                path: None,
+            },
+            "run76-bot",
+            501,
+            &[],
+            &workspace,
+        );
+        assert!(reuse.contains("A calls into B"));
+        assert!(reuse.contains("`run76_a.rs` — unchanged"));
+        assert!(reuse.contains("`run76_b.rs` — unchanged"));
+
+        fs::write(&a, b"fn a() { changed }").expect("edit a");
+        let after = apply(
+            &store,
+            &MemoryToolCall::GetExploration {
+                topic: Some("run76 glue".to_owned()),
+                path: None,
+            },
+            "run76-bot",
+            502,
+            &[],
+            &workspace,
+        );
+        assert!(after.contains("`run76_a.rs` — changed"));
+        assert!(after.contains("`run76_b.rs` — unchanged"));
+    }
+
+    #[test]
+    fn exploration_redacts_secrets_in_conclusion() {
+        let store = open_store();
+        let workspace = std::env::temp_dir().join(format!(
+            "maia-explore-redact-{}-{}",
+            std::process::id(),
+            REMEMBER_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&workspace).expect("ws");
+        fs::write(workspace.join("x.rs"), b"x").expect("x");
+        let fake = "sk-testFAKESECRET_a4b5c6d7e8f9g0h1i2j3";
+        let _ = apply(
+            &store,
+            &MemoryToolCall::SaveExploration {
+                topic: "secrets".to_owned(),
+                conclusion: format!("Saw token {fake} in comments."),
+                files: vec!["x.rs".to_owned()],
+            },
+            "run76-bot",
+            600,
+            &[],
+            &workspace,
+        );
+        let got = apply(
+            &store,
+            &MemoryToolCall::GetExploration {
+                topic: Some("secrets".to_owned()),
+                path: None,
+            },
+            "run76-bot",
+            601,
+            &[],
+            &workspace,
+        );
+        assert!(!got.contains(fake));
+        assert!(got.contains(maia_core::memory_redact::REDACTED));
+    }
+
+    #[test]
+    fn update_memory_stores_reason_and_get_shows_previously() {
+        let store = open_store();
+        let workspace = std::env::temp_dir();
+        let remembered = apply(
+            &store,
+            &MemoryToolCall::Remember {
+                sentence: "Deploy uses staging branch.".to_owned(),
+            },
+            "run76-bot",
+            700,
+            &[],
+            &workspace,
+        );
+        let old_id = remembered
+            .trim_start_matches("Remembered as ")
+            .trim_end_matches('.')
+            .to_owned();
+        let updated = apply(
+            &store,
+            &MemoryToolCall::Update {
+                claim_id: old_id.clone(),
+                sentence: "Deploy uses main branch.".to_owned(),
+                reason: Some("staging was retired".to_owned()),
+                alternatives: Some("keep staging; dual-track".to_owned()),
+            },
+            "run76-bot",
+            701,
+            &[],
+            &workspace,
+        );
+        let new_id = updated
+            .trim_start_matches(&format!("Updated {old_id} → "))
+            .trim_end_matches('.')
+            .to_owned();
+        let full = apply(
+            &store,
+            &MemoryToolCall::Get {
+                ids: vec![new_id],
+            },
+            "run76-bot",
+            702,
+            &[],
+            &workspace,
+        );
+        assert!(full.contains("Deploy uses main branch."));
+        assert!(full.contains("why: staging was retired"));
+        assert!(full.contains("discarded: keep staging; dual-track"));
+        assert!(full.contains("previously: Deploy uses staging branch."));
     }
 }
