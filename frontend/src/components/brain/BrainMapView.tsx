@@ -423,8 +423,8 @@ function MemoryList({
           value={tagName}
           onChange={(event) => onTagName(event.target.value)}
         />
-        <button type="submit" className="maia-btn">
-          Add tag
+        <button type="submit" className="maia-icon-btn" aria-label="Add tag" title="Add tag">
+          <span className="maia-plus-icon" aria-hidden="true" />
         </button>
       </form>
       {empty ? <p>Nothing has been promoted yet. Episodes remain searchable.</p> : null}
@@ -464,8 +464,14 @@ function MemoryList({
                         <span className="maia-edit-icon" aria-hidden="true" />
                       </button>
                       {editing === node.id ? (
-                        <button type="button" className="maia-btn" onClick={() => onSave(node)}>
-                          Save sentence
+                        <button
+                          type="button"
+                          className="maia-icon-btn"
+                          aria-label="Save sentence"
+                          title="Save sentence"
+                          onClick={() => onSave(node)}
+                        >
+                          <span className="maia-check-icon" aria-hidden="true" />
                         </button>
                       ) : null}
                       <button
@@ -509,8 +515,14 @@ function MemoryList({
                             {item.name}
                           </label>
                         ))}
-                        <button type="button" className="maia-btn" onClick={() => onRetagSave(node)}>
-                          Save tags
+                        <button
+                          type="button"
+                          className="maia-icon-btn"
+                          aria-label="Save tags"
+                          title="Save tags"
+                          onClick={() => onRetagSave(node)}
+                        >
+                          <span className="maia-check-icon" aria-hidden="true" />
                         </button>
                       </fieldset>
                     ) : null}
@@ -630,8 +642,8 @@ function SearchResults({
 }) {
   return (
     <div>
-      <button type="button" className="maia-btn" onClick={onSearch}>
-        Search
+      <button type="button" className="maia-icon-btn" aria-label="Search" title="Search" onClick={onSearch}>
+        <span className="maia-inspect-icon" aria-hidden="true" />
       </button>
       {hits === null ? <p>Search uses the same recall Maia uses.</p> : null}
       {hits?.length === 0 ? <p>Nothing matched.</p> : null}
