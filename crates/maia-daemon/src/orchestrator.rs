@@ -309,7 +309,7 @@ A plan or a cut-off sentence is not finished. Call a tool.\n\
 Do not invent results. To read or list a file or folder, call bash. On Windows the command is PowerShell and a path looks like F:\\Development.\n\
 Stay inside this task. Do not start another task.\n\
 Work only on the current in-progress list item. If a step is missing, add it first. Tests, error handling, matching style, and a bug in the same files can be added. Anything else: call ask_owner and keep working on the list.\n\
-When you learn a durable fact worth keeping (owner preference, important info from a document or site), call remember with one short sentence before you move on. After a coding approach fails and you take another path, always remember what failed and which path worked so you do not repeat the rabbit hole. Trailing ## recall is id + short title only — call get_memories for full text, or search_memories then get_memories for exact codes/filenames. Use update_memory or retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status.\n\
+When you learn a durable fact worth keeping (owner preference, important info from a document or site), call remember with one short sentence before you move on. After a coding approach fails and you take another path, always remember what failed and which path worked so you do not repeat the rabbit hole. Trailing ## recall is id + short title only — call get_memories for full text, or search_memories then get_memories for exact codes/filenames. Before editing a file, search_memories for that path (especially tried-and-failed notes). Use update_memory or retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status.\n\
 Reusable how-to: when you discover a reusable procedure or project coding rule (multi-step, worth following again), call save_skill with a short title, one-line when_to_use, and a tight body — not remember. When the trailing ## skills catalog lists a match for the current task, call load_skill before improvising.\n";
 
 #[derive(Clone, Copy)]
@@ -1334,7 +1334,7 @@ On an owner turn keep going until you call success, failure, waiting, message_us
 - Stop for good: cancel_task.\n\
 - Failed or stopped work you choose to retry: retry_task.\n\
 - After a useful lesson (what worked or failed): record_learning with one short note. It appears under LEARNED on later wakes — use it only when ATTENTION already lists matching failed/stuck work; do not spawn new goals from LEARNED alone; do not repeat a failed tactic.\n\
-- Durable brain memory: when the owner states a preference, name, or important fact, call remember with one short sentence. After a coding approach fails and another path works, remember both (what failed, what worked) so later wakes avoid the same rabbit hole. Trailing ## recall lists id + short title only — call get_memories for full text; use search_memories (then get_memories) for exact error codes, filenames, or identifiers. Use update_memory / retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status. Do not dump secrets into memory.\n\
+- Durable brain memory: when the owner states a preference, name, or important fact, call remember with one short sentence. After a coding approach fails and another path works, remember both (what failed, what worked) so later wakes avoid the same rabbit hole. Trailing ## recall lists id + short title only — call get_memories for full text; use search_memories (then get_memories) for exact error codes, filenames, or identifiers. Before editing a file, search_memories for that path (especially tried-and-failed notes). Past session summaries are searchable via search_memories (tagged [session_summary]). Use update_memory / retire_memory when a recalled claim is wrong or obsolete. Skip greetings and transient status. Do not dump secrets into memory.\n\
 - Skills (how-to): reusable procedures and project coding rules go in save_skill (title + when_to_use + body), not remember. When ## skills in the trailing context matches the task, call load_skill with that skill_id and follow it. Never put secrets into skills.\n\
 Fixable worker failures (missing file, bad args, wrong/incomplete output vs the goal check, transient tool error, timeout/transport, or \"Worker stopped answering\"): retry_task or continue_task with guidance that tries a different approach. Do not ask_user. Do not call bash yourself. Prefer a second hire with a corrected brief when the first approach was wrong.\n\
 If a worker is waiting, or the wake brief/inspect_task shows a credential, vault, payment, or irreversible external blocker: call ask_user / ask_questions / request_secret immediately unless CEO_WAITING (already asked), OPEN_QUESTIONS, or RECENT_CEO_CHAT already has that unanswered ask. Do not defer. Do not stay silent on the first ask. Do not message_user instead. Do not retry blindly. Do not paste the worker's wording into chat; restate cleanly. Do not rephrase the same decision again later.\n\
@@ -4231,11 +4231,20 @@ impl<R: Router> Orchestrator<R> {
                     name,
                     arguments_json,
                 } => {
+                    let known: Vec<&str> = self
+                        .ceo_secret_mask_values
+                        .iter()
+                        .map(String::as_str)
+                        .collect();
                     if let Some(parsed) =
                         crate::skill_tools::parse_skill_tool(name, arguments_json)
                     {
-                        let _ =
-                            crate::skill_tools::apply_skill_tool(&self.store, &parsed, self.ids.now);
+                        let _ = crate::skill_tools::apply_skill_tool(
+                            &self.store,
+                            &parsed,
+                            self.ids.now,
+                            &known,
+                        );
                     } else if let Some(parsed) =
                         crate::memory_tools::parse_memory_tool(name, arguments_json)
                     {
@@ -4244,6 +4253,7 @@ impl<R: Router> Orchestrator<R> {
                             &parsed,
                             &self.turn_bot,
                             self.ids.now,
+                            &known,
                         );
                     }
                 }
@@ -4681,10 +4691,20 @@ impl<R: Router> Orchestrator<R> {
 
     /// Applies remember / update_memory / retire_memory / save_skill / load_skill.
     fn run_memory_tool(&self, call: &NormalizedToolCall) -> String {
+        let known: Vec<&str> = self
+            .ceo_secret_mask_values
+            .iter()
+            .map(String::as_str)
+            .collect();
         if let Some(parsed) =
             crate::skill_tools::parse_skill_tool(call.name.as_str(), &call.arguments_json)
         {
-            return match crate::skill_tools::apply_skill_tool(&self.store, &parsed, self.ids.now) {
+            return match crate::skill_tools::apply_skill_tool(
+                &self.store,
+                &parsed,
+                self.ids.now,
+                &known,
+            ) {
                 Ok(message) => message,
                 Err(maia_store::StoreError::NotFound { .. }) => "Skill not found.".to_owned(),
                 Err(_) => "Could not apply that skill tool.".to_owned(),
@@ -4700,6 +4720,7 @@ impl<R: Router> Orchestrator<R> {
             &parsed,
             &self.turn_bot,
             self.ids.now,
+            &known,
         ) {
             Ok(message) => message,
             Err(_) => "Could not write that memory.".to_owned(),

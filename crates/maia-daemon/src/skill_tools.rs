@@ -1,5 +1,6 @@
 //! Prompt-driven skills: save_skill / load_skill (honest leaves + store skin).
 
+use maia_core::memory_redact::redact_secrets_for_save;
 use maia_store::MAX_SKILL_BODY_CHARS;
 use maia_store::SkillRecord;
 use maia_store::SkillRequest;
@@ -102,6 +103,8 @@ fn clean_required(raw: &str, max: usize) -> Option<String> {
 
 /// Applies one skill tool against the store.
 ///
+/// Save paths scrub secrets (patterns, known values, `<private>` blocks) first.
+///
 /// # Errors
 ///
 /// Returns store failures; callers surface a short tool result string instead.
@@ -109,6 +112,7 @@ pub fn apply_skill_tool(
     store: &SqliteOwner,
     call: &SkillToolCall,
     now: i64,
+    known_secret_values: &[&str],
 ) -> Result<String, StoreError> {
     match call {
         SkillToolCall::Save {
@@ -118,12 +122,16 @@ pub fn apply_skill_tool(
             body,
             project,
         } => {
+            let title = redact_secrets_for_save(title, known_secret_values);
+            let when_to_use = redact_secrets_for_save(when_to_use, known_secret_values);
+            let body = redact_secrets_for_save(body, known_secret_values);
+            let project = redact_secrets_for_save(project, known_secret_values);
             let response = store.skills(SkillRequest::Save {
                 skill_id: skill_id.clone(),
-                title: title.clone(),
-                when_to_use: when_to_use.clone(),
-                body: body.clone(),
-                project: project.clone(),
+                title,
+                when_to_use,
+                body,
+                project,
                 now,
             })?;
             let SkillResponse::Skill(record) = response else {
@@ -293,6 +301,7 @@ mod tests {
                 project: "run71".to_owned(),
             },
             10,
+            &[],
         )
         .expect("save");
         assert!(saved.contains("sort-ints-in-powershell") || saved.contains("Saved skill"));
@@ -303,6 +312,7 @@ mod tests {
                 skill_id: id.clone(),
             },
             11,
+            &[],
         )
         .expect("load");
         assert!(loaded.contains("Sort-Object { [int]$_ }"));

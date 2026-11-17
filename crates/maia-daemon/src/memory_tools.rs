@@ -7,6 +7,7 @@ use maia_core::brain::LexicalPolicy;
 use maia_core::brain::lexemes_for_sentence;
 use maia_core::brain::merge_keyword_first;
 use maia_core::dream::MAX_CLAIM_SENTENCE_CHARS;
+use maia_core::memory_redact::redact_secrets_for_save;
 use maia_core::thread_cache::compact_recall_title;
 use maia_store::AppendEvents;
 use maia_store::EpisodeWrite;
@@ -251,6 +252,9 @@ pub fn compact_search_hits(
 
 /// Applies one memory tool against the shared brain. Never logs sentence contents.
 ///
+/// `known_secret_values` are CEO-stored secret values (Credential Manager) when cheaply
+/// available; patterns and `<private>` blocks are always scrubbed before save.
+///
 /// # Errors
 ///
 /// Returns store failures; callers surface a short tool result string instead.
@@ -259,9 +263,11 @@ pub fn apply_memory_tool(
     call: &MemoryToolCall,
     bot_id: &str,
     now: i64,
+    known_secret_values: &[&str],
 ) -> Result<String, StoreError> {
     match call {
         MemoryToolCall::Remember { sentence } => {
+            let sentence = redact_secrets_for_save(sentence, known_secret_values);
             let (episode_id, turn_id, claim_id) = next_ids(now);
             ensure_router_thread(store, now)?;
             store.insert_episode(EpisodeWrite {
@@ -288,7 +294,7 @@ pub fn apply_memory_tool(
                     sentence: sentence.clone(),
                     taint: MemoryTaint::Trusted,
                     valid_from: now,
-                    lexemes: fact_lexemes(sentence),
+                    lexemes: fact_lexemes(&sentence),
                     memory_kind: "explicit".to_owned(),
                     memory_scope: "agent".to_owned(),
                     observer_bot_id: bot_id.to_owned(),
@@ -313,6 +319,7 @@ pub fn apply_memory_tool(
             claim_id,
             sentence,
         } => {
+            let sentence = redact_secrets_for_save(sentence, known_secret_values);
             let (episode_id, turn_id, new_claim_id) = next_ids(now);
             ensure_router_thread(store, now)?;
             store.insert_episode(EpisodeWrite {
@@ -339,7 +346,7 @@ pub fn apply_memory_tool(
                     sentence: sentence.clone(),
                     taint: MemoryTaint::Trusted,
                     valid_from: now,
-                    lexemes: fact_lexemes(sentence),
+                    lexemes: fact_lexemes(&sentence),
                     memory_kind: "explicit".to_owned(),
                     memory_scope: "agent".to_owned(),
                     observer_bot_id: bot_id.to_owned(),
@@ -447,7 +454,7 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "search_memories",
-                "description": "Search the shared brain. Returns a compact list (id + short title). Use for exact error codes, filenames, and identifiers as well as meaning. Then call get_memories with only the ids you need.",
+                "description": "Search the shared brain. Returns a compact list (id + short title). Use for exact error codes, filenames, file paths (before editing), session_summary tags, and identifiers as well as meaning. Then call get_memories with only the ids you need.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -517,6 +524,7 @@ mod tests {
             },
             "run69-bot",
             100,
+            &[],
         )
         .expect("remember");
         assert!(result.starts_with("Remembered as claim-remember-"));
@@ -535,6 +543,37 @@ mod tests {
     }
 
     #[test]
+    fn remember_redacts_secrets_before_save() {
+        let store = open_store();
+        let fake_key = "sk-testFAKESECRET_w1x2y3z4a5b6c7d8e9f0";
+        let known = "ceo-stored-fake-secret-value-75";
+        let result = apply_memory_tool(
+            &store,
+            &MemoryToolCall::Remember {
+                sentence: format!(
+                    "Token {fake_key} and known {known} plus <private>hidden</private>."
+                ),
+            },
+            "run75-bot",
+            300,
+            &[known],
+        )
+        .expect("remember");
+        assert!(result.starts_with("Remembered as claim-remember-"));
+        let map = store.brain_map().expect("map");
+        let sentence = map
+            .nodes
+            .iter()
+            .find(|node| node.kind.as_str() == "claim")
+            .and_then(|node| node.sentence.clone())
+            .expect("claim sentence");
+        assert!(!sentence.contains(fake_key));
+        assert!(!sentence.contains(known));
+        assert!(!sentence.contains("hidden"));
+        assert!(sentence.contains(maia_core::memory_redact::REDACTED));
+    }
+
+    #[test]
     fn search_returns_compact_list_and_get_loads_full_text() {
         let store = open_store();
         let long = format!(
@@ -548,6 +587,7 @@ mod tests {
             },
             "run74-bot",
             200,
+            &[],
         )
         .expect("remember");
         let claim_id = remembered
@@ -562,6 +602,7 @@ mod tests {
             },
             "run74-bot",
             201,
+            &[],
         )
         .expect("search");
         assert!(search.contains("## memories"));
@@ -580,12 +621,45 @@ mod tests {
             },
             "run74-bot",
             202,
+            &[],
         )
         .expect("get");
         assert!(full.contains("## memory bodies"));
         assert!(full.contains("ECONNREFUSED_77"));
         assert!(full.contains("hello73.py"));
         assert!(full.contains("extra detail for truncation"));
+    }
+
+    #[test]
+    fn search_finds_memories_that_mention_a_file_path() {
+        let store = open_store();
+        let path = r"F:\tmp\run75_throwaway.py";
+        let _ = apply_memory_tool(
+            &store,
+            &MemoryToolCall::Remember {
+                sentence: format!(
+                    "Tried editing {path} with a broken import and failed; use relative imports instead."
+                ),
+            },
+            "run75-path-bot",
+            400,
+            &[],
+        )
+        .expect("remember");
+        let search = apply_memory_tool(
+            &store,
+            &MemoryToolCall::Search {
+                query: path.to_owned(),
+            },
+            "run75-path-bot",
+            401,
+            &[],
+        )
+        .expect("search");
+        assert!(
+            search.contains("run75_throwaway") || search.contains("broken import"),
+            "exact FTS / neuron search should find path mentions without a dedicated filter: {search}"
+        );
     }
 
     #[test]
