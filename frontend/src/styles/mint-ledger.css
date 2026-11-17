@@ -1610,7 +1610,6 @@ textarea {
   .maia-quiet,
   .maia-inspect-quiet,
   .maia-chev,
-  .maia-pin,
   .maia-task-open,
   .maia-choice,
   .maia-brain-list button:not(.maia-icon-btn):not(.maia-btn),
@@ -2018,8 +2017,15 @@ textarea {
   padding: 4px 16px 8px;
   border-bottom: 1px solid var(--border);
 }
-.maia-task-strip-find {
+.maia-icon-btn.maia-task-strip-find {
   margin-left: auto;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
 }
 .maia-task-strip-toggle {
   min-height: 28px;
@@ -2251,8 +2257,8 @@ details:not([open]) > .maia-task-tree {
 }
 
 .maia-pin {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
 }
 
 .maia-pin[aria-pressed='true'] {
@@ -2280,8 +2286,8 @@ details:not([open]) > .maia-task-tree {
   width: 8px;
   height: 8px;
   border: 1.5px solid currentColor;
-  border-radius: 1px 1px 0 0;
-  border-bottom: 0;
+  border-radius: 50%;
+  margin-bottom: 4px;
 }
 
 .maia-task-phase,
@@ -3053,4 +3059,8 @@ details:not([open]) > .maia-task-tree {
   width: auto;
   min-height: 28px;
   padding: 0 8px;
+}
+
+.maia-inspector-panel summary {
+  cursor: pointer;
 }

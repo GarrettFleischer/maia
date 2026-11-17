@@ -161,9 +161,8 @@ describe('Live shell integration', () => {
     renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
 
     await user.click(await screen.findByRole('button', { name: 'Inspect' }))
-    expect(await screen.findByText('Route tools')).toBeVisible()
-    expect(screen.getByText('Cache not reported')).toBeVisible()
-    expect(screen.getByTestId('inspector-live-slot-4')).toHaveTextContent('1 message')
+    expect(await screen.findByText('No cache info for this reply')).toBeVisible()
+    expect(screen.getByTestId('inspector-live-slot-4')).toHaveTextContent('Conversation')
     expect(screen.queryByText('Tailscale')).not.toBeInTheDocument()
     expect(screen.queryByText('Persona · Scout')).not.toBeInTheDocument()
     expect(screen.queryByText(/compact/i)).not.toBeInTheDocument()

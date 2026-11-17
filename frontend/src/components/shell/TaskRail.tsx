@@ -111,7 +111,7 @@ function TaskBranch({
             className="maia-pin"
             aria-pressed={row.section === 'pinned'}
             aria-label={`${pinLabel} ${row.title}`}
-            title={pinLabel}
+            title={row.section === 'pinned' ? 'Unpin' : 'Pin to top'}
             onClick={() => onPin(row.task_id, nextPin)}
           >
             <span className="maia-pin-icon" aria-hidden="true" />

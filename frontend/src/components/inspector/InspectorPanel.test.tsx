@@ -82,18 +82,18 @@ describe('InspectorPanel tabs', () => {
     )
 
     expect(screen.getAllByText('25%').length).toBeGreaterThan(0)
-    expect(screen.getByText('Recall · not durable')).toBeVisible()
+    expect(screen.getByText('Memories used')).toBeVisible()
     expect(screen.getByText('Obsidian opens the vault.')).toBeVisible()
     expect(screen.getByText('Untrusted')).toBeVisible()
-    expect(screen.getByTestId('inspector-live-slot-1')).toHaveTextContent('Route tools')
-    expect(screen.getByTestId('inspector-live-slot-4')).toHaveTextContent('1 message')
+    expect(screen.getByTestId('inspector-live-slot-1')).toHaveTextContent('Tools')
+    expect(screen.getByTestId('inspector-live-slot-4')).toHaveTextContent('Conversation')
     expect(screen.queryByText(/compact/i)).not.toBeInTheDocument()
     expect(screen.queryByText('Tailscale')).not.toBeInTheDocument()
     expect(screen.queryByText('Persona · Scout')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('tab', { name: 'Trace' }))
     expect(screen.getByText('No readable reasoning returned.')).toBeVisible()
-    expect(screen.getByText('admitted by host')).toBeVisible()
+    expect(screen.getByText('Action')).toBeVisible()
     expect(screen.getByText('spawn_task')).toBeVisible()
     expect(screen.queryByText(/match/i)).not.toBeInTheDocument()
 
@@ -103,7 +103,7 @@ describe('InspectorPanel tabs', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Cache' }))
     fireEvent.change(screen.getByRole('slider', { name: 'Turn scrubber' }), { target: { value: '1' } })
-    expect(screen.getByText('Cache not reported')).toBeVisible()
+    expect(screen.getByText('No cache info for this reply')).toBeVisible()
     expect(screen.queryByText('Obsidian opens the vault.')).not.toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: 'Trace' }))
     expect(screen.getByText('Hello from Maia.')).toBeVisible()

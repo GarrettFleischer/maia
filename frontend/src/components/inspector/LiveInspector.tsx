@@ -100,11 +100,11 @@ function LiveCache({
   return (
     <>
       {turn.cached_percent === null ? (
-        <p className="maia-cache-hero">Cache not reported</p>
+        <p className="maia-cache-hero">No cache info for this reply</p>
       ) : (
         <p className="maia-cache-hero">
           <span className="maia-cache-pct">{turn.cached_percent}%</span>
-          <span>cached</span>
+          <span>reused from cache</span>
         </p>
       )}
       <div className="maia-byte-stack" aria-hidden="true">
@@ -112,22 +112,21 @@ function LiveCache({
           <i key={slot.ordinal} style={{ flexGrow: Math.max(slot.bytes, 1) }} />
         ))}
       </div>
-      <span className="maia-inspector-label">Router prompt slots · in order</span>
-      <ol className="maia-slots">
-        {turn.slots.map((slot) => (
-          <li key={slot.ordinal} data-testid={`inspector-live-slot-${slot.ordinal}`}>
-            <span className="maia-slot-n">{slot.ordinal}</span>
-            <span>
-              {slot.label}
-              <span className="maia-slot-state">
-                {' '}
-                · {slot.bytes} B · {slot.residence} · {slot.detail}
+      <details>
+        <summary className="maia-inspector-label">What Maia read</summary>
+        <ol className="maia-slots">
+          {turn.slots.map((slot) => (
+            <li key={slot.ordinal} data-testid={`inspector-live-slot-${slot.ordinal}`}>
+              <span className="maia-slot-n">{slot.ordinal}</span>
+              <span>
+                {slotName(slot.label)}
+                <span className="maia-slot-state"> · {sizeText(slot.bytes)}</span>
               </span>
-            </span>
-          </li>
-        ))}
-      </ol>
-      <span className="maia-inspector-label">Recall · not durable</span>
+            </li>
+          ))}
+        </ol>
+      </details>
+      {turn.recall.length > 0 ? <span className="maia-inspector-label">Memories used</span> : null}
       <NodeChoiceList
         label="Facts used"
         selectedId={selectedId}
@@ -137,7 +136,7 @@ function LiveCache({
       <div className="maia-scrub">
         <div className="maia-scrub-head">
           <span>
-            Router turn {turn.ordinal} of {turns.length}
+            Reply {turn.ordinal} of {turns.length}
           </span>
         </div>
         <input
@@ -170,7 +169,7 @@ function LiveBrain({
   const ids = focusIds.length > 0 ? new Set(focusIds) : recallIds(turn)
   const filtered = inspectorBrainMap(brain, ids)
   if (!inspectorBrainHasFactOrEpisode(filtered)) {
-    return <p>Nothing has been promoted yet. Episodes remain searchable.</p>
+    return <p>No memories were used for this reply.</p>
   }
   const points = layoutBrainMap(filtered.nodes, filtered.edges, GRAPH_SIZE)
   return (
@@ -236,7 +235,7 @@ function LiveTrace({
       items={turn.trace.map((step, index) => ({
         id: `${step.kind}-${index}`,
         label: step.text,
-        detail: step.kind === 'route' ? 'admitted by host' : traceLabel(step.kind),
+        detail: traceLabel(step.kind),
       }))}
     />
   )
@@ -244,7 +243,7 @@ function LiveTrace({
 
 function traceLabel(kind: InspectorTurn['trace'][number]['kind']): string {
   if (kind === 'reasoning') return 'Reasoning'
-  if (kind === 'route') return 'Route'
+  if (kind === 'route') return 'Action'
   return 'Reply'
 }
 
@@ -254,6 +253,21 @@ export function recallTaintText(
   if (taint === 'trusted') return 'Trusted'
   if (taint === 'untrusted') return 'Untrusted'
   return null
+}
+
+const SLOT_NAMES: Record<string, string> = {
+  'Route tools': 'Tools',
+  'Router instructions': 'Instructions',
+  'Candidate tasks': 'Open tasks',
+  Recall: 'Memories',
+}
+
+function slotName(label: string): string {
+  return SLOT_NAMES[label] ?? label
+}
+
+function sizeText(bytes: number): string {
+  return bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`
 }
 
 function recallIds(turn: InspectorTurn): Set<string> {
