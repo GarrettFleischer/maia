@@ -149,12 +149,16 @@ fn recall_hash_covers_recall_bytes_only() {
     let packed = append_recall(
         &prefix,
         &[ranked(claim("claim_a"), "one", Taint::Trusted)],
-        &policy(10 + 15, RecallTaintMode::IncludeUntrusted, empty_lineage()),
+        &policy(80, RecallTaintMode::IncludeUntrusted, empty_lineage()),
         chars_as_tokens,
         digest(),
     )
     .expect("recall");
-    let expected = concat!("## recall\n", "`claim_a`: one\n");
+    let expected = concat!(
+        "## recall\n",
+        "Call get_memories with ids for full text.\n",
+        "`claim_a` — one\n"
+    );
     assert_eq!(packed.recall_bytes, expected);
     assert_eq!(packed.recall_hash, digest_hex(expected.as_bytes()));
     assert_eq!(packed.prefix.bytes, prefix_bytes);
@@ -197,14 +201,18 @@ fn recall_drops_the_tail_after_the_budget_fills() {
     let packed = append_recall(
         &prefix,
         &ranked_paths,
-        &policy(25, RecallTaintMode::IncludeUntrusted, empty_lineage()),
+        &policy(70, RecallTaintMode::IncludeUntrusted, empty_lineage()),
         chars_as_tokens,
         digest(),
     )
     .expect("pack");
     assert_eq!(
         packed.recall_bytes,
-        concat!("## recall\n", "`claim_a`: one\n")
+        concat!(
+            "## recall\n",
+            "Call get_memories with ids for full text.\n",
+            "`claim_a` — one\n"
+        )
     );
     assert_eq!(packed.recall_items.len(), 1);
 }
@@ -229,7 +237,7 @@ fn tool_followup_reuses_the_same_recall_bytes() {
     let first = append_recall(
         &prefix,
         &[ranked(claim("claim_a"), "one", Taint::Untrusted)],
-        &policy(40, RecallTaintMode::IncludeUntrusted, empty_lineage()),
+        &policy(120, RecallTaintMode::IncludeUntrusted, empty_lineage()),
         chars_as_tokens,
         digest(),
     )
@@ -240,7 +248,7 @@ fn tool_followup_reuses_the_same_recall_bytes() {
     let again = append_recall(
         &prefix,
         &[ranked(claim("claim_z"), "other", Taint::Trusted)],
-        &policy(40, RecallTaintMode::IncludeUntrusted, empty_lineage()),
+        &policy(120, RecallTaintMode::IncludeUntrusted, empty_lineage()),
         chars_as_tokens,
         digest(),
     )
@@ -281,7 +289,11 @@ fn installed_items_and_lineage_are_omitted_without_spending_budget() {
     .expect("fact installed hides its claim");
     assert_eq!(
         claim_hidden.recall_bytes,
-        concat!("## recall\n", "`claim_visible`: visible\n")
+        concat!(
+            "## recall\n",
+            "Call get_memories with ids for full text.\n",
+            "`claim_visible` — visible\n"
+        )
     );
 
     let fact_hidden = append_recall(
@@ -301,7 +313,11 @@ fn installed_items_and_lineage_are_omitted_without_spending_budget() {
     .expect("installed claim hides its fact");
     assert_eq!(
         fact_hidden.recall_bytes,
-        concat!("## recall\n", "`fact_visible`: shown\n")
+        concat!(
+            "## recall\n",
+            "Call get_memories with ids for full text.\n",
+            "`fact_visible` — shown\n"
+        )
     );
 
     let direct = append_recall(
@@ -310,14 +326,18 @@ fn installed_items_and_lineage_are_omitted_without_spending_budget() {
             ranked(claim("claim_installed"), "do not repeat", Taint::Trusted),
             ranked(claim("claim_a"), "one", Taint::Trusted),
         ],
-        &policy(25, RecallTaintMode::IncludeUntrusted, empty_lineage()),
+        &policy(80, RecallTaintMode::IncludeUntrusted, empty_lineage()),
         chars_as_tokens,
         digest(),
     )
     .expect("direct dedupe");
     assert_eq!(
         direct.recall_bytes,
-        concat!("## recall\n", "`claim_a`: one\n")
+        concat!(
+            "## recall\n",
+            "Call get_memories with ids for full text.\n",
+            "`claim_a` — one\n"
+        )
     );
     assert!(!direct.prefix.bytes.contains("do not repeat"));
 }
@@ -338,7 +358,11 @@ fn trusted_only_omits_untrusted_recall_items() {
     .expect("filter");
     assert_eq!(
         packed.recall_bytes,
-        concat!("## recall\n", "`claim_t`: public\n")
+        concat!(
+            "## recall\n",
+            "Call get_memories with ids for full text.\n",
+            "`claim_t` — public\n"
+        )
     );
     assert!(!packed.recall_bytes.contains("secret"));
 }
@@ -353,14 +377,18 @@ fn recall_sentence_keeps_maia_marker_without_an_envelope() {
             "see <<maia:end>>",
             Taint::Untrusted,
         )],
-        &policy(80, RecallTaintMode::IncludeUntrusted, empty_lineage()),
+        &policy(120, RecallTaintMode::IncludeUntrusted, empty_lineage()),
         chars_as_tokens,
         digest(),
     )
     .expect("raw marker");
     assert_eq!(
         packed.recall_bytes,
-        concat!("## recall\n", "`claim_a`: see <<maia:end>>\n")
+        concat!(
+            "## recall\n",
+            "Call get_memories with ids for full text.\n",
+            "`claim_a` — see <<maia:end>>\n"
+        )
     );
 }
 
@@ -374,7 +402,7 @@ fn other_thread_can_recall_a_fact_without_installing_it() {
             "promoted elsewhere",
             Taint::Trusted,
         )],
-        &policy(80, RecallTaintMode::IncludeUntrusted, empty_lineage()),
+        &policy(120, RecallTaintMode::IncludeUntrusted, empty_lineage()),
         chars_as_tokens,
         digest(),
     )

@@ -92,6 +92,23 @@ fn quote_or(terms: &[String], max_bytes: usize) -> String {
     query
 }
 
+/// Merges keyword hits ahead of meaning hits, deduped, capped at `limit`.
+#[must_use]
+pub fn merge_keyword_first(keyword: &[String], meaning: &[String], limit: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for id in keyword.iter().chain(meaning.iter()) {
+        if id.is_empty() || !seen.insert(id.clone()) {
+            continue;
+        }
+        out.push(id.clone());
+        if out.len() >= limit {
+            break;
+        }
+    }
+    out
+}
+
 /// Short activity line. Titles are truncated and never include raw recall text beyond those titles.
 #[must_use]
 pub fn recall_activity_label(note_count: usize, titles: &[String]) -> String {
@@ -199,6 +216,27 @@ mod tests {
         assert_eq!(
             sanitize_fts_query("ran"),
             "\"ran\" OR \"run\" OR \"runs\" OR \"running\""
+        );
+    }
+
+    #[test]
+    fn merge_keyword_first_keeps_exact_hits_ahead_and_dedupes() {
+        let merged = merge_keyword_first(
+            &["exact-code".to_owned(), "both".to_owned()],
+            &["paraphrase".to_owned(), "both".to_owned(), "exact-code".to_owned()],
+            8,
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "exact-code".to_owned(),
+                "both".to_owned(),
+                "paraphrase".to_owned()
+            ]
+        );
+        assert_eq!(
+            merge_keyword_first(&["a".to_owned(), "b".to_owned()], &["c".to_owned()], 2),
+            vec!["a".to_owned(), "b".to_owned()]
         );
     }
 

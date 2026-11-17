@@ -763,7 +763,8 @@ mod tests {
             candidates: "[]".to_owned(),
             conversation: vec!["Hello".to_owned(), "Again".to_owned()],
             recall: Some(PackedRecall {
-                bytes: "## recall\n`claim-1`: Kept.\n".to_owned(),
+                bytes: "## recall\nCall get_memories with ids for full text.\n`claim-1` — Kept.\n"
+                    .to_owned(),
                 items: vec![RecallLine {
                     id: "claim-1".to_owned(),
                     kind: RecallKind::Claim,

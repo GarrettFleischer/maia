@@ -27,6 +27,24 @@ pub struct RecallPackPolicy {
     pub lineage: RecallLineage,
 }
 
+/// Max chars kept for an auto-injected recall title (progressive disclosure).
+pub const RECALL_TITLE_CHARS: usize = 72;
+
+/// Hint line so agents fetch full text only when needed.
+pub const RECALL_FETCH_HINT: &str = "Call get_memories with ids for full text.\n";
+
+/// Short title/first line for compact recall lists.
+#[must_use]
+pub fn compact_recall_title(sentence: &str) -> String {
+    let first = sentence.lines().next().unwrap_or(sentence).trim();
+    let count = first.chars().count();
+    if count <= RECALL_TITLE_CHARS {
+        return first.to_owned();
+    }
+    let truncated: String = first.chars().take(RECALL_TITLE_CHARS.saturating_sub(1)).collect();
+    format!("{truncated}…")
+}
+
 /// Appends a recall block without changing the durable prefix hash.
 pub fn append_recall(
     prefix: &CompiledPrefix,
@@ -37,15 +55,20 @@ pub fn append_recall(
 ) -> Result<CompiledWithRecall, CompileError> {
     let claims = installed_claims(prefix);
     let facts = installed_facts(prefix);
-    let header = "## recall\n";
-    let mut cost = estimate_tokens(header);
+    let header = format!("## recall\n{RECALL_FETCH_HINT}");
+    let empty_header = "## recall\n";
+    let mut cost = estimate_tokens(&header);
     let mut lines = Vec::new();
     let mut items = Vec::new();
     for path in ranked {
         if excluded(path, policy, &claims, &facts) {
             continue;
         }
-        let line = format!("`{}`: {}\n", item_label(&path.item), path.sentence);
+        let line = format!(
+            "`{}` — {}\n",
+            item_label(&path.item),
+            compact_recall_title(&path.sentence)
+        );
         let line_cost = estimate_tokens(&line);
         let Some(next) = cost.checked_add(line_cost) else {
             return Err(CompileError::TokenOverflow);
@@ -58,13 +81,13 @@ pub fn append_recall(
         lines.push(line);
     }
     let recall_bytes = if lines.is_empty() {
-        let empty = format!("{header}\n");
+        let empty = format!("{empty_header}\n");
         if estimate_tokens(&empty) > policy.token_budget {
             return Err(CompileError::RecallBudgetTooSmall);
         }
         empty
     } else {
-        let mut bytes = String::from(header);
+        let mut bytes = header;
         for line in &lines {
             bytes.push_str(line);
         }

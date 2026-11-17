@@ -1,11 +1,13 @@
-//! Prompt-driven brain writes: remember / update / retire (honest leaves + store skin).
+//! Prompt-driven brain writes and progressive-disclosure recall tools.
 
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use maia_core::brain::LexicalPolicy;
 use maia_core::brain::lexemes_for_sentence;
+use maia_core::brain::merge_keyword_first;
 use maia_core::dream::MAX_CLAIM_SENTENCE_CHARS;
+use maia_core::thread_cache::compact_recall_title;
 use maia_store::AppendEvents;
 use maia_store::EpisodeWrite;
 use maia_store::MemoryTaint;
@@ -20,6 +22,12 @@ use maia_store::ThreadEventWrite;
 use crate::inspector::ROUTER_THREAD;
 
 static REMEMBER_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Cap for compact search_memories results.
+pub const SEARCH_RESULT_LIMIT: usize = 12;
+
+/// Cap for get_memories ids in one call.
+pub const GET_MEMORIES_LIMIT: usize = 8;
 
 /// One parsed memory tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,9 +49,19 @@ pub enum MemoryToolCall {
         /// Claim id to hide.
         claim_id: String,
     },
+    /// Compact keyword+meaning search (ids + short titles).
+    Search {
+        /// Free-text query (exact codes/filenames welcome).
+        query: String,
+    },
+    /// Load full text for a few memory ids.
+    Get {
+        /// Claim/fact ids from recall or search_memories.
+        ids: Vec<String>,
+    },
 }
 
-/// Parses remember / update_memory / retire_memory arguments.
+/// Parses remember / update_memory / retire_memory / search_memories / get_memories.
 #[must_use]
 pub fn parse_memory_tool(name: &str, arguments_json: &str) -> Option<MemoryToolCall> {
     let value: serde_json::Value = serde_json::from_str(arguments_json).ok()?;
@@ -76,8 +94,53 @@ pub fn parse_memory_tool(name: &str, arguments_json: &str) -> Option<MemoryToolC
                 claim_id: claim_id.to_owned(),
             })
         }
+        "search_memories" | "recall" => {
+            let query = value
+                .get("query")
+                .or_else(|| value.get("message"))?
+                .as_str()?
+                .trim();
+            if query.is_empty() || query.len() > 400 {
+                return None;
+            }
+            Some(MemoryToolCall::Search {
+                query: query.to_owned(),
+            })
+        }
+        "get_memories" => {
+            let ids = parse_ids(&value)?;
+            if ids.is_empty() {
+                return None;
+            }
+            Some(MemoryToolCall::Get { ids })
+        }
         _ => None,
     }
+}
+
+fn parse_ids(value: &serde_json::Value) -> Option<Vec<String>> {
+    if let Some(arr) = value.get("ids").and_then(|v| v.as_array()) {
+        let mut ids = Vec::new();
+        for item in arr {
+            let id = item.as_str()?.trim();
+            if id.is_empty() || id.len() > 128 {
+                return None;
+            }
+            ids.push(id.to_owned());
+            if ids.len() >= GET_MEMORIES_LIMIT {
+                break;
+            }
+        }
+        return Some(ids);
+    }
+    let single = value
+        .get("claim_id")
+        .or_else(|| value.get("id"))
+        .or_else(|| value.get("message"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty() && id.len() <= 128)?;
+    Some(vec![single.to_owned()])
 }
 
 fn clean_sentence(value: &serde_json::Value) -> Option<String> {
@@ -119,6 +182,71 @@ fn next_ids(now: i64) -> (String, String, String) {
         format!("turn-remember-{now}-{seq}"),
         format!("claim-remember-{now}-{seq}"),
     )
+}
+
+/// Formats a compact search hit list (id + short title).
+#[must_use]
+pub fn format_compact_memory_hits(hits: &[(String, String)]) -> String {
+    if hits.is_empty() {
+        return "No memories matched.".to_owned();
+    }
+    let mut out = String::from(
+        "## memories\nCall get_memories with ids for full text.\n",
+    );
+    for (id, title) in hits {
+        out.push_str(&format!("`{id}` — {}\n", compact_recall_title(title)));
+    }
+    out
+}
+
+/// Formats full memory bodies for get_memories.
+#[must_use]
+pub fn format_memory_bodies(rows: &[(String, String)]) -> String {
+    if rows.is_empty() {
+        return "No memories found for those ids.".to_owned();
+    }
+    let mut out = String::from("## memory bodies\n");
+    for (id, sentence) in rows {
+        out.push_str(&format!("`{id}`: {sentence}\n"));
+    }
+    out
+}
+
+/// Keyword-first search: exact FTS, then porter neuron FTS, then claim rows by id order.
+#[must_use]
+pub fn compact_search_hits(
+    store: &SqliteOwner,
+    query: &str,
+    limit: usize,
+) -> Vec<(String, String)> {
+    let exact = store
+        .search_memory_exact(query, i64::try_from(limit).unwrap_or(12))
+        .unwrap_or_default();
+    let neurons = store
+        .search_neurons(query, i64::try_from(limit).unwrap_or(12))
+        .unwrap_or_default();
+    let exact_ids: Vec<String> = exact
+        .iter()
+        .filter(|hit| hit.kind == "claim" || hit.kind == "fact")
+        .map(|hit| hit.id.clone())
+        .collect();
+    let meaning_ids: Vec<String> = neurons
+        .iter()
+        .filter(|hit| hit.kind == "claim" || hit.kind == "fact")
+        .map(|hit| hit.id.clone())
+        .collect();
+    let merged = merge_keyword_first(&exact_ids, &meaning_ids, limit);
+    let mut titles = std::collections::BTreeMap::new();
+    for hit in exact.iter().chain(neurons.iter()) {
+        titles.insert(hit.id.clone(), hit.title.clone());
+    }
+    merged
+        .into_iter()
+        .filter_map(|id| {
+            let title = titles.get(&id)?.clone();
+            Some((id, title))
+        })
+        .collect()
 }
 
 /// Applies one memory tool against the shared brain. Never logs sentence contents.
@@ -232,6 +360,18 @@ pub fn apply_memory_tool(
             store.forget_claim(claim_id.clone())?;
             Ok(format!("Retired {claim_id}."))
         }
+        MemoryToolCall::Search { query } => {
+            let hits = compact_search_hits(store, query, SEARCH_RESULT_LIMIT);
+            Ok(format_compact_memory_hits(&hits))
+        }
+        MemoryToolCall::Get { ids } => {
+            let rows = store.memory_bodies(ids)?;
+            let pairs: Vec<(String, String)> = rows
+                .into_iter()
+                .map(|row| (row.id, row.sentence))
+                .collect();
+            Ok(format_memory_bodies(&pairs))
+        }
     }
 }
 
@@ -256,7 +396,7 @@ fn ensure_router_thread(store: &SqliteOwner, now: i64) -> Result<(), StoreError>
     }
 }
 
-/// JSON tool definitions for remember / update_memory / retire_memory.
+/// JSON tool definitions for memory tools.
 #[must_use]
 pub fn memory_tool_defs() -> Vec<serde_json::Value> {
     vec![
@@ -278,7 +418,7 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "update_memory",
-                "description": "Replace an existing brain claim when the fact changed. claim_id from recall; message is the new one-sentence fact.",
+                "description": "Replace an existing brain claim when the fact changed. claim_id from recall or search_memories; message is the new one-sentence fact.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -293,13 +433,41 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "retire_memory",
-                "description": "Hide a brain claim that is wrong or no longer true. claim_id from recall.",
+                "description": "Hide a brain claim that is wrong or no longer true. claim_id from recall or search_memories.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "claim_id": {"type": "string"}
                     },
                     "required": ["claim_id"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "search_memories",
+                "description": "Search the shared brain. Returns a compact list (id + short title). Use for exact error codes, filenames, and identifiers as well as meaning. Then call get_memories with only the ids you need.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "get_memories",
+                "description": "Load full text for a few memory ids from ## recall or search_memories. Pass ids (array, max 8).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ids": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["ids"]
                 }
             }
         }),
@@ -366,4 +534,85 @@ mod tests {
         );
     }
 
+    #[test]
+    fn search_returns_compact_list_and_get_loads_full_text() {
+        let store = open_store();
+        let long = format!(
+            "Build failed with ECONNREFUSED_77 while opening hello73.py during the nightly deploy of the staging stack with extra detail for truncation."
+        );
+        assert!(long.chars().count() > maia_core::thread_cache::RECALL_TITLE_CHARS);
+        let remembered = apply_memory_tool(
+            &store,
+            &MemoryToolCall::Remember {
+                sentence: long.clone(),
+            },
+            "run74-bot",
+            200,
+        )
+        .expect("remember");
+        let claim_id = remembered
+            .trim_start_matches("Remembered as ")
+            .trim_end_matches('.')
+            .to_owned();
+
+        let search = apply_memory_tool(
+            &store,
+            &MemoryToolCall::Search {
+                query: "ECONNREFUSED_77".to_owned(),
+            },
+            "run74-bot",
+            201,
+        )
+        .expect("search");
+        assert!(search.contains("## memories"));
+        assert!(search.contains(&claim_id));
+        assert!(search.contains("Call get_memories"));
+        assert!(search.contains(" — "));
+        assert!(
+            !search.contains("extra detail for truncation"),
+            "compact list must truncate long sentences"
+        );
+
+        let full = apply_memory_tool(
+            &store,
+            &MemoryToolCall::Get {
+                ids: vec![claim_id.clone()],
+            },
+            "run74-bot",
+            202,
+        )
+        .expect("get");
+        assert!(full.contains("## memory bodies"));
+        assert!(full.contains("ECONNREFUSED_77"));
+        assert!(full.contains("hello73.py"));
+        assert!(full.contains("extra detail for truncation"));
+    }
+
+    #[test]
+    fn format_compact_is_smaller_than_full_bodies() {
+        let hits: Vec<(String, String)> = (0..8)
+            .map(|i| {
+                (
+                    format!("claim-{i}"),
+                    format!(
+                        "Long throwaway memory number {i} about ECONNREFUSED_77 and hello73.py with extra padding words to inflate tokens."
+                    ),
+                )
+            })
+            .collect();
+        let compact = format_compact_memory_hits(&hits);
+        let full = format_memory_bodies(
+            &hits
+                .iter()
+                .map(|(id, s)| (id.clone(), s.clone()))
+                .collect::<Vec<_>>(),
+        );
+        assert!(compact.len() < full.len());
+        let compact_tokens = (compact.chars().count() + 3) / 4;
+        let full_tokens = (full.chars().count() + 3) / 4;
+        assert!(
+            compact_tokens < full_tokens,
+            "compact {compact_tokens} should be under full {full_tokens}"
+        );
+    }
 }

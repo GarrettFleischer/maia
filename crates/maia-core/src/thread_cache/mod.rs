@@ -23,7 +23,8 @@ pub use context_packet::{
     PacketRole, PacketTurn, pack_context_packet,
 };
 pub use recall::{
-    CompiledWithRecall, RecallLineage, RecallPackPolicy, append_recall, reuse_recall,
+    CompiledWithRecall, RECALL_FETCH_HINT, RECALL_TITLE_CHARS, RecallLineage, RecallPackPolicy,
+    append_recall, compact_recall_title, reuse_recall,
 };
 pub use scratch::{CompiledRequest, ScratchCanon, ScratchRegion, append_scratch};
 pub use types::{

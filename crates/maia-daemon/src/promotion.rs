@@ -1226,6 +1226,9 @@ pub fn recall_run(
         .iter()
         .map(|lexeme| lexeme.as_str().to_owned())
         .collect();
+    let exact_hits = store
+        .search_memory_exact(query, RECALL_SEED_LIMIT)
+        .unwrap_or_default();
     let keyword_hits = store
         .search_neurons(query, RECALL_SEED_LIMIT)
         .unwrap_or_default();
@@ -1234,10 +1237,21 @@ pub fn recall_run(
     let graph_hits = store
         .graph_arm(&lexeme_ids, RECALL_SEED_LIMIT)
         .unwrap_or_default();
-    let keyword_arm = keyword_hits
+    let exact_arm: Vec<String> = exact_hits
         .iter()
+        .filter(|hit| hit.kind == "claim" || hit.kind == "fact")
         .map(|hit| format!("{}:{}", hit.kind, hit.id))
-        .collect::<Vec<_>>();
+        .collect();
+    let porter_arm: Vec<String> = keyword_hits
+        .iter()
+        .filter(|hit| hit.kind == "claim" || hit.kind == "fact")
+        .map(|hit| format!("{}:{}", hit.kind, hit.id))
+        .collect();
+    let keyword_arm = maia_core::brain::merge_keyword_first(
+        &exact_arm,
+        &porter_arm,
+        RECALL_SEED_LIMIT as usize,
+    );
     let vector_arm = vector_seeds
         .iter()
         .map(|seed| format!("claim:{}", seed.claim_id.as_str()))
@@ -1249,8 +1263,25 @@ pub fn recall_run(
     let keyword_ids = keyword_arm.clone();
     let vector_ids = vector_arm.clone();
     let graph_ids = graph_arm_ids.clone();
-    let fused = reciprocal_rank_fusion(&[keyword_arm, vector_arm, graph_arm_ids], RRF_K)
-        .unwrap_or_default();
+    // Exact/keyword hits stay ahead of meaning; RRF still blends the rest.
+    let fused_tail = reciprocal_rank_fusion(&[vector_arm.clone(), graph_arm_ids.clone()], RRF_K)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|rank| rank.id)
+        .collect::<Vec<_>>();
+    let fused_ids = maia_core::brain::merge_keyword_first(
+        &keyword_arm,
+        &fused_tail,
+        RECALL_SEED_LIMIT as usize,
+    );
+    let fused: Vec<maia_core::brain::FusedRank> = fused_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| maia_core::brain::FusedRank {
+            id,
+            score: 1.0 / (1.0 + index as f64),
+        })
+        .collect();
     let mut claim_ids = Vec::new();
     let mut fact_ids = Vec::new();
     for rank in fused.iter().take(RECALL_SEED_LIMIT as usize) {
@@ -1266,12 +1297,17 @@ pub fn recall_run(
             fact_ids.push(id.to_owned());
         }
     }
-    let keyword_count = i64::try_from(keyword_hits.len()).unwrap_or(0);
+    let keyword_count =
+        i64::try_from(exact_hits.len().saturating_add(keyword_hits.len())).unwrap_or(0);
     let vector_count = i64::try_from(vector_seeds.len()).unwrap_or(0);
     let graph_count = i64::try_from(graph_hits.len()).unwrap_or(0);
     let _ = store.record_recall_arms(keyword_count, vector_count, graph_count);
     let mut titles = std::collections::BTreeMap::new();
-    for hit in keyword_hits.iter().chain(graph_hits.iter()) {
+    for hit in exact_hits
+        .iter()
+        .chain(keyword_hits.iter())
+        .chain(graph_hits.iter())
+    {
         titles.insert(format!("{}:{}", hit.kind, hit.id), hit.title.clone());
     }
     let hits = fused

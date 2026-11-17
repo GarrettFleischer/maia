@@ -14,8 +14,8 @@ pub use autolink::{
     AUTO_LINK_SOURCE, ExtractedLink, KnownNeuron, LinkTarget, MENTION_MIN_CHARS, extract_links,
 };
 pub use fusion::{
-    FusedRank, FusionError, RRF_K, recall_activity_label, reciprocal_rank_fusion,
-    sanitize_fts_query,
+    FusedRank, FusionError, RRF_K, merge_keyword_first, recall_activity_label,
+    reciprocal_rank_fusion, sanitize_fts_query,
 };
 pub use graph::{
     ComponentScores, EmbedderModel, GraphClaim, GraphEdge, GraphEpisode, GraphFact, MemoryScope,
