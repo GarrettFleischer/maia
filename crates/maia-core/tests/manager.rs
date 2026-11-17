@@ -156,6 +156,55 @@ fn wake_tool_ask_questions_builds_structured_card() {
 }
 
 #[test]
+fn enforce_ceo_moments_drops_duplicate_ask_questions_when_open_questions_exist() {
+    // Live run73: card intro had no '?', so recent_ceo_covers missed it and a second card posted.
+    let snap = WakeSnapshot {
+        waiting: vec![(
+            "task-wait".to_owned(),
+            "Need language and greeting choices".to_owned(),
+        )],
+        open_questions: vec![maia_core::chat_widgets::OpenQuestionBrief {
+            text: "Part B of the scratch goal needs two choices from you:".to_owned(),
+            age_secs: 12,
+        }],
+        recent_ceo_lines: vec![
+            "assistant: Part B of the scratch goal needs two choices from you:".to_owned(),
+        ],
+        ..WakeSnapshot::default()
+    };
+    let payload = maia_core::chat_widgets::AskQuestionsPayload {
+        intro: "Part B of the scratch goal needs two choices:".to_owned(),
+        questions: vec![
+            maia_core::chat_widgets::QuestionSpec {
+                id: "language".to_owned(),
+                prompt: "Which language?".to_owned(),
+                kind: maia_core::chat_widgets::QuestionKind::Single,
+                choices: vec!["Python".to_owned(), "PowerShell".to_owned()],
+            },
+            maia_core::chat_widgets::QuestionSpec {
+                id: "greeting".to_owned(),
+                prompt: "Which greeting?".to_owned(),
+                kind: maia_core::chat_widgets::QuestionKind::Single,
+                choices: vec!["HELLO".to_owned(), "HI".to_owned()],
+            },
+        ],
+    };
+    let outcomes = enforce_ceo_moments(&[WakeAction::AskQuestions { payload }], &snap);
+    assert!(
+        !outcomes
+            .iter()
+            .any(|action| matches!(action, WakeAction::AskQuestions { .. })),
+        "must not post a second ask_questions card while one is open: {outcomes:?}"
+    );
+    assert!(
+        !outcomes
+            .iter()
+            .any(|action| matches!(action, WakeAction::AskUser { .. })),
+        "must not force ask_user prose while an ask_questions card is open: {outcomes:?}"
+    );
+}
+
+#[test]
 fn wake_tool_request_secret_uses_safe_name() {
     let outcomes = interpret_wake_tools(&[WakeToolCall {
         name: "request_secret".to_owned(),

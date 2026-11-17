@@ -359,7 +359,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             );
         } else {
             lines.push(
-                "CEO_WAITING (mandatory): call ask_user or ask_questions immediately this wake with the CEO decision(s) you need. Several questions in one ask_questions card are OK when the task needs them. Do not defer. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
+                "CEO_WAITING (mandatory): call ask_user or ask_questions immediately this wake with the CEO decision(s) you need. When two or more named choices are needed, MUST call ask_questions (one card) — not ask_user prose. Do not defer. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
                     .to_owned(),
             );
         }
@@ -814,6 +814,10 @@ pub enum CeoCoverKind {
 /// True when a waiter question was asked in CEO chat and no user line followed that ask.
 #[must_use]
 pub fn waiting_ask_already_in_chat(snap: &WakeSnapshot) -> bool {
+    // An unanswered ask_questions card (tracked as open_questions) already covers the waiter.
+    if !snap.open_questions.is_empty() {
+        return true;
+    }
     snap.waiting
         .iter()
         .any(|(_, question)| unanswered_ask_covers(snap, question))
@@ -866,6 +870,8 @@ pub fn unanswered_ask_covers(snap: &WakeSnapshot, text: &str) -> bool {
 pub fn ask_shaped_ceo_line(lower: &str) -> bool {
     lower.contains('?')
         || lower.contains("need your decision")
+        || lower.contains("need your answers")
+        || lower.contains("needs two choices")
         || lower.contains("what should")
         || lower.contains("provide")
         || lower.contains("password")
