@@ -96,7 +96,17 @@ fn parse_usage(body: &str, capabilities: &RouterCapabilities) -> RouterUsage {
 
 fn read_cached_tokens(body: &str) -> UsageValue {
     if let Some(details_start) = body.find("\"prompt_tokens_details\"") {
-        let window = &body[details_start..details_start.saturating_add(120).min(body.len())];
+        let window = &body[details_start..];
+        if let Some(value) = read_u64_field(window, "cached_tokens") {
+            return UsageValue::Reported(value);
+        }
+    }
+    // OpenAI-compat gateways sometimes hoist Anthropic-style cache fields.
+    if let Some(value) = read_u64_field(body, "cache_read_input_tokens") {
+        return UsageValue::Reported(value);
+    }
+    if let Some(usage_start) = body.find("\"usage\"") {
+        let window = &body[usage_start..];
         if let Some(value) = read_u64_field(window, "cached_tokens") {
             return UsageValue::Reported(value);
         }

@@ -101,6 +101,43 @@ fn missing_cached_tokens_stays_unavailable_not_derived() {
 }
 
 #[test]
+fn cache_read_input_tokens_alias_is_reported_when_details_missing() {
+    let body = r#"{
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {"role": "assistant", "content": "hi"}
+        }],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 2,
+            "cache_read_input_tokens": 80
+        }
+    }"#;
+    let response = normalize_router_json(body, RequestId(30), &caps()).expect("normalize");
+    assert_eq!(response.usage.cached_input_tokens, UsageValue::Reported(80));
+}
+
+#[test]
+fn cached_token_capability_off_ignores_provider_cache_fields() {
+    let mut off = caps();
+    off.cached_token_usage = false;
+    let body = r#"{
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {"role": "assistant", "content": "hi"}
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 1,
+            "prompt_tokens_details": {"cached_tokens": 7}
+        }
+    }"#;
+    let response = normalize_router_json(body, RequestId(31), &off).expect("normalize");
+    assert_eq!(response.usage.cached_input_tokens, UsageValue::Unavailable);
+    assert_eq!(response.usage.input_tokens, UsageValue::Reported(10));
+}
+
+#[test]
 fn adversarial_extra_fields_do_not_become_reasoning() {
     let body = r#"{
         "choices": [{

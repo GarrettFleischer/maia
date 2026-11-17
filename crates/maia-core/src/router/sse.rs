@@ -156,12 +156,19 @@ impl RouterSseAssembler {
         if let Some(completion) = read_u64_field(payload, "completion_tokens") {
             self.usage.output_tokens = UsageValue::Reported(completion);
         }
-        if self.capabilities.cached_token_usage
-            && let Some(details_start) = payload.find("\"prompt_tokens_details\"")
-        {
-            let window = &payload[details_start..];
-            if let Some(cached) = read_u64_field(window, "cached_tokens") {
+        if self.capabilities.cached_token_usage {
+            if let Some(details_start) = payload.find("\"prompt_tokens_details\"") {
+                let window = &payload[details_start..];
+                if let Some(cached) = read_u64_field(window, "cached_tokens") {
+                    self.usage.cached_input_tokens = UsageValue::Reported(cached);
+                }
+            } else if let Some(cached) = read_u64_field(payload, "cache_read_input_tokens") {
                 self.usage.cached_input_tokens = UsageValue::Reported(cached);
+            } else if let Some(usage_start) = payload.find("\"usage\"") {
+                let window = &payload[usage_start..];
+                if let Some(cached) = read_u64_field(window, "cached_tokens") {
+                    self.usage.cached_input_tokens = UsageValue::Reported(cached);
+                }
             }
         }
         if !payload.contains("\"choices\"") {

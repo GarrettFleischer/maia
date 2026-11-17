@@ -217,7 +217,8 @@ fn router_with_stream(
     let capabilities = RouterCapabilities {
         readable_reasoning: true,
         tool_calls: true,
-        cached_token_usage: false,
+        // Parse prompt_tokens_details.cached_tokens (and aliases) into wake_usage.
+        cached_token_usage: true,
         trailing_instruction_placement: TrailingInstructionPlacement::TrailingSystem,
     };
     RouterHttp::new(config, capabilities, true, RouterAuth::bearer(api_key)).map_err(hide_router)
@@ -295,6 +296,23 @@ mod tests {
         let router = streaming_router_from_connection("http://127.0.0.1:9/v1", "test-key", "auto")
             .expect("router");
         assert!(router.streams_replies());
+    }
+
+    #[test]
+    fn live_router_parses_provider_cached_token_fields() {
+        let streaming =
+            streaming_router_from_connection("http://127.0.0.1:9/v1", "test-key", "auto")
+                .expect("streaming");
+        let json = router_from_connection("http://127.0.0.1:9/v1", "test-key", "auto")
+            .expect("json");
+        assert!(
+            streaming.reports_cached_token_usage(),
+            "wake_usage cached=na when cached_token_usage is off"
+        );
+        assert!(
+            json.reports_cached_token_usage(),
+            "normal turns also need cached token fields when the provider sends them"
+        );
     }
 
     #[test]

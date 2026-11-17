@@ -158,6 +158,11 @@ impl RouterHttp {
         matches!(self.config.stream_mode, RouterStreamMode::ServerSentEvents)
     }
 
+    /// Whether usage parsing keeps provider cached-token fields.
+    pub fn reports_cached_token_usage(&self) -> bool {
+        self.capabilities.cached_token_usage
+    }
+
     fn build_body(&self, request: &RouterRequest) -> Result<serde_json::Value, RouterError> {
         let tools: serde_json::Value =
             serde_json::from_str(&request.tools_json.0).map_err(|_| RouterError::Protocol {
