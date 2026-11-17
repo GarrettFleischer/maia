@@ -193,6 +193,72 @@ pub(crate) fn delete_claim(connection: &Connection, claim_id: &str) -> Result<()
     Ok(())
 }
 
+/// Removes one graph entity and its edges. Facts that named it keep their text.
+pub(crate) fn delete_entity(connection: &Connection, entity_id: &str) -> Result<(), StoreError> {
+    require_text("entity_id", entity_id)?;
+    let transaction = connection.unchecked_transaction()?;
+    delete_edges(&transaction, "entity", entity_id)?;
+    transaction.execute(
+        "UPDATE facts SET entity_id = NULL WHERE entity_id = ?1",
+        params![entity_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM entity_links WHERE from_entity_id = ?1 OR to_entity_id = ?1",
+        params![entity_id],
+    )?;
+    let deleted = transaction.execute(
+        "DELETE FROM entities WHERE entity_id = ?1",
+        params![entity_id],
+    )?;
+    if deleted != 1 {
+        return Err(StoreError::NotFound {
+            entity: "entity",
+            id: entity_id.to_owned(),
+        });
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Removes one timeline episode. Refuses while a memory still comes from it.
+pub(crate) fn delete_episode(connection: &Connection, episode_id: &str) -> Result<(), StoreError> {
+    require_text("episode_id", episode_id)?;
+    let transaction = connection.unchecked_transaction()?;
+    let claims: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM claims WHERE episode_id = ?1",
+        params![episode_id],
+        |row| row.get(0),
+    )?;
+    if claims > 0 {
+        return Err(StoreError::InvalidRequest {
+            message: "delete the memories from this episode first".to_owned(),
+        });
+    }
+    delete_edges(&transaction, "episode", episode_id)?;
+    drop_embedding(&transaction, "episode", episode_id)?;
+    delete_hold(&transaction, "episode", episode_id)?;
+    for sql in [
+        "DELETE FROM fact_episodes WHERE episode_id = ?1",
+        "DELETE FROM dismissals WHERE episode_id = ?1",
+        "DELETE FROM episode_fts WHERE episode_id = ?1",
+        "DELETE FROM episode_segments WHERE episode_id = ?1",
+    ] {
+        transaction.execute(sql, params![episode_id])?;
+    }
+    let deleted = transaction.execute(
+        "DELETE FROM episodes WHERE episode_id = ?1",
+        params![episode_id],
+    )?;
+    if deleted != 1 {
+        return Err(StoreError::NotFound {
+            entity: "episode",
+            id: episode_id.to_owned(),
+        });
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 fn clear_fact_pointers(connection: &Connection, fact_id: &str) -> Result<(), StoreError> {
     connection.execute(
         "UPDATE facts SET replacement_fact_id = NULL WHERE replacement_fact_id = ?1",
@@ -566,4 +632,52 @@ fn weight_millis(weight: f64) -> i64 {
         return 0;
     }
     scaled as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::delete_entity;
+    use super::delete_episode;
+    use crate::error::StoreError;
+    use crate::migrate::apply;
+    use crate::vec_register::register_sqlite_vec;
+    use rusqlite::Connection;
+
+    fn count(connection: &Connection, sql: &str) -> i64 {
+        connection.query_row(sql, [], |row| row.get(0)).expect("count")
+    }
+
+    #[test]
+    fn deletes_one_entity_and_one_episode_but_keeps_memory_sources() {
+        register_sqlite_vec().expect("vec");
+        let mut connection = Connection::open_in_memory().expect("memory db");
+        apply(&mut connection, 1).expect("migrate");
+        connection
+            .execute_batch(
+                "INSERT INTO threads (thread_id, version, participants, created_at) VALUES ('t-1', 1, 'owner', 1);
+                 INSERT INTO episodes (episode_id, thread_id, turn_id, body, taint, participants, created_at, write_canonical)
+                   VALUES ('episode-test', 't-1', 'turn-1', 'Owner: test', 'trusted', 'owner', 1, 'canon'),
+                          ('episode-keep', 't-1', 'turn-2', 'Owner: I live in Canby.', 'trusted', 'owner', 1, 'canon');
+                 INSERT INTO claims (claim_id, sentence, episode_id, taint, status, valid_from)
+                   VALUES ('claim-keep', 'The user lives in Canby.', 'episode-keep', 'trusted', 'provisional', 1);
+                 INSERT INTO entities (entity_id, slug, description, scope_kind, scope_agent)
+                   VALUES ('entity-test', 'test', 'test', 'world', '');",
+            )
+            .expect("seed");
+
+        delete_entity(&connection, "entity-test").expect("delete entity");
+        delete_episode(&connection, "episode-test").expect("delete episode");
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM entities WHERE entity_id = 'entity-test'"), 0);
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM episodes WHERE episode_id = 'episode-test'"), 0);
+
+        assert!(matches!(
+            delete_episode(&connection, "episode-keep"),
+            Err(StoreError::InvalidRequest { .. })
+        ));
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM episodes WHERE episode_id = 'episode-keep'"), 1);
+        assert!(matches!(
+            delete_entity(&connection, "entity-test"),
+            Err(StoreError::NotFound { .. })
+        ));
+    }
 }

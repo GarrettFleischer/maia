@@ -618,6 +618,14 @@ enum NormalCommand {
         loser: String,
         reply: Reply<Executed<BrainMap>>,
     },
+    DeleteEntity {
+        entity_id: String,
+        reply: Reply<Executed<BrainMap>>,
+    },
+    DeleteEpisode {
+        episode_id: String,
+        reply: Reply<Executed<BrainMap>>,
+    },
     ClaimOwnerEdited {
         claim_id: String,
         reply: Reply<bool>,
@@ -3040,6 +3048,40 @@ impl SqliteOwner {
         Pending { rx }.wait()
     }
 
+    /// Deletes one graph entity and its edges.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, missing-entity, or SQLite failure.
+    pub fn delete_entity(&self, entity_id: impl Into<String>) -> Result<Executed<BrainMap>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::DeleteEntity {
+                entity_id: entity_id.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Deletes one timeline episode that no memory comes from.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, missing-episode, in-use, or SQLite failure.
+    pub fn delete_episode(&self, episode_id: impl Into<String>) -> Result<Executed<BrainMap>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::DeleteEpisode {
+                episode_id: episode_id.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
     /// Whether the owner edited this claim. Extraction must not replace it.
     ///
     /// # Errors
@@ -4000,6 +4042,20 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
             sequence,
             claim_map(connection, |connection| {
                 crate::memory_cleanup::merge_entities(connection, &winner, &loser)
+            }),
+        ),
+        NormalCommand::DeleteEntity { entity_id, reply } => executed(
+            reply,
+            sequence,
+            claim_map(connection, |connection| {
+                crate::brain_ops::delete_entity(connection, &entity_id)
+            }),
+        ),
+        NormalCommand::DeleteEpisode { episode_id, reply } => executed(
+            reply,
+            sequence,
+            claim_map(connection, |connection| {
+                crate::brain_ops::delete_episode(connection, &episode_id)
             }),
         ),
         NormalCommand::ClaimOwnerEdited { claim_id, reply } => {

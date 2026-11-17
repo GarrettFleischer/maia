@@ -571,7 +571,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
               </div>
               {inspectToggle}
             </header>
-            <div className="maia-main-body">
+            <div className="maia-main-body maia-settings-page">
               <ThemeControl />
               <ModelConnectionSection source={dataSource} editable={viewport !== 'phone'} />
               <ManagerWakeSection source={dataSource} editable={viewport !== 'phone'} />

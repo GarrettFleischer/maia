@@ -1266,6 +1266,33 @@ textarea {
   box-sizing: border-box;
 }
 
+/* One settings column: same width, no inset, no full-width buttons. */
+.maia-settings-page > * {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto 24px;
+  padding: 0;
+  border: 0;
+  box-sizing: border-box;
+}
+
+.maia-settings-page .maia-settings-block {
+  display: grid;
+  gap: 12px;
+}
+
+.maia-settings-page legend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 1.5em;
+  font-weight: 700;
+}
+
+.maia-settings-page .maia-btn {
+  justify-self: start;
+  width: auto;
+}
+
 .maia-settings-fit {
   display: grid;
   gap: 16px;

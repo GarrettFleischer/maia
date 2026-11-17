@@ -42,6 +42,7 @@ use axum::middleware;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use axum::routing::delete;
 use axum::routing::get;
 use axum::routing::patch;
 use axum::routing::post;
@@ -1223,6 +1224,14 @@ enum ActorCall {
         claim_id: String,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
+    DeleteEntity {
+        entity_id: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+    DeleteEpisode {
+        episode_id: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
     SkipQuarantinedEpisode {
         episode_id: String,
         promotion_caps: PromotionCaps,
@@ -2046,6 +2055,14 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
             let deleted = actor.host.store().delete_claim(claim_id).map_err(map_brain_store);
             let _ = reply.send(deleted.map(|done| brain_map_value(&done.value, false)));
         }
+        ActorCall::DeleteEntity { entity_id, reply } => {
+            let deleted = actor.host.store().delete_entity(entity_id).map_err(map_brain_store);
+            let _ = reply.send(deleted.map(|done| brain_map_value(&done.value, false)));
+        }
+        ActorCall::DeleteEpisode { episode_id, reply } => {
+            let deleted = actor.host.store().delete_episode(episode_id).map_err(map_brain_store);
+            let _ = reply.send(deleted.map(|done| brain_map_value(&done.value, false)));
+        }
         ActorCall::SkipQuarantinedEpisode {
             episode_id,
             promotion_caps,
@@ -2800,6 +2817,8 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
             post(restore_claim_route),
         )
         .route("/brain/entities/merge", post(merge_entities_route))
+        .route("/brain/entities/{entity_id}", delete(delete_entity_route))
+        .route("/brain/episodes/{episode_id}", delete(delete_episode_route))
         .route(
             "/brain/facts/{fact_id}",
             patch(patch_fact).delete(delete_fact),
@@ -3905,6 +3924,20 @@ async fn delete_claim_route(
     Path(claim_id): Path<String>,
 ) -> Response {
     finish(ask(&state, |reply| ActorCall::DeleteClaim { claim_id, reply }).await)
+}
+
+async fn delete_entity_route(
+    State(state): State<AppState>,
+    Path(entity_id): Path<String>,
+) -> Response {
+    finish(ask(&state, |reply| ActorCall::DeleteEntity { entity_id, reply }).await)
+}
+
+async fn delete_episode_route(
+    State(state): State<AppState>,
+    Path(episode_id): Path<String>,
+) -> Response {
+    finish(ask(&state, |reply| ActorCall::DeleteEpisode { episode_id, reply }).await)
 }
 
 async fn skip_quarantined_episode_route(

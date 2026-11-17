@@ -3988,6 +3988,13 @@ async fn revise_and_delete_brain(session: Session) {
         again.json::<Value>().await.expect("missing delete"),
         json!({"error": "unknown_fact"})
     );
+    for path in ["/api/brain/entities/entity-missing", "/api/brain/episodes/episode-missing"] {
+        assert_eq!(delete_api(&server, path).await.status(), 404);
+    }
+    let episode = delete_api(&server, "/api/brain/episodes/episode-1").await;
+    assert_eq!(episode.status(), 200);
+    let episode = episode.json::<Value>().await.expect("episode map");
+    assert_eq!(brain_sentence(&episode, "episode-1"), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
