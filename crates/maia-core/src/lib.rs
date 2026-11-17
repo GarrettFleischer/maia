@@ -53,3 +53,6 @@ pub mod agent_tools;
 
 /// Admitted MCP catalogs, grants, and call checks.
 pub mod mcp;
+
+/// Strip secrets before durable memory / skill / session-summary saves.
+pub mod memory_redact;
