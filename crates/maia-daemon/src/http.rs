@@ -1219,6 +1219,10 @@ enum ActorCall {
         claim_id: String,
         reply: oneshot::Sender<Result<Value, ApiError>>,
     },
+    DeleteClaim {
+        claim_id: String,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
     SkipQuarantinedEpisode {
         episode_id: String,
         promotion_caps: PromotionCaps,
@@ -2038,6 +2042,10 @@ fn dispatch<R: RouterPort>(actor: &mut Actor<R>, call: ActorCall) {
         ActorCall::ForgetClaim { claim_id, reply } => {
             let _ = reply.send(forget_claim(actor, claim_id));
         }
+        ActorCall::DeleteClaim { claim_id, reply } => {
+            let deleted = actor.host.store().delete_claim(claim_id).map_err(map_brain_store);
+            let _ = reply.send(deleted.map(|done| brain_map_value(&done.value, false)));
+        }
         ActorCall::SkipQuarantinedEpisode {
             episode_id,
             promotion_caps,
@@ -2774,7 +2782,10 @@ fn app_router(state: AppState, dist: PathBuf) -> Router {
             patch(rename_memory_tag).delete(delete_memory_tag),
         )
         .route("/brain/claims/{claim_id}/tags", put(put_claim_tags))
-        .route("/brain/claims/{claim_id}", patch(patch_claim))
+        .route(
+            "/brain/claims/{claim_id}",
+            patch(patch_claim).delete(delete_claim_route),
+        )
         .route(
             "/brain/claims/{claim_id}/confirm",
             post(confirm_claim_route),
@@ -3889,6 +3900,13 @@ async fn forget_claim_route(
     finish(ask(&state, |reply| ActorCall::ForgetClaim { claim_id, reply }).await)
 }
 
+async fn delete_claim_route(
+    State(state): State<AppState>,
+    Path(claim_id): Path<String>,
+) -> Response {
+    finish(ask(&state, |reply| ActorCall::DeleteClaim { claim_id, reply }).await)
+}
+
 async fn skip_quarantined_episode_route(
     State(state): State<AppState>,
     Path(episode_id): Path<String>,
@@ -4357,7 +4375,6 @@ fn brain_node_value(node: &BrainNode) -> Value {
         "taint": taint,
         "session_id": node.session_id,
         "held": node.held,
-        "category": node.detail.category,
         "confidence_millis": node.detail.confidence_millis,
         "created_at": node.detail.created_at,
         "last_used_at": node.detail.last_used_at,

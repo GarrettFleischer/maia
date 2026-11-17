@@ -69,7 +69,7 @@ pub use schedule::{
 };
 pub use seeds::{ClaimSeed, merge_claim_seeds, promotion_backoff_seconds, promotion_claim_id};
 pub use tags::{
-    KnownTag, TagRole, default_tags, names_for_category, normalize_tag_name, search_kind_rank,
+    KnownTag, TagRole, default_tags, normalize_tag_name, search_kind_rank,
     suggest_tags,
 };
 pub use select::{

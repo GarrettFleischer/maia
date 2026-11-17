@@ -94,21 +94,6 @@ pub fn suggest_tags(sentence: &str, known: &[KnownTag]) -> Vec<String> {
     names
 }
 
-/// Tag names for a category saved before tags existed.
-///
-/// `other` and an empty category return nothing, so the caller asks [`suggest_tags`].
-#[must_use]
-pub fn names_for_category(category: &str, known: &[KnownTag]) -> Option<Vec<String>> {
-    let role = match category {
-        "person" => TagRole::People,
-        "place" => TagRole::Places,
-        "project" | "path" | "device" => TagRole::Things,
-        "preference" | "decision" => TagRole::Ideas,
-        _ => return None,
-    };
-    Some(vec![name_for_role(role, known)])
-}
-
 /// Trims a tag name. Empty and over-long names are rejected.
 #[must_use]
 pub fn normalize_tag_name(raw: &str) -> Option<String> {
@@ -310,7 +295,6 @@ mod tests {
     use super::KnownTag;
     use super::TagRole;
     use super::default_tags;
-    use super::names_for_category;
     use super::normalize_tag_name;
     use super::search_kind_rank;
     use super::suggest_tags;
@@ -404,24 +388,6 @@ mod tests {
             ),
             vec!["Places".to_owned(), "Ideas".to_owned()]
         );
-    }
-
-    #[test]
-    fn stored_categories_map_onto_tags_and_other_does_not() {
-        let known = default_tags();
-        assert_eq!(names_for_category("person", &known), Some(vec!["People".to_owned()]));
-        assert_eq!(names_for_category("place", &known), Some(vec!["Places".to_owned()]));
-        assert_eq!(names_for_category("path", &known), Some(vec!["Things".to_owned()]));
-        assert_eq!(names_for_category("device", &known), Some(vec!["Things".to_owned()]));
-        assert_eq!(names_for_category("preference", &known), Some(vec!["Ideas".to_owned()]));
-        assert_eq!(names_for_category("decision", &known), Some(vec!["Ideas".to_owned()]));
-        assert_eq!(names_for_category("other", &known), None);
-        assert_eq!(names_for_category("", &known), None);
-        let family = vec![KnownTag {
-            name: "Family".to_owned(),
-            role: TagRole::People,
-        }];
-        assert_eq!(names_for_category("person", &family), Some(vec!["Family".to_owned()]));
     }
 
     #[test]

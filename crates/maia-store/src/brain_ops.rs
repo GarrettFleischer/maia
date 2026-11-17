@@ -165,6 +165,34 @@ pub(crate) fn delete(connection: &mut Connection, fact_id: &str) -> Result<Brain
     Ok(map)
 }
 
+/// Removes one claim for good, with its tags, search rows, embedding, edges, and fact links.
+///
+/// The episode it came from stays.
+pub(crate) fn delete_claim(connection: &Connection, claim_id: &str) -> Result<(), StoreError> {
+    require_text("claim_id", claim_id)?;
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute(
+        "UPDATE claims SET replaced_by = NULL WHERE replaced_by = ?1",
+        params![claim_id],
+    )?;
+    delete_edges(&transaction, "claim", claim_id)?;
+    drop_embedding(&transaction, "claim", claim_id)?;
+    delete_claim_fts(&transaction, claim_id)?;
+    delete_hold(&transaction, "claim", claim_id)?;
+    transaction.execute("DELETE FROM fact_claims WHERE claim_id = ?1", params![claim_id])?;
+    transaction.execute("DELETE FROM claim_tags WHERE claim_id = ?1", params![claim_id])?;
+    let deleted = transaction.execute("DELETE FROM claims WHERE claim_id = ?1", params![claim_id])?;
+    if deleted != 1 {
+        return Err(StoreError::NotFound {
+            entity: "claim",
+            id: claim_id.to_owned(),
+        });
+    }
+    prune_lexemes(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 fn clear_fact_pointers(connection: &Connection, fact_id: &str) -> Result<(), StoreError> {
     connection.execute(
         "UPDATE facts SET replacement_fact_id = NULL WHERE replacement_fact_id = ?1",
@@ -387,7 +415,7 @@ fn load_claims(
 ) -> Result<Vec<BrainNode>, StoreError> {
     let mut statement = connection.prepare(
         "SELECT claims.claim_id, claims.sentence, claims.taint, episodes.thread_id, \
-         claims.category, claims.confidence_millis, claims.episode_id, claims.status, \
+         claims.confidence_millis, claims.episode_id, claims.status, \
          claims.hidden_reason, claims.subject, claims.owner_edited, claims.valid_from \
          FROM claims JOIN episodes ON episodes.episode_id = claims.episode_id \
          ORDER BY claims.claim_id",
@@ -398,22 +426,20 @@ fn load_claims(
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, i64>(5)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, String>(5)?,
             row.get::<_, String>(6)?,
-            row.get::<_, String>(7)?,
-            row.get::<_, Option<String>>(8)?,
-            row.get::<_, String>(9)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, i64>(9)?,
             row.get::<_, i64>(10)?,
-            row.get::<_, i64>(11)?,
         ))
     })?;
     let mut nodes = Vec::new();
     for row in mapped {
-        let (id, sentence, taint, session_id, category, confidence, episode, status, hidden, subject, edited, created) = row?;
+        let (id, sentence, taint, session_id, confidence, episode, status, hidden, subject, edited, created) = row?;
         let held = is_held(holds, "claim", &id);
         let mut node = prose_node(id, BrainNodeKind::Claim, sentence, taint, Some(session_id), held)?;
-        node.detail.category = category;
         node.detail.confidence_millis = Some(confidence);
         node.detail.source_episode = Some(episode);
         node.detail.status = Some(status);
@@ -477,8 +503,7 @@ fn load_entities(connection: &Connection) -> Result<Vec<BrainNode>, StoreError> 
             session_id: None,
             held: false,
             detail: crate::types::BrainDetail {
-                entity_kind: Some(kind.clone()),
-                category: kind,
+                entity_kind: Some(kind),
                 ..crate::types::BrainDetail::default()
             },
         });

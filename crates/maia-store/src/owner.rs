@@ -605,6 +605,10 @@ enum NormalCommand {
         claim_id: String,
         reply: Reply<Executed<BrainMap>>,
     },
+    DeleteClaim {
+        claim_id: String,
+        reply: Reply<Executed<BrainMap>>,
+    },
     RestoreClaim {
         claim_id: String,
         reply: Reply<Executed<BrainMap>>,
@@ -2980,6 +2984,23 @@ impl SqliteOwner {
         Pending { rx }.wait()
     }
 
+    /// Deletes a claim for good. Its episode stays.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, missing-claim, or SQLite failure.
+    pub fn delete_claim(&self, claim_id: impl Into<String>) -> Result<Executed<BrainMap>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::DeleteClaim {
+                claim_id: claim_id.into(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
     /// Shows a hidden claim again.
     ///
     /// # Errors
@@ -3954,6 +3975,13 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
             sequence,
             claim_map(connection, |connection| {
                 crate::memory_cleanup::forget_claim(connection, &claim_id)
+            }),
+        ),
+        NormalCommand::DeleteClaim { claim_id, reply } => executed(
+            reply,
+            sequence,
+            claim_map(connection, |connection| {
+                crate::brain_ops::delete_claim(connection, &claim_id)
             }),
         ),
         NormalCommand::RestoreClaim { claim_id, reply } => executed(

@@ -5,7 +5,6 @@
 
 use maia_core::dream::KnownTag;
 use maia_core::dream::TagRole;
-use maia_core::dream::names_for_category;
 use maia_core::dream::normalize_tag_name;
 use maia_core::dream::suggest_tags;
 use rusqlite::Connection;
@@ -123,21 +122,21 @@ pub(crate) fn fill_empty(connection: &Connection) -> Result<(), StoreError> {
         return Ok(());
     }
     let mut statement = connection.prepare(
-        "SELECT claims.claim_id, claims.sentence, claims.category \
+        "SELECT claims.claim_id, claims.sentence \
          FROM claims \
          WHERE claims.tags_locked = 0 \
            AND NOT EXISTS (SELECT 1 FROM claim_tags WHERE claim_tags.claim_id = claims.claim_id)",
     )?;
     let mapped = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
     let mut rows = Vec::new();
     for row in mapped {
         rows.push(row?);
     }
     drop(statement);
-    for (claim_id, sentence, category) in rows {
-        assign_initial(connection, &claim_id, &sentence, &category)?;
+    for (claim_id, sentence) in rows {
+        assign_initial(connection, &claim_id, &sentence)?;
     }
     Ok(())
 }
@@ -147,7 +146,6 @@ pub(crate) fn fill_claim(
     connection: &Connection,
     claim_id: &str,
     sentence: &str,
-    category: &str,
 ) -> Result<(), StoreError> {
     if !table_ready(connection)? {
         return Ok(());
@@ -170,17 +168,16 @@ pub(crate) fn fill_claim(
     if count > 0 {
         return Ok(());
     }
-    assign_initial(connection, claim_id, sentence, category)
+    assign_initial(connection, claim_id, sentence)
 }
 
 fn assign_initial(
     connection: &Connection,
     claim_id: &str,
     sentence: &str,
-    category: &str,
 ) -> Result<(), StoreError> {
     let known = load_known(connection)?;
-    let names = names_for_category(category, &known).unwrap_or_else(|| suggest_tags(sentence, &known));
+    let names = suggest_tags(sentence, &known);
     replace_tags(connection, claim_id, &names, false)
 }
 
@@ -452,12 +449,12 @@ mod tests {
         connection
     }
 
-    fn insert_claim(connection: &Connection, id: &str, sentence: &str, category: &str) {
+    fn insert_claim(connection: &Connection, id: &str, sentence: &str) {
         connection
             .execute(
-                "INSERT INTO claims (claim_id, sentence, episode_id, taint, status, valid_from, category) \
-                 VALUES (?1, ?2, 'episode-1', 'trusted', 'provisional', 1, ?3)",
-                rusqlite::params![id, sentence, category],
+                "INSERT INTO claims (claim_id, sentence, episode_id, taint, status, valid_from) \
+                 VALUES (?1, ?2, 'episode-1', 'trusted', 'provisional', 1)",
+                rusqlite::params![id, sentence],
             )
             .expect("claim");
     }
@@ -469,15 +466,14 @@ mod tests {
     #[test]
     fn migration_tags_existing_facts_and_a_later_cleanup_keeps_owner_choices() {
         let connection = open();
-        insert_claim(&connection, "claim-name", "The user's name is Garrett.", "person");
-        insert_claim(&connection, "claim-city", "The user lives in Canby, Oregon.", "place");
+        insert_claim(&connection, "claim-name", "The user's name is Garrett.");
+        insert_claim(&connection, "claim-city", "The user lives in Canby, Oregon.");
         insert_claim(
             &connection,
             "claim-path",
             "The user has a folder located at F:\\Development\\Ideas.",
-            "path",
         );
-        insert_claim(&connection, "claim-other", "The user plays chess every Tuesday.", "other");
+        insert_claim(&connection, "claim-other", "The user plays chess every Tuesday.");
         fill_empty(&connection).expect("fill");
         assert_eq!(names(&connection, "claim-name"), vec!["People".to_owned()]);
         assert_eq!(names(&connection, "claim-city"), vec!["Places".to_owned()]);
@@ -537,6 +533,29 @@ mod tests {
         fill_empty(&connection).expect("cleanup after remove");
         assert!(names(&connection, "claim-name").is_empty());
         assert_eq!(before, vec!["Family".to_owned()]);
+    }
+
+    #[test]
+    fn deleting_a_claim_removes_it_for_good_and_keeps_its_episode() {
+        let connection = open();
+        insert_claim(&connection, "claim-gone", "The user plays chess every Tuesday.");
+        insert_claim(&connection, "claim-kept", "The user lives in Canby, Oregon.");
+        connection
+            .execute(
+                "INSERT INTO claim_fts (claim_id, sentence) VALUES ('claim-gone', 'chess')",
+                [],
+            )
+            .expect("fts");
+        fill_empty(&connection).expect("fill");
+        assert!(!names(&connection, "claim-gone").is_empty());
+        crate::brain_ops::delete_claim(&connection, "claim-gone").expect("delete");
+        let count = |sql: &str| -> i64 { connection.query_row(sql, [], |row| row.get(0)).expect("count") };
+        assert_eq!(count("SELECT COUNT(*) FROM claims WHERE claim_id = 'claim-gone'"), 0);
+        assert_eq!(count("SELECT COUNT(*) FROM claim_tags WHERE claim_id = 'claim-gone'"), 0);
+        assert_eq!(count("SELECT COUNT(*) FROM claim_fts WHERE claim_id = 'claim-gone'"), 0);
+        assert_eq!(count("SELECT COUNT(*) FROM claims WHERE claim_id = 'claim-kept'"), 1);
+        assert_eq!(count("SELECT COUNT(*) FROM episodes WHERE episode_id = 'episode-1'"), 1);
+        assert!(crate::brain_ops::delete_claim(&connection, "claim-gone").is_err());
     }
 
     #[test]

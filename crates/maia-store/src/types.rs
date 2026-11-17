@@ -665,8 +665,6 @@ impl BrainNodeKind {
 /// Extra memory fields on a brain node. Empty for a bare graph node.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BrainDetail {
-    /// Fact category such as `person` or `place`.
-    pub category: String,
     /// Confidence times 1000. `700` is 0.7.
     pub confidence_millis: Option<i64>,
     /// Unix seconds when the row was written.
@@ -717,7 +715,7 @@ pub struct BrainNode {
     pub session_id: Option<String>,
     /// The row is in `correction_holds`.
     pub held: bool,
-    /// Category, confidence, times, and hide reason.
+    /// Confidence, times, tags, and hide reason.
     pub detail: BrainDetail,
 }
 

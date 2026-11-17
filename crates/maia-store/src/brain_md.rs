@@ -684,7 +684,6 @@ fn insert_claim_doc(connection: &Connection, doc: &NeuronDoc) -> Result<(), Stor
         connection,
         &doc.id,
         &nonempty(&doc.body, &doc.id),
-        "",
     )?;
     connection.execute(
         "INSERT INTO claim_fts (claim_id, sentence) VALUES (?1, ?2)",

@@ -33,14 +33,9 @@ pub(crate) fn edit_claim(
     sentence: &str,
 ) -> Result<(), StoreError> {
     let updated = connection.execute(
-        "UPDATE claims SET sentence = ?1, owner_edited = 1, category = ?2, subject = ?3, \
-         confidence_millis = 1000, hidden_reason = NULL WHERE claim_id = ?4",
-        params![
-            sentence,
-            categorize(sentence).as_str(),
-            subject_name(sentence),
-            claim_id
-        ],
+        "UPDATE claims SET sentence = ?1, owner_edited = 1, subject = ?2, \
+         confidence_millis = 1000, hidden_reason = NULL WHERE claim_id = ?3",
+        params![sentence, subject_name(sentence), claim_id],
     )?;
     if updated != 1 {
         return Err(StoreError::NotFound {
@@ -291,10 +286,9 @@ fn backfill_kept_claims(connection: &Connection) -> Result<(), StoreError> {
         if judge_claim(&sentence) != ClaimJudgment::Keep {
             continue;
         }
-        let category = categorize(&sentence);
         connection.execute(
-            "UPDATE claims SET category = ?1, subject = ?2 WHERE claim_id = ?3 AND owner_edited = 0",
-            params![category.as_str(), subject_name(&sentence), id],
+            "UPDATE claims SET subject = ?1 WHERE claim_id = ?2 AND owner_edited = 0",
+            params![subject_name(&sentence), id],
         )?;
         link_sentence(connection, &id, &sentence)?;
     }
@@ -311,7 +305,6 @@ pub(crate) fn annotate_new_claim(
     if judge_claim(sentence) != ClaimJudgment::Keep {
         return Ok(());
     }
-    let category = categorize(sentence);
     let subject = subject_name(sentence);
     let confidence = if flagged_beside_lock {
         400
@@ -321,11 +314,11 @@ pub(crate) fn annotate_new_claim(
         550
     };
     connection.execute(
-        "UPDATE claims SET category = ?1, subject = ?2, subject_peer_id = ?2, confidence_millis = ?3 \
-         WHERE claim_id = ?4 AND owner_edited = 0",
-        params![category.as_str(), subject, confidence, claim_id],
+        "UPDATE claims SET subject = ?1, subject_peer_id = ?1, confidence_millis = ?2 \
+         WHERE claim_id = ?3 AND owner_edited = 0",
+        params![subject, confidence, claim_id],
     )?;
-    crate::memory_tags::fill_claim(connection, claim_id, sentence, category.as_str())?;
+    crate::memory_tags::fill_claim(connection, claim_id, sentence)?;
     link_sentence(connection, claim_id, sentence)?;
     collapse_duplicate(connection, claim_id, sentence)
 }
@@ -659,14 +652,14 @@ mod tests {
             )
             .expect("junk");
         assert_eq!(hidden, "not a durable fact");
-        let category: String = connection
+        let subject: String = connection
             .query_row(
-                "SELECT category FROM claims WHERE claim_id = 'claim-good'",
+                "SELECT subject FROM claims WHERE claim_id = 'claim-good'",
                 [],
                 |row| row.get(0),
             )
             .expect("good");
-        assert_eq!(category, "person");
+        assert!(!subject.is_empty());
         let body: String = connection
             .query_row(
                 "SELECT body FROM episodes WHERE episode_id = 'episode-1'",
