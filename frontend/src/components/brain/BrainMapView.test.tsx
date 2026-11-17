@@ -316,13 +316,14 @@ describe('BrainMapView', () => {
     expect(screen.queryByTestId('brain-graph-lexeme-this')).not.toBeInTheDocument()
   })
 
-  it('keeps Memory, Search, Review, Timeline, and Graph in one tab row', async () => {
+  it('keeps Memory, Search, Review, Timeline, and Graph in one compact icon tab row', async () => {
     const client = clientFor(sampleMap())
     render(<BrainMapView client={client} />)
     await screen.findByRole('heading', { name: 'People' })
     const tablist = screen.getByRole('tablist', { name: 'Brain views' })
     expect(tablist).toHaveClass('maia-brain-tabs')
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual([
       'Memory',
       'Skills',
       'Search',
@@ -330,6 +331,11 @@ describe('BrainMapView', () => {
       'Timeline',
       'Graph',
     ])
+    for (const tab of tabs) {
+      expect(tab).toHaveClass('maia-icon-btn')
+      expect(tab).not.toHaveTextContent(/Memory|Skills|Search|Review|Timeline|Graph/)
+      expect(tab.querySelector('.maia-brain-tab-icon')).not.toBeNull()
+    }
   })
 
   it('draws short entity names and does not cut claim words', async () => {

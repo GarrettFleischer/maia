@@ -27,6 +27,15 @@ import {
 
 type View = 'memory' | 'skills' | 'search' | 'review' | 'timeline' | 'graph'
 
+const BRAIN_TABS: { id: View; label: string }[] = [
+  { id: 'memory', label: 'Memory' },
+  { id: 'skills', label: 'Skills' },
+  { id: 'search', label: 'Search' },
+  { id: 'review', label: 'Review' },
+  { id: 'timeline', label: 'Timeline' },
+  { id: 'graph', label: 'Graph' },
+]
+
 function facts(map: BrainMap): BrainNode[] {
   return map.nodes.filter((node) => node.kind === 'claim' || node.kind === 'fact')
 }
@@ -148,16 +157,18 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
   return (
     <section className="maia-brain" aria-label="Memory">
       <div className="maia-brain-toolbar maia-brain-tabs" role="tablist" aria-label="Brain views">
-        {(['memory', 'skills', 'search', 'review', 'timeline', 'graph'] as const).map((item) => (
+        {BRAIN_TABS.map((item) => (
           <button
-            key={item}
+            key={item.id}
             type="button"
             role="tab"
-            aria-selected={view === item}
-            className="maia-btn"
-            onClick={() => setView(item)}
+            aria-label={item.label}
+            title={item.label}
+            aria-selected={view === item.id}
+            className="maia-icon-btn maia-brain-tab"
+            onClick={() => setView(item.id)}
           >
-            {item[0]!.toUpperCase() + item.slice(1)}
+            <span className={`maia-brain-tab-icon maia-brain-tab-icon--${item.id}`} aria-hidden="true" />
           </button>
         ))}
       </div>

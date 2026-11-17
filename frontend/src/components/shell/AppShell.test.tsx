@@ -181,6 +181,21 @@ describe('AppShell layout', () => {
     expect(inspect).toHaveAttribute('aria-pressed', 'true')
   })
 
+  it('uses compact icon-only phone section nav', async () => {
+    window.innerWidth = 390
+    window.dispatchEvent(new Event('resize'))
+    renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, {
+      initialState: { ...defaultFixtureState(), onboarding_complete: true },
+    })
+    const nav = screen.getByRole('navigation', { name: 'Sections' })
+    for (const label of ['Chats', 'Tasks', 'Brain', 'Settings'] as const) {
+      const button = within(nav).getByRole('button', { name: label })
+      expect(button).toHaveClass('maia-icon-btn')
+      expect(button).not.toHaveTextContent(label)
+      expect(button.querySelector('.maia-nav-icon')).not.toBeNull()
+    }
+  })
+
   it('uses compact Back and Inspect icons on the phone chat header', async () => {
     window.innerWidth = 412
     window.dispatchEvent(new Event('resize'))

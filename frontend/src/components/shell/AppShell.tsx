@@ -426,19 +426,23 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
             {activity.running > 0 ? <StopAllButton onStop={stopAll} /> : null}
             <button
               type="button"
-              className="maia-foot-link"
+              className="maia-icon-btn maia-foot-link"
+              aria-label="Brain"
+              title="Brain"
               onClick={() => setCenterView((view) => toggleCenterView(view, 'brain'))}
               aria-current={centerView === 'brain' ? 'page' : undefined}
             >
-              Brain
+              <span className="maia-nav-icon maia-nav-icon--brain" aria-hidden="true" />
             </button>
             <button
               type="button"
-              className="maia-foot-link"
+              className="maia-icon-btn maia-foot-link"
+              aria-label="Settings"
+              title="Settings"
               onClick={() => setCenterView((view) => toggleCenterView(view, 'settings'))}
               aria-current={centerView === 'settings' ? 'page' : undefined}
             >
-              Settings
+              <span className="maia-nav-icon maia-nav-icon--settings" aria-hidden="true" />
             </button>
           </div>
         </nav>
@@ -647,6 +651,9 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
         <nav className="maia-phone-nav" aria-label="Sections">
           <button
             type="button"
+            className="maia-icon-btn"
+            aria-label="Chats"
+            title="Chats"
             aria-current={centerView === 'conversation' && !phoneChat ? 'page' : undefined}
             onClick={() => {
               returnToChat.current = false
@@ -654,37 +661,46 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
               setCenterView('conversation')
             }}
           >
-            Chats
+            <span className="maia-nav-icon maia-nav-icon--chats" aria-hidden="true" />
           </button>
           <button
             type="button"
+            className="maia-icon-btn"
+            aria-label="Tasks"
+            title="Tasks"
             aria-current={centerView === 'tasks' ? 'page' : undefined}
             onClick={() => {
               returnToChat.current = phoneChat
               setCenterView((view) => toggleCenterView(view, 'tasks'))
             }}
           >
-            Tasks
+            <span className="maia-nav-icon maia-nav-icon--tasks" aria-hidden="true" />
           </button>
           <button
             type="button"
+            className="maia-icon-btn"
+            aria-label="Brain"
+            title="Brain"
             aria-current={centerView === 'brain' ? 'page' : undefined}
             onClick={() => {
               returnToChat.current = phoneChat
               setCenterView((view) => toggleCenterView(view, 'brain'))
             }}
           >
-            Brain
+            <span className="maia-nav-icon maia-nav-icon--brain" aria-hidden="true" />
           </button>
           <button
             type="button"
+            className="maia-icon-btn"
+            aria-label="Settings"
+            title="Settings"
             aria-current={centerView === 'settings' ? 'page' : undefined}
             onClick={() => {
               returnToChat.current = phoneChat
               setCenterView((view) => toggleCenterView(view, 'settings'))
             }}
           >
-            Settings
+            <span className="maia-nav-icon maia-nav-icon--settings" aria-hidden="true" />
           </button>
         </nav>
       )}

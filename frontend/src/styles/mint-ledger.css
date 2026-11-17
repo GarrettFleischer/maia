@@ -503,18 +503,50 @@ textarea {
   justify-self: start;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   border: 0;
   background: none;
   color: var(--muted);
-  padding: 0 4px;
-  min-height: 40px;
-  min-width: 40px;
+  padding: 0;
+  min-height: 32px;
+  min-width: 32px;
+  width: 32px;
+  height: 32px;
   cursor: pointer;
 }
 
 .maia-foot-link:hover,
 .maia-foot-link[aria-current='page'] {
   color: var(--text);
+}
+
+.maia-nav-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+}
+
+.maia-nav-icon--chats {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3.5h10v7.2H6.2L3 13.2V3.5z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3.5h10v7.2H6.2L3 13.2V3.5z'/%3E%3C/svg%3E");
+}
+
+.maia-nav-icon--tasks {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 4h9M3.5 8h9M3.5 12h6'/%3E%3Cpath d='M2 4h.01M2 8h.01M2 12h.01'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 4h9M3.5 8h9M3.5 12h6'/%3E%3Cpath d='M2 4h.01M2 8h.01M2 12h.01'/%3E%3C/svg%3E");
+}
+
+.maia-nav-icon--brain {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='4.2'/%3E%3Cpath d='M8 3.8v8.4M3.8 8h8.4'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='4.2'/%3E%3Cpath d='M8 3.8v8.4M3.8 8h8.4'/%3E%3C/svg%3E");
+}
+
+.maia-nav-icon--settings {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='2.2'/%3E%3Cpath d='M8 2.5v1.4M8 12.1v1.4M2.5 8h1.4M12.1 8h1.4M4.1 4.1l1 1M10.9 10.9l1 1M11.9 4.1l-1 1M5.1 10.9l-1 1'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='2.2'/%3E%3Cpath d='M8 2.5v1.4M8 12.1v1.4M2.5 8h1.4M12.1 8h1.4M4.1 4.1l1 1M10.9 10.9l1 1M11.9 4.1l-1 1M5.1 10.9l-1 1'/%3E%3C/svg%3E");
 }
 
 .maia-rail-count {
@@ -1562,23 +1594,23 @@ textarea {
   .maia-inspect-quiet,
   .maia-chev,
   .maia-pin,
-  .maia-foot-link,
   .maia-task-open,
   .maia-choice,
   .maia-brain-list button,
   .maia-inspector-tabs [role='tab'],
   .maia-phone-header .maia-btn,
   .maia-phone-header .maia-icon-btn,
-  .maia-phone-nav button,
   .maia-fold summary {
     min-height: 44px;
     min-width: 44px;
   }
-  .maia-icon-btn {
-    width: 32px;
-    height: 32px;
-    min-width: 32px;
-    min-height: 32px;
+  .maia-icon-btn,
+  .maia-foot-link,
+  .maia-phone-nav .maia-icon-btn {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
   }
   .maia-phone-header .maia-icon-btn {
     width: 44px;
@@ -1886,21 +1918,21 @@ textarea {
 
 .maia-phone-nav {
   display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 4px;
   min-width: 0;
   max-width: 100%;
   border-top: 1px solid var(--border);
   background: var(--surface);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
 }
 
 .maia-phone-nav button {
-  flex: 1 1 0;
-  min-width: 44px;
-  min-height: 44px;
+  flex: 0 0 auto;
   border: 0;
   background: transparent;
   color: var(--muted);
-  font: inherit;
 }
 
 .maia-phone-nav button[aria-current='page'] {
@@ -2498,16 +2530,11 @@ details:not([open]) > .maia-task-tree {
 @media (max-width: 727px) {
   .maia-brain .maia-btn,
   .maia-brain-toolbar input {
-    min-height: 44px;
+    min-height: 40px;
   }
 
   .maia-brain-tabs {
-    gap: 6px;
-  }
-
-  .maia-brain-tabs .maia-btn {
-    padding-left: 8px;
-    padding-right: 8px;
+    gap: 4px;
   }
 
   .maia-brain {
@@ -2524,18 +2551,62 @@ details:not([open]) > .maia-task-tree {
 
 .maia-brain-tabs {
   flex-wrap: nowrap;
-  align-items: stretch;
+  align-items: center;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
+  gap: 4px;
 }
 
-.maia-brain-tabs .maia-btn {
+.maia-brain-tabs .maia-brain-tab {
   flex: 0 0 auto;
-  white-space: nowrap;
+}
+
+.maia-brain-tabs .maia-brain-tab[aria-selected='true'] {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+}
+
+.maia-brain-tab-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+}
+
+.maia-brain-tab-icon--memory {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 3.5h8v9H4z'/%3E%3Cpath d='M6 6h4M6 8.5h4M6 11h2.5'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 3.5h8v9H4z'/%3E%3Cpath d='M6 6h4M6 8.5h4M6 11h2.5'/%3E%3C/svg%3E");
+}
+
+.maia-brain-tab-icon--skills {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.5 3.5l3 3-7 7H2.5v-3l7-7z'/%3E%3Cpath d='M8.2 4.8l3 3'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.5 3.5l3 3-7 7H2.5v-3l7-7z'/%3E%3Cpath d='M8.2 4.8l3 3'/%3E%3C/svg%3E");
+}
+
+.maia-brain-tab-icon--search {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7' cy='7' r='3.5'/%3E%3Cpath d='M12.5 12.5L9.7 9.7'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7' cy='7' r='3.5'/%3E%3Cpath d='M12.5 12.5L9.7 9.7'/%3E%3C/svg%3E");
+}
+
+.maia-brain-tab-icon--review {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.2l2.8 2.8 6.2-6.2'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.2l2.8 2.8 6.2-6.2'/%3E%3C/svg%3E");
+}
+
+.maia-brain-tab-icon--timeline {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 8h11'/%3E%3Ccircle cx='5' cy='8' r='1.4'/%3E%3Ccircle cx='11' cy='8' r='1.4'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 8h11'/%3E%3Ccircle cx='5' cy='8' r='1.4'/%3E%3Ccircle cx='11' cy='8' r='1.4'/%3E%3C/svg%3E");
+}
+
+.maia-brain-tab-icon--graph {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='4' cy='4.5' r='1.5'/%3E%3Ccircle cx='12' cy='4.5' r='1.5'/%3E%3Ccircle cx='8' cy='11.5' r='1.5'/%3E%3Cpath d='M5.3 5.3l5.4 0M5.2 5.7L7.2 10.2M10.8 5.7L8.8 10.2'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='4' cy='4.5' r='1.5'/%3E%3Ccircle cx='12' cy='4.5' r='1.5'/%3E%3Ccircle cx='8' cy='11.5' r='1.5'/%3E%3Cpath d='M5.3 5.3l5.4 0M5.2 5.7L7.2 10.2M10.8 5.7L8.8 10.2'/%3E%3C/svg%3E");
 }
 
 .maia-brain-toolbar input,

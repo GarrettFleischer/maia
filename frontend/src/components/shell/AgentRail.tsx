@@ -67,19 +67,23 @@ export function AgentRail({
         {countActivity(rows).running > 0 ? <StopAllButton onStop={onStopAll} /> : null}
         <button
           type="button"
-          className="maia-foot-link"
+          className="maia-icon-btn maia-foot-link"
+          aria-label="Brain"
+          title="Brain"
           onClick={onOpenBrain}
           aria-current={brainActive ? 'page' : undefined}
         >
-          Brain
+          <span className="maia-nav-icon maia-nav-icon--brain" aria-hidden="true" />
         </button>
         <button
           type="button"
-          className="maia-foot-link"
+          className="maia-icon-btn maia-foot-link"
+          aria-label="Settings"
+          title="Settings"
           onClick={onOpenSettings}
           aria-current={settingsActive ? 'page' : undefined}
         >
-          Settings
+          <span className="maia-nav-icon maia-nav-icon--settings" aria-hidden="true" />
         </button>
       </div>
     </nav>
