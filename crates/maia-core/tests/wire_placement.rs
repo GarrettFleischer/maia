@@ -80,7 +80,7 @@ fn request_for(
         &prefix,
         &[],
         &RecallPackPolicy {
-            token_budget: 11,
+            token_budget: 13,
             taint_mode: RecallTaintMode::IncludeUntrusted,
             lineage: RecallLineage {
                 consolidated_claims: std::collections::BTreeMap::new(),
@@ -143,8 +143,8 @@ fn assert_hello_stable(placement: PlacementMode) {
     assert_eq!(first_messages[1], second_messages[1]);
     assert_eq!(first_messages[0].content, expected_system());
     assert_eq!(second_messages[0].content, first_messages[0].content);
-    assert!(!first_messages[1].content.contains("## recall"));
-    assert!(!second_messages[1].content.contains("## recall"));
+    assert!(!first_messages[1].content.contains("## memories"));
+    assert!(!second_messages[1].content.contains("## memories"));
     assert!(
         !first_messages
             .iter()
@@ -188,7 +188,7 @@ fn trailing_system_keeps_recall_scratch_and_tools_apart() {
             ChatMessage::text(ChatRole::System, expected_system()),
             ChatMessage::text(ChatRole::User, "hello"),
             ChatMessage::text(ChatRole::Tool, "TOOL_BYTES_9f3a"),
-            ChatMessage::text(ChatRole::System, "## recall\n\n"),
+            ChatMessage::text(ChatRole::System, "## memories\n\n"),
             ChatMessage::text(ChatRole::System, scratch),
         ]
     );
@@ -212,7 +212,7 @@ fn trailing_user_part_concatenates_in_order() {
     assert_eq!(messages.len(), 3);
     assert_eq!(
         messages[2],
-        ChatMessage::text(ChatRole::User, "## recall\n\nSCRATCH_BYTES\n")
+        ChatMessage::text(ChatRole::User, "## memories\n\nSCRATCH_BYTES\n")
     );
     assert_eq!(messages[1].content, "hello");
 }

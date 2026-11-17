@@ -55,8 +55,9 @@ pub fn append_recall(
 ) -> Result<CompiledWithRecall, CompileError> {
     let claims = installed_claims(prefix);
     let facts = installed_facts(prefix);
-    let header = format!("## recall\n{RECALL_FETCH_HINT}");
-    let empty_header = "## recall\n";
+    // Header matches search_memories/get_memories naming — never "## recall" (models invent a recall tool).
+    let header = format!("## memories\n{RECALL_FETCH_HINT}");
+    let empty_header = "## memories\n";
     let mut cost = estimate_tokens(&header);
     let mut lines = Vec::new();
     let mut items = Vec::new();

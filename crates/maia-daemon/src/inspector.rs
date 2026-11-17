@@ -763,7 +763,7 @@ mod tests {
             candidates: "[]".to_owned(),
             conversation: vec!["Hello".to_owned(), "Again".to_owned()],
             recall: Some(PackedRecall {
-                bytes: "## recall\nCall get_memories with ids for full text.\n`claim-1` — Kept.\n"
+                bytes: "## memories\nCall get_memories with ids for full text.\n`claim-1` — Kept.\n"
                     .to_owned(),
                 items: vec![RecallLine {
                     id: "claim-1".to_owned(),
@@ -842,7 +842,7 @@ mod tests {
         .expect("rank")
         .expect("packed lines");
         assert!(packed.bytes.contains("Obsidian opens the vault."));
-        assert!(packed.bytes.starts_with("## recall\n"));
+        assert!(packed.bytes.starts_with("## memories\n"));
         assert_eq!(packed.items[0].id, "fact-1");
         assert_eq!(packed.items[0].kind, RecallKind::Fact);
         assert!(

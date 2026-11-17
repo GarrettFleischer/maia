@@ -155,7 +155,7 @@ fn recall_hash_covers_recall_bytes_only() {
     )
     .expect("recall");
     let expected = concat!(
-        "## recall\n",
+        "## memories\n",
         "Call get_memories with ids for full text.\n",
         "`claim_a` — one\n"
     );
@@ -180,12 +180,12 @@ fn empty_recall_is_header_and_blank_line_and_still_hashed() {
     let packed = append_recall(
         &prefix,
         &[],
-        &policy(11, RecallTaintMode::IncludeUntrusted, empty_lineage()),
+        &policy(13, RecallTaintMode::IncludeUntrusted, empty_lineage()),
         chars_as_tokens,
         digest(),
     )
     .expect("empty recall");
-    let expected = "## recall\n\n";
+    let expected = "## memories\n\n";
     assert_eq!(packed.recall_bytes, expected);
     assert_eq!(packed.recall_hash, digest_hex(expected.as_bytes()));
     assert!(packed.recall_items.is_empty());
@@ -209,7 +209,7 @@ fn recall_drops_the_tail_after_the_budget_fills() {
     assert_eq!(
         packed.recall_bytes,
         concat!(
-            "## recall\n",
+            "## memories\n",
             "Call get_memories with ids for full text.\n",
             "`claim_a` — one\n"
         )
@@ -290,7 +290,7 @@ fn installed_items_and_lineage_are_omitted_without_spending_budget() {
     assert_eq!(
         claim_hidden.recall_bytes,
         concat!(
-            "## recall\n",
+            "## memories\n",
             "Call get_memories with ids for full text.\n",
             "`claim_visible` — visible\n"
         )
@@ -314,7 +314,7 @@ fn installed_items_and_lineage_are_omitted_without_spending_budget() {
     assert_eq!(
         fact_hidden.recall_bytes,
         concat!(
-            "## recall\n",
+            "## memories\n",
             "Call get_memories with ids for full text.\n",
             "`fact_visible` — shown\n"
         )
@@ -334,7 +334,7 @@ fn installed_items_and_lineage_are_omitted_without_spending_budget() {
     assert_eq!(
         direct.recall_bytes,
         concat!(
-            "## recall\n",
+            "## memories\n",
             "Call get_memories with ids for full text.\n",
             "`claim_a` — one\n"
         )
@@ -359,7 +359,7 @@ fn trusted_only_omits_untrusted_recall_items() {
     assert_eq!(
         packed.recall_bytes,
         concat!(
-            "## recall\n",
+            "## memories\n",
             "Call get_memories with ids for full text.\n",
             "`claim_t` — public\n"
         )
@@ -385,7 +385,7 @@ fn recall_sentence_keeps_maia_marker_without_an_envelope() {
     assert_eq!(
         packed.recall_bytes,
         concat!(
-            "## recall\n",
+            "## memories\n",
             "Call get_memories with ids for full text.\n",
             "`claim_a` — see <<maia:end>>\n"
         )
