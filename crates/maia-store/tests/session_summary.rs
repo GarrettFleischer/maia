@@ -115,6 +115,16 @@ fn summary_and_claim_commit_together_and_failed_write_keeps_neither() {
         nearest.iter().any(|row| row.claim_id == "claim-oat"),
         "{nearest:?}"
     );
+    let by_tag = must(db.owner().search_memory_exact("session_summary", 8));
+    assert!(
+        by_tag.iter().any(|hit| hit.id == "claim-ssum-maia"),
+        "session summary must be a searchable claim: {by_tag:?}"
+    );
+    let by_body = must(db.owner().search_memory_exact("coffee", 8));
+    assert!(
+        by_body.iter().any(|hit| hit.id == "claim-ssum-maia"),
+        "session summary body must be findable: {by_body:?}"
+    );
 
     let missing = db.owner().apply_promotion(PromotionWrite {
         episode_id: "episode-missing".to_owned(),

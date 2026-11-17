@@ -3,6 +3,8 @@
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
 
+use maia_core::dream::MAX_CLAIM_SENTENCE_CHARS;
+use maia_core::memory_redact::redact_secrets_for_save;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
@@ -37,6 +39,9 @@ use crate::types::PromotionWrite;
 use crate::types::ProposalOperation;
 use crate::types::SegmentWrite;
 use crate::types::TextSearch;
+
+/// Tag prefix on the searchable mirror of a rolling session summary.
+pub(crate) const SESSION_SUMMARY_TAG: &str = "[session_summary]";
 
 fn immediate(connection: &mut Connection) -> Result<Transaction<'_>, StoreError> {
     connection
@@ -128,6 +133,7 @@ pub(crate) fn apply_promotion(
         });
     }
     for claim in &request.claims {
+        let sentence = redact_secrets_for_save(&claim.sentence, &[]);
         let memory_kind = normalize_memory_kind(&claim.memory_kind);
         let memory_scope = normalize_memory_scope(&claim.memory_scope);
         transaction.execute(
@@ -136,7 +142,7 @@ pub(crate) fn apply_promotion(
              VALUES (?1, ?2, ?3, ?4, 'provisional', ?5, NULL, ?6, ?7, ?8, '', '')",
             params![
                 claim.claim_id,
-                claim.sentence,
+                sentence,
                 request.episode_id,
                 claim.taint.as_str(),
                 claim.valid_from,
@@ -147,7 +153,7 @@ pub(crate) fn apply_promotion(
         )?;
         transaction.execute(
             "INSERT INTO claim_fts (claim_id, sentence) VALUES (?1, ?2)",
-            params![claim.claim_id, claim.sentence],
+            params![claim.claim_id, sentence],
         )?;
         transaction.execute(
             "INSERT INTO edges (edge_kind, from_kind, from_id, to_kind, to_id, weight) \
@@ -172,7 +178,7 @@ pub(crate) fn apply_promotion(
         crate::memory_cleanup::annotate_new_claim(
             &transaction,
             &claim.claim_id,
-            &claim.sentence,
+            &sentence,
             memory_kind,
             claim.flagged_beside_lock,
         )?;
@@ -289,10 +295,18 @@ pub(crate) fn apply_promotion(
         });
     }
     if !request.session_bot_id.is_empty() && !request.session_summary.is_empty() {
+        let summary = redact_secrets_for_save(&request.session_summary, &[]);
         upsert_session_summary(
             &transaction,
             &request.session_bot_id,
-            &request.session_summary,
+            &summary,
+            request.now,
+        )?;
+        upsert_searchable_session_summary(
+            &transaction,
+            &request.session_bot_id,
+            &summary,
+            &request.episode_id,
             request.now,
         )?;
     }
@@ -316,6 +330,79 @@ pub(crate) fn upsert_session_summary(
         params![bot_id, body, now],
     )?;
     Ok(())
+}
+
+/// Mirrors the rolling session summary into one searchable claim (id stable per bot).
+pub(crate) fn upsert_searchable_session_summary(
+    transaction: &rusqlite::Transaction<'_>,
+    bot_id: &str,
+    body: &str,
+    episode_id: &str,
+    now: i64,
+) -> Result<(), StoreError> {
+    let claim_id = session_summary_claim_id(bot_id);
+    let sentence = clip_session_summary_sentence(body);
+    let existing: Option<i64> = transaction
+        .query_row(
+            "SELECT 1 FROM claims WHERE claim_id = ?1",
+            params![claim_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing.is_some() {
+        transaction.execute(
+            "UPDATE claims SET sentence = ?1 WHERE claim_id = ?2",
+            params![sentence, claim_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM claim_fts WHERE claim_id = ?1",
+            params![claim_id],
+        )?;
+        transaction.execute(
+            "INSERT INTO claim_fts (claim_id, sentence) VALUES (?1, ?2)",
+            params![claim_id, sentence],
+        )?;
+        return Ok(());
+    }
+    transaction.execute(
+        "INSERT INTO claims (claim_id, sentence, episode_id, taint, status, valid_from, consolidated_by, \
+         memory_kind, memory_scope, observer_bot_id, subject_peer_id, learned_session_id) \
+         VALUES (?1, ?2, ?3, 'trusted', 'provisional', ?4, NULL, 'explicit', 'session', ?5, '', '')",
+        params![claim_id, sentence, episode_id, now, bot_id],
+    )?;
+    transaction.execute(
+        "INSERT INTO claim_fts (claim_id, sentence) VALUES (?1, ?2)",
+        params![claim_id, sentence],
+    )?;
+    transaction.execute(
+        "INSERT INTO edges (edge_kind, from_kind, from_id, to_kind, to_id, weight) \
+         VALUES ('mention', 'claim', ?1, 'episode', ?2, 1.0)",
+        params![claim_id, episode_id],
+    )?;
+    Ok(())
+}
+
+fn session_summary_claim_id(bot_id: &str) -> String {
+    let safe: String = bot_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("claim-ssum-{safe}")
+}
+
+fn clip_session_summary_sentence(body: &str) -> String {
+    let tagged = format!("{SESSION_SUMMARY_TAG} {body}");
+    if tagged.chars().count() <= MAX_CLAIM_SENTENCE_CHARS {
+        tagged
+    } else {
+        tagged.chars().take(MAX_CLAIM_SENTENCE_CHARS).collect()
+    }
 }
 
 pub(crate) fn load_session_summary(
