@@ -36,8 +36,16 @@ export function TaskStrip({
       </button>
       {!open
         ? needs.map((row) => (
-              <button key={row.task_id} type="button" className="maia-btn" onClick={() => onOpen(row.task_id)}>
-                {needsYouChipLabel(row)}
+              <button
+                key={row.task_id}
+                type="button"
+                className="maia-task-chip"
+                aria-label={needsYouChipLabel(row)}
+                title={needsYouChipLabel(row)}
+                onClick={() => onOpen(row.task_id)}
+              >
+                <span className="maia-mark maia-mark--need" aria-hidden="true" />
+                <span className="maia-task-chip-text">{needsYouChipLabel(row)}</span>
               </button>
             ))
         : null}

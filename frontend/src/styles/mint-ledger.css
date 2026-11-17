@@ -1589,7 +1589,9 @@ textarea {
   .maia-inspector-tabs [role='tab'],
   .maia-phone-header .maia-btn,
   .maia-phone-header .maia-icon-btn,
-  .maia-fold summary {
+  .maia-fold summary,
+  .maia-task-strip-toggle,
+  .maia-task-chip {
     min-height: 44px;
     min-width: 44px;
   }
@@ -1989,12 +1991,35 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 .maia-task-strip-toggle {
-  min-height: 44px;
+  min-height: 28px;
   padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
+  font: 12px/16px inherit;
   font-weight: 650;
+}
+
+.maia-task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(100%, 280px);
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: 12px/16px inherit;
+}
+
+.maia-task-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .maia-tag-add,
 .maia-tag-head,

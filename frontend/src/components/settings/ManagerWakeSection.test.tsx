@@ -14,4 +14,9 @@ describe('ManagerWakeSection', () => {
     expect(screen.getByText(/Restart budget/i)).toBeVisible()
     expect(screen.getByText(/Mute non-essential wake messages/i)).toBeVisible()
   })
+
+  it('does not show a text Save wake schedule button in fixture mode', () => {
+    render(<ManagerWakeSection source="fixture" editable />)
+    expect(screen.queryByRole('button', { name: /Save wake schedule/i })).toBeNull()
+  })
 })

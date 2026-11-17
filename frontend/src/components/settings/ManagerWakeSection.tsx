@@ -124,8 +124,15 @@ export function ManagerWakeSection({
         Keeps decision questions and finished-goal close-outs; drops optional status chatter.
       </p>
       {canEdit ? (
-        <button type="button" disabled={busy || !loaded} onClick={() => void save()}>
-          Save wake schedule
+        <button
+          type="button"
+          className="maia-icon-btn maia-icon-btn--primary"
+          aria-label="Save wake schedule"
+          title="Save wake schedule"
+          disabled={busy || !loaded}
+          onClick={() => void save()}
+        >
+          <span className="maia-check-icon" aria-hidden="true" />
         </button>
       ) : null}
       <p className="maia-field-help" role="status">

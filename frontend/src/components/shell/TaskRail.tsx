@@ -89,9 +89,9 @@ function TaskBranch({
           onClick={() => onOpen(row.task_id)}
         >
           <span className="maia-task-title">{row.title}</span>
-          <span className="maia-task-phase">
+          <span className="maia-task-phase" title={formatPhase(row.phase)}>
             <span className={phaseMark(row.phase)} aria-hidden="true" />
-            {formatPhase(row.phase)}
+            <span className="visually-hidden">{formatPhase(row.phase)}</span>
           </span>
           <ActivityPreview summary={row.summary} />
           {meta.length > 0 ? <span className="maia-task-meta">{meta}</span> : null}
