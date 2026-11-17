@@ -145,7 +145,7 @@ export function InspectorPanel({
   const tabListId = useId()
   const index = live ? selectedIndex(live.turns.length, scrub) : 0
   const turn = live?.turns[index]
-  const counts = turn && live ? liveTabCounts(turn, live.brain) : undefined
+  const counts = turn && live ? liveTabCounts(turn) : undefined
 
   const body = (
     <>
@@ -201,9 +201,9 @@ export function InspectorPanel({
           </h2>
           <button
             type="button"
-            className="maia-icon-btn"
-            aria-label="Close inspector"
-            title="Close inspector"
+            className="maia-icon-btn maia-inspector-close"
+            aria-label="Close"
+            title="Close"
             onClick={onClose}
           >
             <span className="maia-remove-icon" aria-hidden="true" />

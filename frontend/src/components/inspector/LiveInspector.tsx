@@ -1,11 +1,8 @@
 import { useState } from 'react'
-import { layoutBrainMap, type BrainMap } from '@/components/brain/layoutBrainMap'
+import type { BrainMap } from '@/components/brain/layoutBrainMap'
 import { NodeChoiceList, type NodeChoice } from '@/components/brain/NodeChoiceList'
-import { inspectorBrainHasFactOrEpisode, inspectorBrainMap } from '@/components/inspector/inspectorBrain'
 import type { InspectorTabId } from '@/components/inspector/inspectorTabs'
 import type { InspectorTurn } from '@/api/superAgentTypes'
-
-const GRAPH_SIZE = { width: 280, height: 220 }
 
 export function LiveInspector({
   tab,
@@ -59,15 +56,9 @@ export function LiveInspector({
   )
 }
 
-export function liveTabCounts(
-  turn: InspectorTurn,
-  brain: BrainMap,
-): Partial<Record<InspectorTabId, string>> {
-  const filtered = inspectorBrainMap(brain, recallIds(turn))
-  const counts: Partial<Record<InspectorTabId, string>> = {
-    brain: String(filtered.nodes.length),
-    trace: String(turn.trace.length),
-  }
+export function liveTabCounts(turn: InspectorTurn): Partial<Record<InspectorTabId, string>> {
+  const counts: Partial<Record<InspectorTabId, string>> = { trace: String(turn.trace.length) }
+  if (turn.recall.length > 0) counts.brain = String(turn.recall.length)
   if (turn.cached_percent !== null) counts.cache = `${turn.cached_percent}%`
   return counts
 }
@@ -166,55 +157,15 @@ function LiveBrain({
   onSelect: (id: string) => void
   focusIds: readonly string[]
 }) {
-  const ids = focusIds.length > 0 ? new Set(focusIds) : recallIds(turn)
-  const filtered = inspectorBrainMap(brain, ids)
-  if (!inspectorBrainHasFactOrEpisode(filtered)) {
-    return <p>No memories were used for this reply.</p>
-  }
-  const points = layoutBrainMap(filtered.nodes, filtered.edges, GRAPH_SIZE)
+  const items = recallChoices(turn, brain, focusIds)
+  if (items.length === 0) return <p>No memories were used for this reply.</p>
   return (
-    <>
-    <svg
-      className="maia-inspector-graph"
-      viewBox={`0 0 ${GRAPH_SIZE.width} ${GRAPH_SIZE.height}`}
-      role="img"
-      aria-label="Router brain"
-    >
-      {filtered.edges.map((edge) => {
-        const from = points.get(edge.from_id)
-        const to = points.get(edge.to_id)
-        if (!from || !to) return null
-        return (
-          <line
-            key={`${edge.from_id}-${edge.to_id}-${edge.kind}`}
-            x1={from.x}
-            y1={from.y}
-            x2={to.x}
-            y2={to.y}
-          />
-        )
-      })}
-      {filtered.nodes.map((node) => {
-        const point = points.get(node.id)
-        if (!point) return null
-        return (
-          <g key={node.id}>
-            <circle cx={point.x} cy={point.y} r={8} />
-          </g>
-        )
-      })}
-    </svg>
     <NodeChoiceList
-      label="Brain nodes"
+      label="Memories used"
       selectedId={selectedId}
       onSelect={onSelect}
-      items={filtered.nodes.map((node) => ({
-        id: node.id,
-        label: node.label,
-        taint: node.taint,
-      }))}
+      items={items}
     />
-    </>
   )
 }
 
@@ -268,10 +219,6 @@ function slotName(label: string): string {
 
 function sizeText(bytes: number): string {
   return bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`
-}
-
-function recallIds(turn: InspectorTurn): Set<string> {
-  return new Set(turn.recall.map((item) => item.id))
 }
 
 function recallChoices(

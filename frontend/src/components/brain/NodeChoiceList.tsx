@@ -49,13 +49,13 @@ export function NodeChoiceList({
               {taint ? (
                 <>
                   {' '}
-                  <span>{taint}</span>
+                  <span className="maia-choice-tag">{taint}</span>
                 </>
               ) : null}
               {item.detail ? (
                 <>
                   {' '}
-                  <span>{item.detail}</span>
+                  <span className="maia-choice-tag">{item.detail}</span>
                 </>
               ) : null}
             </button>

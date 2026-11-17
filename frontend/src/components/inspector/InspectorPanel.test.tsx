@@ -98,8 +98,9 @@ describe('InspectorPanel tabs', () => {
     expect(screen.queryByText(/match/i)).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('tab', { name: 'Brain' }))
-    expect(screen.getByText('Router exchange')).toBeVisible()
-    expect(screen.queryByText('Other thread')).not.toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Memories used' })).toHaveTextContent('Obsidian opens the vault.')
+    expect(screen.queryByText('Router exchange')).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Brain' })).toHaveTextContent('Brain1')
 
     await user.click(screen.getByRole('tab', { name: 'Cache' }))
     fireEvent.change(screen.getByRole('slider', { name: 'Turn scrubber' }), { target: { value: '1' } })

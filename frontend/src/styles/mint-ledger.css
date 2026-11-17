@@ -1521,24 +1521,6 @@ textarea {
   font-size: 12px;
 }
 
-.maia-inspector-graph {
-  width: 100%;
-  height: 220px;
-}
-
-.maia-inspector-graph line {
-  stroke: var(--border);
-}
-
-.maia-inspector-graph circle {
-  fill: var(--accent);
-}
-
-.maia-inspector-graph text {
-  fill: var(--text);
-  font-size: 10px;
-}
-
 .maia-task-empty {
   margin: 0 8px 8px;
   color: var(--muted);
@@ -2017,6 +1999,19 @@ textarea {
   padding: 4px 16px 8px;
   border-bottom: 1px solid var(--border);
 }
+.maia-icon-btn.maia-inspector-close {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.maia-choice-tag {
+  color: var(--muted);
+  font-size: 11px;
+}
 .maia-icon-btn.maia-task-strip-find {
   margin-left: auto;
   width: 32px;
@@ -2268,6 +2263,11 @@ details:not([open]) > .maia-task-tree {
 .maia-chev-spacer {
   width: 20px;
   flex: none;
+}
+
+/* Keep the chevron slot only when some row in the list can expand. */
+.maia-task-tree:not(:has(.maia-chev)) .maia-chev-spacer {
+  display: none;
 }
 
 .maia-chev-icon {
