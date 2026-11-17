@@ -23,8 +23,16 @@ function ActivityPreview({ summary }: { summary: string }) {
   return <span className="maia-task-sum">{preview}</span>
 }
 
-function ArchiveDisclosure({ count, children }: { count: number; children: ReactNode }) {
-  const [open, setOpen] = useState(false)
+function ArchiveDisclosure({
+  count,
+  startOpen,
+  children,
+}: {
+  count: number
+  startOpen: boolean
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(startOpen)
   return (
     <details open={open} aria-label="Archive">
       <summary
@@ -140,6 +148,7 @@ function SidebarSectionBlock({
   onOpen,
   onPin,
   empty,
+  archiveOpen,
 }: {
   label: string
   section: SidebarSection
@@ -150,6 +159,7 @@ function SidebarSectionBlock({
   onOpen: (taskId: string) => void
   onPin: (taskId: string, pin: PinMark) => void
   empty: 'hidden' | 'shown'
+  archiveOpen: boolean
 }) {
   if (rows.length === 0) {
     if (empty === 'hidden' || (section !== 'needs_you' && section !== 'working')) return null
@@ -183,7 +193,7 @@ function SidebarSectionBlock({
   if (section === 'archive') {
     return (
       <section aria-label={label} className="maia-task-section">
-        <ArchiveDisclosure count={rows.length}>{list}</ArchiveDisclosure>
+        <ArchiveDisclosure count={rows.length} startOpen={archiveOpen}>{list}</ArchiveDisclosure>
       </section>
     )
   }
@@ -203,11 +213,13 @@ export function TaskRail({
   openTaskId = null,
   onOpen,
   onPin = () => undefined,
+  archiveOpen = false,
 }: {
   rows: readonly SidebarRow[]
   openTaskId?: string | null
   onOpen: (taskId: string) => void
   onPin?: (taskId: string, pin: PinMark) => void
+  archiveOpen?: boolean
 }) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
   const grouped = groupSidebarRows(rows)
@@ -234,6 +246,7 @@ export function TaskRail({
           onOpen={onOpen}
           onPin={onPin}
           empty={rows.length === 0 ? 'shown' : 'hidden'}
+          archiveOpen={archiveOpen}
         />
       ))}
     </div>

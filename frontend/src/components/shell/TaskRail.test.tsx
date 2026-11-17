@@ -163,6 +163,19 @@ describe('TaskRail', () => {
     expect(screen.queryByRole('region', { name: 'Archive' })).not.toBeInTheDocument()
   })
 
+  it('starts with archive open when asked', () => {
+    render(
+      <TaskRail
+        rows={[row({ task_id: 'old', title: 'Archived row', section: 'archive', phase: 'cancelled' })]}
+        onOpen={vi.fn()}
+        archiveOpen
+      />,
+    )
+    const archive = screen.getByRole('region', { name: 'Archive' })
+    expect(within(archive).getByRole('group', { name: 'Archive' })).toHaveAttribute('open')
+    expect(within(archive).getByRole('listitem', { name: 'Archived row' })).toBeVisible()
+  })
+
   it('keeps archive collapsed until its disclosure is opened', async () => {
     const user = userEvent.setup()
     render(

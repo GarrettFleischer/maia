@@ -516,6 +516,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
                 onPin={(taskId, mark) => {
                   void agent.pin(taskId, mark)
                 }}
+                archiveOpen={agent.rows.every((row) => row.section === 'archive')}
               />
             </div>
           </section>
