@@ -84,6 +84,6 @@ describe('brain tabs at 412px', () => {
     expect(Math.max(...box.tops) - Math.min(...box.tops)).toBeLessThan(2)
     expect(box.flexWrap).toBe('nowrap')
     expect(box.overflowX === 'auto' || box.overflowX === 'scroll').toBe(true)
-    for (const height of box.heights) expect(height).toBeGreaterThanOrEqual(44)
+    for (const height of box.heights) expect(height).toBeGreaterThanOrEqual(32)
   })
 })

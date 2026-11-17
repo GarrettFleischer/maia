@@ -117,11 +117,9 @@ export interface BrainMapClient {
 }
 
 export function brainStatusLine(index: BrainIndex): string {
-  const exported =
-    index.exported_at === null
-      ? 'No markdown export yet'
-      : `Last export ${index.exported_at} · ${index.neuron_count} notes · ${index.edge_count} edges`
-  return `${exported}. Last recall: keyword ${index.keyword_count} · vector ${index.vector_count} · graph ${index.graph_count}.`
+  if (index.exported_at === null) return 'No markdown export yet.'
+  const when = new Date(index.exported_at * 1000).toLocaleString()
+  return `Last exported ${when} · ${index.neuron_count} notes.`
 }
 
 export function memoryBehindLine(extraction: ExtractionLag | undefined, nowSeconds = Date.now() / 1000): string | null {

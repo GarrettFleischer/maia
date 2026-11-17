@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { chatActivityLabel, countActivity, phoneStopLabel, taskStripLabel } from '@/api/superAgentFormat'
+import { chatActivityLabel, countActivity, phoneStopLabel, taskSummary } from '@/api/superAgentFormat'
 import { scopeSuperAgentClient } from '@/api/scopeSuperAgent'
 import type { BotSummary, ConnectionSnapshot, InspectorTurn, SuperAgentClient } from '@/api/superAgentTypes'
 import { liveBrainMapClient } from '@/api/liveBrainMap'
@@ -503,8 +503,8 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
           >
             <header className="maia-conv-head maia-conv-head--split">
               <div>
-                <h1>Tasks</h1>
-                <p>{taskStripLabel(agent.rows)}</p>
+                {viewport === 'phone' ? null : <h1>Tasks</h1>}
+                <p>{taskSummary(agent.rows) || 'Nothing running'}</p>
               </div>
               {activity.running > 0 ? <StopAllButton onStop={stopAll} /> : null}
             </header>

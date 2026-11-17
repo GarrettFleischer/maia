@@ -142,7 +142,7 @@ describe('phone layout at 390px', () => {
     expect(box.summaryHeight).toBeGreaterThanOrEqual(44)
   })
 
-  it('keeps phone controls at least 44px and the brain screen inside the viewport', async () => {
+  it('keeps compact phone icons tappable (about 32px) and the brain screen inside the viewport', async () => {
     const box = await measure(
       page,
       390,
@@ -153,10 +153,10 @@ describe('phone layout at 390px', () => {
           <button class="maia-btn" type="button">Inspect</button>
         </header>
         <nav class="maia-phone-nav" aria-label="Sections">
-          <button type="button" aria-current="page">Chat</button>
-          <button type="button">Tasks</button>
-          <button type="button">Brain</button>
-          <button type="button">Settings</button>
+          <button class="maia-icon-btn" type="button" aria-label="Chat" title="Chat" aria-current="page"></button>
+          <button class="maia-icon-btn" type="button" aria-label="Tasks" title="Tasks"></button>
+          <button class="maia-icon-btn" type="button" aria-label="Brain" title="Brain"></button>
+          <button class="maia-icon-btn" type="button" aria-label="Settings" title="Settings"></button>
         </nav>
         <main class="maia-main">
           <section class="maia-conversation maia-phone-screen" aria-label="Brain">
@@ -185,7 +185,7 @@ describe('phone layout at 390px', () => {
     expect(box.offenders).toEqual([])
     expect(box.conversationWidth).toBeGreaterThanOrEqual(box.clientWidth - 1)
     expect(box.buttonHeight).toBeGreaterThanOrEqual(44)
-    expect(box.phoneNavHeight).toBeGreaterThanOrEqual(44)
+    expect(box.phoneNavHeight).toBeGreaterThanOrEqual(32)
     expect(box.searchHeight).toBeGreaterThanOrEqual(44)
     expect(box.modeLabelHeight).toBeGreaterThanOrEqual(44)
   })

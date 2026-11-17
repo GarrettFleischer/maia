@@ -174,8 +174,8 @@ describe('BrainMapView', () => {
     expect(screen.queryByRole('heading', { name: 'People' })).not.toBeInTheDocument()
     expect(screen.queryByText('this')).not.toBeInTheDocument()
     await user.click(screen.getByText('Settings / Sync'))
-    expect(screen.getByText(/Last export 1700000000/)).toBeVisible()
-    expect(screen.getByText(/keyword 3 · vector 1 · graph 2/)).toBeVisible()
+    expect(screen.getByText(/Last exported .* · 4 notes\./)).toBeVisible()
+    expect(screen.queryByText(/keyword 3/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Export markdown' })).toBeVisible()
   })
 

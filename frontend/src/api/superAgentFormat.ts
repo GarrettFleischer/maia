@@ -109,8 +109,14 @@ export function chatActivityLabel(counts: { running: number; needsYou: number })
 }
 
 export function taskStripLabel(rows: readonly SidebarRow[]): string {
+  const summary = taskSummary(rows)
+  return summary ? `Tasks · ${summary}` : 'Tasks'
+}
+
+/** Short status for the Tasks screen, e.g. "1 needs you · 2 working". */
+export function taskSummary(rows: readonly SidebarRow[]): string {
   const counts = countActivity(rows)
-  const parts = ['Tasks']
+  const parts: string[] = []
   if (counts.needsYou > 0) parts.push(`${counts.needsYou} needs you`)
   if (counts.running > 0) parts.push(`${counts.running} working`)
   const finished = rows.filter((row) => row.section === 'completed').length

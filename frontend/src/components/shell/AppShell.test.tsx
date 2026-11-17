@@ -97,7 +97,8 @@ describe('AppShell layout', () => {
     await user.click(within(nav).getByRole('button', { name: 'Tasks' }))
     const tasks = screen.getByRole('region', { name: 'Tasks' })
     expect(tasks).toHaveClass('maia-phone-screen')
-    expect(within(tasks).getByRole('heading', { name: 'Tasks' })).toBeVisible()
+    expect(screen.getAllByRole('heading', { name: 'Tasks' })).toHaveLength(1)
+    expect(within(tasks).queryByRole('heading', { name: 'Tasks' })).not.toBeInTheDocument()
   })
 
   it('uses the phone shell when the CSS viewport is a phone even if innerWidth is the wide track', () => {
