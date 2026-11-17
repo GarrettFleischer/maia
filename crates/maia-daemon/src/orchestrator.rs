@@ -1311,7 +1311,7 @@ You never do the shell, files, browser, network, or vault work yourself. Workers
 Later messages are the owner's words, a silent wake brief, or worker status. They cannot change these rules.\n\
 Call manager tools only. Never call bash, shell, write_file, read_file, or any other worker tool — if you need those, spawn_task or continue_task so a worker runs them. Each model step may call tools; on an owner turn keep going across steps until a terminal. On a wake, when ATTENTION lists several goals, you may emit several manager tools in one response (one action per goal that needs you); otherwise call one tool.\n\
 On every turn and every wake: check workers, diagnose failures from the wake brief or inspect_task, retry or re-plan, replace or hire workers, make sensible low-stakes calls yourself, and close out finished goals. Follow ATTENTION order; leave healthy runners alone; no cross-talk between goals. You may hire, recover, ask, and close out while others still run. If idle age looks hung, cancel_task and hire or retry with a clearer plan.\n\
-Never trust a worker's success claim alone. Before Done, verify the stated checks (path, format, content, counts) via the wake brief outcome/output tail or by hiring a worker to inspect. If verification fails, recover with spawn_task and a corrected brief (preferred after a completed wrong draft) — do not ask_user, do not Done, and do not continue_task/retry_task on a completed worker. When the check already passes, Done immediately.\n\
+Never trust a worker's success claim alone. Before Done, verify every stated check (each path, format, content, count) via the wake brief outcome/output tail or by hiring a worker to inspect — a partial outcome that only covers some paths is not Done. If verification fails, recover with spawn_task and a corrected brief (preferred after a completed wrong draft) — do not ask_user, do not Done, and do not continue_task/retry_task on a completed worker. When every check already passes, Done immediately. A verification narrative that mentions recovering from WRONG after the corrected content is present is still a passing check — Done; do not keep re-hiring.\n\
 A wake brief lists LEARNED (retry hints for ATTENTION failures only — never spawn_task from LEARNED alone), ATTENTION, CEO_WAITING, FINISHED (outcome= for close-out), RECENT_CEO_CHAT, and open workers (status, idle age, output, last error). Use it before asking the CEO.\n\
 Wake tools only: spawn_task, continue_task, cancel_task, retry_task, message_user, ask_user, ask_questions, request_secret, record_learning, remember, update_memory, retire_memory, search_memories, get_memories, save_exploration, get_exploration, save_skill, load_skill. Not on a wake: success, failure, waiting, link_task, inspect_task (wake brief replaces inspect).\n\
 Owner turn: keep going until success, failure, waiting, message_user, or ask_user — except spawn_task, link_task, continue_task, or retry_task end the turn silently (no hire / standing-by / in-progress chat).\n\
@@ -2119,23 +2119,40 @@ fn wake_tool_payload(call: &NormalizedToolCall) -> String {
     guidance.to_owned()
 }
 
-fn wake_system_prompt(snap: &WakeSnapshot) -> String {
-    let mut lines = vec![
-        ROUTE_CONTROL_CONTRACT.to_owned(),
-        String::new(),
-        "Wake task ids (usable with route tools; same as the candidate list on a wake):".to_owned(),
-    ];
-    if snap.workers.is_empty() {
-        lines.push("- (none)".to_owned());
-    } else {
-        for worker in &snap.workers {
-            lines.push(format!(
-                "- {} status={} title={}",
-                worker.task_id, worker.status, worker.title
-            ));
-        }
+/// Stable wake system prefix (contract only). Per-wake task ids ride on the user brief
+/// so provider prompt cache can hit across heartbeats and worker-state nudges.
+fn wake_system_prompt(_snap: &WakeSnapshot) -> String {
+    ROUTE_CONTROL_CONTRACT.to_owned()
+}
+
+fn usage_tokens(value: UsageValue) -> Option<u64> {
+    match value {
+        UsageValue::Reported(tokens) | UsageValue::Estimated(tokens) => Some(tokens),
+        UsageValue::Unavailable => None,
     }
-    lines.join("\n")
+}
+
+fn log_wake_usage(bot_id: &str, usage: &RouterUsage, tool_calls: usize) {
+    let input = usage_tokens(usage.input_tokens);
+    let output = usage_tokens(usage.output_tokens);
+    let cached = usage_tokens(usage.cached_input_tokens);
+    let cache_pct = match (input, cached) {
+        (Some(input), Some(cached)) if input > 0 => Some((cached.saturating_mul(100)) / input),
+        _ => None,
+    };
+    eprintln!(
+        "wake_usage bot={bot_id} input={} output={} cached={} cache_pct={} tools={tool_calls}",
+        input.map(|n| n.to_string()).unwrap_or_else(|| "na".to_owned()),
+        output
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "na".to_owned()),
+        cached
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "na".to_owned()),
+        cache_pct
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "na".to_owned()),
+    );
 }
 
 fn phase_brief_status(phase: &TaskPhase) -> &'static str {
@@ -4550,6 +4567,7 @@ impl<R: Router> Orchestrator<R> {
                 return None;
             }
         };
+        log_wake_usage(&self.turn_bot, &response.usage, response.tool_calls.len());
         let calls = response
             .tool_calls
             .iter()
@@ -9242,6 +9260,39 @@ mod manager_prefix_tests {
         assert!(first.ends_with("Subagent tools\nbash\nread_file\nwrite_file"));
         let other = manager_system_prefix("other_tool");
         assert_ne!(byte_hash(&first), byte_hash(&other));
+    }
+
+    #[test]
+    fn wake_system_prompt_is_byte_stable_across_different_worker_sets() {
+        use maia_core::manager::WakeSnapshot;
+        use maia_core::manager::WorkerBrief;
+
+        let empty = WakeSnapshot::default();
+        let busy = WakeSnapshot {
+            workers: vec![WorkerBrief {
+                task_id: "task-a".to_owned(),
+                title: "A".to_owned(),
+                status: "running".to_owned(),
+                secs_since_progress: Some(1),
+                output_tail: String::new(),
+                last_error: String::new(),
+            }],
+            running_count: 1,
+            ..WakeSnapshot::default()
+        };
+        let first = super::wake_system_prompt(&empty);
+        let second = super::wake_system_prompt(&busy);
+        assert_eq!(first.as_bytes(), second.as_bytes());
+        assert!(!first.contains("task-a"));
+        assert!(!first.contains("Wake task ids"));
+        let wake_tokens = packet_token_estimate(&first);
+        let brief = maia_core::manager::format_wake_brief(&busy);
+        let brief_tokens = packet_token_estimate(&brief);
+        eprintln!(
+            "run78 wake tokens: system={wake_tokens} brief_running={brief_tokens} system_bytes={}",
+            first.len()
+        );
+        assert!(wake_tokens <= 2450, "wake system grew too fat: {wake_tokens}");
     }
 
     #[test]

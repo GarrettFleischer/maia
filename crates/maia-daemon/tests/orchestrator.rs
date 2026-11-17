@@ -5759,13 +5759,24 @@ fn manager_wake_system_prompt_lists_wake_task_ids_as_candidates() {
         .find(|message| matches!(message.role, ChatRole::System))
         .map(|message| message.content.as_str())
         .unwrap_or("");
+    let user = wake_requests[0]
+        .messages
+        .iter()
+        .find(|message| matches!(message.role, ChatRole::User))
+        .map(|message| message.content.as_str())
+        .unwrap_or("");
+    // Task ids ride on the user brief so the system prefix stays cache-stable.
     assert!(
-        system.contains(&task.0),
-        "wake system prompt must list the failed task id as a candidate: {system}"
+        !system.contains(&task.0),
+        "wake system prompt must stay free of per-wake task ids: {system}"
     );
     assert!(
-        system.contains("Wake task ids") || system.contains("Candidates:"),
-        "wake system prompt should mark usable task ids: {system}"
+        !system.contains("Wake task ids"),
+        "wake system prompt must not list mutable task ids: {system}"
+    );
+    assert!(
+        user.contains(&task.0) && user.contains("Wake task ids"),
+        "wake brief must list the failed task id as a candidate: {user}"
     );
 }
 
