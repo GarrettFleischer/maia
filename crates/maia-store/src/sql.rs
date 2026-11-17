@@ -287,6 +287,25 @@ pub(crate) const MIGRATION_V22: &[&str] = &[
      END",
 ];
 
+/// Migration 23: exploration memos keyed to workspace file content hashes.
+pub(crate) const MIGRATION_V23: &[&str] = &[
+    "CREATE TABLE exploration_memos (\
+        memo_id TEXT PRIMARY KEY, \
+        topic TEXT NOT NULL, \
+        conclusion TEXT NOT NULL, \
+        observer_bot_id TEXT NOT NULL DEFAULT '', \
+        updated_at INTEGER NOT NULL\
+     )",
+    "CREATE INDEX exploration_memos_topic ON exploration_memos (topic)",
+    "CREATE TABLE exploration_memo_files (\
+        memo_id TEXT NOT NULL REFERENCES exploration_memos (memo_id) ON DELETE CASCADE, \
+        path TEXT NOT NULL, \
+        content_sha256 TEXT NOT NULL, \
+        PRIMARY KEY (memo_id, path)\
+     )",
+    "CREATE INDEX exploration_memo_files_path ON exploration_memo_files (path)",
+];
+
 /// Migration 17 drops tasks whose owner-message source was already deleted.
 ///
 /// A deleted bot used to remove chat rows while leaving the task. Restore then

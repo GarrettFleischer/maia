@@ -474,6 +474,8 @@ pub struct MemoryBodyRow {
     pub id: String,
     /// Full sentence body.
     pub sentence: String,
+    /// Prior sentence when this claim superseded another (one step).
+    pub previous: Option<String>,
 }
 
 /// Provisional claim returned by a same-model vector search.

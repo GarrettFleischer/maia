@@ -333,6 +333,9 @@ pub(crate) fn upsert_session_summary(
 }
 
 /// Mirrors the rolling session summary into one searchable claim (id stable per bot).
+///
+/// When the stable claim's body changes, the previous sentence is archived as
+/// `claim-ssum-{bot}-{now}` so older summaries stay findable via search.
 pub(crate) fn upsert_searchable_session_summary(
     transaction: &rusqlite::Transaction<'_>,
     bot_id: &str,
@@ -342,14 +345,24 @@ pub(crate) fn upsert_searchable_session_summary(
 ) -> Result<(), StoreError> {
     let claim_id = session_summary_claim_id(bot_id);
     let sentence = clip_session_summary_sentence(body);
-    let existing: Option<i64> = transaction
+    let existing: Option<String> = transaction
         .query_row(
-            "SELECT 1 FROM claims WHERE claim_id = ?1",
+            "SELECT sentence FROM claims WHERE claim_id = ?1",
             params![claim_id],
             |row| row.get(0),
         )
         .optional()?;
-    if existing.is_some() {
+    if let Some(old_sentence) = existing {
+        if old_sentence != sentence {
+            archive_session_summary_sentence(
+                transaction,
+                bot_id,
+                &claim_id,
+                &old_sentence,
+                episode_id,
+                now,
+            )?;
+        }
         transaction.execute(
             "UPDATE claims SET sentence = ?1 WHERE claim_id = ?2",
             params![sentence, claim_id],
@@ -378,6 +391,37 @@ pub(crate) fn upsert_searchable_session_summary(
         "INSERT INTO edges (edge_kind, from_kind, from_id, to_kind, to_id, weight) \
          VALUES ('mention', 'claim', ?1, 'episode', ?2, 1.0)",
         params![claim_id, episode_id],
+    )?;
+    Ok(())
+}
+
+fn archive_session_summary_sentence(
+    transaction: &rusqlite::Transaction<'_>,
+    bot_id: &str,
+    stable_claim_id: &str,
+    old_sentence: &str,
+    episode_id: &str,
+    now: i64,
+) -> Result<(), StoreError> {
+    let archive_id = format!("{stable_claim_id}-{now}");
+    let existing: Option<i64> = transaction
+        .query_row(
+            "SELECT 1 FROM claims WHERE claim_id = ?1",
+            params![archive_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing.is_some() {
+        return Ok(());
+    }
+    // Keep status provisional so exact-FTS triggers retain the row; tag stays in the sentence.
+    // Avoid replaced_by here — that FK expects the successor to already exist as a separate insert.
+    let _ = stable_claim_id;
+    transaction.execute(
+        "INSERT INTO claims (claim_id, sentence, episode_id, taint, status, valid_from, consolidated_by, \
+         memory_kind, memory_scope, observer_bot_id, subject_peer_id, learned_session_id) \
+         VALUES (?1, ?2, ?3, 'trusted', 'provisional', ?4, NULL, 'explicit', 'session', ?5, '', '')",
+        params![archive_id, old_sentence, episode_id, now, bot_id],
     )?;
     Ok(())
 }
@@ -745,13 +789,16 @@ pub(crate) fn memory_bodies(
         require_text("memory_id", id)?;
         if let Some(row) = connection
             .query_row(
-                "SELECT claim_id, sentence FROM claims WHERE claim_id = ?1",
+                "SELECT c.claim_id, c.sentence, \
+                 (SELECT p.sentence FROM claims p WHERE p.replaced_by = c.claim_id LIMIT 1) \
+                 FROM claims c WHERE c.claim_id = ?1",
                 params![id],
                 |row| {
                     Ok(crate::types::MemoryBodyRow {
                         kind: "claim".to_owned(),
                         id: row.get(0)?,
                         sentence: row.get(1)?,
+                        previous: row.get(2)?,
                     })
                 },
             )
@@ -769,6 +816,7 @@ pub(crate) fn memory_bodies(
                         kind: "fact".to_owned(),
                         id: row.get(0)?,
                         sentence: row.get(1)?,
+                        previous: None,
                     })
                 },
             )

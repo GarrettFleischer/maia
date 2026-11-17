@@ -410,7 +410,7 @@ fn owner_thread_is_named_maia_sqlite_and_shutdown_reopens() {
     db.reopen(11);
     assert_eq!(must(db.owner().thread_name()), "maia-sqlite");
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 22);
+    assert_eq!(settings.user_version, 23);
 }
 
 #[test]
@@ -469,7 +469,7 @@ fn migrations_apply_forward_only_and_keep_the_original_row() {
         "1|schema_migrations|100\n2|durable_schema|100\n3|super_agent_schema|100\n4|message_submission_idempotency|100\n5|runtime_id_high_water|100\n6|model_connection|100\n7|router_turn_snapshots|100\n8|mcp_connections|100\n9|promotion_brain|100\n10|approvals_attachments|100\n11|brain_markdown|100\n12|neuron_fts_porter|100\n13|brain_memory|100\n14|brain_polish|100\n15|bots|100\n16|memory_tags|100\n17|purge_orphan_bot_tasks|100\n18|claim_kind_and_scope|100\n19|session_summaries|100\n20|bind_unbound_messages_to_maia|100\n21|skills|100\n22|memory_exact_fts|100",
     );
     let settings = must(db.owner().connection_settings());
-    assert_eq!(settings.user_version, 22);
+    assert_eq!(settings.user_version, 23);
     db.reopen(250);
     assert_dump(
         db.file(),
@@ -541,7 +541,7 @@ fn initial_schema_matches_the_locked_catalog() {
     let settings = must(db.owner().connection_settings());
     assert_eq!(settings.journal_mode, "wal");
     assert_eq!(settings.foreign_keys, 1);
-    assert_eq!(settings.user_version, 22);
+    assert_eq!(settings.user_version, 23);
     db.shutdown();
     let actual = master_dump(db.file());
     let expected = include_str!("expected_schema.txt")

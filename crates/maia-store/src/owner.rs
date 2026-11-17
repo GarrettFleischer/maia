@@ -677,6 +677,10 @@ enum NormalCommand {
         request: crate::skill_ops::SkillRequest,
         reply: Reply<crate::skill_ops::SkillResponse>,
     },
+    Explorations {
+        request: crate::exploration_ops::ExplorationRequest,
+        reply: Reply<crate::exploration_ops::ExplorationResponse>,
+    },
 }
 
 enum PanicCommand {
@@ -2073,6 +2077,20 @@ impl SqliteOwner {
     ) -> Result<crate::skill_ops::SkillResponse, StoreError> {
         let (reply, rx) = oneshot::channel();
         self.send_normal(NormalCommand::Skills { request, reply }, Submit::Wait)?;
+        Pending { rx }.wait()
+    }
+
+    /// Applies one exploration-memo command.
+    ///
+    /// # Errors
+    ///
+    /// Returns a queue, validation, or SQLite failure.
+    pub fn explorations(
+        &self,
+        request: crate::exploration_ops::ExplorationRequest,
+    ) -> Result<crate::exploration_ops::ExplorationResponse, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(NormalCommand::Explorations { request, reply }, Submit::Wait)?;
         Pending { rx }.wait()
     }
 
@@ -4034,6 +4052,9 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
         }
         NormalCommand::Skills { request, reply } => {
             send(reply, crate::skill_ops::apply(connection, &request));
+        }
+        NormalCommand::Explorations { request, reply } => {
+            send(reply, crate::exploration_ops::apply(connection, &request));
         }
     }
 }

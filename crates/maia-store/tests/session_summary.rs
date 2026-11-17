@@ -150,3 +150,100 @@ fn summary_and_claim_commit_together_and_failed_write_keeps_neither() {
         Some("Talking about coffee preferences.")
     );
 }
+
+#[test]
+fn searchable_session_summary_archives_prior_body_when_overwritten() {
+    let db = TestDb::open("archive");
+    db.owner()
+        .append(AppendEvents {
+            thread_id: "thread-1".to_owned(),
+            expected_version: 0,
+            participants: "owner".to_owned(),
+            occurred_at: 10,
+            events: vec![ThreadEventWrite {
+                event_id: "open".to_owned(),
+                kind: "system".to_owned(),
+                body: "open".to_owned(),
+            }],
+        })
+        .unwrap_or_else(|e| panic!("append: {e}"));
+    db.owner()
+        .insert_episode(EpisodeWrite {
+            episode_id: "episode-1".to_owned(),
+            thread_id: "thread-1".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            body: "first".to_owned(),
+            taint: MemoryTaint::Trusted,
+            reasoning: None,
+            participants: "owner".to_owned(),
+            created_at: 20,
+            segments: Vec::new(),
+        })
+        .unwrap_or_else(|e| panic!("episode-1: {e}"));
+    db.owner()
+        .apply_promotion(PromotionWrite {
+            episode_id: "episode-1".to_owned(),
+            model: "promoter".to_owned(),
+            now: 30,
+            claims: vec![PromotionClaimWrite {
+                claim_id: "claim-a".to_owned(),
+                sentence: "The owner prefers oat milk.".to_owned(),
+                taint: MemoryTaint::Trusted,
+                valid_from: 20,
+                lexemes: vec!["oat".to_owned(), "milk".to_owned()],
+                ..Default::default()
+            }],
+            same_claim_ids: Vec::new(),
+            replacements: Vec::new(),
+            links: Vec::new(),
+            session_bot_id: "maia".to_owned(),
+            session_summary: "RUN76_SESSION_PITFALL_ALPHA coffee talk.".to_owned(),
+        })
+        .unwrap_or_else(|e| panic!("promo-1: {e}"));
+    db.owner()
+        .insert_episode(EpisodeWrite {
+            episode_id: "episode-2".to_owned(),
+            thread_id: "thread-1".to_owned(),
+            turn_id: "turn-2".to_owned(),
+            body: "second".to_owned(),
+            taint: MemoryTaint::Trusted,
+            reasoning: None,
+            participants: "owner".to_owned(),
+            created_at: 40,
+            segments: Vec::new(),
+        })
+        .unwrap_or_else(|e| panic!("episode-2: {e}"));
+    db.owner()
+        .apply_promotion(PromotionWrite {
+            episode_id: "episode-2".to_owned(),
+            model: "promoter".to_owned(),
+            now: 50,
+            claims: vec![PromotionClaimWrite {
+                claim_id: "claim-b".to_owned(),
+                sentence: "The owner likes pour-over coffee.".to_owned(),
+                taint: MemoryTaint::Trusted,
+                valid_from: 40,
+                lexemes: vec!["coffee".to_owned()],
+                ..Default::default()
+            }],
+            same_claim_ids: Vec::new(),
+            replacements: Vec::new(),
+            links: Vec::new(),
+            session_bot_id: "maia".to_owned(),
+            session_summary: "RUN76_SESSION_PITFALL_BETA later topic.".to_owned(),
+        })
+        .unwrap_or_else(|e| panic!("promo-2: {e}"));
+
+    let latest = must(db.owner().search_memory_exact("PITFALL_BETA", 8));
+    assert!(
+        latest.iter().any(|hit| hit.id == "claim-ssum-maia"),
+        "latest summary must stay on the stable id: {latest:?}"
+    );
+    let prior = must(db.owner().search_memory_exact("PITFALL_ALPHA", 8));
+    assert!(
+        prior
+            .iter()
+            .any(|hit| hit.id.starts_with("claim-ssum-maia-") && hit.title.contains("ALPHA")),
+        "prior summary must remain searchable after overwrite: {prior:?}"
+    );
+}
