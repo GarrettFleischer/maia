@@ -204,7 +204,7 @@ pub fn skill_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "save_skill",
-                "description": "Save a reusable procedure or project coding rule as a named skill (not a one-line fact — use remember for facts). title, when_to_use (one line), and body (steps). Optional skill_id and project.",
+                "description": "Save a reusable how-to or project coding rule (not a one-line fact — use remember). title, when_to_use, body; optional skill_id and project.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -222,7 +222,7 @@ pub fn skill_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "load_skill",
-                "description": "Load a skill body from the ## skills catalog when the current task matches its when-to-use line. skill_id is required.",
+                "description": "Load a skill body from ## skills when the task matches. skill_id required.",
                 "parameters": {
                     "type": "object",
                     "properties": {

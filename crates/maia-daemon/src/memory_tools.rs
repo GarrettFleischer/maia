@@ -686,7 +686,7 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "remember",
-                "description": "Save one durable fact to the shared brain (preference, name, project rule, what was tried and failed, important info from docs/sites). message is one short sentence. Skip greetings and transient status.",
+                "description": "Save one durable brain fact (preference, name, tried-and-failed note, important doc/site info). message = one short sentence. Skip greetings and transient status.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -700,7 +700,7 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "update_memory",
-                "description": "Replace an existing brain claim when the fact changed. claim_id from recall or search_memories; message is the new one-sentence fact. Optional reason (why) and alternatives (options discarded) are stored with the decision; the prior sentence stays as history.",
+                "description": "Replace a brain claim. claim_id from ## memories or search_memories; message = new sentence. Optional reason / alternatives stored with the decision; prior sentence kept as history.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -717,7 +717,7 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "retire_memory",
-                "description": "Hide a brain claim that is wrong or no longer true. claim_id from recall or search_memories.",
+                "description": "Hide a wrong or obsolete brain claim. claim_id from ## memories or search_memories.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -731,7 +731,7 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "search_memories",
-                "description": "Search the shared brain. Returns a compact list (id + short title). Use for exact error codes, filenames, file paths (before editing), session_summary tags, and identifiers as well as meaning. Then call get_memories with only the ids you need.",
+                "description": "Search the brain (compact id + title). Exact codes, filenames, paths (before editing), session_summary, or meaning. Then get_memories for the ids you need.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -745,7 +745,7 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "get_memories",
-                "description": "Load full text for a few memory ids from ## recall or search_memories. Pass ids (array, max 8). When a fact was updated, includes a short previously line.",
+                "description": "Load full text for memory ids from ## memories or search_memories (array, max 8). Updated facts include a short previously line.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -759,7 +759,7 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "save_exploration",
-                "description": "Save how part of the code fits together. topic is a short key; conclusion is the insight; files are paths you read (daemon stores SHA-256 of each). Separate from ordinary remember facts. Later call get_exploration to reuse if hashes still match.",
+                "description": "Save how code fits together (topic, conclusion, files read — daemon stores SHA-256). Separate from remember. Later get_exploration if hashes still match.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -775,7 +775,7 @@ pub fn memory_tool_defs() -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "get_exploration",
-                "description": "Load an exploration memo by topic or path. Returns the conclusion plus each file marked unchanged, changed, or missing versus the stored hashes.",
+                "description": "Load exploration memo by topic or path. Returns conclusion plus each file unchanged/changed/missing vs stored hashes.",
                 "parameters": {
                     "type": "object",
                     "properties": {
