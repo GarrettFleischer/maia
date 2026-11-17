@@ -703,6 +703,45 @@ fn wake_brief_finished_recover_requires_goal_checks_in_corrected_brief() {
 }
 
 #[test]
+fn finished_wake_drops_verification_rehire_and_forces_done() {
+    // Run83: Pass→Done stayed ~minutes because the model spawned "verify it prints…"
+    // after outcome= already evidenced the goal. Safety cap drops those re-hires.
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-final".to_owned(),
+            title: "FINAL HELLO83".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Printed HELLO83.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let capped = enforce_ceo_moments(
+        &[WakeAction::Spawn {
+            guidance: "Run the file and verify it prints HELLO83, then success.".to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        !capped
+            .iter()
+            .any(|action| matches!(action, WakeAction::Spawn { .. })),
+        "verification re-hire must be dropped when finished evidence already exists: {capped:?}"
+    );
+    assert!(
+        capped.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if text.starts_with("Done")
+        )),
+        "dropping verification re-hire must force Done this wake: {capped:?}"
+    );
+}
+
+#[test]
 fn finished_wake_keeps_spawn_for_verify_recover_and_defers_done() {
     // Prompt decides WRONG vs pass; host only keeps spawn so Done is not overwritten.
     use maia_core::manager::WorkerBrief;
@@ -851,16 +890,19 @@ fn finished_wake_does_not_classify_outcome_text() {
         }],
         ..WakeSnapshot::default()
     };
+    // Outcome text may look "passing"; a real recover rewrite (no verify/re-check words)
+    // must still be kept. Verification-named guidance is covered by
+    // finished_wake_drops_verification_rehire_and_forces_done.
     let kept = enforce_ceo_moments(
         &[WakeAction::Spawn {
-            guidance: "Re-hire another verify worker.".to_owned(),
+            guidance: "Rewrite the file with the corrected HELLO body, then success.".to_owned(),
         }],
         &passing_with_extra_spawn,
     );
     assert!(
         kept.iter()
             .any(|action| matches!(action, WakeAction::Spawn { .. })),
-        "host must not drop spawn based on passing-outcome heuristics: {kept:?}"
+        "host must not drop a real recover spawn based on passing-outcome heuristics: {kept:?}"
     );
     assert!(
         !kept.iter().any(|action| matches!(
@@ -934,8 +976,9 @@ fn wake_brief_finished_requires_requirement_checklist_before_done() {
     assert!(
         lower.contains("same wake")
             || lower.contains("verification re-hire")
-            || lower.contains("re-check"),
-        "FINISHED brief must push same-wake Done without verification re-hire: {brief}"
+            || lower.contains("re-check")
+            || lower.contains("second wake"),
+        "FINISHED brief must push same-wake Done without a second wake: {brief}"
     );
 }
 

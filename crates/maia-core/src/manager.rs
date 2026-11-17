@@ -400,7 +400,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             && snap.waiting.is_empty()
         {
             lines.push(
-                "REQUIRED: checklist each finished goal requirement against outcome=; any miss or partial → spawn_task once (do not continue_task on completed); all evidenced → message_user Done this same wake with zero CEO chatter between pass and Done (never a verification re-hire). Never Done on a partial outcome."
+                "REQUIRED: checklist each finished goal against outcome= now; any miss/partial → one spawn_task (do not continue_task on completed); when every requirement is already in outcome=, message_user Done immediately this same wake — do not re-read, re-hire, or spend a second wake. Zero CEO chatter between pass and Done. Never Done on a partial."
                     .to_owned(),
             );
         }
@@ -973,6 +973,23 @@ pub fn looks_like_close_out(text: &str) -> bool {
         || trimmed.starts_with("all done")
 }
 
+/// True when spawn guidance is a verify/re-check re-hire (not a real recover rewrite).
+///
+/// Safety cap only — matches the prompt ban on re-check/double-check/polish hires after
+/// outcome= already evidences the goal. Does not inspect outcome text.
+#[must_use]
+pub fn looks_like_verification_rehire(guidance: &str) -> bool {
+    let low = guidance.to_ascii_lowercase();
+    low.contains("verif")
+        || low.contains("re-check")
+        || low.contains("recheck")
+        || low.contains("double-check")
+        || low.contains("double check")
+        || low.contains("polish")
+        || low.contains("confirm it prints")
+        || low.contains("confirm the file")
+}
+
 /// Alphanumeric tokens of length >= 6, lowercased (longest first).
 #[must_use]
 pub fn distinctive_tokens(text: &str) -> Vec<String> {
@@ -1116,6 +1133,18 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
             // Idle wake (no attention, no finished goal) → drop LEARNED-only hire.
             let idle = attention_clear && snap.completed_unopened == 0;
             !(idle && matches!(action, WakeAction::Spawn { .. }))
+        })
+        .filter(|action| match action {
+            // Finished evidence already in the brief: drop verify/re-check re-hires so
+            // Pass→Done is not deferred for another worker that only re-reads outcome=.
+            WakeAction::Spawn { guidance }
+                if snap.completed_unopened > 0
+                    && attention_clear
+                    && looks_like_verification_rehire(guidance) =>
+            {
+                false
+            }
+            _ => true,
         })
         .filter(|action| match action {
             // Safety cap: never re-post an ask / Done already covered in CEO chat.
