@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { BrainNode, BrainSearchHit } from '@/components/brain/layoutBrainMap'
 import {
-  groupFactsByPrimaryTag,
+  filterFactsByTag,
   orderSearchHits,
   searchHitAction,
+  tagCounts,
+  UNTAGGED,
   type MemoryTag,
 } from '@/components/brain/memoryTags'
 
@@ -27,20 +29,35 @@ function fact(id: string, tags: string[]): BrainNode {
   }
 }
 
-describe('groupFactsByPrimaryTag', () => {
-  it('groups by the first tag and hides empty default tags', () => {
-    const groups = groupFactsByPrimaryTag(
-      [fact('city', ['Places']), fact('name', ['People', 'Ideas']), fact('path', ['Things'])],
+describe('tagCounts', () => {
+  it('counts every tag a fact carries in catalog order and leaves out empty tags', () => {
+    const counts = tagCounts(
+      [fact('city', ['Places']), fact('name', ['People', 'Ideas']), fact('path', ['Things']), fact('loose', [])],
       catalog,
     )
-    expect(groups.map((group) => group.title)).toEqual(['People', 'Places', 'Things'])
-    expect(groups[0]?.nodes.map((node) => node.id)).toEqual(['name'])
-    expect(groups.find((group) => group.title === 'Ideas')).toBeUndefined()
+    expect(counts).toEqual([
+      { name: 'People', count: 1 },
+      { name: 'Places', count: 1 },
+      { name: 'Things', count: 1 },
+      { name: 'Ideas', count: 1 },
+      { name: UNTAGGED, count: 1 },
+    ])
+  })
+})
+
+describe('filterFactsByTag', () => {
+  const all = [fact('city', ['Places']), fact('name', ['People', 'Ideas']), fact('loose', [])]
+
+  it('keeps every fact in one flat list with no filter', () => {
+    expect(filterFactsByTag(all, null).map((node) => node.id)).toEqual(['city', 'name', 'loose'])
   })
 
-  it('keeps a fact that has no tag instead of dropping it', () => {
-    const groups = groupFactsByPrimaryTag([fact('loose', [])], catalog)
-    expect(groups.map((group) => group.title)).toEqual(['Untagged'])
+  it('matches any tag on a fact, not only the first', () => {
+    expect(filterFactsByTag(all, 'Ideas').map((node) => node.id)).toEqual(['name'])
+  })
+
+  it('shows facts with no tag under Untagged', () => {
+    expect(filterFactsByTag(all, UNTAGGED).map((node) => node.id)).toEqual(['loose'])
   })
 })
 

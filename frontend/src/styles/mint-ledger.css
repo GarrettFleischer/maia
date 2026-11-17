@@ -1585,7 +1585,7 @@ textarea {
   .maia-pin,
   .maia-task-open,
   .maia-choice,
-  .maia-brain-list button,
+  .maia-brain-list button:not(.maia-icon-btn):not(.maia-btn),
   .maia-inspector-tabs [role='tab'],
   .maia-phone-header .maia-btn,
   .maia-phone-header .maia-icon-btn,
@@ -2052,14 +2052,16 @@ details.maia-tag-edit:not([open]) > :not(summary) {
 }
 .maia-tag-edit summary,
 .maia-tag-edit-toggle {
-  min-height: 44px;
+  min-height: 28px;
   cursor: pointer;
 }
 .maia-tag-edit-toggle {
-  padding: 0 8px;
+  padding: 0 4px;
   border: 0;
   background: transparent;
-  color: inherit;
+  color: var(--muted, inherit);
+  font-size: 0.8rem;
+  text-decoration: underline;
 }
 .maia-tag-edit input,
 .maia-tag-edit select {
@@ -2598,8 +2600,8 @@ details:not([open]) > .maia-task-tree {
 }
 
 .maia-brain-tab-icon--skills {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.5 3.5l3 3-7 7H2.5v-3l7-7z'/%3E%3Cpath d='M8.2 4.8l3 3'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.5 3.5l3 3-7 7H2.5v-3l7-7z'/%3E%3Cpath d='M8.2 4.8l3 3'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 1.8L3.8 9h4l-1 5.2L12.2 7h-4z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 1.8L3.8 9h4l-1 5.2L12.2 7h-4z'/%3E%3C/svg%3E");
 }
 
 .maia-brain-tab-icon--search {
@@ -2699,7 +2701,7 @@ details:not([open]) > .maia-task-tree {
   max-height: 280px;
 }
 
-.maia-brain-list button {
+.maia-brain-list button:not(.maia-icon-btn):not(.maia-btn):not(.maia-tag-chip) {
   width: 100%;
   text-align: left;
   border: 0;
@@ -2741,7 +2743,7 @@ details:not([open]) > .maia-task-tree {
   .maia-brain-toolbar select,
   .maia-brain-toolbar label,
   .maia-brain-detail input,
-  .maia-brain-list button {
+  .maia-brain-list button:not(.maia-icon-btn):not(.maia-btn) {
     min-height: 44px;
   }
   .maia-brain-toolbar label {
@@ -2900,4 +2902,94 @@ details:not([open]) > .maia-task-tree {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* Brain memory: one flat list, tag filter chips, one compact action row per memory. */
+.maia-brain-tabs .maia-brain-tab[aria-selected='true'] {
+  width: auto;
+  padding: 0 8px;
+  gap: 4px;
+}
+.maia-brain-tab-label {
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.maia-tag-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 8px;
+}
+.maia-tag-chip {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.maia-tag-chip[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+.maia-tag-filter .maia-tag-add {
+  margin-left: auto;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.maia-tag-filter .maia-tag-add input {
+  width: 7.5rem;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 6px;
+}
+.maia-memory-list .maia-memory-item article {
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.maia-memory-item p {
+  margin: 0;
+}
+.maia-memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.maia-memory-meta .maia-chip {
+  margin-right: 0;
+}
+.maia-chip--muted {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted, #5c6b66);
+}
+.maia-memory-meta .maia-brain-actions {
+  margin-left: auto;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.maia-memory-meta .maia-brain-actions .maia-icon-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+}
+.maia-delete-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.maia-delete-confirm .maia-btn,
+.maia-brain-actions .maia-delete-confirm .maia-btn {
+  width: auto;
+  min-height: 28px;
+  padding: 0 8px;
 }

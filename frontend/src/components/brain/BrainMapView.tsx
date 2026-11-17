@@ -17,23 +17,25 @@ import {
   wrapGraphText,
 } from '@/components/brain/layoutForce'
 import {
-  groupFactsByPrimaryTag,
+  filterFactsByTag,
   orderSearchHits,
   searchHitAction,
   searchKindLabel,
-  type MemoryGroup,
+  tagCounts,
+  UNTAGGED,
   type MemoryTag,
+  type TagCount,
 } from '@/components/brain/memoryTags'
 
 type View = 'memory' | 'skills' | 'search' | 'review' | 'timeline' | 'graph'
 
-const BRAIN_TABS: { id: View; label: string }[] = [
-  { id: 'memory', label: 'Memory' },
-  { id: 'skills', label: 'Skills' },
-  { id: 'search', label: 'Search' },
-  { id: 'review', label: 'Review' },
-  { id: 'timeline', label: 'Timeline' },
-  { id: 'graph', label: 'Graph' },
+const BRAIN_TABS: { id: View; label: string; hint: string }[] = [
+  { id: 'memory', label: 'Memory', hint: 'Memory: saved facts' },
+  { id: 'skills', label: 'Skills', hint: 'Skills: saved how-tos' },
+  { id: 'search', label: 'Search', hint: 'Search the brain' },
+  { id: 'review', label: 'Review', hint: 'Review: unsure and hidden facts' },
+  { id: 'timeline', label: 'Timeline', hint: 'Timeline: conversations' },
+  { id: 'graph', label: 'Graph', hint: 'Graph: how facts connect' },
 ]
 
 function facts(map: BrainMap): BrainNode[] {
@@ -55,12 +57,12 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
-  const [undo, setUndo] = useState<string | null>(null)
   const [tagName, setTagName] = useState('')
   const [retagId, setRetagId] = useState<string | null>(null)
   const [retagNames, setRetagNames] = useState<string[]>([])
   const [skills, setSkills] = useState<SkillsCatalog | null>(null)
   const [openSkill, setOpenSkill] = useState<SkillRecord | null>(null)
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
 
   const reload = (next: BrainMap) => {
     setMap(next)
@@ -115,11 +117,10 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when opening skills tab
   }, [client, view])
 
-  const memory = useMemo(
-    () => groupFactsByPrimaryTag(facts(map ?? { nodes: [], edges: [] }), map?.tags ?? []),
-    [map],
-  )
+  const allFacts = useMemo(() => facts(map ?? { nodes: [], edges: [] }), [map])
   const catalog = map?.tags ?? []
+  const counts = useMemo(() => tagCounts(allFacts, map?.tags ?? []), [allFacts, map])
+  const activeFilter = tagFilter !== null && counts.some((item) => item.name === tagFilter) ? tagFilter : null
 
   if (error && !map) return <p role="alert">{error}</p>
   if (!map) return <p role="status">Loading the brain.</p>
@@ -146,12 +147,14 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
     setEditing(null)
   }
 
-  const forget = (node: BrainNode) => {
-    const write = node.kind === 'claim' && client.forgetClaim ? client.forgetClaim(node.id) : client.deleteFact(node.id)
-    void write.then((next) => {
-      reload(next)
-      setUndo(node.id)
-    }, () => setError('That fact could not be forgotten.'))
+  const remove = (node: BrainNode) => {
+    const write = node.kind === 'claim' && client.deleteClaim ? client.deleteClaim(node.id) : client.deleteFact(node.id)
+    void write.then(reload, () => setError('That memory could not be deleted.'))
+  }
+
+  const hide = (node: BrainNode) => {
+    if (!client.forgetClaim) return
+    void client.forgetClaim(node.id).then(reload, () => setError('That memory could not be hidden.'))
   }
 
   return (
@@ -163,12 +166,17 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
             type="button"
             role="tab"
             aria-label={item.label}
-            title={item.label}
+            title={item.hint}
             aria-selected={view === item.id}
             className="maia-icon-btn maia-brain-tab"
             onClick={() => setView(item.id)}
           >
             <span className={`maia-brain-tab-icon maia-brain-tab-icon--${item.id}`} aria-hidden="true" />
+            {view === item.id ? (
+              <span className="maia-brain-tab-label" aria-hidden="true">
+                {item.label}
+              </span>
+            ) : null}
           </button>
         ))}
       </div>
@@ -216,9 +224,13 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
       {error ? <p role="alert">{error}</p> : null}
       {view === 'memory' ? (
         <MemoryList
-          grouped={memory}
+          nodes={filterFactsByTag(allFacts, activeFilter)}
+          counts={counts}
+          total={allFacts.length}
+          filter={activeFilter}
+          onFilter={setTagFilter}
           catalog={catalog}
-          empty={facts(map).length === 0}
+          empty={allFacts.length === 0}
           editing={editing}
           draft={draft}
           tagName={tagName}
@@ -249,7 +261,7 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
             setDraft(node.sentence ?? node.label)
           }}
           onSave={saveEdit}
-          onForget={forget}
+          onDelete={remove}
           onSource={setSelected}
           onRetagStart={(node) => {
             setRetagId(node.id)
@@ -291,6 +303,7 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           onOpenFact={(id) => {
             const node = facts(map).find((item) => item.id === id)
             if (!node) return
+            setTagFilter(null)
             setView('memory')
             setEditing(node.id)
             setDraft(node.sentence ?? node.label)
@@ -309,11 +322,12 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
             if (!client.confirmClaim) return
             void client.confirmClaim(node.id).then(reload)
           }}
-          onReject={forget}
+          onReject={hide}
           onRestore={(id) => {
             if (!client.restoreClaim) return
             void client.restoreClaim(id).then(reload)
           }}
+          onDelete={remove}
         />
       ) : null}
       {view === 'timeline' ? <Timeline map={map} /> : null}
@@ -324,21 +338,6 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           selected={selected}
           onSelect={setSelected}
         />
-      ) : null}
-      {undo ? (
-        <p role="status">
-          Forgotten.{' '}
-          <button
-            type="button"
-            className="maia-btn"
-            onClick={() => {
-              if (client.restoreClaim) void client.restoreClaim(undo).then(reload)
-              setUndo(null)
-            }}
-          >
-            Undo
-          </button>
-        </p>
       ) : null}
       <details className="maia-brain-settings">
         <summary>Settings / Sync</summary>
@@ -364,7 +363,11 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
 }
 
 function MemoryList({
-  grouped,
+  nodes,
+  counts,
+  total,
+  filter,
+  onFilter,
   catalog,
   empty,
   editing,
@@ -380,13 +383,17 @@ function MemoryList({
   onDraft,
   onEdit,
   onSave,
-  onForget,
+  onDelete,
   onSource,
   onRetagStart,
   onRetagToggle,
   onRetagSave,
 }: {
-  grouped: MemoryGroup[]
+  nodes: BrainNode[]
+  counts: TagCount[]
+  total: number
+  filter: string | null
+  onFilter: (tag: string | null) => void
   catalog: MemoryTag[]
   empty: boolean
   editing: string | null
@@ -402,137 +409,162 @@ function MemoryList({
   onDraft: (value: string) => void
   onEdit: (node: BrainNode) => void
   onSave: (node: BrainNode) => void
-  onForget: (node: BrainNode) => void
+  onDelete: (node: BrainNode) => void
   onSource: (id: string) => void
   onRetagStart: (node: BrainNode) => void
   onRetagToggle: (name: string) => void
   onRetagSave: (node: BrainNode) => void
 }) {
+  const filterTag = filter === null ? undefined : catalog.find((item) => item.name === filter)
   return (
-    <div>
-      <form
-        className="maia-tag-add"
-        onSubmit={(event) => {
-          event.preventDefault()
-          onAddTag()
-        }}
-      >
-        <input
-          aria-label="New tag"
-          placeholder="New tag"
-          value={tagName}
-          onChange={(event) => onTagName(event.target.value)}
-        />
-        <button type="submit" className="maia-icon-btn" aria-label="Add tag" title="Add tag">
-          <span className="maia-plus-icon" aria-hidden="true" />
+    <div className="maia-memory">
+      <div className="maia-tag-filter" role="group" aria-label="Filter by tag">
+        <button
+          type="button"
+          className="maia-tag-chip"
+          aria-pressed={filter === null}
+          title="Show every memory"
+          onClick={() => onFilter(null)}
+        >
+          {`All ${total}`}
         </button>
-      </form>
+        {counts.map((item) => (
+          <button
+            key={item.name}
+            type="button"
+            className="maia-tag-chip"
+            aria-pressed={filter === item.name}
+            title={item.name === UNTAGGED ? 'Show memories with no tag' : `Show memories tagged ${item.name}`}
+            onClick={() => onFilter(filter === item.name ? null : item.name)}
+          >
+            {`${item.name} ${item.count}`}
+          </button>
+        ))}
+        <form
+          className="maia-tag-add"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onAddTag()
+          }}
+        >
+          <input
+            aria-label="New tag"
+            placeholder="New tag"
+            value={tagName}
+            onChange={(event) => onTagName(event.target.value)}
+          />
+          <button type="submit" className="maia-icon-btn" aria-label="Add tag" title="Add tag">
+            <span className="maia-plus-icon" aria-hidden="true" />
+          </button>
+        </form>
+      </div>
+      {filterTag ? (
+        <TagEditor
+          key={filterTag.id}
+          tag={filterTag}
+          catalog={catalog}
+          onRename={onRenameTag}
+          onMerge={onMergeTag}
+          onRemove={onRemoveTag}
+        />
+      ) : null}
       {empty ? <p>Nothing has been promoted yet. Episodes remain searchable.</p> : null}
-      {grouped.map((group) => {
-        const tag = catalog.find((item) => item.id === group.id) ?? catalog.find((item) => item.name === group.title)
-        return (
-          <section key={group.title} aria-label={group.title}>
-            <div className="maia-tag-head">
-              <h2>{group.title}</h2>
-              {tag ? <TagEditor tag={tag} catalog={catalog} onRename={onRenameTag} onMerge={onMergeTag} onRemove={onRemoveTag} /> : null}
-            </div>
-            <ul className="maia-brain-list">
-              {group.nodes.map((node) => (
-                <li key={node.id}>
-                  <article>
-                    {editing === node.id ? (
+      <ul className="maia-brain-list maia-memory-list" aria-label="Memories">
+        {nodes.map((node) => (
+          <li key={node.id} className="maia-memory-item">
+            <article>
+              {editing === node.id ? (
+                <input
+                  aria-label="Fact sentence"
+                  value={draft}
+                  onChange={(event) => onDraft(event.target.value)}
+                />
+              ) : (
+                <p>{node.sentence ?? node.label}</p>
+              )}
+              <div className="maia-memory-meta">
+                {(node.tags ?? []).length > 0 ? (
+                  (node.tags ?? []).map((name) => (
+                    <span key={name} className="maia-chip">
+                      {name}
+                    </span>
+                  ))
+                ) : (
+                  <span className="maia-chip maia-chip--muted">{UNTAGGED}</span>
+                )}
+                <span className="maia-muted">{learned(node)}</span>
+                <div className="maia-brain-actions" role="group" aria-label="Memory actions">
+                  {editing === node.id ? (
+                    <button
+                      type="button"
+                      className="maia-icon-btn"
+                      aria-label="Save sentence"
+                      title="Save sentence"
+                      onClick={() => onSave(node)}
+                    >
+                      <span className="maia-check-icon" aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="maia-icon-btn"
+                      aria-label="Edit"
+                      title="Edit"
+                      onClick={() => onEdit(node)}
+                    >
+                      <span className="maia-edit-icon" aria-hidden="true" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="maia-icon-btn"
+                    aria-label="Tag"
+                    title="Tag"
+                    aria-expanded={retagId === node.id}
+                    onClick={() => onRetagStart(node)}
+                  >
+                    <span className="maia-tag-icon" aria-hidden="true" />
+                  </button>
+                  <DeleteButton onDelete={() => onDelete(node)} />
+                  <button
+                    type="button"
+                    className="maia-icon-btn"
+                    aria-label="Source"
+                    title="Source"
+                    onClick={() => onSource(node.source_episode ?? node.id)}
+                  >
+                    <span className="maia-source-icon" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              {retagId === node.id ? (
+                <fieldset className="maia-tag-picker">
+                  <legend>Tags for this fact</legend>
+                  {catalog.map((item) => (
+                    <label key={item.id}>
                       <input
-                        aria-label="Fact sentence"
-                        value={draft}
-                        onChange={(event) => onDraft(event.target.value)}
+                        type="checkbox"
+                        checked={retagNames.includes(item.name)}
+                        onChange={() => onRetagToggle(item.name)}
                       />
-                    ) : (
-                      <p>{node.sentence ?? node.label}</p>
-                    )}
-                    {(node.tags ?? []).length > 1 ? (
-                      <p className="maia-muted">{(node.tags ?? []).slice(1).join(' · ')}</p>
-                    ) : null}
-                    <p className="maia-muted">{learned(node)}</p>
-                    <div className="maia-brain-actions">
-                      <button
-                        type="button"
-                        className="maia-icon-btn"
-                        aria-label="Edit"
-                        title="Edit"
-                        onClick={() => onEdit(node)}
-                      >
-                        <span className="maia-edit-icon" aria-hidden="true" />
-                      </button>
-                      {editing === node.id ? (
-                        <button
-                          type="button"
-                          className="maia-icon-btn"
-                          aria-label="Save sentence"
-                          title="Save sentence"
-                          onClick={() => onSave(node)}
-                        >
-                          <span className="maia-check-icon" aria-hidden="true" />
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="maia-icon-btn"
-                        aria-label="Tags"
-                        title="Tags"
-                        onClick={() => onRetagStart(node)}
-                      >
-                        <span className="maia-tag-icon" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="maia-icon-btn"
-                        aria-label="Forget"
-                        title="Forget"
-                        onClick={() => onForget(node)}
-                      >
-                        <span className="maia-forget-icon" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="maia-icon-btn"
-                        aria-label="View source"
-                        title="View source"
-                        onClick={() => onSource(node.source_episode ?? node.id)}
-                      >
-                        <span className="maia-source-icon" aria-hidden="true" />
-                      </button>
-                    </div>
-                    {retagId === node.id ? (
-                      <fieldset className="maia-tag-picker">
-                        <legend>Tags for this fact</legend>
-                        {catalog.map((item) => (
-                          <label key={item.id}>
-                            <input
-                              type="checkbox"
-                              checked={retagNames.includes(item.name)}
-                              onChange={() => onRetagToggle(item.name)}
-                            />
-                            {item.name}
-                          </label>
-                        ))}
-                        <button
-                          type="button"
-                          className="maia-icon-btn"
-                          aria-label="Save tags"
-                          title="Save tags"
-                          onClick={() => onRetagSave(node)}
-                        >
-                          <span className="maia-check-icon" aria-hidden="true" />
-                        </button>
-                      </fieldset>
-                    ) : null}
-                  </article>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )
-      })}
+                      {item.name}
+                    </label>
+                  ))}
+                  <button
+                    type="button"
+                    className="maia-icon-btn"
+                    aria-label="Save tags"
+                    title="Save tags"
+                    onClick={() => onRetagSave(node)}
+                  >
+                    <span className="maia-check-icon" aria-hidden="true" />
+                  </button>
+                </fieldset>
+              ) : null}
+            </article>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -561,12 +593,14 @@ function TagEditor({
         type="button"
         className="maia-tag-edit-toggle"
         aria-expanded={open}
+        aria-label={`Edit tag ${tag.name}`}
+        title={`Rename, merge or remove the ${tag.name} tag`}
         onClick={() => {
           setOpen((current) => !current)
           setConfirmRemove(false)
         }}
       >
-        {`Edit ${tag.name}`}
+        Edit tag
       </button>
       {open ? (
         <>
@@ -695,12 +729,14 @@ function ReviewList({
   onApprove,
   onReject,
   onRestore,
+  onDelete,
 }: {
   nodes: BrainNode[]
   hidden: BrainNode[]
   onApprove: (node: BrainNode) => void
   onReject: (node: BrainNode) => void
   onRestore: (id: string) => void
+  onDelete: (node: BrainNode) => void
 }) {
   return (
     <div>
@@ -712,8 +748,8 @@ function ReviewList({
             <button type="button" className="maia-btn" onClick={() => onApprove(node)}>
               Approve
             </button>
-            <button type="button" className="maia-btn" onClick={() => onReject(node)}>
-              Reject
+            <button type="button" className="maia-btn" title="Hide it; it stays under Hidden" onClick={() => onReject(node)}>
+              Hide
             </button>
           </li>
         ))}
@@ -724,14 +760,47 @@ function ReviewList({
           {hidden.map((node) => (
             <li key={node.id}>
               <p>{node.sentence ?? node.label}</p>
-              <button type="button" className="maia-btn" onClick={() => onRestore(node.id)}>
-                Restore
-              </button>
+              <div className="maia-brain-actions" role="group" aria-label="Hidden memory actions">
+                <button type="button" className="maia-btn" onClick={() => onRestore(node.id)}>
+                  Restore
+                </button>
+                <DeleteButton onDelete={() => onDelete(node)} />
+              </div>
             </li>
           ))}
         </ul>
       </details>
     </div>
+  )
+}
+
+/** Trash icon that asks once before deleting for good. */
+function DeleteButton({ onDelete }: { onDelete: () => void }) {
+  const [asking, setAsking] = useState(false)
+  if (asking) {
+    return (
+      <span className="maia-delete-confirm" role="group" aria-label="Confirm delete">
+        <span className="maia-muted">Delete for good?</span>
+        <button
+          type="button"
+          className="maia-btn"
+          onClick={() => {
+            setAsking(false)
+            onDelete()
+          }}
+        >
+          Delete
+        </button>
+        <button type="button" className="maia-btn" onClick={() => setAsking(false)}>
+          Cancel
+        </button>
+      </span>
+    )
+  }
+  return (
+    <button type="button" className="maia-icon-btn" aria-label="Delete" title="Delete" onClick={() => setAsking(true)}>
+      <span className="maia-forget-icon" aria-hidden="true" />
+    </button>
   )
 }
 

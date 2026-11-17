@@ -75,6 +75,7 @@ function TaskBranch({
             className="maia-chev"
             aria-expanded={expandedRow}
             aria-label={`${expandedRow ? 'Collapse' : 'Expand'} ${row.title}`}
+            title={expandedRow ? 'Hide helpers' : 'Show helpers'}
             onClick={() => onToggle(row.task_id)}
           >
             <span className="maia-chev-icon" aria-hidden="true" />
@@ -102,6 +103,7 @@ function TaskBranch({
             className="maia-pin"
             aria-pressed={row.section === 'pinned'}
             aria-label={`${pinLabel} ${row.title}`}
+            title={pinLabel}
             onClick={() => onPin(row.task_id, nextPin)}
           >
             <span className="maia-pin-icon" aria-hidden="true" />

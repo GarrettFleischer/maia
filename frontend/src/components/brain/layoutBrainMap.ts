@@ -8,7 +8,6 @@ export interface BrainNode {
   taint: 'trusted' | 'untrusted' | 'owner' | null
   session_id: string | null
   held: boolean
-  category?: string
   confidence_millis?: number | null
   created_at?: number | null
   source_episode?: string | null
@@ -105,6 +104,7 @@ export interface BrainMapClient {
   editClaim?(id: string, sentence: string): Promise<BrainMap>
   confirmClaim?(id: string): Promise<BrainMap>
   forgetClaim?(id: string): Promise<BrainMap>
+  deleteClaim?(id: string): Promise<BrainMap>
   restoreClaim?(id: string): Promise<BrainMap>
   createTag?(name: string): Promise<BrainMap>
   renameTag?(id: string, name: string): Promise<BrainMap>
@@ -346,7 +346,6 @@ function parseNode(value: unknown): BrainNode {
     taint: optionalTaint(value.taint),
     session_id: optionalText(value.session_id),
     held: value.held,
-    category: typeof value.category === 'string' ? value.category : '',
     confidence_millis: optionalNumber(value.confidence_millis),
     created_at: optionalNumber(value.created_at),
     source_episode: optionalText(value.source_episode),

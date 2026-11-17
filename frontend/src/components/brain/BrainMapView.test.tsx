@@ -15,7 +15,6 @@ function sampleMap(): BrainMap {
         taint: 'trusted',
         session_id: 'thread-1',
         held: false,
-        category: 'person',
         subject: 'Owner',
         confidence_millis: 900,
         created_at: 1700000000,
@@ -30,7 +29,6 @@ function sampleMap(): BrainMap {
         taint: 'trusted',
         session_id: 'thread-1',
         held: false,
-        category: 'place',
         subject: 'Owner',
         confidence_millis: 500,
         source_episode: 'episode-1',
@@ -130,6 +128,14 @@ function clientFor(initial: BrainMap, hits: BrainSearchHit[] = []) {
       }
       return map
     },
+    async deleteClaim(id) {
+      map = {
+        ...map,
+        nodes: map.nodes.filter((item) => item.id !== id),
+        hidden: (map.hidden ?? []).filter((item) => item.id !== id),
+      }
+      return map
+    },
     async restoreClaim(id) {
       const node = (map.hidden ?? []).find((item) => item.id === id)
       map = {
@@ -164,8 +170,8 @@ describe('BrainMapView', () => {
       graph_count: 2,
     })
     render(<BrainMapView client={client} />)
-    expect(await screen.findByRole('heading', { name: 'People' })).toBeVisible()
-    expect(screen.getByText("The user's name is Garrett.")).toBeVisible()
+    expect(await screen.findByText("The user's name is Garrett.")).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'People' })).not.toBeInTheDocument()
     expect(screen.queryByText('this')).not.toBeInTheDocument()
     await user.click(screen.getByText('Settings / Sync'))
     expect(screen.getByText(/Last export 1700000000/)).toBeVisible()
@@ -241,7 +247,7 @@ describe('BrainMapView', () => {
       { id: 'claim-city', kind: 'claim', sentence: 'The user lives in Canby, Oregon.', arms: ['keyword', 'graph'] },
     ])
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'People' })
+    await screen.findByText("The user's name is Garrett.")
     await user.click(screen.getByRole('tab', { name: 'Search' }))
     await user.type(screen.getByRole('searchbox', { name: 'Search the brain' }), 'where do I live')
     const searchBtn = screen.getByRole('button', { name: 'Search' })
@@ -265,7 +271,7 @@ describe('BrainMapView', () => {
       { id: 'claim-city', kind: 'claim', sentence: 'The user lives in Canby, Oregon.', arms: ['keyword'] },
     ])
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'People' })
+    await screen.findByText("The user's name is Garrett.")
     await user.click(screen.getByRole('tab', { name: 'Search' }))
     await user.type(screen.getByRole('searchbox', { name: 'Search the brain' }), 'Canby')
     await user.click(screen.getByRole('button', { name: 'Search' }))
@@ -285,7 +291,7 @@ describe('BrainMapView', () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap())
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'People' })
+    await screen.findByText("The user's name is Garrett.")
     await user.click(screen.getByRole('tab', { name: 'Review' }))
     expect(screen.getByText('The user lives in Canby, Oregon.')).toBeVisible()
     expect(screen.queryByText("The user's name is Garrett.")).not.toBeInTheDocument()
@@ -301,7 +307,7 @@ describe('BrainMapView', () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap())
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'People' })
+    await screen.findByText("The user's name is Garrett.")
     await user.click(screen.getByRole('tab', { name: 'Timeline' }))
     const timeline = screen.getByRole('list', { name: 'Timeline' })
     expect(within(timeline).getByText('Owner: I live in Canby.')).toBeVisible()
@@ -312,17 +318,18 @@ describe('BrainMapView', () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap())
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'People' })
+    await screen.findByText("The user's name is Garrett.")
     await user.click(screen.getByRole('tab', { name: 'Graph' }))
     expect(screen.getByTestId('brain-graph-entity-owner')).toBeInTheDocument()
     expect(screen.getByTestId('brain-graph-claim-name')).toBeInTheDocument()
     expect(screen.queryByTestId('brain-graph-lexeme-this')).not.toBeInTheDocument()
   })
 
-  it('keeps Memory, Search, Review, Timeline, and Graph in one compact icon tab row', async () => {
+  it('keeps the brain views in one compact icon tab row with names and a label on the active tab', async () => {
+    const user = userEvent.setup()
     const client = clientFor(sampleMap())
     render(<BrainMapView client={client} />)
-    await screen.findByRole('heading', { name: 'People' })
+    await screen.findByText("The user's name is Garrett.")
     const tablist = screen.getByRole('tablist', { name: 'Brain views' })
     expect(tablist).toHaveClass('maia-brain-tabs')
     const tabs = screen.getAllByRole('tab')
@@ -336,9 +343,73 @@ describe('BrainMapView', () => {
     ])
     for (const tab of tabs) {
       expect(tab).toHaveClass('maia-icon-btn')
-      expect(tab).not.toHaveTextContent(/Memory|Skills|Search|Review|Timeline|Graph/)
+      expect(tab.getAttribute('title')).toBeTruthy()
       expect(tab.querySelector('.maia-brain-tab-icon')).not.toBeNull()
     }
+    expect(screen.getByRole('tab', { name: 'Memory' })).toHaveTextContent('Memory')
+    expect(screen.getByRole('tab', { name: 'Graph' })).not.toHaveTextContent('Graph')
+    await user.click(screen.getByRole('tab', { name: 'Graph' }))
+    expect(screen.getByRole('tab', { name: 'Graph' })).toHaveTextContent('Graph')
+    expect(screen.getByRole('tab', { name: 'Memory' })).not.toHaveTextContent('Memory')
+  })
+
+  it('shows one flat memory list with tag chips, a tag filter, and one labeled action row each', async () => {
+    const user = userEvent.setup()
+    render(<BrainMapView client={clientFor(sampleMap())} />)
+    await screen.findByText("The user's name is Garrett.")
+    expect(screen.queryByRole('heading', { name: 'People' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Places' })).not.toBeInTheDocument()
+    const list = screen.getByRole('list', { name: 'Memories' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    const fact = screen.getByText("The user's name is Garrett.").closest('article') as HTMLElement
+    expect(within(fact).getByText('People')).toHaveClass('maia-chip')
+    const actions = within(fact).getByRole('group', { name: 'Memory actions' })
+    const names = within(actions)
+      .getAllByRole('button')
+      .map((button) => [button.getAttribute('aria-label'), button.getAttribute('title')])
+    expect(names).toEqual([
+      ['Edit', 'Edit'],
+      ['Tag', 'Tag'],
+      ['Delete', 'Delete'],
+      ['Source', 'Source'],
+    ])
+    expect(actions.parentElement).toHaveClass('maia-memory-meta')
+    expect(within(actions.parentElement as HTMLElement).getByText(/^Learned/)).toBeVisible()
+    const filter = screen.getByRole('group', { name: 'Filter by tag' })
+    await user.click(within(filter).getByRole('button', { name: 'Places 1' }))
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
+    expect(screen.getByText('The user lives in Canby, Oregon.')).toBeVisible()
+    expect(screen.queryByText("The user's name is Garrett.")).not.toBeInTheDocument()
+    await user.click(within(filter).getByRole('button', { name: 'All 2' }))
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+  })
+
+  it('deletes a memory for good only after a confirm, and can delete hidden ones too', async () => {
+    const user = userEvent.setup()
+    const client = clientFor(sampleMap())
+    const deleted: string[] = []
+    const base = client.deleteClaim!.bind(client)
+    client.deleteClaim = async (id) => {
+      deleted.push(id)
+      return base(id)
+    }
+    render(<BrainMapView client={client} />)
+    const fact = (await screen.findByText("The user's name is Garrett.")).closest('article') as HTMLElement
+    await user.click(within(fact).getByRole('button', { name: 'Delete' }))
+    expect(deleted).toEqual([])
+    await user.click(within(fact).getByRole('button', { name: 'Cancel' }))
+    await user.click(within(fact).getByRole('button', { name: 'Delete' }))
+    const confirm = within(fact).getByRole('group', { name: 'Confirm delete' })
+    await user.click(within(confirm).getByRole('button', { name: 'Delete' }))
+    expect(deleted).toEqual(['claim-name'])
+    expect(screen.queryByText("The user's name is Garrett.")).not.toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Review' }))
+    await user.click(screen.getByText('Hidden'))
+    const hiddenRow = screen.getByText('Handed this message to the running task.').closest('li') as HTMLElement
+    await user.click(within(hiddenRow).getByRole('button', { name: 'Delete' }))
+    await user.click(within(within(hiddenRow).getByRole('group', { name: 'Confirm delete' })).getByRole('button', { name: 'Delete' }))
+    expect(deleted).toEqual(['claim-name', 'claim-junk'])
+    expect(screen.queryByText('Handed this message to the running task.')).not.toBeInTheDocument()
   })
 
   it('draws short entity names and does not cut claim words', async () => {
@@ -374,14 +445,13 @@ describe('BrainMapView', () => {
         taint: 'trusted',
         session_id: 'thread-1',
         held: false,
-        category: 'path',
         subject: 'Owner',
         confidence_millis: 800,
         tags: ['Things'],
       },
     )
     render(<BrainMapView client={clientFor(map)} />)
-    await screen.findByRole('heading', { name: 'People' })
+    await screen.findByText("The user's name is Garrett.")
     await user.click(screen.getByRole('tab', { name: 'Graph' }))
     expect(drawnLines('entity-owner')).toEqual(['Owner'])
     expect(drawnLines('entity-canby')).toEqual(['Canby'])
@@ -402,14 +472,15 @@ describe('BrainMapView', () => {
     expect(Number.parseFloat((svg as SVGElement | null)?.style.minWidth ?? '')).toBeGreaterThanOrEqual(viewWidth)
   })
 
-  it('keeps tag rename controls out of the page until Edit is opened', async () => {
+  it('keeps tag rename controls out of the page until a tag is picked and Edit tag is opened', async () => {
     const user = userEvent.setup()
     render(<BrainMapView client={clientFor(sampleMap())} />)
-    expect(await screen.findByRole('heading', { name: 'People' })).toBeVisible()
+    expect(await screen.findByText("The user's name is Garrett.")).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Edit tag People' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'People 1' }))
     expect(screen.queryByRole('textbox', { name: 'Rename People', hidden: true })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Remove People', hidden: true })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Edit People' }))
-    const editor = screen.getByRole('button', { name: 'Edit People' }).closest('.maia-tag-edit')
+    await user.click(screen.getByRole('button', { name: 'Edit tag People' }))
+    const editor = screen.getByRole('button', { name: 'Edit tag People' }).closest('.maia-tag-edit')
     expect(editor).toHaveClass('is-open')
     expect(screen.getByRole('textbox', { name: 'Rename People' })).toBeVisible()
   })
@@ -446,32 +517,31 @@ describe('BrainMapView', () => {
       return current
     }
     render(<BrainMapView client={client} />)
-    expect(await screen.findByRole('heading', { name: 'People' })).toBeVisible()
-    expect(screen.queryByRole('heading', { name: 'Ideas' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'About you' })).not.toBeInTheDocument()
+    expect(await screen.findByText("The user's name is Garrett.")).toBeVisible()
+    const filter = screen.getByRole('group', { name: 'Filter by tag' })
+    expect(within(filter).queryByRole('button', { name: /^Ideas/ })).not.toBeInTheDocument()
     await user.type(screen.getByRole('textbox', { name: 'New tag' }), 'Dogs')
     const addTag = screen.getByRole('button', { name: 'Add tag' })
     expect(addTag).toHaveClass('maia-icon-btn')
     expect(addTag).not.toHaveTextContent('Add tag')
     await user.click(addTag)
-    const people = await screen.findByRole('region', { name: 'People' })
-    await user.click(within(people).getByRole('button', { name: 'Tags' }))
+    const fact = () => screen.getByText("The user's name is Garrett.").closest('article') as HTMLElement
+    await user.click(within(fact()).getByRole('button', { name: 'Tag' }))
     await user.click(screen.getByRole('checkbox', { name: 'Places' }))
     const saveTags = screen.getByRole('button', { name: 'Save tags' })
     expect(saveTags).toHaveClass('maia-icon-btn')
     expect(saveTags).not.toHaveTextContent('Save tags')
     await user.click(saveTags)
-    const fact = within(await screen.findByRole('region', { name: 'People' }))
-      .getByText("The user's name is Garrett.")
-      .closest('article')
-    expect(within(fact as HTMLElement).getByText('Places')).toBeVisible()
-    await user.click(screen.getByText('Edit People'))
+    expect(await within(fact()).findByText('Places')).toBeVisible()
+    expect(within(fact()).getByText('People')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'People 1' }))
+    await user.click(screen.getByRole('button', { name: 'Edit tag People' }))
     await user.click(screen.getByRole('button', { name: 'Remove People' }))
     expect(screen.getByRole('group', { name: 'Confirm remove People' })).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'People' })).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Confirm remove People' }))
     expect(screen.getByText("The user's name is Garrett.")).toBeVisible()
-    expect(screen.queryByRole('heading', { name: 'People' })).not.toBeInTheDocument()
+    expect(within(fact()).queryByText('People')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^People/ })).not.toBeInTheDocument()
   })
 
   it('lists skills with view and delete icons', async () => {

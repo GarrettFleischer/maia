@@ -76,6 +76,14 @@ export function liveBrainMapClient(origin: string): BrainMapClient {
         }),
       )
     },
+    deleteClaim(id: string) {
+      return readMap(
+        fetch(`${root}/api/brain/claims/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: withCsrf('DELETE', {}),
+        }),
+      )
+    },
     restoreClaim(id: string) {
       return readMap(
         fetch(`${root}/api/brain/claims/${encodeURIComponent(id)}/restore`, {
