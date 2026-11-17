@@ -390,7 +390,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): Before Done, checklist every CEO-stated requirement (each path, format, content, count, forbidden token) against outcome=/output evidence. A missing piece or failed check is a partial outcome — not Done; MUST spawn_task with a corrected brief that restates every requirement — do not Silent, Done, continue_task/retry_task on completed, or ask_user. Only when every requirement is evidenced → one Done message_user restating outcome= (never echo secrets). Do not re-hire after every requirement already passes. Status chatter does not close a goal. One close-out per finished goal; then stay silent. Skip if RECENT_CEO_CHAT already has that Done."
+            "FINISHED (close-out): Before Done, checklist every CEO-stated requirement (each path, format, content, count, forbidden token) against outcome=/output evidence. A missing piece or failed check is a partial outcome — not Done; MUST spawn_task with a corrected brief that restates every requirement — do not Silent, Done, continue_task/retry_task on completed, or ask_user. Only when every requirement is evidenced → one Done message_user this same wake restating outcome= (never echo secrets). Do not spawn_task to re-check/double-check/polish after the checklist already passes. Status chatter does not close a goal. One close-out per finished goal; then stay silent. Skip if RECENT_CEO_CHAT already has that Done."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -400,7 +400,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             && snap.waiting.is_empty()
         {
             lines.push(
-                "REQUIRED: checklist each finished goal requirement against outcome=; any miss or partial → spawn_task once (do not continue_task on completed); all evidenced → message_user immediately (Done — …). Never Done on a partial outcome."
+                "REQUIRED: checklist each finished goal requirement against outcome=; any miss or partial → spawn_task once (do not continue_task on completed); all evidenced → message_user Done this same wake (never a verification re-hire). Never Done on a partial outcome."
                     .to_owned(),
             );
         }
@@ -751,6 +751,9 @@ pub fn interpret_wake_tools(calls: &[WakeToolCall]) -> Vec<WakeAction> {
 /// Lead-in stored on a waiting-worker continue so cold resume is not raw CEO chat.
 pub const CEO_WAITING_ANSWER_PREFIX: &str = "CEO answered your waiting question.";
 
+/// Lead-in when the CEO submits an `ask_questions` card so the manager hires instead of re-asking.
+pub const CEO_CARD_ANSWER_PREFIX: &str = "CEO answered your ask_questions card.";
+
 /// Frames a CEO reply so a resumed waiting worker finishes instead of re-asking.
 ///
 /// Honest leaf: text in, framed text out. Idempotent when already framed.
@@ -773,6 +776,35 @@ pub fn frame_ceo_waiting_answer(answer: &str) -> String {
 pub fn is_framed_ceo_waiting_answer(text: &str) -> bool {
     text.trim_start()
         .starts_with(CEO_WAITING_ANSWER_PREFIX)
+}
+
+/// Frames CEO card answers so the manager turn hires/continues instead of re-asking.
+///
+/// Honest leaf: text in, framed text out. Idempotent when already framed.
+#[must_use]
+pub fn frame_ceo_card_answers(answer: &str) -> String {
+    let trimmed = answer.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if is_framed_ceo_card_answers(trimmed) {
+        return trimmed.to_owned();
+    }
+    format!(
+        "{CEO_CARD_ANSWER_PREFIX} Do not ask_questions or ask_user again. Immediately spawn_task or continue_task with these answers.\n\n{trimmed}"
+    )
+}
+
+/// True when `text` is already a framed CEO card-answer message.
+#[must_use]
+pub fn is_framed_ceo_card_answers(text: &str) -> bool {
+    text.trim_start().starts_with(CEO_CARD_ANSWER_PREFIX)
+}
+
+fn card_answer_already_in_chat(snap: &WakeSnapshot) -> bool {
+    snap.recent_ceo_lines
+        .iter()
+        .any(|line| line.contains(CEO_CARD_ANSWER_PREFIX))
 }
 
 /// Drops optional wake status chatter when the owner muted non-essential messages.
@@ -1070,12 +1102,13 @@ pub fn mask_close_out_secrets(text: &str, secrets: &[String]) -> String {
     out
 }
 
-/// Safety cap only: waiting → one ask_user; silent finished → one Done; skip if already in chat.
+/// Safety cap only: waiting → one ask_user; silent finished → one Done; skip if already in chat;
+/// drop idle LEARNED-only spawn; drop re-ask after a framed card answer.
 ///
-/// Drops `spawn_task` on idle wakes (LEARNED must not invent goals). A finished wake may keep
-/// `spawn_task` and defer Done for a second hire; the host re-runs this cap after apply when
-/// that hire never started live work (see orchestrator second pass). Outcome text is never
-/// keyword-classified — recover vs Done is prompt + model.
+/// Recover vs Done *content* stays prompt + model (no outcome keyword classifiers). Injecting
+/// ask/Done when the model stays Silent is a liveness safety — live proof shows finished goals
+/// can otherwise stall open. A finished wake may keep `spawn_task` and defer Done for a second
+/// hire; the host re-runs this cap after apply when that hire never started live work.
 #[must_use]
 pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<WakeAction> {
     // Failed / stuck / waiting block close-out; healthy runners do not.
@@ -1095,11 +1128,13 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
             // While a waiter is already asked, drop any rephrased ask_user too.
             WakeAction::AskUser { text } => {
                 !waiting_ask_already_in_chat(snap)
+                    && !card_answer_already_in_chat(snap)
                     && !recent_ceo_covers(snap, text, CeoCoverKind::Ask)
             }
             WakeAction::AskQuestions { payload } => {
                 let summary = ask_questions_summary(payload);
                 !waiting_ask_already_in_chat(snap)
+                    && !card_answer_already_in_chat(snap)
                     && !recent_ceo_covers(snap, &summary, CeoCoverKind::Ask)
             }
             WakeAction::RequestSecret { name } => {
@@ -1139,6 +1174,7 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
             let question = truncate_brief(question, BRIEF_TAIL_CHARS);
             if !question.is_empty()
                 && !recent_ceo_covers(snap, &question, CeoCoverKind::Ask)
+                && !card_answer_already_in_chat(snap)
             {
                 out.push(WakeAction::AskUser {
                     text: format!("Need your decision for {task_id}: {question}"),

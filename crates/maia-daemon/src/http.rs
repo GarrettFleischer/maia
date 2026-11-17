@@ -3255,7 +3255,9 @@ fn answer_questions_card<R: RouterPort>(
     }
     let parsed: Vec<maia_core::chat_widgets::QuestionAnswer> =
         serde_json::from_value(answers.clone()).map_err(|_| ApiError::InvalidJson)?;
-    let reply_text = maia_core::chat_widgets::format_question_answers_reply("", &parsed);
+    let reply_text = maia_core::manager::frame_ceo_card_answers(
+        &maia_core::chat_widgets::format_question_answers_reply("", &parsed),
+    );
     let updated = mark_widget_answered(&body, Some(answers)).ok_or(ApiError::InvalidJson)?;
     {
         let connection = Connection::open(&actor.database).map_err(|_| ApiError::Store)?;

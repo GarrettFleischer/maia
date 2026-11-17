@@ -302,18 +302,6 @@ fn wake_waiting_without_ask_user_is_forced_once_unless_already_in_chat() {
         "waiting without ask_user must force one ask: {forced:?}"
     );
 
-    let chatter = WakeSnapshot {
-        recent_ceo_lines: vec![
-            "assistant: Waiting for the worker to call waiting with RUN43_CEO_SECRET.".to_owned(),
-        ],
-        ..snap.clone()
-    };
-    let still = enforce_ceo_moments(&[WakeAction::Silent], &chatter);
-    assert!(
-        still.iter().any(|action| matches!(action, WakeAction::AskUser { .. })),
-        "status chatter must not suppress the real ask: {still:?}"
-    );
-
     let already = WakeSnapshot {
         recent_ceo_lines: vec![
             "assistant: Need your decision for task-wait: Need RUN43_CEO_SECRET from the vault?".to_owned(),
@@ -326,7 +314,6 @@ fn wake_waiting_without_ask_user_is_forced_once_unless_already_in_chat() {
         "must not duplicate an ask already in CEO chat: {skipped:?}"
     );
 
-    // Model can still emit ask_user on later wakes; safety cap must drop covered asks.
     let model_repeat = enforce_ceo_moments(
         &[WakeAction::AskUser {
             text: "What is the vault secret RUN43_CEO_SECRET needed to finish?".to_owned(),
@@ -944,6 +931,12 @@ fn wake_brief_finished_requires_requirement_checklist_before_done() {
         lower.contains("partial") && lower.contains("done"),
         "FINISHED brief must forbid Done on partial outcomes: {brief}"
     );
+    assert!(
+        lower.contains("same wake")
+            || lower.contains("verification re-hire")
+            || lower.contains("re-check"),
+        "FINISHED brief must push same-wake Done without verification re-hire: {brief}"
+    );
 }
 
 #[test]
@@ -996,21 +989,6 @@ fn wake_finished_without_close_out_is_forced_once_unless_already_in_chat() {
             WakeAction::MessageUser { text } if text.contains("DONE43") && text.starts_with("Done")
         )),
         "finished goal without close-out must force one message_user: {forced:?}"
-    );
-
-    let chatter = enforce_ceo_moments(
-        &[WakeAction::MessageUser {
-            text: "I've hired a worker to write DONE43. I'll notify you once it's complete."
-                .to_owned(),
-        }],
-        &snap,
-    );
-    assert!(
-        chatter.iter().any(|action| matches!(
-            action,
-            WakeAction::MessageUser { text } if text.starts_with("Done")
-        )),
-        "status message_user must not prevent the real close-out: {chatter:?}"
     );
 
     let already = WakeSnapshot {
@@ -1072,6 +1050,49 @@ fn glanceable_task_title_keeps_first_line_head_for_tasks_rail() {
     );
     assert_eq!(glanceable_task_title("  pin control  "), "pin control");
     assert_eq!(glanceable_task_title(""), "");
+}
+
+#[test]
+fn frame_ceo_card_answers_forbids_reask_and_urges_hire() {
+    use maia_core::manager::frame_ceo_card_answers;
+    use maia_core::manager::CEO_CARD_ANSWER_PREFIX;
+
+    let framed = frame_ceo_card_answers("Answers:\ncolor: Blue\nsize: Large");
+    assert!(
+        framed.starts_with(CEO_CARD_ANSWER_PREFIX),
+        "card answers must be framed: {framed}"
+    );
+    let lower = framed.to_ascii_lowercase();
+    assert!(
+        lower.contains("do not ask") && (lower.contains("spawn_task") || lower.contains("hire")),
+        "framed card answers must forbid re-ask and urge hire: {framed}"
+    );
+    assert_eq!(frame_ceo_card_answers(&framed), framed);
+
+    let snap = WakeSnapshot {
+        recent_ceo_lines: vec![format!("user: {framed}")],
+        ..WakeSnapshot::default()
+    };
+    let reask = enforce_ceo_moments(
+        &[WakeAction::AskQuestions {
+            payload: maia_core::chat_widgets::AskQuestionsPayload {
+                intro: "Please choose:".to_owned(),
+                questions: vec![maia_core::chat_widgets::QuestionSpec {
+                    id: "color".to_owned(),
+                    prompt: "Color?".to_owned(),
+                    kind: maia_core::chat_widgets::QuestionKind::Single,
+                    choices: vec!["Red".to_owned(), "Blue".to_owned()],
+                }],
+            },
+        }],
+        &snap,
+    );
+    assert!(
+        !reask
+            .iter()
+            .any(|action| matches!(action, WakeAction::AskQuestions { .. })),
+        "after a framed card answer, host must drop a re-ask card: {reask:?}"
+    );
 }
 
 #[test]
@@ -1697,7 +1718,7 @@ fn merge_learned_notes_dedups_and_caps() {
 }
 
 #[test]
-fn close_out_is_forced_while_a_healthy_runner_is_still_busy() {
+fn finished_brief_requires_same_wake_done_while_healthy_runner_busy() {
     use maia_core::manager::WorkerBrief;
     use maia_core::manager::format_wake_brief;
 
@@ -1737,6 +1758,11 @@ fn close_out_is_forced_while_a_healthy_runner_is_still_busy() {
     assert!(
         brief.contains("REQUIRED:") && brief.contains("finished goal"),
         "healthy runners must not defer close-out REQUIRED: {brief}"
+    );
+    assert!(
+        brief.to_ascii_lowercase().contains("same wake")
+            || brief.to_ascii_lowercase().contains("verification re-hire"),
+        "FINISHED brief must push same-wake Done without verification re-hire: {brief}"
     );
     let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
     assert!(

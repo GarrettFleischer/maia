@@ -5588,7 +5588,6 @@ fn manager_wake_forces_done_when_finished_spawn_starts_no_work() {
         harness.host().phase(&task),
         Some(TaskPhase::Completed { .. })
     ));
-    // Model claims it will hire again but returns spawn with no usable guidance payload.
     harness.router.push_tool("spawn_task", r#"{"guidance":""}"#);
     let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
     assert!(
@@ -5600,9 +5599,7 @@ fn manager_wake_forces_done_when_finished_spawn_starts_no_work() {
         "SELECT body FROM router_messages ORDER BY ordinal",
     );
     assert!(
-        bodies
-            .iter()
-            .any(|body| body.contains("Done")),
+        bodies.iter().any(|body| body.contains("Done")),
         "forced close-out must land in CEO chat: {bodies:?}"
     );
 }
