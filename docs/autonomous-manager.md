@@ -4,7 +4,7 @@ Maia is a smart manager employee. Given a goal, it hires workers, keeps them mov
 
 ## Prompt + tools
 
-The router system prompt (`ROUTE_CONTROL_CONTRACT` in `crates/maia-daemon/src/orchestrator.rs`) describes the role: own the goal end to end, check workers on every wake, diagnose failures, retry or re-plan, replace or hire workers, make low-stakes calls, close finished goals, and use `ask_user` only for real CEO decisions (credentials, money, irreversible/external actions, preferences) as one clear question. Use `message_user` only when something is genuinely useful.
+The router system prompt (`ROUTE_CONTROL_CONTRACT` in `crates/maia-daemon/src/orchestrator.rs`) describes the role: own the goal end to end, check workers on every wake, diagnose failures, retry or re-plan, replace or hire workers, make low-stakes calls, close finished goals, and use `ask_user` only for real CEO decisions (credentials, money, irreversible/external actions, preferences). When two or more named choices belong together (or the CEO asks for a multi-question card), use one `ask_questions` card — not ask_user prose. When the CEO mandates a draft/WRONG first hire, spawn that draft first; do not fold it into one final-correct worker. Use `message_user` only when something is genuinely useful. Owner-turn `spawn_task` stays silent (no “Dispatched as…” chat).
 
 ### Tools
 
