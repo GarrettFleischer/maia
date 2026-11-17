@@ -1463,24 +1463,6 @@ textarea {
   line-height: 32px;
 }
 
-.maia-byte-stack {
-  display: flex;
-  height: 8px;
-  overflow: hidden;
-  border-radius: 4px;
-  background: var(--border);
-}
-
-.maia-byte-stack i {
-  display: block;
-  min-width: 2px;
-  background: var(--accent);
-}
-
-.maia-byte-stack i:nth-child(2n) {
-  background: color-mix(in srgb, var(--accent) 45%, var(--muted));
-}
-
 .maia-inspector-label {
   color: var(--muted);
   font-size: 12px;
@@ -2561,6 +2543,14 @@ details:not([open]) > .maia-task-tree {
 
 .maia-brain-entity {
   fill: #7d6b9d;
+}
+
+.maia-swatch--entity {
+  background: #7d6b9d;
+}
+
+.maia-swatch--claim {
+  background: #2f6f62;
 }
 
 .maia-brain-claim {

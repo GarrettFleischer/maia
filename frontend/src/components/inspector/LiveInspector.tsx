@@ -98,11 +98,6 @@ function LiveCache({
           <span>reused from cache</span>
         </p>
       )}
-      <div className="maia-byte-stack" aria-hidden="true">
-        {turn.slots.map((slot) => (
-          <i key={slot.ordinal} style={{ flexGrow: Math.max(slot.bytes, 1) }} />
-        ))}
-      </div>
       <details>
         <summary className="maia-inspector-label">What Maia read</summary>
         <ol className="maia-slots">

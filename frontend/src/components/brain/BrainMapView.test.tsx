@@ -240,7 +240,7 @@ describe('BrainMapView', () => {
     expect(screen.queryByTestId('memory-behind')).not.toBeInTheDocument()
   })
 
-  it('searches with recall arms', async () => {
+  it('searches without showing internal match labels', async () => {
     const user = userEvent.setup()
     const client = clientFor(sampleMap(), [
       { id: 'episode-1', kind: 'episode', sentence: 'I live in Canby', arms: ['keyword'] },
@@ -256,8 +256,8 @@ describe('BrainMapView', () => {
     await user.click(searchBtn)
     const results = await screen.findByRole('list', { name: 'Search results' })
     expect(within(results).getByText('The user lives in Canby, Oregon.')).toBeVisible()
-    expect(within(results).getAllByText('keyword').length).toBeGreaterThan(0)
-    expect(within(results).getByText('graph')).toBeVisible()
+    expect(within(results).queryByText('keyword')).toBeNull()
+    expect(within(results).queryByText('graph')).toBeNull()
     const items = within(results).getAllByRole('listitem')
     expect(items[0]).toHaveTextContent('The user lives in Canby, Oregon.')
     expect(items[0]).toHaveTextContent('Fact')

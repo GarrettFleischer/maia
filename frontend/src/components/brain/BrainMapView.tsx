@@ -195,6 +195,18 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
             }
           }}
         />
+        <button
+          type="button"
+          className="maia-icon-btn"
+          aria-label="Search"
+          title="Search"
+          onClick={() => {
+            setView('search')
+            runSearch()
+          }}
+        >
+          <span className="maia-find-icon" aria-hidden="true" />
+        </button>
       </div>
       ) : null}
       {behind ? (
@@ -301,7 +313,6 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
       {view === 'search' ? (
         <SearchResults
           hits={hits}
-          onSearch={runSearch}
           onOpenFact={(id) => {
             const node = facts(map).find((item) => item.id === id)
             if (!node) return
@@ -667,21 +678,16 @@ function TagEditor({
 
 function SearchResults({
   hits,
-  onSearch,
   onOpenFact,
   onViewSource,
 }: {
   hits: BrainSearchHit[] | null
-  onSearch: () => void
   onOpenFact: (id: string) => void
   onViewSource: (id: string) => void
 }) {
   return (
     <div>
-      <button type="button" className="maia-icon-btn" aria-label="Search" title="Search" onClick={onSearch}>
-        <span className="maia-find-icon" aria-hidden="true" />
-      </button>
-      {hits === null ? <p>Search uses the same recall Maia uses.</p> : null}
+      {hits === null ? <p className="maia-muted">Type a word and press Enter.</p> : null}
       {hits?.length === 0 ? <p>Nothing matched.</p> : null}
       <ul aria-label="Search results">
         {hits
@@ -691,11 +697,6 @@ function SearchResults({
                 <li key={`${hit.kind}-${hit.id}`}>
                   <p>{hit.sentence || hit.id}</p>
                   <span className="maia-chip">{searchKindLabel(hit.kind)}</span>
-                  {hit.arms.map((arm) => (
-                    <span key={arm} className="maia-chip">
-                      {arm}
-                    </span>
-                  ))}
                   {action === 'open_fact' ? (
                     <button
                       type="button"
@@ -863,8 +864,8 @@ function Graph({
   return (
     <div className="maia-brain-graph">
       <p className="maia-muted">
-        <span className="maia-swatch maia-swatch--entity">Entity</span>
-        <span className="maia-swatch maia-swatch--claim">Claim</span>
+        <span className="maia-swatch maia-swatch--entity">Topic</span>
+        <span className="maia-swatch maia-swatch--claim">Memory</span>
       </p>
       <svg
         className="maia-brain-svg"
