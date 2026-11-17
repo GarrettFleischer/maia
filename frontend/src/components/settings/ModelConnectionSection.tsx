@@ -139,7 +139,7 @@ export function ModelConnectionSection({
       <header>
         <h2 id="model-connection-heading">Model connection</h2>
         <p className="maia-field-help">
-          The OpenAI-compatible endpoint the router uses. Saving changes future model calls only.
+          The AI service Maia thinks with. Changes apply to new replies.
         </p>
       </header>
       <div className="maia-field">
@@ -150,7 +150,7 @@ export function ModelConnectionSection({
           disabled={!canEdit || busy}
           onChange={(event) => setBaseUrl(event.target.value)}
         />
-        <p className="maia-field-help">https, or a loopback address for a local server.</p>
+        <p className="maia-field-help">Use https, or a local address for a model on this computer.</p>
       </div>
       <div className="maia-field">
         <label htmlFor="model-api-key">API key</label>
@@ -170,7 +170,7 @@ export function ModelConnectionSection({
             </button>
           ) : null}
         </div>
-        <p className="maia-field-help">Write-only. Stored as the router-key secret. Maia never shows it again.</p>
+        <p className="maia-field-help">Kept secret. Maia never shows it again after saving.</p>
       </div>
       <div className="maia-field">
         <label htmlFor="model-id">Model</label>
@@ -196,7 +196,7 @@ export function ModelConnectionSection({
             onChange={(event) => setModel(event.target.value)}
           />
         )}
-        <p className="maia-field-help">Listed from this endpoint after Test connection.</p>
+        <p className="maia-field-help">Pick from the list after Test connection.</p>
       </div>
       <div className="maia-field">
         <p id="model-reasoning-label">Reasoning</p>
@@ -213,7 +213,7 @@ export function ModelConnectionSection({
             </button>
           ))}
         </div>
-        <p className="maia-field-help">Saved with this connection for later model calls.</p>
+        <p className="maia-field-help">Higher is more careful but slower.</p>
       </div>
       {canEdit ? (
         <div className="maia-set-acts">

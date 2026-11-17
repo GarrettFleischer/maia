@@ -122,22 +122,22 @@ describe('countActivity', () => {
   })
 
   it('does not call a missing duration work time', () => {
-    expect(taskCardMeta('waiting_for_user', 0, 0, 1)).toBe('Waiting · 0/1 criteria')
-    expect(taskCardMeta('waiting_for_user', 0, 0, 1)).not.toContain('0 ms')
-    expect(taskCardMeta('queued', 0, 0, 1)).toBe('Not started · 0/1 criteria')
-    expect(taskCardMeta('running', 0, 0, 1)).toBe('Working · 0/1 criteria')
-    expect(taskCardMeta('completed', 0, 1, 1)).toBe('1/1 criteria')
-    expect(taskCardMeta('completed', 0, 1, 1)).not.toContain('ms')
-    expect(taskCardMeta('running', 90_000, 0, 1)).toBe('1m 30s · 0/1 criteria')
-    expect(taskCardMeta('waiting_for_user', 2 * 86_400_000, 0, 1)).toBe('2d · 0/1 criteria')
-    expect(taskCardMeta('cancelled', 0, 0, 0)).toBe('')
+    expect(taskCardMeta('waiting_for_user', 0)).toBe('Waiting')
+    expect(taskCardMeta('waiting_for_user', 0)).not.toContain('0 ms')
+    expect(taskCardMeta('queued', 0)).toBe('Not started')
+    expect(taskCardMeta('running', 0)).toBe('Working')
+    expect(taskCardMeta('completed', 0)).toBe('')
+    expect(taskCardMeta('completed', 0)).not.toContain('ms')
+    expect(taskCardMeta('running', 90_000)).toBe('1m 30s')
+    expect(taskCardMeta('waiting_for_user', 2 * 86_400_000)).toBe('2d')
+    expect(taskCardMeta('cancelled', 0)).toBe('')
   })
 
   it('does not treat wall-clock-since-create as work time on finished tasks', () => {
-    expect(taskCardMeta('completed', 9 * 86_400_000, 1, 1)).toBe('1/1 criteria')
-    expect(taskCardMeta('completed', 9 * 86_400_000, 1, 1)).not.toContain('d')
-    expect(taskCardMeta('cancelled', 90_000, 0, 1)).toBe('0/1 criteria')
-    expect(taskCardMeta('abandoned', 3_600_000, 0, 1)).toBe('0/1 criteria')
+    expect(taskCardMeta('completed', 9 * 86_400_000)).toBe('')
+    expect(taskCardMeta('completed', 9 * 86_400_000)).not.toContain('d')
+    expect(taskCardMeta('cancelled', 90_000)).toBe('')
+    expect(taskCardMeta('abandoned', 3_600_000)).toBe('')
   })
 
   it('formats long waits as days and hours, not only minutes', () => {

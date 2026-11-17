@@ -67,7 +67,7 @@ function TaskBranch({
 }) {
   const expandedRow = expanded.has(row.task_id)
   const selected = openTaskId === row.task_id
-  const meta = taskCardMeta(row.phase, row.elapsed_ms, row.criteria_done, row.criteria_total)
+  const meta = taskCardMeta(row.phase, row.elapsed_ms)
   const pinLabel = row.section === 'pinned' ? 'Unpin' : 'Pin'
   const nextPin: PinMark = row.section === 'pinned' ? 'unpinned' : 'pinned'
   return (

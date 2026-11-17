@@ -67,6 +67,8 @@ export function RouterConversation({
   botId = 'maia',
   onSubmitQuestionAnswers,
   onProvideSecret,
+  findOpen: findOpenProp,
+  onFindOpenChange,
 }: {
   messages: readonly RouterMessage[]
   transcriptState: TranscriptState
@@ -97,11 +99,16 @@ export function RouterConversation({
   botId?: string
   onSubmitQuestionAnswers?: (messageId: string, answers: ChatQuestionAnswer[]) => void | Promise<void>
   onProvideSecret?: (messageId: string, name: string, value: string) => void | Promise<void>
+  /** When the parent owns Find, it also shows the closed Find button in its own row. */
+  findOpen?: boolean
+  onFindOpenChange?: (open: boolean) => void
 }) {
   const [rejection, setRejection] = useState<string | null>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [composerKey, setComposerKey] = useState(0)
-  const [findOpen, setFindOpen] = useState(false)
+  const [ownFindOpen, setOwnFindOpen] = useState(false)
+  const findOpen = findOpenProp ?? ownFindOpen
+  const setFindOpen = onFindOpenChange ?? setOwnFindOpen
   const [findQuery, setFindQuery] = useState('')
   const [findActive, setFindActive] = useState(0)
   const fieldRef = useRef<HTMLTextAreaElement>(null)
@@ -295,6 +302,7 @@ export function RouterConversation({
           </span>
         ) : null}
       </div>
+      {findOpen || !onFindOpenChange ? (
       <div className={findOpen ? 'maia-transcript-find maia-transcript-find--open' : 'maia-transcript-find'}>
         {findOpen ? (
           <>
@@ -372,6 +380,7 @@ export function RouterConversation({
           </button>
         )}
       </div>
+      ) : null}
       <div
         ref={transcriptRef}
         className="maia-transcript"

@@ -85,10 +85,10 @@ describe('TaskRail', () => {
       />,
     )
     const waiting = screen.getByRole('region', { name: 'Needs you' })
-    expect(waiting).toHaveTextContent('Waiting · 0/1 criteria')
+    expect(waiting).toHaveTextContent('Waiting')
     expect(waiting).not.toHaveTextContent('0 ms')
     const done = screen.getByRole('region', { name: 'Completed' })
-    expect(done).toHaveTextContent('1/1 criteria')
+    expect(done).not.toHaveTextContent('criteria')
     expect(done).not.toHaveTextContent('0 ms')
   })
 
@@ -98,7 +98,7 @@ describe('TaskRail', () => {
     render(<TaskRail rows={rows} onOpen={onOpen} />)
     expect(screen.getByRole('region', { name: 'Completed' })).toHaveTextContent('Pin control')
     expect(screen.getByRole('region', { name: 'Completed' })).not.toHaveTextContent('1s')
-    expect(screen.getByRole('region', { name: 'Completed' })).toHaveTextContent('1/1')
+    expect(screen.getByRole('region', { name: 'Completed' })).not.toHaveTextContent('1/1')
     expect(screen.queryByRole('listitem', { name: 'Write the control' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Expand Pin control' }))
     expect(screen.getByText('Write the control')).toBeInTheDocument()

@@ -17,10 +17,12 @@ export function TaskStrip({
   rows,
   onOpen,
   onPin,
+  onFind,
 }: {
   rows: readonly SidebarRow[]
   onOpen: (taskId: string) => void
   onPin: (taskId: string, mark: PinMark) => void
+  onFind?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const needs = rows.filter((row) => row.section === 'needs_you')
@@ -49,6 +51,17 @@ export function TaskStrip({
               </button>
             ))
         : null}
+      {onFind ? (
+        <button
+          type="button"
+          className="maia-icon-btn maia-task-strip-find"
+          aria-label="Find in chat"
+          title="Find in chat"
+          onClick={onFind}
+        >
+          <span className="maia-find-icon" aria-hidden="true" />
+        </button>
+      ) : null}
       {open ? <TaskRail rows={rows} onOpen={onOpen} onPin={onPin} /> : null}
     </section>
   )
@@ -87,6 +100,8 @@ export function ConversationPane({
 }) {
   const { state, dispatch } = useMaiaState()
   const [approvalOpen, setApprovalOpen] = useState(false)
+  const [findOpen, setFindOpen] = useState(false)
+  const stripShown = tasks.length > 0 && onOpenTask !== undefined
   const pending = dataSource === 'fixture' ? state.pending_approval : null
   const liveApproval =
     dataSource === 'live' ? openLiveApproval(router.approvals, Date.now() / 1000) : null
@@ -154,9 +169,10 @@ export function ConversationPane({
               {headerAction}
             </header>
           )}
-          {tasks.length > 0 && onOpenTask ? (
+          {stripShown ? (
             <TaskStrip
               rows={tasks}
+              onFind={findOpen ? undefined : () => setFindOpen(true)}
               onOpen={onOpenTask}
               onPin={(taskId, mark) => void router.pin(taskId, mark)}
             />
@@ -213,6 +229,8 @@ export function ConversationPane({
             botId={botId}
             onSubmitQuestionAnswers={router.submitQuestionAnswers}
             onProvideSecret={router.provideSecret}
+            findOpen={stripShown ? findOpen : undefined}
+            onFindOpenChange={stripShown ? setFindOpen : undefined}
             accessory={
               phoneStop ? (
                 <div className="maia-phone-stop" data-testid="phone-stop-bar">

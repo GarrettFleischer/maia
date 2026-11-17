@@ -198,8 +198,6 @@ const UNMEASURED_CARD_STATUS: Partial<Record<TaskPhaseName, string>> = {
 export function taskCardMeta(
   phase: TaskPhaseName,
   elapsedMs: number,
-  criteriaDone: number,
-  criteriaTotal: number,
 ): string {
   const parts: string[] = []
   // Terminal cards keep growing "elapsed" from created_at→now; that is age, not work time.
@@ -209,7 +207,6 @@ export function taskCardMeta(
     const status = UNMEASURED_CARD_STATUS[phase]
     if (status) parts.push(status)
   }
-  if (criteriaTotal > 0) parts.push(`${criteriaDone}/${criteriaTotal} criteria`)
   return parts.join(' · ')
 }
 

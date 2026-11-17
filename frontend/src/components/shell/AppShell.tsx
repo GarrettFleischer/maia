@@ -566,8 +566,8 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
                 {viewport === 'phone' ? null : <h1>Settings</h1>}
                 <p>
                   {viewport === 'phone'
-                    ? 'This computer · Model connection and MCP transports are read-only here'
-                    : 'This computer · Model connection and MCP servers are administered here only'}
+                    ? 'View only · change the model and tools on the computer'
+                    : 'This computer · the model and tools can only be changed here'}
                 </p>
               </div>
               {inspectToggle}
