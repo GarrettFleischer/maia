@@ -1446,6 +1446,24 @@ fn wake_interval_allows(
     now.saturating_sub(last_wake_at) >= interval_secs
 }
 
+/// Decide whether a pending attention nudge may run now, and whether it must stay pending.
+///
+/// Returns `(run_wake, keep_nudge)`. Debounced nudges must keep the flag so Pass→Done
+/// does not fall back to `interval_secs` (floor 30s).
+#[must_use]
+fn decide_attention_nudge(
+    nudge_pending: bool,
+    interval_secs: u64,
+    last_wake_at: u64,
+    now: u64,
+) -> (bool, bool) {
+    let allowed = wake_interval_allows(interval_secs, last_wake_at, now, nudge_pending);
+    if nudge_pending && !allowed {
+        return (false, true);
+    }
+    (allowed, false)
+}
+
 fn restore_pending_inbox<R: RouterPort>(actor: &Actor<R>) -> VecDeque<QueuedChat> {
     let Ok(pending) = actor.host.store().pending_submissions() else {
         return VecDeque::new();
@@ -1521,15 +1539,18 @@ fn run_scheduled_wake<R: RouterPort>(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let attention_nudge = actor.host.take_wake_nudge();
-    if !wake_interval_allows(
+    // Peek then decide: never burn a same-second debounced nudge (would wait ≥30s).
+    let nudge_pending = actor.host.wake_nudge_pending();
+    let (run_wake, keep_nudge) = decide_attention_nudge(
+        nudge_pending,
         wake_state.interval_secs,
         wake_state.last_wake_at,
         now,
-        attention_nudge,
-    ) {
+    );
+    if keep_nudge || !run_wake {
         return;
     }
+    let _ = actor.host.take_wake_nudge();
     // UI selection must not decide which Super Agent wakes — run_manager_wake
     // iterates every bot with open work and binds CEO posts via turn_bot.
     actor.host.configure_manager_wake_policy(
@@ -5579,6 +5600,28 @@ mod scheduled_wake_tests {
         assert!(
             wake_interval_allows(0, 100, 101, false),
             "interval 0 means wakes are always allowed"
+        );
+    }
+
+    #[test]
+    fn attention_nudge_survives_same_second_debounce() {
+        use super::decide_attention_nudge;
+        // Same-second debounce must not burn the one-shot nudge — otherwise Pass→Done
+        // waits the full interval_secs floor (30s+).
+        assert_eq!(
+            decide_attention_nudge(true, 300, 100, 100),
+            (false, true),
+            "debounced nudge must stay pending for the next check"
+        );
+        assert_eq!(
+            decide_attention_nudge(true, 300, 100, 101),
+            (true, false),
+            "due nudge must run and clear"
+        );
+        assert_eq!(
+            decide_attention_nudge(false, 300, 100, 150),
+            (false, false),
+            "no nudge + interval not elapsed → idle"
         );
     }
 }

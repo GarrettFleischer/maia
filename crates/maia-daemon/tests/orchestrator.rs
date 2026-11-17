@@ -493,18 +493,6 @@ fn proposal(
     }
 }
 
-fn continue_parent() -> RouteProposal {
-    proposal(
-        ProposedRouteDecision::Continue {
-            target: RouteTarget::Parent(TaskId("task-1".to_owned())),
-        },
-        ProposalShape::Single,
-        900,
-        200,
-        &["task-1"],
-    )
-}
-
 fn create_task(confidence_value: u16, margin: u16, considered: &[&str]) -> RouteProposal {
     proposal(
         ProposedRouteDecision::CreateTask,
@@ -3172,15 +3160,8 @@ fn a_router_turn_stores_the_sent_slots_and_an_unreported_cache() {
             &harness.database,
             "SELECT COUNT(*) FROM episodes WHERE thread_id = 'router'"
         ),
-        1,
-        "completed chat turn must enqueue exactly one episode"
-    );
-    assert_eq!(
-        scalar(
-            &harness.database,
-            "SELECT body FROM episodes WHERE thread_id = 'router'"
-        ),
-        "Owner: Hello\nMaia: Hello from Maia."
+        0,
+        "prompt-only memory must not auto-enqueue chat episodes"
     );
     harness.host.take();
     assert_eq!(
@@ -3265,14 +3246,18 @@ fn a_stored_claim_is_packed_into_the_router_request() {
             .unwrap_or("")
             .contains("Obsidian opens the vault.")
     );
-    assert_eq!(count(&harness.database, "SELECT COUNT(*) FROM claims"), 1);
+    // Seeded claim plus optional session-summary mirror (run75).
+    assert!(
+        count(&harness.database, "SELECT COUNT(*) FROM claims") >= 1,
+        "seeded Obsidian claim must remain"
+    );
     let router_episodes = count(
         &harness.database,
         "SELECT COUNT(*) FROM episodes WHERE thread_id = 'router'",
     );
     assert_eq!(
-        router_episodes, 1,
-        "completed chat turn must enqueue exactly one episode after the reply is stored"
+        router_episodes, 0,
+        "prompt-only memory must not auto-enqueue chat episodes"
     );
 }
 
@@ -3300,56 +3285,6 @@ fn a_running_task_handoff_does_not_enqueue_extraction() {
         ),
         0,
         "nothing must be extracted from a running task's intermediate steps"
-    );
-}
-
-#[test]
-fn a_finished_task_enqueues_one_completion_episode() {
-    let mut harness = Harness::open("extract-on-task-finish", prompt_supply());
-    harness.router.push_tool("spawn_task", "{}");
-    let outcome = wait(
-        harness
-            .host()
-            .handle_user_message("For slice2 task finish I prefer oat milk."),
-    )
-    .expect("spawn");
-    let task = outcome.task.expect("task");
-    assert_eq!(
-        count(
-            &harness.database,
-            "SELECT COUNT(*) FROM episodes WHERE thread_id = 'router'"
-        ),
-        0,
-        "spawn must not extract while the task is still open"
-    );
-    harness
-        .host()
-        .tools()
-        .push_parent(ScriptedCall::Completion {
-            summary: "The owner prefers oat milk for slice2 task finish.".to_owned(),
-            evidence: CompletionEvidence::Stored,
-        });
-    let done = harness.host().step_parent(&task).expect("complete");
-    assert!(
-        matches!(done.phase, TaskPhase::Completed { .. }),
-        "task should finish: {:?}",
-        done.phase
-    );
-    let episodes = count(
-        &harness.database,
-        "SELECT COUNT(*) FROM episodes WHERE thread_id = 'router'",
-    );
-    assert_eq!(
-        episodes, 1,
-        "finished task must enqueue exactly one completion episode"
-    );
-    let body = scalar(
-        &harness.database,
-        "SELECT body FROM episodes WHERE thread_id = 'router'",
-    );
-    assert!(
-        body.contains("oat milk"),
-        "completion episode must cover the owner fact: {body}"
     );
 }
 
@@ -5321,6 +5256,54 @@ fn worker_attention_phases_set_wake_nudge() {
 }
 
 #[test]
+fn restore_renudges_when_finished_goals_still_need_close_out() {
+    // In-memory wake_nudge dies with the process. Boot must re-arm it when completed
+    // unopened work is still on disk, or Pass→Done waits the full interval after restart.
+    let mut harness = Harness::open_model("wake-nudge-restore", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote RESTORE82."));
+    let _ = wait(harness.host().handle_user_message("Write restore file")).expect("run");
+    let snap = harness.host().wake_snapshot();
+    assert!(
+        snap.completed_unopened >= 1,
+        "fixture needs an unopened finished goal: {snap:?}"
+    );
+    harness.host.take();
+    let owner_store = SqliteOwner::open(OwnerOpen {
+        path: harness.database.clone(),
+        now: NOW,
+        normal_capacity: 8,
+        panic_capacity: 2,
+    })
+    .expect("reopen");
+    let snapshot = owner_store.runtime_snapshot().expect("snapshot");
+    let mut host = Orchestrator::restore(
+        ScriptedRouter::create(),
+        owner_store,
+        ScriptedToolHost::create(),
+        OrchestratorConfig {
+            policy: accepted_routing_policy(),
+            ids: long_supply(),
+            turn: RouterTurn {
+                model: "fixture-model".to_owned(),
+                reasoning: ReasoningEffort::Low,
+                prefix_hash: PrefixHash::new("fixture-prefix"),
+            },
+            profile: SecurityProfile::Protected,
+            parent_work: ParentWork::ModelTurn,
+        },
+        snapshot,
+    )
+    .expect("restore");
+    assert!(
+        host.take_wake_nudge(),
+        "restore with unfinished close-out must re-nudge so Done is not delayed by interval_secs"
+    );
+}
+
+#[test]
 fn worker_silent_sets_wake_nudge() {
     let mut harness = Harness::open_model("wake-nudge-silent", long_supply());
     harness.router.push_tool("spawn_task", "{}");
@@ -5627,6 +5610,7 @@ fn manager_wake_status_chatter_does_not_advance_finished_fingerprint() {
         "message_user",
         r#"{"message":"Hired a worker; still working on CHATTER60 and will notify you."}"#,
     );
+    let _ = harness.host().take_wake_nudge();
     let (fp, messaged, _) = harness.host().run_manager_wake(previous, &[]);
     assert!(messaged, "status chatter may post with the sole message id");
     assert_eq!(
@@ -5637,6 +5621,10 @@ fn manager_wake_status_chatter_does_not_advance_finished_fingerprint() {
     assert!(
         snap.completed_unopened >= 1,
         "finished goal must stay unopened when Done could not post: {snap:?}"
+    );
+    assert!(
+        harness.host().take_wake_nudge(),
+        "unfinished finished-goal wake must re-nudge so Pass→Done does not wait the full interval"
     );
 }
 
@@ -5660,6 +5648,7 @@ fn manager_wake_keeps_fingerprint_when_close_out_message_fails_to_post() {
     // Leave request ids for the wake model call, but no message ids for note_router.
     harness.host().drain_router_message_ids();
     harness.router.push_raw("{}".to_owned());
+    let _ = harness.host().take_wake_nudge();
     let (fp, messaged, _) = harness.host().run_manager_wake(previous, &[]);
     assert!(
         !messaged,
@@ -5673,6 +5662,10 @@ fn manager_wake_keeps_fingerprint_when_close_out_message_fails_to_post() {
     assert!(
         snap.completed_unopened >= 1,
         "finished goal must stay unopened for the next wake: {snap:?}"
+    );
+    assert!(
+        harness.host().take_wake_nudge(),
+        "failed close-out post must re-nudge so the next check does not burn interval_secs"
     );
 }
 

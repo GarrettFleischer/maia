@@ -3826,7 +3826,13 @@ impl<R: Router> Orchestrator<R> {
         snapshot: RuntimeSnapshot,
     ) -> Result<Self, OrchestratorError> {
         let runtime = reconstruct_runtime_state(&snapshot)?;
-        Ok(Self::from_runtime(router, store, tools, config, runtime))
+        let mut host = Self::from_runtime(router, store, tools, config, runtime);
+        // wake_nudge is process-local; re-arm when durable attention remains so a
+        // mid-goal restart does not wait interval_secs (floor 30s) for close-out.
+        if !host.bots_with_open_wake_work().is_empty() {
+            host.request_wake_nudge();
+        }
+        Ok(host)
     }
 
     fn from_runtime(
@@ -3908,6 +3914,12 @@ impl<R: Router> Orchestrator<R> {
     /// True when a parent just entered failed / waiting / completed (take clears it).
     pub fn take_wake_nudge(&mut self) -> bool {
         std::mem::take(&mut self.wake_nudge)
+    }
+
+    /// Peek without clearing — scheduled wake must not burn a debounced nudge.
+    #[must_use]
+    pub fn wake_nudge_pending(&self) -> bool {
+        self.wake_nudge
     }
 
     /// Empties unused router message ids so a later `note_router` fails (test harnesses).
@@ -4474,6 +4486,14 @@ impl<R: Router> Orchestrator<R> {
             | maia_core::manager::WakePlan::SkipModel
             | maia_core::manager::WakePlan::NotDue
             | maia_core::manager::WakePlan::CapReached => {
+                // Cap/Skip with unfinished attention must not burn interval_secs.
+                if snap.completed_unopened > 0
+                    || !snap.failed_task_ids.is_empty()
+                    || !snap.stuck_task_ids.is_empty()
+                    || !snap.waiting.is_empty()
+                {
+                    self.request_wake_nudge();
+                }
                 return (fingerprint, false, Vec::new());
             }
             maia_core::manager::WakePlan::RunModel { .. } => {}
@@ -4521,10 +4541,13 @@ impl<R: Router> Orchestrator<R> {
         // Keep the fingerprint until attention is actually handled. message_user alone
         // does not clear failed/waiting work. Status chatter must not count as close-out —
         // only a real close (completed_unopened dropped) or a live runner advances.
+        // Re-nudge whenever attention remains so the next check does not wait interval_secs.
         if failed_or_stuck && !recovered_or_cancelled && !asked {
+            self.request_wake_nudge();
             return (previous_fingerprint.to_owned(), messaged, new_learned);
         }
         if !snap.waiting.is_empty() && !asked && !recovered_or_cancelled {
+            self.request_wake_nudge();
             return (previous_fingerprint.to_owned(), messaged, new_learned);
         }
         let after = self.wake_snapshot_for(&self.turn_bot);
@@ -4534,6 +4557,7 @@ impl<R: Router> Orchestrator<R> {
             && after.completed_unopened > 0
             && after.running_count == 0
         {
+            self.request_wake_nudge();
             return (previous_fingerprint.to_owned(), messaged, new_learned);
         }
         (fingerprint, messaged, new_learned)
@@ -5842,7 +5866,7 @@ impl<R: Router> Orchestrator<R> {
     fn finish_owner_turn(
         &mut self,
         message: MessageId,
-        owner_text: &str,
+        _owner_text: &str,
         sentence: String,
         applied: Option<AppliedRoute>,
         thinking: Option<String>,
@@ -5899,12 +5923,10 @@ impl<R: Router> Orchestrator<R> {
         }
         if let Err(error) = self.persist_router_turn(
             &message,
-            owner_text,
             thinking.as_deref(),
             measured,
             &usage,
             &shown,
-            task.as_ref(),
         ) {
             return self.admitted_failure(message, error);
         }
@@ -6352,15 +6374,12 @@ impl<R: Router> Orchestrator<R> {
     fn persist_router_turn(
         &self,
         message: &MessageId,
-        _owner_text: &str,
         thinking: Option<&str>,
         measured: &MeasuredPrompt,
         usage: &RouterUsage,
         shown: &ShownRouterTurn,
-        _task: Option<&TaskId>,
     ) -> Result<(), OrchestratorError> {
         // Prompt-driven memory only: agents call remember / update_memory / retire_memory.
-        // Do not enqueue chat turns for automatic extraction.
         let slots = prompt_slots(measured, cache_residence(usage));
         let slots_json = serde_json::to_string(&slots).map_err(|_| snapshot_error())?;
         let usage_json = usage_json(usage).map_err(|_| snapshot_error())?;
