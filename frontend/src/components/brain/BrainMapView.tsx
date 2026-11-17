@@ -180,6 +180,7 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           </button>
         ))}
       </div>
+      {view === 'memory' || view === 'search' ? (
       <div className="maia-brain-toolbar">
         <input
           type="search"
@@ -195,6 +196,7 @@ export function BrainMapView({ client }: { client: BrainMapClient }) {
           }}
         />
       </div>
+      ) : null}
       {behind ? (
         <div className="maia-brain-behind" data-testid="memory-behind">
           <p role="status">{behind}</p>
@@ -677,7 +679,7 @@ function SearchResults({
   return (
     <div>
       <button type="button" className="maia-icon-btn" aria-label="Search" title="Search" onClick={onSearch}>
-        <span className="maia-inspect-icon" aria-hidden="true" />
+        <span className="maia-find-icon" aria-hidden="true" />
       </button>
       {hits === null ? <p>Search uses the same recall Maia uses.</p> : null}
       {hits?.length === 0 ? <p>Nothing matched.</p> : null}
@@ -938,7 +940,7 @@ function SkillsList({
 }) {
   if (!catalog) return <p role="status">Loading skills.</p>
   if (catalog.skills.length === 0) {
-    return <p>No skills yet. Workers save reusable procedures with save_skill.</p>
+    return <p>No skills yet. Maia saves reusable how-tos here as she learns them.</p>
   }
   return (
     <div>

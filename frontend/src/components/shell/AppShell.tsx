@@ -391,7 +391,7 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
 
   const phoneStop = viewport === 'phone' && !phoneList ? phoneStopLabel(activity) : null
   const inspectToggle =
-    viewport === 'tablet' ? (
+    viewport !== 'phone' ? (
       <InspectToggle open={inspectorOpen} onToggle={() => setInspectorOpen((open) => !open)} />
     ) : null
   const showDesktopRail = viewport !== 'phone'
@@ -403,7 +403,9 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
       ? 'maia-shell maia-shell--phone'
       : viewport === 'tablet'
         ? 'maia-shell maia-shell--tablet'
-        : 'maia-shell'
+        : inspectorOpen
+          ? 'maia-shell'
+          : 'maia-shell maia-shell--inspector-closed'
 
   return (
     <div className={shellClass} data-viewport={viewport} data-testid="app-shell">
@@ -465,16 +467,18 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
               <span>{`One conversation · ${chatActivityLabel(activity)}`}</span>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="maia-icon-btn maia-inspect-quiet"
-            aria-label="Inspect"
-            title="Inspect"
-            aria-pressed={inspectorOpen}
-            onClick={() => setInspectorOpen((open) => !open)}
-          >
-            <span className="maia-inspect-icon" aria-hidden="true" />
-          </button>
+          {phoneChat && centerView === 'conversation' ? (
+            <button
+              type="button"
+              className="maia-icon-btn maia-inspect-quiet"
+              aria-label="Inspect"
+              title="Inspect"
+              aria-pressed={inspectorOpen}
+              onClick={() => setInspectorOpen((open) => !open)}
+            >
+              <span className="maia-inspect-icon" aria-hidden="true" />
+            </button>
+          ) : null}
         </header>
       )}
       <main className="maia-main" id="main-content">
@@ -631,13 +635,15 @@ export function AppShell({ client }: { client: SuperAgentClient }) {
         )}
       </main>
       {viewport === 'desktop' ? (
-        <InspectorPanel
-          surface="docked"
-          open
-          data={dataSource === 'fixture' ? state.inspector : undefined}
-          live={liveInspector}
-          onClose={() => undefined}
-        />
+        inspectorOpen ? (
+          <InspectorPanel
+            surface="docked"
+            open
+            data={dataSource === 'fixture' ? state.inspector : undefined}
+            live={liveInspector}
+            onClose={() => setInspectorOpen(false)}
+          />
+        ) : null
       ) : (
         <InspectorPanel
           surface="drawer"

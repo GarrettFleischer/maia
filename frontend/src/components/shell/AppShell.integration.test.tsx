@@ -44,6 +44,7 @@ afterEach(() => {
 
 describe('Live shell integration', () => {
   it('renders API transcript messages without fixture-only shell data', async () => {
+    const user = userEvent.setup()
     window.innerWidth = 1440
     window.dispatchEvent(new Event('resize'))
     vi.stubGlobal('WebSocket', FakeSocket)
@@ -79,6 +80,7 @@ describe('Live shell integration', () => {
     expect(screen.queryByTestId('activity-counts')).not.toBeInTheDocument()
     expect(screen.queryByTestId('needs-human-banner')).not.toBeInTheDocument()
     expect(screen.queryByText('Persona · Scout')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Inspect' }))
     expect(screen.getByRole('tab', { name: 'Cache' })).toBeVisible()
     expect(screen.getByRole('tab', { name: 'Brain' })).toBeVisible()
     expect(screen.getByRole('tab', { name: 'Trace' })).toBeVisible()
@@ -158,6 +160,7 @@ describe('Live shell integration', () => {
 
     renderWithMaia(<AppShell client={liveSuperAgentClient('http://127.0.0.1:4178')} />)
 
+    await user.click(await screen.findByRole('button', { name: 'Inspect' }))
     expect(await screen.findByText('Route tools')).toBeVisible()
     expect(screen.getByText('Cache not reported')).toBeVisible()
     expect(screen.getByTestId('inspector-live-slot-4')).toHaveTextContent('1 message')
@@ -196,7 +199,6 @@ describe('Live shell integration', () => {
     expect(screen.queryByTestId('phone-stop-bar')).not.toBeInTheDocument()
     expect(screen.queryByTestId('activity-counts')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Settings' })).toBeVisible()
-    await user.click(screen.getByRole('button', { name: 'Back' }))
     await user.click(screen.getByRole('button', { name: 'Inspect' }))
     expect(screen.getByRole('tab', { name: 'Brain' })).toBeVisible()
     expect(screen.getByText('No context usage for this turn.')).toBeVisible()
@@ -692,10 +694,13 @@ describe('Phone settings layout', () => {
 })
 
 describe('Inspector tabs', () => {
-  it('renders cache brain trace tabs in desktop inspector', () => {
+  it('keeps the desktop inspector closed until Inspect opens it', async () => {
     window.innerWidth = 1440
     window.dispatchEvent(new Event('resize'))
+    const user = userEvent.setup()
     renderWithMaia(<AppShell client={createFixtureSuperAgentClient()} />, { initialState: onboarded() })
+    expect(screen.queryByRole('tab', { name: 'Cache' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Inspect' }))
     expect(screen.getByRole('tab', { name: 'Cache' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Brain' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Trace' })).toBeInTheDocument()
