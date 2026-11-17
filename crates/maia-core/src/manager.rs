@@ -390,7 +390,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): verify each outcome= against every stated goal check (all paths). Partial outcomes are not Done. WRONG/failed check → MUST spawn_task with a corrected brief (restate path/format/content/forbidden tokens) — do not Silent, Done, continue_task/retry_task on completed, or ask_user. Passing check (including verified recover-from-WRONG when corrected content is present) → one Done message_user restating outcome= (never echo secrets). Status chatter does not close a goal. One close-out per finished goal; then stay silent. Skip if RECENT_CEO_CHAT already has that Done."
+            "FINISHED (close-out): Before Done, checklist every CEO-stated requirement (each path, format, content, count, forbidden token) against outcome=/output evidence. A missing piece or failed check is a partial outcome — not Done; MUST spawn_task with a corrected brief that restates every requirement — do not Silent, Done, continue_task/retry_task on completed, or ask_user. Only when every requirement is evidenced → one Done message_user restating outcome= (never echo secrets). Do not re-hire after every requirement already passes. Status chatter does not close a goal. One close-out per finished goal; then stay silent. Skip if RECENT_CEO_CHAT already has that Done."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -400,7 +400,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             && snap.waiting.is_empty()
         {
             lines.push(
-                "REQUIRED: verify the finished goal; if the check fails spawn_task once (do not continue_task on completed); otherwise message_user immediately (Done — …)."
+                "REQUIRED: checklist each finished goal requirement against outcome=; any miss or partial → spawn_task once (do not continue_task on completed); all evidenced → message_user immediately (Done — …). Never Done on a partial outcome."
                     .to_owned(),
             );
         }
@@ -614,8 +614,8 @@ pub fn plan_wake(
     }
     if !previous_fingerprint.is_empty() && previous_fingerprint == fingerprint {
         // Answers are not in the fingerprint; still wake so continue_task can run.
-        // WRONG outcomes are not in the fingerprint either — keep calling until recover.
-        if !waiting_ceo_answered(snap) && !finished_outcome_needs_recover(snap) {
+        // Unclosed finished goals stay fingerprint-stable — keep calling until Done.
+        if !waiting_ceo_answered(snap) && snap.completed_unopened == 0 {
             return WakePlan::SkipModel;
         }
     }
@@ -941,63 +941,6 @@ pub fn looks_like_close_out(text: &str) -> bool {
         || trimmed.starts_with("all done")
 }
 
-/// Durable failed-check marker already present in FINISHED `outcome=` (not a classifier).
-///
-/// When a completed worker's output tail still shows a WRONG draft, close-out must wait for a
-/// corrected hire — safety must not Done over a known-bad draft. Negated mentions
-/// ("no WRONG", verification passed) do not count.
-#[must_use]
-pub fn finished_outcome_needs_recover(snap: &WakeSnapshot) -> bool {
-    let completed: Vec<&WorkerBrief> = snap
-        .workers
-        .iter()
-        .filter(|worker| worker.status == "completed")
-        .collect();
-    if completed.is_empty() {
-        return false;
-    }
-    let has_wrong = completed
-        .iter()
-        .any(|worker| outcome_shows_wrong_draft(&worker.output_tail));
-    if !has_wrong {
-        return false;
-    }
-    // An older mandated WRONG draft must not stay sticky after a later corrected hire
-    // (or verify) has already completed with a non-WRONG outcome.
-    let has_corrected = completed.iter().any(|worker| {
-        !worker.output_tail.trim().is_empty() && !outcome_shows_wrong_draft(&worker.output_tail)
-    });
-    has_wrong && !has_corrected
-}
-
-fn outcome_shows_wrong_draft(tail: &str) -> bool {
-    let upper = tail.to_ascii_uppercase();
-    if !upper.contains("WRONG") {
-        return false;
-    }
-    // Recovery / verification narratives often mention WRONG historically ("recovered from
-    // WRONG"). Only treat clear draft-write markers as still needing recover.
-    let wrote_wrong = upper.contains("WROTE WRONG")
-        || upper.contains("WORD WRONG")
-        || upper.contains("WRONG INTO")
-        || upper.trim() == "WRONG"
-        || upper.starts_with("WRONG\n")
-        || upper.ends_with("\nWRONG")
-        || upper.contains("= WRONG")
-        || upper.contains("=WRONG");
-    let negated = upper.contains("NO WRONG")
-        || upper.contains("WITHOUT WRONG")
-        || upper.contains("NOT CONTAIN WRONG")
-        || upper.contains("FORBIDDEN TOKEN")
-        || upper.contains("RECOVERED FROM WRONG")
-        || upper.contains("RECOVERED") && upper.contains("WRONG")
-        || upper.contains("FROM WRONG)");
-    if negated {
-        return false;
-    }
-    wrote_wrong
-}
-
 /// Alphanumeric tokens of length >= 6, lowercased (longest first).
 #[must_use]
 pub fn distinctive_tokens(text: &str) -> Vec<String> {
@@ -1131,25 +1074,21 @@ pub fn mask_close_out_secrets(text: &str, secrets: &[String]) -> String {
 ///
 /// Drops `spawn_task` on idle wakes (LEARNED must not invent goals). A finished wake may keep
 /// `spawn_task` and defer Done for a second hire; the host re-runs this cap after apply when
-/// that hire never started live work (see orchestrator second pass).
+/// that hire never started live work (see orchestrator second pass). Outcome text is never
+/// keyword-classified — recover vs Done is prompt + model.
 #[must_use]
 pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<WakeAction> {
     // Failed / stuck / waiting block close-out; healthy runners do not.
     let attention_clear = snap.failed_task_ids.is_empty()
         && snap.stuck_task_ids.is_empty()
         && snap.waiting.is_empty();
-    let finished_checks_pass = attention_clear
-        && snap.completed_unopened > 0
-        && !finished_outcome_needs_recover(snap);
     let mut out: Vec<WakeAction> = actions
         .iter()
         .filter(|action| !matches!(action, WakeAction::Silent))
         .filter(|action| {
             // Idle wake (no attention, no finished goal) → drop LEARNED-only hire.
             let idle = attention_clear && snap.completed_unopened == 0;
-            // Finished + checks already pass → drop extra spawn so Done is not deferred forever.
             !(idle && matches!(action, WakeAction::Spawn { .. }))
-                && !(finished_checks_pass && matches!(action, WakeAction::Spawn { .. }))
         })
         .filter(|action| match action {
             // Safety cap: never re-post an ask / Done already covered in CEO chat.
@@ -1170,8 +1109,7 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
                 !recent_ceo_covers(snap, &summary, CeoCoverKind::Ask)
             }
             WakeAction::MessageUser { text } if looks_like_close_out(text) => {
-                !finished_outcome_needs_recover(snap)
-                    && !recent_ceo_covers(snap, text, CeoCoverKind::CloseOut)
+                !recent_ceo_covers(snap, text, CeoCoverKind::CloseOut)
             }
             // Unanswered ask → stay silent; drop standing-by / status chatter.
             WakeAction::MessageUser { .. } if waiting_ask_already_in_chat(snap) => false,
@@ -1209,12 +1147,7 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
         }
     }
 
-    if snap.completed_unopened > 0
-        && attention_clear
-        && !closed_out
-        && !recovering
-        && !finished_outcome_needs_recover(snap)
-    {
+    if snap.completed_unopened > 0 && attention_clear && !closed_out && !recovering {
         let summary = finished_close_out_summary(snap);
         if !recent_ceo_covers(snap, &summary, CeoCoverKind::CloseOut) {
             let secrets = ceo_supplied_secret_values(&snap.recent_ceo_lines);
