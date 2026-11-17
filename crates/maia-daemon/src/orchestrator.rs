@@ -4571,6 +4571,8 @@ impl<R: Router> Orchestrator<R> {
         let brief = format_wake_brief(snap);
         let tools_json = wake_tools_json();
         let system = wake_system_prompt(snap);
+        // Wakes are short tool routes (Done / ask / retry). Owner-turn Medium/High
+        // reasoning burns ~15–18s and hundreds of tokens on Pass→Done close-out.
         let request = RouterRequest {
             request_id: RequestId(request_id),
             model: self.turn.model.clone(),
@@ -4581,7 +4583,7 @@ impl<R: Router> Orchestrator<R> {
             tools_json: CanonicalJson(tools_json),
             prefix_hash: self.turn.prefix_hash.clone(),
             recall_hash: None,
-            reasoning_effort: self.turn.reasoning,
+            reasoning_effort: ReasoningEffort::Low,
             prior_provider_tool_state: None,
         };
         let response = match wait_router(self.router.complete(&request)) {

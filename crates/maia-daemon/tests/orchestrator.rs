@@ -5234,6 +5234,113 @@ fn manager_wake_renudges_when_model_fails_while_waiting() {
 }
 
 #[test]
+fn provider_error_holds_failed_without_ceo_spam_and_manager_can_retry() {
+    // Worker provider/tool death must park for the manager, keep the owner chat durable,
+    // and never dump "I will decide" / provider text into CEO messages.
+    let mut harness = Harness::open_model("provider-fail-durable", prompt_supply());
+    let owner = "Check the weather in Canby, Oregon and report it back.";
+    harness.router.push_tool("spawn_task", "{}");
+    harness.router.push_failure(RouterError::Server { code: 502 });
+    harness.router.push_failure(RouterError::Protocol {
+        detail: "stop".to_owned(),
+    });
+    let outcome = wait(harness.host().handle_user_message(owner)).expect("spawn");
+    let task = outcome.task.expect("task");
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Failed { .. })),
+        "provider death becomes failed for manager recovery, got {:?}",
+        harness.host().phase(&task)
+    );
+    let bodies = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert_eq!(bodies, vec![owner.to_owned()], "owner chat must stay durable with only the CEO line");
+    assert!(
+        bodies.iter().all(|body| {
+            let low = body.to_ascii_lowercase();
+            !low.contains("provider")
+                && !low.contains("i will decide")
+                && !low.contains("stopped answering")
+        }),
+        "failure must not spam the CEO chat: {bodies:?}"
+    );
+    assert!(
+        harness.host().wake_nudge_pending(),
+        "failed worker must nudge the manager"
+    );
+    let retry_args = serde_json::json!({ "task_id": task.0 }).to_string();
+    harness.router.push_tool("retry_task", &retry_args);
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    harness
+        .router
+        .push_tool("success", &success_arguments("It is 54 F in Canby."));
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
+    assert!(!messaged, "retry wake must not chat the CEO");
+    assert!(
+        matches!(
+            harness.host().phase(&task),
+            Some(TaskPhase::Completed { .. })
+        ),
+        "manager retry must complete the goal, got {:?}",
+        harness.host().phase(&task)
+    );
+    let bodies_after = shown(
+        &harness.database,
+        "SELECT body FROM router_messages ORDER BY ordinal",
+    );
+    assert_eq!(
+        bodies_after, vec![owner.to_owned()],
+        "retry must not append CEO spam; chat stays the original owner line"
+    );
+}
+
+#[test]
+fn manager_wake_uses_low_reasoning_even_when_turn_is_medium() {
+    // Pass→Done close-out is a short tool route. Medium/High wake reasoning burns
+    // ~15–18s and hundreds of output tokens; wakes must stay Low regardless of the
+    // owner-turn connection setting.
+    let mut harness = Harness::open_model("mgr-wake-low-reasoning", long_supply());
+    harness
+        .host()
+        .set_router_model("fixture-model".to_owned(), ReasoningEffort::Medium);
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("success", &success_arguments("Wrote LOW83."));
+    let _ = wait(harness.host().handle_user_message("Write LOW83")).expect("run");
+    let before = harness.router.requests().len();
+    harness.router.push_tool(
+        "message_user",
+        r#"{"message":"Done — wrote LOW83."}"#,
+    );
+    let (_fp, messaged, _) = harness.host().run_manager_wake("", &[]);
+    assert!(messaged, "close-out wake must post Done");
+    let wake_reqs: Vec<_> = harness
+        .router
+        .requests()
+        .into_iter()
+        .skip(before)
+        .collect();
+    assert!(
+        !wake_reqs.is_empty(),
+        "close-out must call the model"
+    );
+    assert!(
+        wake_reqs
+            .iter()
+            .all(|req| req.reasoning_effort == ReasoningEffort::Low),
+        "wake requests must use Low reasoning, got {:?}",
+        wake_reqs
+            .iter()
+            .map(|req| req.reasoning_effort)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn worker_attention_phases_set_wake_nudge() {
     let mut harness = Harness::open_model("wake-nudge-complete", long_supply());
     assert!(
