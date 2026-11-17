@@ -331,7 +331,9 @@ textarea {
 .maia-quote-icon,
 .maia-tag-icon,
 .maia-source-icon,
-.maia-reveal-icon {
+.maia-reveal-icon,
+.maia-check-icon,
+.maia-plus-icon {
   display: block;
   width: 14px;
   height: 14px;
@@ -353,6 +355,16 @@ textarea {
 .maia-send-icon {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8h9'/%3E%3Cpath d='M8 3.5L12.5 8 8 12.5'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8h9'/%3E%3Cpath d='M8 3.5L12.5 8 8 12.5'/%3E%3C/svg%3E");
+}
+
+.maia-check-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.2 8.2l3 3 6.4-6.4'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.2 8.2l3 3 6.4-6.4'/%3E%3C/svg%3E");
+}
+
+.maia-plus-icon {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M8 3v10M3 8h10'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M8 3v10M3 8h10'/%3E%3C/svg%3E");
 }
 
 .maia-reveal-icon {
@@ -863,7 +875,6 @@ textarea {
   gap: 8px;
   width: 100%;
   min-height: 20px;
-  padding-right: 72px;
   box-sizing: border-box;
 }
 
@@ -872,28 +883,6 @@ textarea {
   min-width: 0;
 }
 
-.maia-message-actions {
-  position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 1;
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  margin-left: 0;
-}
-
-.maia-message-actions .maia-btn {
-  min-height: 32px;
-  min-width: 0;
-  height: auto;
-  padding: 0 10px;
-  font-size: 13px;
-}
-
-.maia-message-actions .maia-icon-btn,
 .maia-brain-actions .maia-icon-btn,
 .maia-code-toolbar .maia-icon-btn,
 .maia-attachment-chips .maia-icon-btn,
@@ -1646,7 +1635,6 @@ textarea {
   }
   .maia-run-head {
     min-height: 0;
-    padding-right: 68px;
   }
   .maia-run--you .maia-speaker {
     font-size: 12px;

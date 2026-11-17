@@ -986,12 +986,6 @@ pub fn distinctive_tokens(text: &str) -> Vec<String> {
     tokens
 }
 
-/// Longest alphanumeric token of length >= 6, lowercased. Empty when none.
-#[must_use]
-pub fn distinctive_token(text: &str) -> String {
-    distinctive_tokens(text).into_iter().next().unwrap_or_default()
-}
-
 /// One-line Done body for a finished wake, or `"the goal"` when nothing useful is known.
 #[must_use]
 pub fn finished_close_out_summary(snap: &WakeSnapshot) -> String {

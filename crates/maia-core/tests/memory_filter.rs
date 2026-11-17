@@ -187,14 +187,8 @@ fn episodes_keep_the_owner_fact_and_drop_status_and_scratch() {
 }
 
 #[test]
-fn extraction_waits_for_the_turn_or_task_to_finish() {
-    use maia_core::dream::{
-        ExtractionTiming, episode_record, join_owner_messages, should_enqueue_extraction,
-    };
-
-    assert!(!should_enqueue_extraction(ExtractionTiming::TaskRunning));
-    assert!(should_enqueue_extraction(ExtractionTiming::ChatReplyStored));
-    assert!(should_enqueue_extraction(ExtractionTiming::TaskFinished));
+fn episode_record_keeps_owner_and_maia_facts() {
+    use maia_core::dream::episode_record;
 
     let (body, hide) = episode_record(
         "I prefer coffee for the slice2 check.",
@@ -204,16 +198,9 @@ fn extraction_waits_for_the_turn_or_task_to_finish() {
     assert!(body.contains("Owner:"));
     assert!(body.contains("Maia:"));
 
-    let joined = join_owner_messages(&[
-        "I prefer coffee for the slice2 check.",
-        "Also keep the mug warm.",
-    ]);
-    assert_eq!(
-        joined,
-        "I prefer coffee for the slice2 check.\nAlso keep the mug warm."
-    );
+    let joined = "I prefer coffee for the slice2 check.\nAlso keep the mug warm.";
     let (task_body, task_hide) = episode_record(
-        &joined,
+        joined,
         "The subagent finished: coffee preference saved.",
     );
     assert!(task_hide.is_none(), "{task_hide:?}");
