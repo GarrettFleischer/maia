@@ -940,6 +940,34 @@ fn wake_brief_finished_requires_requirement_checklist_before_done() {
 }
 
 #[test]
+fn wake_brief_finished_forbids_ceo_chatter_between_recover_pass_and_done() {
+    // Run81: measure recover→Done latency; prompt must ban intermediate CEO messages.
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-final".to_owned(),
+            title: "FINAL recover hire".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Wrote HELLO81.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let brief = format_wake_brief(&snap);
+    let lower = brief.to_ascii_lowercase();
+    assert!(
+        lower.contains("zero ceo")
+            || lower.contains("zero intermediate")
+            || lower.contains("no intermediate ceo")
+            || lower.contains("no ceo chatter between"),
+        "FINISHED must forbid CEO chatter between recover pass and Done: {brief}"
+    );
+}
+
+#[test]
 fn forced_close_out_includes_title_when_outcome_omits_goal_marker() {
     use maia_core::manager::WorkerBrief;
 

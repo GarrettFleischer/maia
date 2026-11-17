@@ -390,7 +390,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): Before Done, checklist every CEO-stated requirement (each path, format, content, count, forbidden token) against outcome=/output evidence. A missing piece or failed check is a partial outcome — not Done; MUST spawn_task with a corrected brief that restates every requirement — do not Silent, Done, continue_task/retry_task on completed, or ask_user. Only when every requirement is evidenced → one Done message_user this same wake restating outcome= (never echo secrets). Do not spawn_task to re-check/double-check/polish after the checklist already passes. Status chatter does not close a goal. One close-out per finished goal; then stay silent. Skip if RECENT_CEO_CHAT already has that Done."
+            "FINISHED (close-out): Before Done, checklist every CEO-stated requirement (each path, format, content, count, forbidden token) against outcome=/output evidence. A missing piece or failed check is a partial outcome — not Done; MUST spawn_task with a corrected brief that restates every requirement — do not Silent, Done, continue_task/retry_task on completed, or ask_user. Only when every requirement is evidenced → one Done message_user this same wake restating outcome= (never echo secrets). After a recover hire's outcome= passes, Done immediately — zero CEO chatter between that pass and Done (no fixed/recovered/status lines). Do not spawn_task to re-check/double-check/polish after the checklist already passes. Status chatter does not close a goal. One close-out per finished goal; then stay silent. Skip if RECENT_CEO_CHAT already has that Done."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -400,7 +400,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
             && snap.waiting.is_empty()
         {
             lines.push(
-                "REQUIRED: checklist each finished goal requirement against outcome=; any miss or partial → spawn_task once (do not continue_task on completed); all evidenced → message_user Done this same wake (never a verification re-hire). Never Done on a partial outcome."
+                "REQUIRED: checklist each finished goal requirement against outcome=; any miss or partial → spawn_task once (do not continue_task on completed); all evidenced → message_user Done this same wake with zero CEO chatter between pass and Done (never a verification re-hire). Never Done on a partial outcome."
                     .to_owned(),
             );
         }
