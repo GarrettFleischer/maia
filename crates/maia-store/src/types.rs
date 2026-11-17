@@ -465,6 +465,17 @@ pub struct NearestClaimRow {
     pub sentence: String,
 }
 
+/// Full memory text loaded by id for progressive disclosure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryBodyRow {
+    /// `claim` or `fact`.
+    pub kind: String,
+    /// Stable id.
+    pub id: String,
+    /// Full sentence body.
+    pub sentence: String,
+}
+
 /// Provisional claim returned by a same-model vector search.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VectorClaimHit {

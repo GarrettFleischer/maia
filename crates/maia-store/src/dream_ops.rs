@@ -648,6 +648,51 @@ pub(crate) fn claim_rows(
     Ok(rows)
 }
 
+/// Loads claim/fact sentences in the caller's id order (missing ids skipped).
+pub(crate) fn memory_bodies(
+    connection: &Connection,
+    ids: &[String],
+) -> Result<Vec<crate::types::MemoryBodyRow>, StoreError> {
+    let mut rows = Vec::new();
+    for id in ids {
+        require_text("memory_id", id)?;
+        if let Some(row) = connection
+            .query_row(
+                "SELECT claim_id, sentence FROM claims WHERE claim_id = ?1",
+                params![id],
+                |row| {
+                    Ok(crate::types::MemoryBodyRow {
+                        kind: "claim".to_owned(),
+                        id: row.get(0)?,
+                        sentence: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?
+        {
+            rows.push(row);
+            continue;
+        }
+        if let Some(row) = connection
+            .query_row(
+                "SELECT fact_id, sentence FROM facts WHERE fact_id = ?1",
+                params![id],
+                |row| {
+                    Ok(crate::types::MemoryBodyRow {
+                        kind: "fact".to_owned(),
+                        id: row.get(0)?,
+                        sentence: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?
+        {
+            rows.push(row);
+        }
+    }
+    Ok(rows)
+}
+
 pub(crate) fn recall_subgraph(
     connection: &Connection,
     seed_claim_ids: &[String],

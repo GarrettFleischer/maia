@@ -189,6 +189,10 @@ enum NormalCommand {
         ids: Vec<String>,
         reply: Reply<Vec<NearestClaimRow>>,
     },
+    MemoryBodies {
+        ids: Vec<String>,
+        reply: Reply<Vec<crate::types::MemoryBodyRow>>,
+    },
     RecallSubgraph {
         seed_claim_ids: Vec<String>,
         seed_fact_ids: Vec<String>,
@@ -639,6 +643,11 @@ enum NormalCommand {
         reply: Reply<BrainSyncReport>,
     },
     SearchNeurons {
+        query: String,
+        limit: i64,
+        reply: Reply<Vec<NeuronHit>>,
+    },
+    SearchMemoryExact {
         query: String,
         limit: i64,
         reply: Reply<Vec<NeuronHit>>,
@@ -1126,6 +1135,26 @@ impl SqliteOwner {
         Pending { rx }.wait()
     }
 
+    /// Loads full claim/fact sentences for the given ids (order preserved).
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure.
+    pub fn memory_bodies(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<crate::types::MemoryBodyRow>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::MemoryBodies {
+                ids: ids.to_vec(),
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
     /// Brain-map subset reachable from seed claims and lexemes within `hops`.
     ///
     /// # Errors
@@ -1540,6 +1569,28 @@ impl SqliteOwner {
         let (reply, rx) = oneshot::channel();
         self.send_normal(
             NormalCommand::SearchNeurons {
+                query: query.to_owned(),
+                limit,
+                reply,
+            },
+            Submit::Wait,
+        )?;
+        Pending { rx }.wait()
+    }
+
+    /// Exact-token keyword search (error codes, filenames, identifiers).
+    ///
+    /// # Errors
+    ///
+    /// Returns a SQLite failure. Malformed text becomes an empty list.
+    pub fn search_memory_exact(
+        &self,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<NeuronHit>, StoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.send_normal(
+            NormalCommand::SearchMemoryExact {
                 query: query.to_owned(),
                 limit,
                 reply,
@@ -3296,6 +3347,9 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
         NormalCommand::ClaimRows { ids, reply } => {
             send(reply, dream_ops::claim_rows(connection, &ids))
         }
+        NormalCommand::MemoryBodies { ids, reply } => {
+            send(reply, dream_ops::memory_bodies(connection, &ids))
+        }
         NormalCommand::RecallSubgraph {
             seed_claim_ids,
             seed_fact_ids,
@@ -3946,6 +4000,14 @@ fn dispatch_normal(connection: &mut rusqlite::Connection, command: NormalCommand
             limit,
             reply,
         } => send(reply, crate::brain_md::search_neurons(connection, &query, limit)),
+        NormalCommand::SearchMemoryExact {
+            query,
+            limit,
+            reply,
+        } => send(
+            reply,
+            crate::brain_md::search_memory_exact(connection, &query, limit),
+        ),
         NormalCommand::GraphArm {
             lexeme_ids,
             limit,

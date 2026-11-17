@@ -222,6 +222,51 @@ pub(crate) fn sync_markdown(
     Ok(report)
 }
 
+/// Exact-token keyword hits (unicode61, no Porter) for codes, filenames, ids.
+pub(crate) fn search_memory_exact(
+    connection: &Connection,
+    raw: &str,
+    limit: i64,
+) -> Result<Vec<NeuronHit>, StoreError> {
+    if limit < 1 {
+        return Err(StoreError::InvalidRequest {
+            message: "memory exact search limit must be at least 1".to_owned(),
+        });
+    }
+    let query = sanitize_fts_query(raw);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let statement = connection.prepare(
+        "SELECT memory_exact_fts.kind, memory_exact_fts.memory_id, memory_exact_fts.body, \
+            CASE memory_exact_fts.kind \
+              WHEN 'claim' THEN COALESCE((SELECT taint FROM claims WHERE claim_id = memory_exact_fts.memory_id), 'trusted') \
+              WHEN 'fact' THEN COALESCE((SELECT taint FROM facts WHERE fact_id = memory_exact_fts.memory_id), 'trusted') \
+              ELSE 'trusted' \
+            END \
+         FROM memory_exact_fts \
+         WHERE memory_exact_fts MATCH ?1 \
+         ORDER BY bm25(memory_exact_fts) ASC, memory_exact_fts.kind ASC, memory_exact_fts.memory_id ASC \
+         LIMIT ?2",
+    );
+    let mut statement = match statement {
+        Ok(statement) => statement,
+        Err(error) => return fts_or_empty(error),
+    };
+    let mapped = match statement.query_map(params![query, limit], read_hit) {
+        Ok(mapped) => mapped,
+        Err(error) => return fts_or_empty(error),
+    };
+    let mut hits = Vec::new();
+    for hit in mapped {
+        match hit {
+            Ok(hit) => hits.push(hit),
+            Err(error) => return fts_or_empty(error),
+        }
+    }
+    Ok(hits)
+}
+
 /// Keyword hits. Odd FTS input becomes an empty hit list instead of an error.
 pub(crate) fn search_neurons(
     connection: &Connection,

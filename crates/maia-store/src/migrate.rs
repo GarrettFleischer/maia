@@ -32,9 +32,10 @@ use crate::sql::MIGRATION_V18;
 use crate::sql::MIGRATION_V19;
 use crate::sql::MIGRATION_V20;
 use crate::sql::MIGRATION_V21;
+use crate::sql::MIGRATION_V22;
 
 /// Highest `user_version` this binary can open.
-pub const LATEST_SCHEMA_VERSION: i64 = 21;
+pub const LATEST_SCHEMA_VERSION: i64 = 22;
 
 /// How long a second opener waits for the migration writer. This is SQLite's
 /// lock wait, not a process-global path mutex.
@@ -173,6 +174,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 21,
         name: "skills",
         statements: MIGRATION_V21,
+    },
+    Migration {
+        version: 22,
+        name: "memory_exact_fts",
+        statements: MIGRATION_V22,
     },
 ];
 

@@ -247,6 +247,46 @@ pub(crate) const MIGRATION_V21: &[&str] = &[
      )",
 ];
 
+/// Migration 22: exact-token FTS (no Porter) for error codes, filenames, identifiers.
+pub(crate) const MIGRATION_V22: &[&str] = &[
+    "CREATE VIRTUAL TABLE memory_exact_fts USING fts5(\
+        kind UNINDEXED, \
+        memory_id UNINDEXED, \
+        body, \
+        tokenize='unicode61'\
+     )",
+    "INSERT INTO memory_exact_fts (kind, memory_id, body) \
+     SELECT 'claim', claim_id, sentence FROM claims \
+     WHERE status = 'provisional' AND consolidated_by IS NULL AND hidden_reason IS NULL",
+    "INSERT INTO memory_exact_fts (kind, memory_id, body) \
+     SELECT 'fact', fact_id, sentence FROM facts",
+    "CREATE TRIGGER memory_exact_claim_ai AFTER INSERT ON claims BEGIN \
+        INSERT INTO memory_exact_fts (kind, memory_id, body) \
+        VALUES ('claim', new.claim_id, new.sentence); \
+     END",
+    "CREATE TRIGGER memory_exact_claim_au AFTER UPDATE OF sentence, status, consolidated_by, hidden_reason ON claims BEGIN \
+        DELETE FROM memory_exact_fts WHERE kind = 'claim' AND memory_id = old.claim_id; \
+        INSERT INTO memory_exact_fts (kind, memory_id, body) \
+        SELECT 'claim', new.claim_id, new.sentence \
+        WHERE new.status = 'provisional' AND new.consolidated_by IS NULL AND new.hidden_reason IS NULL; \
+     END",
+    "CREATE TRIGGER memory_exact_claim_ad AFTER DELETE ON claims BEGIN \
+        DELETE FROM memory_exact_fts WHERE kind = 'claim' AND memory_id = old.claim_id; \
+     END",
+    "CREATE TRIGGER memory_exact_fact_ai AFTER INSERT ON facts BEGIN \
+        INSERT INTO memory_exact_fts (kind, memory_id, body) \
+        VALUES ('fact', new.fact_id, new.sentence); \
+     END",
+    "CREATE TRIGGER memory_exact_fact_au AFTER UPDATE OF sentence ON facts BEGIN \
+        DELETE FROM memory_exact_fts WHERE kind = 'fact' AND memory_id = old.fact_id; \
+        INSERT INTO memory_exact_fts (kind, memory_id, body) \
+        VALUES ('fact', new.fact_id, new.sentence); \
+     END",
+    "CREATE TRIGGER memory_exact_fact_ad AFTER DELETE ON facts BEGIN \
+        DELETE FROM memory_exact_fts WHERE kind = 'fact' AND memory_id = old.fact_id; \
+     END",
+];
+
 /// Migration 17 drops tasks whose owner-message source was already deleted.
 ///
 /// A deleted bot used to remove chat rows while leaving the task. Restore then

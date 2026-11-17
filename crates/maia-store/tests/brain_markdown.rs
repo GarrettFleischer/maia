@@ -167,7 +167,41 @@ fn consolidate(owner: &SqliteOwner, sentence: &str) {
 
 #[test]
 fn schema_version_is_twelve() {
-    assert_eq!(LATEST_SCHEMA_VERSION, 21);
+    assert_eq!(LATEST_SCHEMA_VERSION, 22);
+}
+
+#[test]
+fn exact_fts_finds_error_codes_and_stays_in_sync_on_update_and_delete() {
+    let db = TestDb::open("exact-fts");
+    seed_thread(db.owner());
+    must(db.owner().insert_episode(episode(
+        "Deploy failed with ECONNREFUSED_77 on hello73.py.",
+        MemoryTaint::Trusted,
+    )));
+    promote(
+        db.owner(),
+        vec![claim(
+            "claim-exact",
+            "Deploy failed with ECONNREFUSED_77 on hello73.py.",
+            MemoryTaint::Trusted,
+            &["deploy", "econnrefused_77", "hello73"],
+        )],
+    );
+    let hits = must(db.owner().search_memory_exact("ECONNREFUSED_77", 8));
+    assert!(
+        hits.iter().any(|hit| hit.id == "claim-exact"),
+        "exact code should hit memory_exact_fts"
+    );
+    let by_file = must(db.owner().search_memory_exact("hello73.py", 8));
+    assert!(by_file.iter().any(|hit| hit.id == "claim-exact"));
+
+    // Update sentence via promotion replace path isn't needed — revise claim status hide.
+    must(db.owner().forget_claim("claim-exact".to_owned()));
+    let after_hide = must(db.owner().search_memory_exact("ECONNREFUSED_77", 8));
+    assert!(
+        after_hide.iter().all(|hit| hit.id != "claim-exact"),
+        "hidden claim must leave exact FTS"
+    );
 }
 
 #[test]

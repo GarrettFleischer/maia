@@ -179,6 +179,7 @@ pub use types::McpConnectionRecord;
 pub use types::McpSecretSlot;
 pub use types::McpTransportRecord;
 pub use types::ModelConnectionRecord;
+pub use types::MemoryBodyRow;
 pub use types::NearestClaimRow;
 pub use types::VectorClaimHit;
 pub use types::NegativeMarkWrite;
