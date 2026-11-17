@@ -303,17 +303,32 @@ pub fn attention_lines(snap: &WakeSnapshot) -> Vec<String> {
 }
 
 /// Prompt context for a manager wake that will call the model.
+///
+/// Compact state summary only (no chat history). Task ids live here so the wake
+/// system prefix stays byte-stable for provider prompt cache hits.
 #[must_use]
 pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     let mut lines = vec![
-        "Manager wake. Use manager route tools only. Never call bash, shell, write_file, read_file, success, failure, or waiting.".to_owned(),
+        "Manager wake. Manager tools only — never bash/shell/write_file/read_file/success/failure/waiting.".to_owned(),
         "Default: stay silent. Mandatory exceptions below override silence.".to_owned(),
         format!("running={}", snap.running_count),
         format!("completed_unopened={}", snap.completed_unopened),
+        "Wake task ids (usable with route tools; same as the candidate list):".to_owned(),
     ];
+    if snap.workers.is_empty() {
+        lines.push("- (none)".to_owned());
+    } else {
+        for worker in &snap.workers {
+            let title = truncate_brief(&worker.title, BRIEF_TITLE_CHARS);
+            lines.push(format!(
+                "- {} status={} title={title}",
+                worker.task_id, worker.status
+            ));
+        }
+    }
     if !snap.learned.is_empty() {
         lines.push(
-            "LEARNED: prior lessons for ATTENTION items only (how to retry/fix a listed failure). Prefer a different approach after a failure; do not repeat a failed tactic. Never spawn_task from LEARNED alone — do not invent new work that is not in ATTENTION. Call record_learning with one short note when you learn something useful."
+            "LEARNED: ATTENTION failures only — prefer a different approach; do not repeat a failed tactic; never spawn_task from LEARNED alone / invent new work; record_learning when useful."
                 .to_owned(),
         );
         for note in &snap.learned {
@@ -326,7 +341,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     let attention = attention_lines(snap);
     if !attention.is_empty() {
         lines.push(
-            "ATTENTION: act on each item that needs you this wake (failed → waiting → close-out). Leave healthy runners alone. Ask what you need (ask_user or ask_questions — several questions OK when the task needs them); never rephrase an already-open question; one close-out per finished goal when clear; do not cross-talk or duplicate CEO messages."
+            "ATTENTION: act on each item (failed → waiting → close-out); leave healthy runners alone; do not cross-talk or duplicate CEO messages."
                 .to_owned(),
         );
         for item in attention {
@@ -341,25 +356,25 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     }
     if !snap.failed_task_ids.is_empty() || !snap.stuck_task_ids.is_empty() {
         lines.push(
-            "REQUIRED: call retry_task or continue_task with the failed/stuck task_id (and guidance). Do not call bash. Do not ask_user for a fixable missing-file or tool error."
+            "REQUIRED: retry_task or continue_task with the failed/stuck task_id (+ guidance). No bash. No ask_user for fixable missing-file/tool errors."
                 .to_owned(),
         );
     }
     if !snap.waiting.is_empty() {
         if waiting_ask_already_in_chat(snap) {
             lines.push(
-                "CEO_WAITING (already asked): RECENT_CEO_CHAT already has your unanswered question. Stay silent. Do not rephrase. Do not ask_user / ask_questions again for the same decision. Do not message_user that you are waiting. When the CEO answers, continue_task with their answer. If an unrelated CEO message arrives while questions stay open, you may briefly remind once (link/re-surface the open question) — do not nag every wake."
+                "CEO_WAITING (already asked): stay silent — do not rephrase, re-ask, or message_user that you are waiting. When the CEO answers, continue_task with their answer. One brief reminder only if OPEN_QUESTIONS + unrelated CEO message."
                     .to_owned(),
             );
         } else if snap.waiting.iter().any(|(_, q)| recent_ceo_covers(snap, q, CeoCoverKind::Ask))
         {
             lines.push(
-                "CEO_WAITING (CEO answered): RECENT_CEO_CHAT has the owner's answer. continue_task immediately this wake with that task_id and their answer so the worker can finish. Do not wait for a later wake. Do not ask_user again."
+                "CEO_WAITING (CEO answered): continue_task immediately with that task_id and their answer. Do not ask_user again."
                     .to_owned(),
             );
         } else {
             lines.push(
-                "CEO_WAITING (mandatory): call ask_user or ask_questions immediately this wake with the CEO decision(s) you need. When two or more named choices are needed, MUST call ask_questions (one card) — not ask_user prose. Do not defer. Do not stay silent. Do not call message_user instead. Do not paste worker wording; restate cleanly. Skip only if RECENT_CEO_CHAT already asked this."
+                "CEO_WAITING (mandatory): ask_user or ask_questions immediately this wake. Two+ named choices → MUST call ask_questions (one card), not ask_user prose. Do not defer, stay silent, or message_user instead."
                     .to_owned(),
             );
         }
@@ -375,7 +390,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
         .collect();
     if snap.completed_unopened > 0 || !finished.is_empty() {
         lines.push(
-            "FINISHED (close-out): worker success is not Done. Verify each outcome= against the goal's stated checks (path, format, content). If outcome= contains WRONG or otherwise fails a stated check, you MUST spawn_task this wake with a corrected brief that restates every stated goal check (path, format, content, forbidden tokens) so the next hire is durable — do not Silent, do not Done, do not continue_task or retry_task on a completed worker, and do not ask_user. When verification passes, send one Done message_user immediately this wake that starts with Done — and restates each outcome=. Never put a secret value, password, token, or vault contents into Done — name the secret, do not echo its value (even if outcome= shows it). Do not defer close-out. Prior status chatter (hired, working on it, will notify) does not close a goal. One close-out per finished goal. Then stay silent. Do not dump worker logs. Skip only if RECENT_CEO_CHAT already has that Done close-out."
+            "FINISHED (close-out): verify each outcome= against every stated goal check (all paths). Partial outcomes are not Done. WRONG/failed check → MUST spawn_task with a corrected brief (restate path/format/content/forbidden tokens) — do not Silent, Done, continue_task/retry_task on completed, or ask_user. Passing check (including verified recover-from-WRONG when corrected content is present) → one Done message_user restating outcome= (never echo secrets). Status chatter does not close a goal. One close-out per finished goal; then stay silent. Skip if RECENT_CEO_CHAT already has that Done."
                 .to_owned(),
         );
         // Healthy runners are not "attention" — close out finished goals while they keep working.
@@ -411,7 +426,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     }
     if !snap.open_questions.is_empty() {
         lines.push(
-            "OPEN_QUESTIONS (still unanswered): you may briefly remind the CEO once if they messaged about something else or a question has been open a while — re-surface or link the open card. Do not nag on every wake. Never rephrase into a duplicate ask."
+            "OPEN_QUESTIONS: one brief reminder OK if CEO messaged about something else; never duplicate ask; do not nag every wake."
                 .to_owned(),
         );
         for item in &snap.open_questions {
@@ -423,7 +438,7 @@ pub fn format_wake_brief(snap: &WakeSnapshot) -> String {
     }
     if !snap.recent_ceo_lines.is_empty() {
         lines.push(
-            "RECENT_CEO_CHAT (durable signal — do not repeat an ask_user / ask_questions or close-out already here):"
+            "RECENT_CEO_CHAT (do not repeat an ask_user / ask_questions or close-out already here):"
                 .to_owned(),
         );
         for line in &snap.recent_ceo_lines {
@@ -618,6 +633,11 @@ pub fn plan_wake(
         };
     }
     if !snap.waiting.is_empty() {
+        // Already asked: do not burn a model call every heartbeat/nudge. SkipModel
+        // advances the fingerprint so later identical wakes stay free until the CEO answers.
+        if waiting_ask_already_in_chat(snap) {
+            return WakePlan::SkipModel;
+        }
         return WakePlan::RunModel {
             reason: "waiting tasks may need a CEO question".to_owned(),
         };
@@ -928,9 +948,26 @@ pub fn looks_like_close_out(text: &str) -> bool {
 /// ("no WRONG", verification passed) do not count.
 #[must_use]
 pub fn finished_outcome_needs_recover(snap: &WakeSnapshot) -> bool {
-    snap.workers
+    let completed: Vec<&WorkerBrief> = snap
+        .workers
         .iter()
-        .any(|worker| worker.status == "completed" && outcome_shows_wrong_draft(&worker.output_tail))
+        .filter(|worker| worker.status == "completed")
+        .collect();
+    if completed.is_empty() {
+        return false;
+    }
+    let has_wrong = completed
+        .iter()
+        .any(|worker| outcome_shows_wrong_draft(&worker.output_tail));
+    if !has_wrong {
+        return false;
+    }
+    // An older mandated WRONG draft must not stay sticky after a later corrected hire
+    // (or verify) has already completed with a non-WRONG outcome.
+    let has_corrected = completed.iter().any(|worker| {
+        !worker.output_tail.trim().is_empty() && !outcome_shows_wrong_draft(&worker.output_tail)
+    });
+    has_wrong && !has_corrected
 }
 
 fn outcome_shows_wrong_draft(tail: &str) -> bool {
@@ -938,18 +975,27 @@ fn outcome_shows_wrong_draft(tail: &str) -> bool {
     if !upper.contains("WRONG") {
         return false;
     }
+    // Recovery / verification narratives often mention WRONG historically ("recovered from
+    // WRONG"). Only treat clear draft-write markers as still needing recover.
     let wrote_wrong = upper.contains("WROTE WRONG")
         || upper.contains("WORD WRONG")
         || upper.contains("WRONG INTO")
-        || upper.trim() == "WRONG";
+        || upper.trim() == "WRONG"
+        || upper.starts_with("WRONG\n")
+        || upper.ends_with("\nWRONG")
+        || upper.contains("= WRONG")
+        || upper.contains("=WRONG");
     let negated = upper.contains("NO WRONG")
         || upper.contains("WITHOUT WRONG")
         || upper.contains("NOT CONTAIN WRONG")
-        || upper.contains("FORBIDDEN TOKEN");
+        || upper.contains("FORBIDDEN TOKEN")
+        || upper.contains("RECOVERED FROM WRONG")
+        || upper.contains("RECOVERED") && upper.contains("WRONG")
+        || upper.contains("FROM WRONG)");
     if negated {
-        return wrote_wrong;
+        return false;
     }
-    true
+    wrote_wrong
 }
 
 /// Alphanumeric tokens of length >= 6, lowercased (longest first).
@@ -1092,13 +1138,18 @@ pub fn enforce_ceo_moments(actions: &[WakeAction], snap: &WakeSnapshot) -> Vec<W
     let attention_clear = snap.failed_task_ids.is_empty()
         && snap.stuck_task_ids.is_empty()
         && snap.waiting.is_empty();
+    let finished_checks_pass = attention_clear
+        && snap.completed_unopened > 0
+        && !finished_outcome_needs_recover(snap);
     let mut out: Vec<WakeAction> = actions
         .iter()
         .filter(|action| !matches!(action, WakeAction::Silent))
         .filter(|action| {
             // Idle wake (no attention, no finished goal) → drop LEARNED-only hire.
             let idle = attention_clear && snap.completed_unopened == 0;
+            // Finished + checks already pass → drop extra spawn so Done is not deferred forever.
             !(idle && matches!(action, WakeAction::Spawn { .. }))
+                && !(finished_checks_pass && matches!(action, WakeAction::Spawn { .. }))
         })
         .filter(|action| match action {
             // Safety cap: never re-post an ask / Done already covered in CEO chat.

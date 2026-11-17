@@ -905,6 +905,121 @@ fn finished_wrong_outcome_drops_false_done_close_out() {
 }
 
 #[test]
+fn older_wrong_draft_does_not_sticky_block_after_corrected_hire() {
+    // Live run78-recover2: DRAFT outcome=WRONG stayed in the wake snapshot beside FINAL
+    // HELLO78, so needs_recover stayed true and Done never posted.
+    use maia_core::manager::WorkerBrief;
+    use maia_core::manager::finished_outcome_needs_recover;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 2,
+        workers: vec![
+            WorkerBrief {
+                task_id: "task-draft".to_owned(),
+                title: "DRAFT".to_owned(),
+                status: "completed".to_owned(),
+                secs_since_progress: Some(40),
+                output_tail: "Wrote WRONG.".to_owned(),
+                last_error: String::new(),
+            },
+            WorkerBrief {
+                task_id: "task-final".to_owned(),
+                title: "FINAL".to_owned(),
+                status: "completed".to_owned(),
+                secs_since_progress: Some(2),
+                output_tail: "Wrote hello78.py; running it prints HELLO78.".to_owned(),
+                last_error: String::new(),
+            },
+        ],
+        ..WakeSnapshot::default()
+    };
+    assert!(
+        !finished_outcome_needs_recover(&snap),
+        "corrected hire must clear sticky WRONG draft"
+    );
+    let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if maia_core::manager::looks_like_close_out(text)
+        )),
+        "safety cap must Done after corrected hire: {forced:?}"
+    );
+}
+
+#[test]
+fn passing_finished_wake_drops_extra_spawn_so_done_can_post() {
+    // Live run78-recover2: model kept spawn_task after HELLO78 already passed, so recovering
+    // stayed true and the Done safety cap never fired.
+    use maia_core::manager::WorkerBrief;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-final".to_owned(),
+            title: "FINAL hello".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Wrote hello78.py; running it prints HELLO78.".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    let forced = enforce_ceo_moments(
+        &[WakeAction::Spawn {
+            guidance: "Re-hire another verify worker.".to_owned(),
+        }],
+        &snap,
+    );
+    assert!(
+        !forced
+            .iter()
+            .any(|action| matches!(action, WakeAction::Spawn { .. })),
+        "passing finished wake must drop extra spawn: {forced:?}"
+    );
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if maia_core::manager::looks_like_close_out(text)
+        )),
+        "passing finished wake must Done after dropping spawn: {forced:?}"
+    );
+}
+
+#[test]
+fn recovered_from_wrong_summary_does_not_block_done() {
+    // Live run78-long: verify worker wrote "recovered from WRONG" in outcome=; any WRONG
+    // substring kept finished_outcome_needs_recover true forever so Done never posted.
+    use maia_core::manager::WorkerBrief;
+    use maia_core::manager::finished_outcome_needs_recover;
+
+    let snap = WakeSnapshot {
+        completed_unopened: 1,
+        workers: vec![WorkerBrief {
+            task_id: "task-verify".to_owned(),
+            title: "Verify files".to_owned(),
+            status: "completed".to_owned(),
+            secs_since_progress: Some(1),
+            output_tail: "Done. Verified: long_b.txt = OK_B (recovered from WRONG)".to_owned(),
+            last_error: String::new(),
+        }],
+        ..WakeSnapshot::default()
+    };
+    assert!(
+        !finished_outcome_needs_recover(&snap),
+        "recovery narrative must not keep needs_recover sticky"
+    );
+    let forced = enforce_ceo_moments(&[WakeAction::Silent], &snap);
+    assert!(
+        forced.iter().any(|action| matches!(
+            action,
+            WakeAction::MessageUser { text } if maia_core::manager::looks_like_close_out(text)
+        )),
+        "safety cap must Done after verified recover: {forced:?}"
+    );
+}
+
+#[test]
 fn plan_wake_reruns_model_when_finished_outcome_still_wrong() {
     use maia_core::manager::WorkerBrief;
 
@@ -1143,6 +1258,38 @@ fn mute_nonessential_wake_messages_keeps_ask_and_close_out() {
 #[test]
 fn wake_interval_default_is_five_minutes() {
     assert_eq!(DEFAULT_WAKE_INTERVAL_SECS, 300);
+}
+
+#[test]
+fn waiting_already_asked_skips_model_even_when_fingerprint_changed() {
+    // Live idle-cost burn: Silent model while waiting left the fingerprint stuck, so every
+    // heartbeat re-called the model. SkipModel advances the fingerprint without tokens.
+    let snap = WakeSnapshot {
+        waiting: vec![("task-wait".to_owned(), "Need the vault password?".to_owned())],
+        open_questions: vec![maia_core::chat_widgets::OpenQuestionBrief {
+            text: "Need the vault password?".to_owned(),
+            age_secs: 90,
+        }],
+        recent_ceo_lines: vec![
+            "assistant: Need the vault password?".to_owned(),
+        ],
+        running_count: 0,
+        completed_unopened: 0,
+        ..WakeSnapshot::default()
+    };
+    let plan = plan_wake(
+        1_000,
+        0,
+        DEFAULT_WAKE_INTERVAL_SECS,
+        "", // fingerprint mismatch / first wake after ask
+        &snap,
+        0,
+        MAX_MODEL_CALLS_PER_WAKE,
+    );
+    assert!(
+        matches!(plan, maia_core::manager::WakePlan::SkipModel),
+        "already-asked waiting wake must SkipModel, got {plan:?}"
+    );
 }
 
 #[test]
