@@ -2522,6 +2522,23 @@ fn reasoning_without_content_does_not_become_the_reply() {
 }
 
 #[test]
+fn multi_paragraph_reply_is_stored_whole() {
+    let mut harness = Harness::open("multi-paragraph", prompt_supply());
+    let reply = "Here is what I can do:\n\n- Check the weather\n- Run commands on Gamma\n\nWhat would you like me to tackle?";
+    harness
+        .router
+        .push_tool("success", &success_arguments(reply));
+    wait(harness.host().handle_user_message("What can you do for me")).expect("chat");
+    assert_eq!(
+        texts(
+            &harness.database,
+            "SELECT body FROM router_messages ORDER BY ordinal"
+        ),
+        vec!["What can you do for me".to_owned(), reply.to_owned()]
+    );
+}
+
+#[test]
 fn later_turn_remembers_the_conversation_and_records_the_spawn() {
     let mut harness = Harness::open("memory-spawn", prompt_supply());
     harness

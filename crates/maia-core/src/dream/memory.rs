@@ -282,7 +282,7 @@ pub fn owner_visible_reply(reply: &str) -> String {
             kept.push(text);
         }
     }
-    kept.last().cloned().unwrap_or_default()
+    kept.join("\n\n")
 }
 
 /// Episode body and a hide reason. `None` means the episode stays visible.

@@ -180,6 +180,8 @@ fn episodes_keep_the_owner_fact_and_drop_status_and_scratch() {
     );
     assert_eq!(visible, "The weather is 54 F.");
     assert!(owner_visible_reply("Hmm, looking at the candidate list: task-1.").is_empty());
+    let list = "Here is what I can do:\n\n- Check the weather\n- Run commands\n\nWhat would you like me to tackle?";
+    assert_eq!(owner_visible_reply(list), list);
     assert_eq!(
         should_skip_promotion("Handed this message to the running task."),
         Some(PromotionSkipReason::Status)

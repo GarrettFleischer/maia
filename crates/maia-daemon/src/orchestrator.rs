@@ -1836,21 +1836,6 @@ fn chat_source(response: &RouterResponse) -> Option<&str> {
     nonempty(response.reply.as_deref())
 }
 
-fn sanitize_owner_sentence(sentence: String) -> String {
-    if maia_core::dream::is_status_text(&sentence) {
-        return sentence;
-    }
-    let visible = maia_core::dream::owner_visible_reply(&sentence);
-    if visible.is_empty() && maia_core::dream::looks_like_reasoning(&sentence) {
-        return "Working on that.".to_owned();
-    }
-    if visible.is_empty() {
-        sentence
-    } else {
-        visible
-    }
-}
-
 fn distinct_thinking(response: &RouterResponse) -> Option<String> {
     let reasoning = nonempty(response.reasoning.as_deref())?;
     let reply = nonempty(response.reply.as_deref());
@@ -5884,7 +5869,7 @@ impl<R: Router> Orchestrator<R> {
         {
             String::new()
         } else {
-            sanitize_owner_sentence(sentence)
+            sentence.trim().to_owned()
         };
         let (admitted, task, route) = if matches!(close, TurnClose::HostAsk) {
             (
