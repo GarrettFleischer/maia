@@ -42,6 +42,7 @@ function sampleMap(): BrainMap {
         taint: 'trusted',
         session_id: 'thread-1',
         held: false,
+        created_at: 1700000000,
       },
       {
         id: 'lexeme-this',
@@ -312,6 +313,19 @@ describe('BrainMapView', () => {
     const timeline = screen.getByRole('list', { name: 'Timeline' })
     expect(within(timeline).getByText('Owner: I live in Canby.')).toBeVisible()
     expect(within(timeline).getByText("The user's name is Garrett.")).toBeVisible()
+  })
+
+  it('shows compact dates on timeline entries when created_at is present', async () => {
+    const user = userEvent.setup()
+    const client = clientFor(sampleMap())
+    render(<BrainMapView client={client} />)
+    await screen.findByText("The user's name is Garrett.")
+    await user.click(screen.getByRole('tab', { name: 'Timeline' }))
+    const timeline = screen.getByRole('list', { name: 'Timeline' })
+    const items = within(timeline).getAllByRole('listitem')
+    // First item should have both episode and fact with dates
+    expect(items[0]).toHaveTextContent('11/14/2023')
+    expect(items[0]).toHaveTextContent("The user's name is Garrett.")
   })
 
   it('draws entities and claims and leaves lexemes out', async () => {

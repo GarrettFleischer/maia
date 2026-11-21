@@ -47,6 +47,14 @@ function learned(node: BrainNode): string {
   return `Learned ${new Date(node.created_at * 1000).toLocaleDateString()}`
 }
 
+function formatDate(ts: number | null | undefined): string {
+  if (ts == null) return ''
+  const d = new Date(ts * 1000)
+  const date = d.toLocaleDateString()
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return `${date} · ${time}`
+}
+
 export function BrainMapView({ client }: { client: BrainMapClient }) {
   const [map, setMap] = useState<BrainMap | null>(null)
   const [view, setView] = useState<View>('memory')
@@ -817,12 +825,22 @@ function Timeline({ map }: { map: BrainMap }) {
     <ol aria-label="Timeline">
       {episodes.map((episode) => {
         const born = facts(map).filter((fact) => fact.source_episode === episode.id)
+        const date = formatDate(episode.created_at)
         return (
           <li key={episode.id}>
-            <p>{episode.sentence ?? episode.label}</p>
-            {born.map((fact) => (
-              <p key={fact.id}>{fact.sentence ?? fact.label}</p>
-            ))}
+            <p className="maia-muted">
+              {date && <span>{date} · </span>}
+              <span>{episode.sentence ?? episode.label}</span>
+            </p>
+            {born.map((fact) => {
+              const factDate = formatDate(fact.created_at)
+              return (
+                <p key={fact.id} className="maia-muted">
+                  {factDate && <span>{factDate} · </span>}
+                  <span>{fact.sentence ?? fact.label}</span>
+                </p>
+              )
+            })}
           </li>
         )
       })}
