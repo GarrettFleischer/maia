@@ -13,6 +13,13 @@
       "transport": "stdio",
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"]
+    },
+    {
+      "id": "windows",
+      "label": "Windows",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["windows-mcp", "serve"]
     }
   ]
 }
