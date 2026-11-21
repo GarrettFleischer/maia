@@ -32,12 +32,8 @@ export function LiveInspector({
         <LiveCache
           turn={turn}
           turns={turns}
-          brain={brain}
           index={index}
           onScrub={onScrub}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          focusIds={focusIds}
         />
       ) : null}
       {tab === 'brain' ? (
@@ -72,21 +68,13 @@ export function selectedIndex(length: number, scrub: number | null): number {
 function LiveCache({
   turn,
   turns,
-  brain,
   index,
   onScrub,
-  selectedId,
-  onSelect,
-  focusIds,
 }: {
   turn: InspectorTurn
   turns: readonly InspectorTurn[]
-  brain: BrainMap
   index: number
   onScrub: (index: number) => void
-  selectedId: string | null
-  onSelect: (id: string) => void
-  focusIds: readonly string[]
 }) {
   return (
     <>
@@ -112,13 +100,6 @@ function LiveCache({
           ))}
         </ol>
       </details>
-      {turn.recall.length > 0 ? <span className="maia-inspector-label">Memories used</span> : null}
-      <NodeChoiceList
-        label="Facts used"
-        selectedId={selectedId}
-        onSelect={onSelect}
-        items={recallChoices(turn, brain, focusIds)}
-      />
       <div className="maia-scrub">
         <div className="maia-scrub-head">
           <span>

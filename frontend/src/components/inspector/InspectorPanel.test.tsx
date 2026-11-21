@@ -82,9 +82,6 @@ describe('InspectorPanel tabs', () => {
     )
 
     expect(screen.getAllByText('25%').length).toBeGreaterThan(0)
-    expect(screen.getByText('Memories used')).toBeVisible()
-    expect(screen.getByText('Obsidian opens the vault.')).toBeVisible()
-    expect(screen.getByText('Untrusted')).toBeVisible()
     expect(screen.getByTestId('inspector-live-slot-1')).toHaveTextContent('Tools')
     expect(screen.getByTestId('inspector-live-slot-4')).toHaveTextContent('Conversation')
     expect(screen.queryByText(/compact/i)).not.toBeInTheDocument()
