@@ -833,9 +833,8 @@ fn bind_message(
          ON CONFLICT(message_id) DO UPDATE SET bot_id = excluded.bot_id",
         params![message_id, bot_id],
     )?;
-    let preview = maia_core::bots::message_preview(preview, 80);
     let chosen = selected(connection).unwrap_or_else(|_| "maia".to_owned());
-    let keep_preview = maia_core::bots::is_ephemeral_status_note(&preview);
+    let keep_preview = maia_core::bots::is_ephemeral_status_note(preview);
     if keep_preview {
         if from_owner || bot_id == chosen {
             connection.execute(
@@ -852,6 +851,7 @@ fn bind_message(
         }
         return Ok(());
     }
+    let preview = maia_core::bots::message_preview(preview, 80);
     if from_owner || bot_id == chosen {
         connection.execute(
             "UPDATE bots SET preview = ?1, last_message_at = ?2, updated_at = ?2, unread = 0 \

@@ -84,7 +84,14 @@ fn clip_words(text: &str, max_words: usize) -> String {
     if words.len() <= max_words && text.chars().count() <= 42 {
         return text.to_owned();
     }
-    format!("{}…", words.into_iter().take(max_words).collect::<Vec<_>>().join(" "))
+    format!(
+        "{}…",
+        words
+            .into_iter()
+            .take(max_words)
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
 }
 
 /// Router outcome lines that belong in the transcript, not the chat-list preview.
@@ -119,11 +126,10 @@ pub fn catalog_status_line(activity: &str, running_title: &str, waiting_title: &
 /// Prefer a real chat preview; fall back to waiting work when stored is empty or ephemeral.
 #[must_use]
 pub fn catalog_preview(stored: &str, waiting_title: &str, limit: usize) -> String {
-    let preview = message_preview(stored, limit);
-    if !preview.is_empty() && !is_ephemeral_status_note(&preview) {
-        return preview;
+    if is_ephemeral_status_note(stored) {
+        return message_preview(waiting_title, limit);
     }
-    message_preview(waiting_title, limit)
+    message_preview(stored, limit)
 }
 
 /// Last-message preview, collapsed to one line and capped by characters.
