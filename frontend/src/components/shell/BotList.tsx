@@ -114,18 +114,20 @@ export function BotList({
               onChange={(event) => setInstructions(event.target.value)}
             />
           </label>
-          <button type="submit" className="maia-btn">
-            Create
-          </button>
-          <button
-            type="button"
-            className="maia-icon-btn"
-            aria-label="Cancel"
-            title="Cancel"
-            onClick={() => setCreating(false)}
-          >
-            <span className="maia-remove-icon" aria-hidden="true" />
-          </button>
+          <div className="maia-bot-create-actions">
+            <button type="submit" className="maia-btn">
+              Create
+            </button>
+            <button
+              type="button"
+              className="maia-icon-btn"
+              aria-label="Cancel"
+              title="Cancel"
+              onClick={() => setCreating(false)}
+            >
+              <span className="maia-remove-icon" aria-hidden="true" />
+            </button>
+          </div>
         </form>
       ) : null}
       <ul className="maia-bot-rows" aria-label="Bots">

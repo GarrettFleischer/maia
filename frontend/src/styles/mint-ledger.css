@@ -2818,6 +2818,33 @@ details:not([open]) > .maia-task-tree {
 .maia-bot-tools input {
   flex: 1;
 }
+.maia-bot-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  margin-top: 4px;
+  border-radius: 8px;
+  background: var(--surface);
+}
+.maia-bot-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 550;
+}
+.maia-bot-create textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+.maia-bot-create-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
 .maia-bot-rows,
 .maia-bot-archived ul {
   list-style: none;
@@ -2952,6 +2979,21 @@ details:not([open]) > .maia-task-tree {
 }
 .maia-phone-screen .maia-bot-list {
   padding: 8px 12px 12px;
+}
+@media (max-width: 727px) {
+  .maia-bot-create {
+    padding: 6px 4px;
+    gap: 6px;
+  }
+  .maia-bot-create label {
+    gap: 3px;
+  }
+  .maia-bot-create textarea {
+    min-height: 56px;
+  }
+  .maia-bot-create-actions {
+    gap: 6px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
