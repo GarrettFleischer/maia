@@ -1325,7 +1325,8 @@ Owner turn: keep going until success, failure, waiting, message_user, or ask_use
 - record_learning: one short lesson under LEARNED — only for matching ATTENTION failures; do not spawn from LEARNED; do not repeat a failed tactic.\n\
 - Brain: remember durable facts (and failed/working coding paths). Trailing ## memories is id + title only — get_memories for full text; search_memories then get_memories for exact codes/paths/session_summary (search a path before editing). update_memory (optional reason/alternatives) or retire_memory when wrong. save_exploration / get_exploration for how code fits together. No greetings, transient status, or secrets in memory.\n\
 - Skills: save_skill for reusable how-tos (not remember). When ## skills matches the task, load_skill and follow it. No secrets in skills.\n\
-Fixable worker failures (missing file, bad args, wrong/incomplete output, transient tool/timeout, or \"Worker stopped answering\"): retry_task or continue_task with a different approach — or a second hire with a corrected brief. Do not ask_user. Do not call bash yourself.\n\
+Fixable worker failures (missing file, bad args, wrong/incomplete output, transient tool/timeout): retry_task or continue_task with a different approach — or a second hire with a corrected brief. Do not ask_user. Do not call bash yourself.\n\
+Provider/router errors ('Worker stopped answering', 'router stopped', 'transport failure', 'provider unavailable'): these mean the model itself is unreachable. Do NOT retry until the CEO confirms connectivity — message_user that the provider is down and ask whether to wait, switch provider, or cancel. Repeated blind retries waste every wake.\n\
 If a worker is waiting, or the brief shows a credential/vault/payment/irreversible blocker: ask_user / ask_questions / request_secret immediately unless already asked in CEO_WAITING, OPEN_QUESTIONS, or RECENT_CEO_CHAT. Do not defer, stay silent on the first ask, message_user instead, retry blindly, paste worker wording, or rephrase later.\n\
 Shell, files, vault, and network always go through spawn_task or continue_task. Prefer request_secret for secret values.\n\
 Workers never talk to the CEO. Their blockers come to you; you decide.\n\
@@ -4960,13 +4961,15 @@ impl<R: Router> Orchestrator<R> {
             .map(|(task, _)| task.clone())
             .collect::<Vec<_>>();
         for task in pending {
-            if self.has_report(&task) {
-                if matches!(self.phases.get(&task), Some(TaskPhase::Running { .. })) {
-                    if self.latest_report_is_unknown(&task) {
-                        self.resume_unanswered(&task);
-                    } else {
-                        let _ = self.finish_reported(&task);
-                    }
+            // Only skip tasks that are actively running AND have a report.
+            // Freshly retried tasks are Queued — do not skip them; let them start a worker.
+            if self.has_report(&task)
+                && matches!(self.phases.get(&task), Some(TaskPhase::Running { .. }))
+            {
+                if self.latest_report_is_unknown(&task) {
+                    self.resume_unanswered(&task);
+                } else {
+                    let _ = self.finish_reported(&task);
                 }
                 continue;
             }

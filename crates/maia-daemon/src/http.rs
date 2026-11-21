@@ -2551,6 +2551,7 @@ fn retry_host<R: RouterPort>(actor: &mut Actor<R>, task_id: &str) -> Result<Valu
         .host
         .retry_task(&TaskId(task_id.to_owned()))
         .map_err(map_orchestrator)?;
+    actor.host.work_queued_parents();
     publish_best_effort(actor);
     Ok(serde_json::json!({ "phase": phase_name(&phase) }))
 }

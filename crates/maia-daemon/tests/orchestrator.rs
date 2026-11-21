@@ -4832,6 +4832,35 @@ fn manager_wake_recovers_a_failed_worker_via_tools() {
 }
 
 #[test]
+fn retry_host_starts_workers_for_queued_task() {
+    let mut harness = Harness::open_model("retry-host-starts", long_supply());
+    harness.router.push_tool("spawn_task", "{}");
+    harness
+        .router
+        .push_tool("failure", r#"{"message":"bash exited 1: missing config"}"#);
+    let outcome = wait(harness.host().handle_user_message("Fix the missing file")).expect("run");
+    let task = outcome.task.expect("task");
+    assert!(
+        matches!(harness.host().phase(&task), Some(TaskPhase::Failed { .. })),
+        "phase {:?}",
+        harness.host().phase(&task)
+    );
+
+    // Manual retry via the HTTP endpoint path: retry_task + work_queued_parents
+    harness.host().retry_task(&task).expect("retry_task");
+    harness.host().work_queued_parents();
+
+    // The task must have been picked up by work_queued_parents — it should
+    // no longer be Queued (the worker ran; with the current router it fails
+    // a second time, but the important thing is that it was NOT stuck).
+    let phase = harness.host().phase(&task);
+    assert!(
+        !matches!(phase, Some(TaskPhase::Queued)),
+        "task stayed Queued after retry + work_queued_parents — fix not applied? phase={phase:?}"
+    );
+}
+
+#[test]
 fn manager_wake_asks_user_once_for_a_blocker() {
     let mut harness = Harness::open_model("mgr-wake-ask", long_supply());
     harness.router.push_tool("spawn_task", "{}");
