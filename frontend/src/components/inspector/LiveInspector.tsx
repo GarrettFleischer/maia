@@ -163,6 +163,7 @@ function LiveTrace({
         id: `${step.kind}-${index}`,
         label: step.text,
         detail: traceLabel(step.kind),
+        detailTitle: traceLabel(step.kind),
       }))}
     />
   )

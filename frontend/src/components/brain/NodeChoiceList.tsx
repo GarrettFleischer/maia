@@ -5,6 +5,7 @@ export interface NodeChoice {
   label: string
   taint?: 'trusted' | 'untrusted' | 'owner' | null
   detail?: string
+  detailTitle?: string
 }
 
 export function taintLabel(taint: NodeChoice['taint']): 'Trusted' | 'Untrusted' | null {
@@ -55,7 +56,7 @@ export function NodeChoiceList({
               {item.detail ? (
                 <>
                   {' '}
-                  <span className="maia-choice-tag">{item.detail}</span>
+                  <span className="maia-choice-tag" title={item.detailTitle || item.detail}>{item.detail}</span>
                 </>
               ) : null}
             </button>

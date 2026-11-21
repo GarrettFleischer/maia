@@ -1994,6 +1994,13 @@ textarea {
   color: var(--muted);
   font-size: 11px;
 }
+.maia-choice-tag[title] {
+  cursor: help;
+  opacity: 0.7;
+}
+.maia-choice-tag[title]:hover {
+  opacity: 1;
+}
 .maia-icon-btn.maia-task-strip-find {
   margin-left: auto;
   width: 32px;
