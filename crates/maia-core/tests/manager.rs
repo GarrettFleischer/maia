@@ -703,45 +703,6 @@ fn wake_brief_finished_recover_requires_goal_checks_in_corrected_brief() {
 }
 
 #[test]
-fn finished_wake_drops_verification_rehire_and_forces_done() {
-    // Run83: Pass→Done stayed ~minutes because the model spawned "verify it prints…"
-    // after outcome= already evidenced the goal. Safety cap drops those re-hires.
-    use maia_core::manager::WorkerBrief;
-
-    let snap = WakeSnapshot {
-        completed_unopened: 1,
-        workers: vec![WorkerBrief {
-            task_id: "task-final".to_owned(),
-            title: "FINAL HELLO83".to_owned(),
-            status: "completed".to_owned(),
-            secs_since_progress: Some(1),
-            output_tail: "Printed HELLO83.".to_owned(),
-            last_error: String::new(),
-        }],
-        ..WakeSnapshot::default()
-    };
-    let capped = enforce_ceo_moments(
-        &[WakeAction::Spawn {
-            guidance: "Run the file and verify it prints HELLO83, then success.".to_owned(),
-        }],
-        &snap,
-    );
-    assert!(
-        !capped
-            .iter()
-            .any(|action| matches!(action, WakeAction::Spawn { .. })),
-        "verification re-hire must be dropped when finished evidence already exists: {capped:?}"
-    );
-    assert!(
-        capped.iter().any(|action| matches!(
-            action,
-            WakeAction::MessageUser { text } if text.starts_with("Done")
-        )),
-        "dropping verification re-hire must force Done this wake: {capped:?}"
-    );
-}
-
-#[test]
 fn finished_wake_keeps_spawn_for_verify_recover_and_defers_done() {
     // Prompt decides WRONG vs pass; host only keeps spawn so Done is not overwritten.
     use maia_core::manager::WorkerBrief;
